@@ -99,7 +99,7 @@ impl Tool for CameraCaptureTool {
             "Capturing camera image"
         );
 
-        // TODO: Send command to the peripheral node via serial or MQTT bus
+        // TODO: Send command to the peripheral node via serial or MQTT spine
         // and return the base64-encoded JPEG result.
         Ok(ToolResult {
             success: true,
@@ -178,7 +178,7 @@ impl Tool for AudioSampleTool {
             "Sampling audio"
         );
 
-        // TODO: Send command to the peripheral node via serial or MQTT bus.
+        // TODO: Send command to the peripheral node via serial or MQTT spine.
         Ok(ToolResult {
             success: true,
             output: format!(
@@ -256,7 +256,7 @@ impl Tool for SensorReadTool {
             "Reading sensor"
         );
 
-        // TODO: Send command to the peripheral node via serial or MQTT bus.
+        // TODO: Send command to the peripheral node via serial or MQTT spine.
         Ok(ToolResult {
             success: true,
             output: format!(

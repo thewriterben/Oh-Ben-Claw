@@ -31,7 +31,7 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 mod agent;
-mod bus;
+mod spine;
 mod channels;
 mod config;
 mod memory;
@@ -72,9 +72,9 @@ enum Commands {
         /// Session ID for conversation history (default: "default").
         #[arg(long, default_value = "default")]
         session: String,
-        /// Skip connecting to the MQTT bus.
+        /// Skip connecting to the MQTT spine.
         #[arg(long)]
-        no_bus: bool,
+        no_spine: bool,
     },
 
     /// Check the status of the agent and all connected peripheral nodes.
@@ -144,7 +144,7 @@ async fn main() -> Result<()> {
     let mut config = Config::load()?;
 
     match cli.command {
-        Commands::Start { provider, model, session, no_bus } => {
+        Commands::Start { provider, model, session, no_spine } => {
             // Apply CLI overrides to config
             if let Some(p) = provider {
                 config.provider.name = p;
@@ -152,7 +152,7 @@ async fn main() -> Result<()> {
             if let Some(m) = model {
                 config.provider.model = m;
             }
-            run_start(config, &session, no_bus).await?;
+            run_start(config, &session, no_spine).await?;
         }
         Commands::Status => {
             run_status(&config).await?;
@@ -168,7 +168,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_start(config: Config, session_id: &str, no_bus: bool) -> Result<()> {
+async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<()> {
     info!("Starting Oh-Ben-Claw v{}", env!("CARGO_PKG_VERSION"));
 
     // Open memory store
@@ -197,14 +197,14 @@ async fn run_start(config: Config, session_id: &str, no_bus: bool) -> Result<()>
     // Build tool registry
     let mut all_tools = default_tools();
 
-    // Connect to MQTT bus and discover peripheral tools
-    let bus_client = if !no_bus && config.bus.kind == "mqtt" {
-        match bus::BusClient::new(config.bus.clone(), "obc-brain").connect().await {
+    // Connect to MQTT spine and discover peripheral tools
+    let spine_client = if !no_spine && config.spine.kind == "mqtt" {
+        match spine::SpineClient::new(config.spine.clone(), "obc-brain").connect().await {
             Ok(client) => {
                 info!(
-                    host = %config.bus.host,
-                    port = config.bus.port,
-                    "Connected to MQTT bus"
+                    host = %config.spine.host,
+                    port = config.spine.port,
+                    "Connected to MQTT spine"
                 );
                 // Give nodes a moment to announce themselves
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -216,7 +216,7 @@ async fn run_start(config: Config, session_id: &str, no_bus: bool) -> Result<()>
                 Some(client)
             }
             Err(e) => {
-                tracing::warn!("Could not connect to MQTT bus: {}. Continuing without bus.", e);
+                tracing::warn!("Could not connect to MQTT spine: {}. Continuing without spine.", e);
                 None
             }
         }
@@ -228,7 +228,7 @@ async fn run_start(config: Config, session_id: &str, no_bus: bool) -> Result<()>
     if config.peripherals.enabled {
         let peripheral_tools = peripherals::create_peripheral_tools(
             &config.peripherals,
-            bus_client,
+            spine_client,
         )
         .await?;
         if !peripheral_tools.is_empty() {
@@ -243,13 +243,27 @@ async fn run_start(config: Config, session_id: &str, no_bus: bool) -> Result<()>
         "Agent ready"
     );
 
+    // Build security context and attach policy engine to agent
+    let security_ctx = security::SecurityContext::new(&config.security)
+        .unwrap_or_else(|e| {
+            tracing::warn!("Failed to init security context: {}; using defaults", e);
+            security::SecurityContext::new(&Default::default()).unwrap()
+        });
+
+    if security_ctx.policy.policy_count() > 0 {
+        info!(
+            policies = security_ctx.policy.policy_count(),
+            "Security policy engine active"
+        );
+    }
+
     // Build and start the agent
     let agent = Arc::new(Agent::new(
         config.agent.clone(),
         provider,
         Arc::clone(&memory),
         all_tools,
-    ));
+    ).with_policy(security_ctx.policy));
 
     // Run the CLI channel
     let cli_channel = CliChannel::new(agent, config.provider.clone(), session_id);
@@ -263,7 +277,7 @@ async fn run_status(config: &Config) -> Result<()> {
     println!("Version:  {}", env!("CARGO_PKG_VERSION"));
     println!("Agent:    {}", config.agent.name);
     println!("Provider: {} / {}", config.provider.name, config.provider.model);
-    println!("Bus:      {} @ {}:{}", config.bus.kind, config.bus.host, config.bus.port);
+    println!("Spine:    {} @ {}:{}", config.spine.kind, config.spine.host, config.spine.port);
 
     // Memory stats
     match MemoryStore::open() {

@@ -4,15 +4,15 @@ This document outlines the planned development phases for Oh-Ben-Claw.
 
 ## Phase 1: Foundation (Current)
 
-The initial release establishes the core architecture and demonstrates the key concepts of the system. It includes the MQTT bus design, the peripheral tool registry, the hardware board registry, and the ESP32-S3 and NanoPi Neo3 peripheral drivers.
+The initial release establishes the core architecture and demonstrates the key concepts of the system. It includes the MQTT spine design, the peripheral tool registry, the hardware board registry, and the ESP32-S3 and NanoPi Neo3 peripheral drivers.
 
 - [x] Repository structure and Cargo workspace
-- [x] MQTT bus protocol design (`src/bus/mod.rs`)
+- [x] MQTT spine protocol design (`src/spine/mod.rs`)
 - [x] Hardware board registry with USB VID/PID mappings (`src/peripherals/registry.rs`)
 - [x] NanoPi Neo3 GPIO peripheral driver (`src/peripherals/nanopi.rs`)
 - [x] ESP32-S3 sensor tools (camera, audio, sensor read) (`src/peripherals/sensors.rs`)
 - [x] ESP32-S3 firmware with serial + MQTT support (`firmware/obc-esp32-s3`)
-- [x] Configuration schema with MQTT bus and multi-board support (`src/config/mod.rs`)
+- [x] Configuration schema with MQTT spine and multi-board support (`src/config/mod.rs`)
 - [x] CLI with `start`, `status`, `peripheral`, and `service` subcommands (`src/main.rs`)
 - [x] Architecture documentation (`docs/architecture/ARCHITECTURE.md`)
 - [x] Hardware datasheets (`docs/datasheets/`)
@@ -29,11 +29,11 @@ Implement the full agent loop with LLM integration, memory, and tool execution.
 - [ ] CLI channel (interactive terminal)
 - [ ] Telegram channel
 
-## Phase 3: MQTT Bus Implementation
+## Phase 3: MQTT Spine Implementation
 
-Implement the full MQTT bus with dynamic tool discovery.
+Implement the full MQTT spine with dynamic tool discovery.
 
-- [ ] `rumqttc`-based MQTT client in `src/bus/mod.rs`
+- [ ] `rumqttc`-based MQTT client in `src/spine/mod.rs`
 - [ ] Node announcement subscription and dynamic tool registration
 - [ ] Tool call request/response over MQTT
 - [ ] Node heartbeat monitoring and health tracking

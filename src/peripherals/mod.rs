@@ -5,7 +5,7 @@
 //!
 //! - **Serial**: Direct USB/UART connection to a microcontroller (ESP32, Arduino, STM32).
 //! - **Native**: Direct access to hardware on the host machine (Raspberry Pi GPIO, NanoPi GPIO).
-//! - **MQTT**: Network-based connection via the Oh-Ben-Claw MQTT bus.
+//! - **MQTT**: Network-based connection via the Oh-Ben-Claw MQTT spine.
 //!
 //! # Multi-Board Support
 //!
@@ -25,7 +25,7 @@ pub mod rpi;
 
 pub use traits::Peripheral;
 
-use crate::bus::{BusClient, NodeAnnouncement, NodeToolSpec};
+use crate::spine::{SpineClient, NodeAnnouncement, NodeToolSpec};
 use crate::config::{PeripheralBoardConfig, PeripheralsConfig};
 use crate::tools::traits::Tool;
 use anyhow::Result;
@@ -38,7 +38,7 @@ use std::sync::Arc;
 /// single `Vec`. The agent can then use any of these tools transparently.
 pub async fn create_peripheral_tools(
     config: &PeripheralsConfig,
-    bus: Option<Arc<BusClient>>,
+    spine: Option<Arc<SpineClient>>,
 ) -> Result<Vec<Box<dyn Tool>>> {
     if !config.enabled {
         return Ok(Vec::new());
@@ -51,7 +51,7 @@ pub async fn create_peripheral_tools(
 
         match board.transport.as_str() {
             "mqtt" => {
-                if let Some(ref bus_client) = bus {
+                if let Some(ref spine_client) = spine {
                     let node_id = board
                         .node_id
                         .clone()
@@ -59,15 +59,15 @@ pub async fn create_peripheral_tools(
                     tracing::info!(
                         board = %board.board,
                         node_id = %node_id,
-                        "Registering MQTT peripheral node (tools will be discovered via bus)"
+                        "Registering MQTT peripheral node (tools will be discovered via spine)"
                     );
                     // MQTT peripheral tools are registered dynamically when the node
-                    // announces itself on the bus. See `bus::BusClient::subscribe_announcements`.
-                    let _ = bus_client;
+                    // announces itself on the spine. See `spine::SpineClient::subscribe_announcements`.
+                    let _ = spine_client;
                 } else {
                     tracing::warn!(
                         board = %board.board,
-                        "MQTT transport configured but no bus client available; skipping"
+                        "MQTT transport configured but no spine client available; skipping"
                     );
                 }
             }
@@ -124,7 +124,7 @@ pub async fn create_peripheral_tools(
 }
 
 /// Build a `NodeAnnouncement` for a peripheral board, suitable for publishing
-/// to the MQTT bus when the board starts up.
+/// to the MQTT spine when the board starts up.
 pub fn build_announcement(
     node_id: &str,
     board_config: &PeripheralBoardConfig,

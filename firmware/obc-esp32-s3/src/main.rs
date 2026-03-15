@@ -20,7 +20,7 @@
 //!
 //! 2. **MQTT**: The firmware connects to a WiFi network and an MQTT broker,
 //!    announces its capabilities, and receives tool call requests over the
-//!    Oh-Ben-Claw MQTT bus. This enables network-based, multi-device
+//!    Oh-Ben-Claw MQTT spine. This enables network-based, multi-device
 //!    coordination without a direct USB connection.
 //!
 //! # Wiring (Waveshare ESP32-S3 Touch LCD 2.1)
