@@ -97,6 +97,7 @@ http-body-util = "0.1"
 # Discord WebSocket
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 
 # Cron scheduling
 cron = "0.12"

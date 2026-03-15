@@ -102,3 +102,57 @@ vault_enabled = false
 # tool_pattern = "*"
 # action = "deny"
 # reason = "Only explicitly allowed tools are permitted"
+
+# ── Gateway Configuration ─────────────────────────────────────────────────────
+
+[gateway]
+# Enable the REST/WebSocket API gateway.
+# Once enabled, Oh-Ben-Claw is accessible from any browser or mobile device.
+enabled = false
+
+# Bind to 0.0.0.0 to allow connections from other devices on your network.
+# Use 127.0.0.1 (default) for local-only access.
+host = "127.0.0.1"
+port = 8080
+
+# Optional Bearer token for API authentication.
+# If set, all API requests must include: Authorization: Bearer <token>
+# Generate with: openssl rand -hex 32
+# api_token = "your-secret-token-here"
+
+# Serve the built-in PWA web client at http://<host>:<port>/
+serve_pwa = true
+
+# CORS allowed origins (leave empty to allow all origins)
+# cors_origins = ["https://yourdomain.com"]
+
+# ── Tunnel Configuration ─────────────────────────────────────────────────────
+
+[tunnel]
+# Enable the network tunnel for public internet access.
+# Requires the gateway to be enabled first.
+enabled = false
+
+# Tunnel backend: "cloudflare" or "tailscale"
+backend = "cloudflare"
+
+# The local port the gateway is listening on (must match [gateway].port).
+local_port = 8080
+
+# ── Cloudflare Quick Tunnel (no account required, temporary URL) ──
+# No additional config needed. Just set enabled = true and run:
+#   oh-ben-claw start --gateway --tunnel
+
+# ── Cloudflare Named Tunnel (persistent custom domain) ──
+# 1. Run: cloudflared tunnel login
+# 2. Run: cloudflared tunnel create oh-ben-claw
+# 3. Run: cloudflared tunnel route dns oh-ben-claw obc.yourdomain.com
+# 4. Get the token: cloudflared tunnel token oh-ben-claw
+# named_tunnel = "oh-ben-claw"
+# token = "eyJhIjoiM..."
+
+# ── Tailscale (private Tailnet access) ──
+# 1. Install Tailscale: curl -fsSL https://tailscale.com/install.sh | sh
+# 2. Run: sudo tailscale up
+# 3. Set backend = "tailscale"
+# tailscale_funnel = false   # Set to true for public HTTPS access via Tailscale Funnel

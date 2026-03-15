@@ -215,6 +215,102 @@ pub struct ChannelsConfig {
     pub discord: DiscordConfig,
 }
 
+// ── Tunnel Configuration ────────────────────────────────────────────────────
+
+/// Configuration for the network tunnel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunnelConfig {
+    /// Whether the tunnel is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The tunnel backend: "cloudflare" or "tailscale".
+    #[serde(default = "default_tunnel_backend")]
+    pub backend: String,
+    /// The local port the gateway listens on.
+    #[serde(default = "default_tunnel_port")]
+    pub local_port: u16,
+    /// Named Cloudflare tunnel name (for persistent custom domains).
+    #[serde(default)]
+    pub named_tunnel: Option<String>,
+    /// Cloudflare tunnel token (for named tunnels).
+    #[serde(default)]
+    pub token: Option<String>,
+    /// Whether to enable Tailscale Funnel for public access.
+    #[serde(default)]
+    pub tailscale_funnel: bool,
+}
+
+fn default_tunnel_backend() -> String {
+    "cloudflare".to_string()
+}
+
+fn default_tunnel_port() -> u16 {
+    8080
+}
+
+impl Default for TunnelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: default_tunnel_backend(),
+            local_port: default_tunnel_port(),
+            named_tunnel: None,
+            token: None,
+            tailscale_funnel: false,
+        }
+    }
+}
+
+// ── Gateway Configuration ─────────────────────────────────────────────────────
+
+/// Configuration for the REST/WebSocket API gateway.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayConfig {
+    /// Whether the gateway is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The host to bind to (default: 127.0.0.1 for local-only).
+    #[serde(default = "default_gateway_host")]
+    pub host: String,
+    /// The port to listen on.
+    #[serde(default = "default_gateway_port")]
+    pub port: u16,
+    /// Optional Bearer token for API authentication.
+    #[serde(default)]
+    pub api_token: Option<String>,
+    /// Whether to serve the built-in PWA web client.
+    #[serde(default = "default_true")]
+    pub serve_pwa: bool,
+    /// CORS allowed origins (default: same-origin only).
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
+}
+
+fn default_gateway_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_gateway_port() -> u16 {
+    8080
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: default_gateway_host(),
+            port: default_gateway_port(),
+            api_token: None,
+            serve_pwa: true,
+            cors_origins: vec![],
+        }
+    }
+}
+
 // ── Root Configuration ───────────────────────────────────────────────────────
 
 /// The root configuration for Oh-Ben-Claw.
@@ -232,6 +328,10 @@ pub struct Config {
     pub channels: ChannelsConfig,
     #[serde(default)]
     pub security: crate::security::SecurityConfig,
+    #[serde(default)]
+    pub tunnel: TunnelConfig,
+    #[serde(default)]
+    pub gateway: GatewayConfig,
 }
 
 impl Config {

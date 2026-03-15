@@ -34,6 +34,7 @@ mod agent;
 mod spine;
 mod channels;
 mod config;
+mod gateway;
 mod memory;
 mod observability;
 mod peripherals;
@@ -61,7 +62,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Start the Oh-Ben-Claw agent (interactive CLI).
+    /// Start the Oh-Ben-Claw agent (interactive CLI, gateway, and tunnel).
     Start {
         /// LLM provider name (openai, anthropic, ollama, openrouter, or any compatible).
         #[arg(long)]
@@ -75,6 +76,12 @@ enum Commands {
         /// Skip connecting to the MQTT spine.
         #[arg(long)]
         no_spine: bool,
+        /// Start the REST/WebSocket gateway (overrides config).
+        #[arg(long)]
+        gateway: bool,
+        /// Start the network tunnel (overrides config).
+        #[arg(long)]
+        tunnel: bool,
     },
 
     /// Check the status of the agent and all connected peripheral nodes.
@@ -144,7 +151,7 @@ async fn main() -> Result<()> {
     let mut config = Config::load()?;
 
     match cli.command {
-        Commands::Start { provider, model, session, no_spine } => {
+        Commands::Start { provider, model, session, no_spine, gateway, tunnel } => {
             // Apply CLI overrides to config
             if let Some(p) = provider {
                 config.provider.name = p;
@@ -152,6 +159,8 @@ async fn main() -> Result<()> {
             if let Some(m) = model {
                 config.provider.model = m;
             }
+            if gateway { config.gateway.enabled = true; }
+            if tunnel { config.tunnel.enabled = true; }
             run_start(config, &session, no_spine).await?;
         }
         Commands::Status => {
@@ -169,6 +178,36 @@ async fn main() -> Result<()> {
 }
 
 async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<()> {
+    // Start the REST/WebSocket gateway if enabled
+    let _gateway_state = if config.gateway.enabled {
+        match gateway::start(config.gateway.clone()).await {
+            Ok((state, url)) => {
+                info!(url = %url, "Gateway started — PWA available at {}", url);
+                if config.tunnel.enabled {
+                    let mgr = tunnel::TunnelManager::new(config.tunnel.clone());
+                    match mgr.start().await {
+                        Ok(public_url) => {
+                            info!(url = %public_url, "Tunnel started — public access at {}", public_url);
+                            state.broadcast(gateway::GatewayEvent::Status {
+                                agent_running: false,
+                                node_count: 0,
+                                tunnel_url: Some(public_url),
+                            });
+                        }
+                        Err(e) => tracing::warn!("Tunnel failed to start: {}", e),
+                    }
+                }
+                Some(state)
+            }
+            Err(e) => {
+                tracing::warn!("Gateway failed to start: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     info!("Starting Oh-Ben-Claw v{}", env!("CARGO_PKG_VERSION"));
 
     // Open memory store
