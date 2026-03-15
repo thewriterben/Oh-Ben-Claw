@@ -5,7 +5,12 @@
 //! LLM, and repeats until the model produces a final text response.
 
 pub mod handle;
+pub mod pool;
+pub mod delegation_tools;
+pub mod orchestrator;
 pub use handle::{AgentEvent, AgentHandle};
+pub use pool::{AgentPool, SubAgentInfo, SubAgentSpec, SubAgentStatus};
+pub use orchestrator::{OrchestratorAgent, OrchestratorConfig, RoutingStrategy};
 
 use crate::config::AgentConfig;
 use crate::memory::MemoryStore;
