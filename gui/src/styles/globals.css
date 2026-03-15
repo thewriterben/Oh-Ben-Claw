@@ -1,0 +1,104 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  * {
+    @apply border-surface-border;
+  }
+
+  body {
+    @apply bg-surface text-slate-100 font-sans antialiased;
+    /* Disable default drag on non-draggable elements */
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* Allow text selection in chat and input areas */
+  .selectable {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    @apply w-1.5;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-border rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-slate-500;
+  }
+}
+
+@layer components {
+  /* Tauri window drag region */
+  .drag-region {
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+
+  /* Glass card */
+  .glass {
+    @apply bg-surface-raised/80 backdrop-blur-sm border border-surface-border rounded-xl;
+  }
+
+  /* Status dot */
+  .status-dot {
+    @apply w-2 h-2 rounded-full inline-block;
+  }
+  .status-dot.online  { @apply bg-emerald-400; }
+  .status-dot.offline { @apply bg-slate-500; }
+  .status-dot.error   { @apply bg-red-400; }
+  .status-dot.paired  { @apply bg-obc-400; }
+
+  /* Chat bubble */
+  .chat-bubble-user {
+    @apply bg-obc-600 text-white rounded-2xl rounded-br-sm px-4 py-2.5 max-w-[80%] ml-auto selectable;
+  }
+  .chat-bubble-assistant {
+    @apply bg-surface-overlay text-slate-100 rounded-2xl rounded-bl-sm px-4 py-2.5 max-w-[80%] selectable;
+  }
+  .chat-bubble-tool {
+    @apply bg-surface-raised border border-surface-border text-slate-300 rounded-lg px-3 py-2 font-mono text-xs max-w-full w-full selectable;
+  }
+
+  /* Input field */
+  .obc-input {
+    @apply bg-surface-overlay border border-surface-border rounded-xl px-4 py-2.5
+           text-slate-100 placeholder-slate-500
+           focus:outline-none focus:ring-2 focus:ring-obc-500/50 focus:border-obc-500
+           transition-colors duration-150;
+  }
+
+  /* Button variants */
+  .btn-primary {
+    @apply bg-obc-500 hover:bg-obc-400 active:bg-obc-600
+           text-white font-medium rounded-xl px-4 py-2
+           transition-colors duration-150 no-drag;
+  }
+  .btn-ghost {
+    @apply bg-transparent hover:bg-surface-overlay active:bg-surface-border
+           text-slate-400 hover:text-slate-200 rounded-xl px-3 py-2
+           transition-colors duration-150 no-drag;
+  }
+  .btn-danger {
+    @apply bg-red-500/20 hover:bg-red-500/30 active:bg-red-500/40
+           text-red-400 hover:text-red-300 rounded-xl px-4 py-2
+           transition-colors duration-150 no-drag;
+  }
+}
