@@ -11,7 +11,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["thewriterben"]
 license = "MIT"
-description = "Advanced multi-device AI assistant with distributed peripheral nodes, MQTT bus, and multi-modal I/O."
+description = "Advanced multi-device AI assistant with distributed peripheral nodes, MQTT spine, and multi-modal I/O."
 repository = "https://github.com/thewriterben/Oh-Ben-Claw"
 readme = "README.md"
 keywords = ["ai", "agent", "assistant", "iot", "multi-device"]
@@ -55,9 +55,14 @@ async-trait = "0.1"
 # UUID
 uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }
 
-# Crypto
+# Crypto — symmetric encryption, HMAC, and key derivation
+aes-gcm = "0.10"
 chacha20poly1305 = "0.10"
 rand = "0.8"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+argon2 = { version = "0.5", features = ["std"] }
 
 # Concurrency
 parking_lot = "0.12"
@@ -66,7 +71,7 @@ parking_lot = "0.12"
 rusqlite = { version = "0.38", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 
-# MQTT bus — the core communication backbone for multi-device coordination
+# MQTT spine — the core communication backbone for multi-device coordination
 rumqttc = { version = "0.24", default-features = false, features = ["use-rustls"] }
 
 # Hardware discovery
@@ -103,9 +108,9 @@ glob = "0.3"
 rppal = { version = "0.14", optional = true }
 
 [features]
-default = ["hardware", "mqtt-bus"]
+default = ["hardware", "mqtt-spine"]
 hardware = ["nusb", "tokio-serial"]
-mqtt-bus = []
+mqtt-spine = []
 peripheral-rpi = ["rppal"]
 peripheral-nanopi = []
 gui = []

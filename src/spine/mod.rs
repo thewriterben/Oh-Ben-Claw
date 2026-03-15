@@ -1,4 +1,4 @@
-//! Oh-Ben-Claw Communication Bus
+//! Oh-Ben-Claw Communication Spine
 //!
 //! This module implements the MQTT-based communication backbone that connects
 //! the central brain agent with all distributed peripheral nodes.
@@ -20,7 +20,7 @@
 //!     └── command    # Brain publishes a command to all nodes
 //! ```
 
-use crate::config::BusConfig;  // BusConfig is defined in config::mod
+use crate::config::SpineConfig;  // SpineConfig is defined in config::mod
 use crate::tools::traits::{Tool, ToolResult};
 use anyhow::{bail, Result};
 use async_trait::async_trait;
@@ -110,20 +110,20 @@ type PendingCalls = Arc<Mutex<HashMap<String, oneshot::Sender<ToolCallResult>>>>
 /// A map from node_id to a list of that node's tool specs.
 type NodeRegistry = Arc<RwLock<HashMap<String, NodeAnnouncement>>>;
 
-// ── Bus Client ───────────────────────────────────────────────────────────────
+// ── Spine Client ───────────────────────────────────────────────────────────────
 
-/// A client for the Oh-Ben-Claw MQTT communication bus.
-pub struct BusClient {
-    config: BusConfig,
+/// A client for the Oh-Ben-Claw MQTT communication spine.
+pub struct SpineClient {
+    config: SpineConfig,
     client_id: String,
     mqtt_client: Option<AsyncClient>,
     pending_calls: PendingCalls,
     node_registry: NodeRegistry,
 }
 
-impl BusClient {
-    /// Create a new `BusClient` from configuration.
-    pub fn new(config: BusConfig, client_id: impl Into<String>) -> Self {
+impl SpineClient {
+    /// Create a new `SpineClient` from configuration.
+    pub fn new(config: SpineConfig, client_id: impl Into<String>) -> Self {
         Self {
             config,
             client_id: client_id.into(),
@@ -135,7 +135,7 @@ impl BusClient {
 
     /// Connect to the MQTT broker and spawn the event loop.
     ///
-    /// Returns the `BusClient` and a handle to the background event loop task.
+    /// Returns the `SpineClient` and a handle to the background event loop task.
     pub async fn connect(mut self) -> Result<Arc<Self>> {
         let mut opts = MqttOptions::new(
             &self.client_id,
@@ -181,7 +181,7 @@ impl BusClient {
                                     node_id = %node_id,
                                     board = %announcement.board,
                                     tool_count = announcement.tools.len(),
-                                    "Node announced on bus"
+                                    "Node announced on spine"
                                 );
                                 node_registry
                                     .write()
@@ -215,25 +215,25 @@ impl BusClient {
             host = %self.config.host,
             port = self.config.port,
             client_id = %self.client_id,
-            "Connected to MQTT bus"
+            "Connected to MQTT spine"
         );
 
         Ok(Arc::new(self))
     }
 
-    /// Publish a node announcement to the bus.
+    /// Publish a node announcement to the spine.
     pub async fn announce(&self, announcement: &NodeAnnouncement) -> Result<()> {
         let client = self
             .mqtt_client
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Bus not connected"))?;
+            .ok_or_else(|| anyhow::anyhow!("Spine not connected"))?;
         let topic = topic_announce(&announcement.node_id);
         let payload = serde_json::to_vec(announcement)?;
         client.publish(topic, QoS::AtLeastOnce, true, payload).await?;
         Ok(())
     }
 
-    /// Invoke a tool on a specific peripheral node via the bus.
+    /// Invoke a tool on a specific peripheral node via the spine.
     pub async fn invoke_tool(
         &self,
         node_id: &str,
@@ -243,7 +243,7 @@ impl BusClient {
         let client = self
             .mqtt_client
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Bus not connected"))?;
+            .ok_or_else(|| anyhow::anyhow!("Spine not connected"))?;
 
         let call_id = uuid::Uuid::new_v4().to_string();
         let request = ToolCallRequest {
@@ -289,7 +289,7 @@ impl BusClient {
                 tools.push(Box::new(MqttNodeTool {
                     node_id: node_id.clone(),
                     spec: spec.clone(),
-                    bus: Arc::clone(self),
+                    spine: Arc::clone(self),
                 }));
             }
         }
@@ -299,11 +299,11 @@ impl BusClient {
 
 // ── MQTT Node Tool ────────────────────────────────────────────────────────────
 
-/// A tool that delegates execution to a peripheral node via the MQTT bus.
+/// A tool that delegates execution to a peripheral node via the MQTT spine.
 struct MqttNodeTool {
     node_id: String,
     spec: NodeToolSpec,
-    bus: Arc<BusClient>,
+    spine: Arc<SpineClient>,
 }
 
 #[async_trait]
@@ -322,7 +322,7 @@ impl Tool for MqttNodeTool {
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let result = self
-            .bus
+            .spine
             .invoke_tool(&self.node_id, &self.spec.name, args)
             .await?;
 
@@ -374,8 +374,8 @@ mod tests {
     }
 
     #[test]
-    fn bus_config_defaults_are_sensible() {
-        let config = BusConfig::default();
+    fn spine_config_defaults_are_sensible() {
+        let config = SpineConfig::default();
         assert_eq!(config.kind, "mqtt");
         assert_eq!(config.host, "localhost");
         assert_eq!(config.port, 1883);

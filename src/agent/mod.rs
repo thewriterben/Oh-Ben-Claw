@@ -7,6 +7,7 @@
 use crate::config::AgentConfig;
 use crate::memory::MemoryStore;
 use crate::providers::{ChatMessage, ChatRole, Provider};
+use crate::security::{PolicyEngine, ToolPolicyAction};
 use crate::tools::traits::Tool;
 use anyhow::Result;
 use std::sync::Arc;
@@ -25,6 +26,8 @@ pub struct Agent {
     provider: Arc<dyn Provider>,
     memory: Arc<MemoryStore>,
     tools: Vec<Box<dyn Tool>>,
+    /// Optional policy engine for tool execution enforcement.
+    policy: Option<PolicyEngine>,
 }
 
 impl Agent {
@@ -40,7 +43,14 @@ impl Agent {
             provider,
             memory,
             tools,
+            policy: None,
         }
+    }
+
+    /// Attach a policy engine to enforce tool execution policies.
+    pub fn with_policy(mut self, policy: PolicyEngine) -> Self {
+        self.policy = Some(policy);
+        self
     }
 
     /// Add tools to the agent's registry.
@@ -204,11 +214,39 @@ impl Agent {
     }
 
     /// Execute a tool by name with the given JSON arguments string.
+    ///
+    /// Evaluates the security policy before executing. Denied tool calls
+    /// return an error immediately without invoking the tool.
     async fn execute_tool(
         &self,
         name: &str,
         args_str: &str,
     ) -> Result<crate::tools::traits::ToolResult> {
+        // Policy check
+        if let Some(ref policy) = self.policy {
+            let verdict = policy.evaluate(name, args_str);
+            if !verdict.is_allowed() {
+                let reason = verdict
+                    .reason
+                    .as_deref()
+                    .unwrap_or("blocked by security policy");
+                let policy_name = verdict
+                    .policy_name
+                    .as_deref()
+                    .unwrap_or("unknown");
+                tracing::warn!(
+                    tool = %name,
+                    policy = %policy_name,
+                    reason = %reason,
+                    "Tool call blocked by policy"
+                );
+                return Ok(crate::tools::traits::ToolResult::err(format!(
+                    "Tool '{}' blocked by security policy '{}': {}",
+                    name, policy_name, reason
+                )));
+            }
+        }
+
         let tool = self
             .tools
             .iter()

@@ -134,12 +134,12 @@ pub struct PeripheralsConfig {
     pub boards: Vec<PeripheralBoardConfig>,
 }
 
-// ── Bus Configuration ───────────────────────────────────────────────────────
+// ── Spine Configuration ───────────────────────────────────────────────────────
 
-/// Configuration for the MQTT communication bus.
+/// Configuration for the MQTT communication spine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BusConfig {
-    /// The bus kind (currently only "mqtt" is supported).
+pub struct SpineConfig {
+    /// The spine kind (currently only "mqtt" is supported).
     #[serde(default = "default_bus_kind")]
     pub kind: String,
     /// The MQTT broker hostname.
@@ -178,7 +178,7 @@ fn default_tool_timeout_secs() -> u64 {
     30
 }
 
-impl Default for BusConfig {
+impl Default for SpineConfig {
     fn default() -> Self {
         Self {
             kind: default_bus_kind(),
@@ -225,11 +225,13 @@ pub struct Config {
     #[serde(default)]
     pub provider: ProviderConfig,
     #[serde(default)]
-    pub bus: BusConfig,
+    pub spine: SpineConfig,
     #[serde(default)]
     pub peripherals: PeripheralsConfig,
     #[serde(default)]
     pub channels: ChannelsConfig,
+    #[serde(default)]
+    pub security: crate::security::SecurityConfig,
 }
 
 impl Config {
@@ -279,8 +281,8 @@ mod tests {
         assert_eq!(config.agent.name, "Oh-Ben-Claw");
         assert_eq!(config.provider.name, "openai");
         assert_eq!(config.provider.model, "gpt-4o");
-        assert_eq!(config.bus.host, "localhost");
-        assert_eq!(config.bus.port, 1883);
+        assert_eq!(config.spine.host, "localhost");
+        assert_eq!(config.spine.port, 1883);
     }
 
     #[test]

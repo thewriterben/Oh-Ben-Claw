@@ -11,7 +11,7 @@
   <a href="https://github.com/thewriterben/Oh-Ben-Claw/actions"><img src="https://img.shields.io/github/actions/workflow/status/thewriterben/Oh-Ben-Claw/ci.yml?branch=main" alt="CI" /></a>
 </p>
 
-**Oh-Ben-Claw** is an advanced, distributed AI assistant built on the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) architecture. It extends the core framework with a multi-device coordination layer, enabling a single intelligent agent to orchestrate a fleet of specialized hardware peripherals — cameras, microphones, sensors, actuators, and more — over a unified MQTT communication bus.
+**Oh-Ben-Claw** is an advanced, distributed AI assistant built on the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) architecture. It extends the core framework with a multi-device coordination layer, enabling a single intelligent agent to orchestrate a fleet of specialized hardware peripherals — cameras, microphones, sensors, actuators, and more — over a unified MQTT communication spine.
 
 > **Mental model:** Oh-Ben-Claw is the brain. Your ESP32s, NanoPis, and Raspberry Pis are the arms, eyes, and ears.
 
@@ -24,7 +24,7 @@ Oh-Ben-Claw is organized around three layers:
 | Layer | Component | Description |
 |---|---|---|
 | **Brain** | Core Agent | The central LLM-powered reasoning engine, running on a host machine. Orchestrates all peripheral nodes. |
-| **Bus** | MQTT Broker | The unified communication backbone. All devices publish their capabilities and receive commands over MQTT topics. |
+| **Spine** | MQTT Broker | The unified communication backbone. All devices publish their capabilities and receive commands over MQTT topics. |
 | **Appendages** | Peripheral Nodes | Specialized firmware running on ESP32-S3, NanoPi Neo3, Raspberry Pi, and other hardware. Each node exposes its capabilities as tools. |
 
 ```
@@ -38,7 +38,7 @@ Oh-Ben-Claw is organized around three layers:
 │  │  CLI / GUI  │          │                                                  │
 │  └─────────────┘          ▼                                                  │
 │                   ┌───────────────┐                                          │
-│                   │  MQTT Bus     │  ◄── Unified communication backbone      │
+│                   │  MQTT Spine   │  ◄── Unified communication backbone      │
 │                   └──────┬────────┘                                          │
 └──────────────────────────┼───────────────────────────────────────────────────┘
                            │
@@ -58,9 +58,9 @@ Oh-Ben-Claw is organized around three layers:
 
 ## Key Features
 
-**Multi-Device Orchestration** allows a single agent to command a fleet of hardware nodes simultaneously. Each node registers its capabilities dynamically over the MQTT bus, and the central agent merges all available tools into a single, unified registry. The agent can then use natural language to invoke any tool on any device.
+**Multi-Device Orchestration** allows a single agent to command a fleet of hardware nodes simultaneously. Each node registers its capabilities dynamically over the MQTT spine, and the central agent merges all available tools into a single, unified registry. The agent can then use natural language to invoke any tool on any device.
 
-**MQTT Communication Bus** replaces the direct serial-only connections of the base ZeroClaw with a scalable, network-based publish-subscribe model. This enables devices to be located anywhere on the local network (or even the internet via a tunnel), and allows for easy addition and removal of nodes without restarting the core agent.
+**MQTT Communication Spine** replaces the direct serial-only connections of the base ZeroClaw with a scalable, network-based publish-subscribe model. This enables devices to be located anywhere on the local network (or even the internet via a tunnel), and allows for easy addition and removal of nodes without restarting the core agent.
 
 **Multi-Modal I/O** provides a unified interface for interacting with the physical world. The agent can see (via cameras on ESP32-S3 or Raspberry Pi), hear (via I2S microphones), sense (via I2C/SPI sensors like BME280, MPU6050), and act (via GPIO on NanoPi Neo3 or Raspberry Pi).
 
@@ -99,7 +99,7 @@ git clone https://github.com/thewriterben/Oh-Ben-Claw.git
 cd Oh-Ben-Claw
 
 # Build the core agent
-cargo build --release --features hardware,mqtt-bus
+cargo build --release --features hardware,mqtt-spine
 
 # Run the setup wizard
 ./target/release/oh-ben-claw setup
@@ -119,7 +119,7 @@ name = "openai"
 model = "gpt-4o"
 api_key = "sk-..."
 
-[bus]
+[spine]
 kind = "mqtt"
 host = "localhost"
 port = 1883
@@ -147,7 +147,7 @@ token = "your-telegram-bot-token"
 ### Running
 
 ```bash
-# Start the core agent (connects to MQTT bus and all configured peripherals)
+# Start the core agent (connects to MQTT spine and all configured peripherals)
 ./target/release/oh-ben-claw start
 
 # Or run as a background service
@@ -192,7 +192,7 @@ cargo build --target aarch64-unknown-linux-gnu --features hardware,peripheral-na
 Oh-Ben-Claw/
 ├── src/
 │   ├── agent/          # Core agent loop, dispatcher, memory loader
-│   ├── bus/            # MQTT communication bus (publish, subscribe, discovery)
+│   ├── spine/          # MQTT communication spine (publish, subscribe, discovery)
 │   ├── channels/       # Communication channels (Telegram, Discord, CLI, etc.)
 │   ├── config/         # Configuration schema and loading
 │   ├── gui/            # Native GUI application (Tauri/egui)
@@ -220,7 +220,7 @@ Oh-Ben-Claw/
 
 Oh-Ben-Claw is built on top of the `Benji-zeroclaw` fork of `zeroclaw-labs/zeroclaw`. It inherits the core architecture — the agent loop, provider system, channel system, tool registry, and peripheral framework — and extends it with:
 
-- A dedicated MQTT-based communication bus for distributed, network-connected peripheral nodes.
+- A dedicated MQTT-based communication spine for distributed, network-connected peripheral nodes.
 - An expanded hardware ecosystem with more detailed datasheets and firmware.
 - A native GUI application for easier management and monitoring.
 - A more opinionated, production-ready configuration and deployment story.

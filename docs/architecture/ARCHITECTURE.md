@@ -2,7 +2,7 @@
 
 ## Overview
 
-Oh-Ben-Claw is a distributed, multi-device AI assistant. It extends the ZeroClaw architecture with a network-based communication bus, enabling a single intelligent agent to orchestrate a fleet of specialized hardware peripherals located anywhere on the local network or internet.
+Oh-Ben-Claw is a distributed, multi-device AI assistant. It extends the ZeroClaw architecture with a network-based communication spine, enabling a single intelligent agent to orchestrate a fleet of specialized hardware peripherals located anywhere on the local network or internet.
 
 ## Design Principles
 
@@ -14,11 +14,11 @@ The system is organized into three distinct layers, each with a clear responsibi
 
 ### Layer 1: The Brain (Core Agent)
 
-The core agent is the central reasoning and orchestration engine. It runs on a capable host machine and is responsible for maintaining conversational state, interfacing with LLMs, making high-level decisions, and delegating tasks to peripheral nodes. The brain never directly controls hardware; it always delegates to the appropriate peripheral node via the communication bus.
+The core agent is the central reasoning and orchestration engine. It runs on a capable host machine and is responsible for maintaining conversational state, interfacing with LLMs, making high-level decisions, and delegating tasks to peripheral nodes. The brain never directly controls hardware; it always delegates to the appropriate peripheral node via the communication spine.
 
-### Layer 2: The Bus (MQTT Communication Backbone)
+### Layer 2: The Spine (MQTT Communication Backbone)
 
-The MQTT bus is the nervous system of the Oh-Ben-Claw system. All communication between the brain and peripheral nodes flows through the bus. The bus uses a hierarchical topic structure to organize messages:
+The MQTT spine is the nervous system of the Oh-Ben-Claw system. All communication between the brain and peripheral nodes flows through the spine. The spine uses a hierarchical topic structure to organize messages:
 
 | Topic Pattern | Direction | Purpose |
 |---|---|---|
@@ -30,7 +30,7 @@ The MQTT bus is the nervous system of the Oh-Ben-Claw system. All communication 
 
 ### Layer 3: The Appendages (Peripheral Nodes)
 
-Peripheral nodes are the sensory and motor organs of the system. Each node runs a lightweight firmware or agent that exposes its hardware capabilities as tools. When a node starts up, it publishes a `NodeAnnouncement` to the MQTT bus describing its capabilities. The brain subscribes to these announcements and dynamically registers the node's tools into its unified tool registry.
+Peripheral nodes are the sensory and motor organs of the system. Each node runs a lightweight firmware or agent that exposes its hardware capabilities as tools. When a node starts up, it publishes a `NodeAnnouncement` to the MQTT spine describing its capabilities. The brain subscribes to these announcements and dynamically registers the node's tools into its unified tool registry.
 
 ## Component Diagram
 
@@ -45,7 +45,7 @@ Peripheral nodes are the sensory and motor organs of the system. Each node runs 
 │  │  CLI / GUI  │          │                                                  │
 │  └─────────────┘          ▼                                                  │
 │                   ┌───────────────┐                                          │
-│                   │  Bus Client   │                                          │
+│                   │  Spine Client   │                                          │
 │                   └──────┬────────┘                                          │
 └──────────────────────────┼───────────────────────────────────────────────────┘
                            │ MQTT
@@ -94,13 +94,13 @@ All inter-node communication is secured through a combination of MQTT authentica
 
 ## Relationship to ZeroClaw
 
-Oh-Ben-Claw is built on top of the `Benji-zeroclaw` fork of `zeroclaw-labs/zeroclaw`. It inherits the core agent loop, provider system, channel system, tool registry, and peripheral framework. The key additions are the MQTT-based communication bus, the dynamic tool discovery mechanism, and the expanded hardware ecosystem.
+Oh-Ben-Claw is built on top of the `Benji-zeroclaw` fork of `zeroclaw-labs/zeroclaw`. It inherits the core agent loop, provider system, channel system, tool registry, and peripheral framework. The key additions are the MQTT-based communication spine, the dynamic tool discovery mechanism, and the expanded hardware ecosystem.
 
 The following table summarizes the key differences:
 
 | Feature | ZeroClaw | Oh-Ben-Claw |
 |---|---|---|
-| Communication | Direct serial / native GPIO | MQTT bus + serial / native GPIO |
+| Communication | Direct serial / native GPIO | MQTT spine + serial / native GPIO |
 | Tool discovery | Static configuration | Dynamic via node announcements |
 | Multi-device | Multiple boards, direct connections | Fleet of nodes over network |
 | GUI | None | Planned (Tauri/egui) |

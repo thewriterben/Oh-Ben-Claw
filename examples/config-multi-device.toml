@@ -22,7 +22,7 @@ name = "openai"
 model = "gpt-4o"
 # api_key = "sk-..."  # Or set OPENAI_API_KEY environment variable
 
-[bus]
+[spine]
 kind = "mqtt"
 host = "localhost"
 port = 1883
@@ -51,7 +51,7 @@ board = "nanopi-neo3"
 transport = "native"
 
 # Raspberry Pi — connected wirelessly via MQTT
-# The RPi runs its own Oh-Ben-Claw agent and announces itself on the bus
+# The RPi runs its own Oh-Ben-Claw agent and announces itself on the spine
 # Provides: gpio_read, gpio_write, camera_capture, audio_sample
 [[peripherals.boards]]
 board = "rpi-gpio"
@@ -63,3 +63,42 @@ node_id = "rpi-living-room"
 
 [channels.discord]
 # token = "your-discord-bot-token"
+
+# ── Security Configuration ───────────────────────────────────────────────────
+
+[security]
+# Require peripheral nodes to present a valid HMAC-SHA256 pairing token
+# before their tools are registered into the agent's tool registry.
+# Generate a secret with: openssl rand -hex 32
+require_pairing = false
+# pairing_secret = "your-32-byte-hex-secret-here"
+
+# Enable the encrypted secrets vault for API keys and credentials.
+# Secrets stored in the vault take precedence over environment variables.
+vault_enabled = false
+# vault_path = "~/.oh-ben-claw/vault.db"
+
+# Tool execution policies — evaluated in order, first match wins.
+# Actions: "allow" (default), "deny" (block), "audit" (allow + log warning)
+
+# Example: Audit all shell commands
+# [[security.policies]]
+# name = "audit-shell"
+# tool_pattern = "shell"
+# action = "audit"
+# reason = "All shell commands are logged for review"
+
+# Example: Block writes to sensitive system paths
+# [[security.policies]]
+# name = "deny-etc-writes"
+# tool_pattern = "file_write"
+# arg_contains = "/etc/"
+# action = "deny"
+# reason = "Writing to /etc is not permitted"
+
+# Example: Deny all tools except the built-ins (whitelist approach)
+# [[security.policies]]
+# name = "deny-unknown-peripherals"
+# tool_pattern = "*"
+# action = "deny"
+# reason = "Only explicitly allowed tools are permitted"
