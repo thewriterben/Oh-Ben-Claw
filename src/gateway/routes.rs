@@ -1,6 +1,8 @@
-//! Gateway route handlers — all wired to the live `AgentHandle`.
+//! Gateway route handlers — all wired to the live `AgentHandle`, `MemoryStore`,
+//! `Scheduler`, and `ObsContext`.
 
 use super::{GatewayEvent, GatewayState};
+use crate::scheduler::ScheduledTask;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -50,33 +52,166 @@ pub async fn get_status(State(state): State<Arc<GatewayState>>) -> impl IntoResp
     })
 }
 
+// ── Metrics ───────────────────────────────────────────────────────────────────
+
+/// `GET /api/v1/metrics` — Observability metrics snapshot.
+pub async fn get_metrics(State(state): State<Arc<GatewayState>>) -> impl IntoResponse {
+    let metrics = if let Some(obs) = &state.obs {
+        let snap = obs.snapshot();
+        json!({
+            "requests_total": snap.requests_total,
+            "tool_calls_total": snap.tool_calls_total,
+            "tool_errors_total": snap.tool_errors_total,
+            "agent_turns_total": snap.agent_turns_total,
+            "uptime_secs": snap.uptime_secs,
+            "active_sessions": snap.active_sessions,
+        })
+    } else {
+        json!({ "error": "Observability not initialized" })
+    };
+
+    Json(metrics)
+}
+
 // ── Sessions ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 pub struct SessionSummary {
     pub id: String,
+    pub title: String,
     pub message_count: usize,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// `GET /api/v1/sessions` — List conversation sessions.
-pub async fn list_sessions(State(_state): State<Arc<GatewayState>>) -> impl IntoResponse {
-    // TODO: wire to MemoryStore::list_sessions() in Phase 8
-    Json(json!({ "sessions": Value::Array(vec![]) }))
+pub async fn list_sessions(State(state): State<Arc<GatewayState>>) -> impl IntoResponse {
+    let sessions: Vec<Value> = if let Some(mem) = &state.memory {
+        match mem.list_sessions() {
+            Ok(sessions) => sessions
+                .into_iter()
+                .map(|s| {
+                    json!({
+                        "id": s.id,
+                        "title": s.title,
+                        "created_at": s.created_at.to_rfc3339(),
+                        "updated_at": s.updated_at.to_rfc3339(),
+                    })
+                })
+                .collect(),
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to list sessions");
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Json(json!({
+        "sessions": sessions,
+        "count": sessions.len()
+    }))
 }
 
 /// `POST /api/v1/sessions` — Create a new session.
-pub async fn create_session(State(_state): State<Arc<GatewayState>>) -> impl IntoResponse {
-    let id = uuid::Uuid::new_v4().to_string();
-    (StatusCode::CREATED, Json(json!({ "session_id": id })))
+pub async fn create_session(
+    State(state): State<Arc<GatewayState>>,
+    body: Option<Json<Value>>,
+) -> impl IntoResponse {
+    let title = body
+        .as_ref()
+        .and_then(|b| b.get("title"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("New Session")
+        .to_string();
+
+    if let Some(mem) = &state.memory {
+        match mem.create_session(&title) {
+            Ok(id) => (
+                StatusCode::CREATED,
+                Json(json!({ "session_id": id, "title": title })),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        }
+    } else {
+        let id = uuid::Uuid::new_v4().to_string();
+        (
+            StatusCode::CREATED,
+            Json(json!({ "session_id": id, "title": title })),
+        )
+            .into_response()
+    }
 }
 
 /// `GET /api/v1/sessions/{id}/messages` — Get messages for a session.
 pub async fn get_messages(
-    State(_state): State<Arc<GatewayState>>,
+    State(state): State<Arc<GatewayState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    // TODO: wire to MemoryStore::load_messages() in Phase 8
-    Json(json!({ "session_id": id, "messages": Value::Array(vec![]) }))
+    let messages: Vec<Value> = if let Some(mem) = &state.memory {
+        match mem.load_messages(&id) {
+            Ok(msgs) => msgs
+                .into_iter()
+                .map(|m| {
+                    json!({
+                        "role": format!("{:?}", m.role).to_lowercase(),
+                        "content": m.content,
+                    })
+                })
+                .collect(),
+            Err(e) => {
+                tracing::error!(session_id = %id, error = %e, "Failed to load messages");
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Json(json!({
+        "session_id": id,
+        "messages": messages,
+        "count": messages.len()
+    }))
+}
+
+/// `DELETE /api/v1/sessions/{id}` — Delete a session and its messages.
+pub async fn delete_session(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Some(mem) = &state.memory {
+        match mem.delete_session(&id) {
+            Ok(deleted) => {
+                if deleted {
+                    Json(json!({ "deleted": true, "session_id": id })).into_response()
+                } else {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({ "error": "Session not found", "session_id": id })),
+                    )
+                        .into_response()
+                }
+            }
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        }
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Memory store not available" })),
+        )
+            .into_response()
+    }
 }
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
@@ -96,10 +231,6 @@ pub struct ChatResponse {
 }
 
 /// `POST /api/v1/chat` — Send a message to the agent and get a response.
-///
-/// If an `AgentHandle` is attached, this calls `Agent::process()` and
-/// broadcasts all intermediate events (tool calls, results) to the SSE stream.
-/// If no agent is attached, returns a 503 Service Unavailable.
 pub async fn chat(
     State(state): State<Arc<GatewayState>>,
     Json(req): Json<ChatRequest>,
@@ -118,6 +249,11 @@ pub async fn chat(
         )
             .into_response();
     };
+
+    // Track request in observability
+    if let Some(obs) = &state.obs {
+        obs.record_request();
+    }
 
     // Broadcast user message to SSE subscribers
     state.broadcast(GatewayEvent::Message {
@@ -200,6 +336,11 @@ pub async fn chat(
         Ok(response) => {
             forward_task.abort();
 
+            // Track turn in observability
+            if let Some(obs) = &state.obs {
+                obs.record_agent_turn(response.tool_calls.len());
+            }
+
             // Broadcast the final assistant message
             state.broadcast(GatewayEvent::Message {
                 session_id: session_id.clone(),
@@ -250,19 +391,20 @@ pub async fn list_tools(State(state): State<Arc<GatewayState>>) -> impl IntoResp
         vec![]
     };
 
+    let count = tools.len();
     Json(json!({
         "tools": tools,
-        "count": tools.len()
+        "count": count
     }))
 }
 
-/// `POST /api/v1/tools/{name}` — Execute a tool directly via the agent.
+/// `POST /api/v1/tools/{name}` — Execute a tool directly by name.
 pub async fn execute_tool(
     State(state): State<Arc<GatewayState>>,
     Path(name): Path<String>,
     Json(args): Json<Value>,
 ) -> impl IntoResponse {
-    let Some(_handle) = &state.agent else {
+    let Some(handle) = &state.agent else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "Agent not available" })),
@@ -270,34 +412,47 @@ pub async fn execute_tool(
             .into_response();
     };
 
-    let call_id = uuid::Uuid::new_v4().to_string();
+    // Track in observability
+    if let Some(obs) = &state.obs {
+        obs.record_tool_call(&name);
+    }
 
-    state.broadcast(GatewayEvent::ToolCall {
-        session_id: "direct".to_string(),
-        call_id: call_id.clone(),
-        name: name.clone(),
-        args: args.clone(),
-    });
-
-    // TODO: expose Agent::execute_tool() publicly in Phase 8 for direct invocation
-    let result = format!(
-        "Direct tool execution for '{name}' will be available in Phase 8. \
-         Use POST /api/v1/chat to invoke tools via the agent loop."
-    );
-
-    state.broadcast(GatewayEvent::ToolResult {
-        session_id: "direct".to_string(),
-        call_id,
-        name: name.clone(),
-        success: false,
-        result: result.clone(),
-    });
-
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({ "tool": name, "result": result })),
-    )
-        .into_response()
+    match handle.execute_tool_direct(&name, args).await {
+        Ok(result) => {
+            if result.success {
+                Json(json!({
+                    "tool": name,
+                    "success": true,
+                    "output": result.output,
+                }))
+                .into_response()
+            } else {
+                // Track error in observability
+                if let Some(obs) = &state.obs {
+                    obs.record_tool_error(&name);
+                }
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({
+                        "tool": name,
+                        "success": false,
+                        "output": result.output,
+                    })),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => {
+            if let Some(obs) = &state.obs {
+                obs.record_tool_error(&name);
+            }
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "tool": name, "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
 }
 
 // ── Nodes ─────────────────────────────────────────────────────────────────────
@@ -310,11 +465,201 @@ pub async fn list_nodes(State(state): State<Arc<GatewayState>>) -> impl IntoResp
         0
     };
 
-    // TODO: expose per-node details from SpineClient in Phase 8
     Json(json!({
         "nodes": Value::Array(vec![]),
         "count": node_count
     }))
+}
+
+// ── Scheduler ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTaskRequest {
+    pub id: Option<String>,
+    pub name: String,
+    pub prompt: String,
+    pub session_id: Option<String>,
+    pub kind: String,
+    pub value: String,
+}
+
+/// `GET /api/v1/scheduler/tasks` — List all scheduled tasks.
+pub async fn list_tasks(State(state): State<Arc<GatewayState>>) -> impl IntoResponse {
+    let Some(sched) = &state.scheduler else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Scheduler not initialized" })),
+        )
+            .into_response();
+    };
+
+    match sched.list_tasks() {
+        Ok(tasks) => {
+            let items: Vec<Value> = tasks
+                .into_iter()
+                .map(|t| {
+                    json!({
+                        "id": t.id,
+                        "name": t.name,
+                        "prompt": t.prompt,
+                        "session_id": t.session_id,
+                        "kind": t.kind.to_storage_string(),
+                        "enabled": t.enabled,
+                        "last_run": t.last_run,
+                        "next_run": t.next_run,
+                        "run_count": t.run_count,
+                        "created_at": t.created_at,
+                    })
+                })
+                .collect();
+            let count = items.len();
+            Json(json!({ "tasks": items, "count": count })).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/v1/scheduler/tasks` — Create a new scheduled task.
+pub async fn create_task(
+    State(state): State<Arc<GatewayState>>,
+    Json(req): Json<CreateTaskRequest>,
+) -> impl IntoResponse {
+    let Some(sched) = &state.scheduler else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Scheduler not initialized" })),
+        )
+            .into_response();
+    };
+
+    let id = req
+        .id
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_id = req.session_id.unwrap_or_else(|| "default".to_string());
+
+    let task = match req.kind.as_str() {
+        "cron" => ScheduledTask::cron(
+            &id, &req.name, &req.prompt, &session_id, &req.value,
+        ),
+        "interval" => {
+            let secs: u64 = match req.value.parse() {
+                Ok(s) => s,
+                Err(_) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "interval value must be a number of seconds" })),
+                    )
+                        .into_response();
+                }
+            };
+            ScheduledTask::interval(&id, &req.name, &req.prompt, &session_id, secs)
+        }
+        "oneshot" => {
+            let ts: u64 = match req.value.parse() {
+                Ok(t) => t,
+                Err(_) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "oneshot value must be a Unix timestamp" })),
+                    )
+                        .into_response();
+                }
+            };
+            ScheduledTask::one_shot(&id, &req.name, &req.prompt, &session_id, ts)
+        }
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("Unknown task kind: {other}. Use cron, interval, or oneshot.") })),
+            )
+                .into_response();
+        }
+    };
+
+    match sched.add_task(task) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({ "task_id": id, "created": true })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `DELETE /api/v1/scheduler/tasks/{id}` — Delete a scheduled task.
+pub async fn delete_task(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let Some(sched) = &state.scheduler else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Scheduler not initialized" })),
+        )
+            .into_response();
+    };
+
+    match sched.remove_task(&id) {
+        Ok(true) => Json(json!({ "deleted": true, "task_id": id })).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Task not found", "task_id": id })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `PATCH /api/v1/scheduler/tasks/{id}` — Enable or disable a task.
+pub async fn patch_task(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    let Some(sched) = &state.scheduler else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Scheduler not initialized" })),
+        )
+            .into_response();
+    };
+
+    let enabled = match body.get("enabled").and_then(|v| v.as_bool()) {
+        Some(e) => e,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Body must contain {\"enabled\": true|false}" })),
+            )
+                .into_response();
+        }
+    };
+
+    match sched.set_enabled(&id, enabled) {
+        Ok(true) => Json(json!({ "task_id": id, "enabled": enabled })).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Task not found", "task_id": id })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 // ── Tunnel ────────────────────────────────────────────────────────────────────
@@ -395,5 +740,21 @@ mod tests {
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"name\":\"shell\""));
+    }
+
+    #[test]
+    fn create_task_request_deserializes() {
+        let json = r#"{
+            "name": "Daily Briefing",
+            "prompt": "Give me a summary.",
+            "kind": "cron",
+            "value": "0 0 8 * * *"
+        }"#;
+        let req: CreateTaskRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.name, "Daily Briefing");
+        assert_eq!(req.kind, "cron");
+        assert_eq!(req.value, "0 0 8 * * *");
+        assert!(req.id.is_none());
+        assert!(req.session_id.is_none());
     }
 }

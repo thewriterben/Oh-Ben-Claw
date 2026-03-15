@@ -39,6 +39,7 @@ mod memory;
 mod observability;
 mod peripherals;
 mod providers;
+mod scheduler;
 mod security;
 mod tools;
 mod tunnel;

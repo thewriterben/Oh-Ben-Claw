@@ -77,6 +77,7 @@ fn event_stream(
                     GatewayEvent::NodeConnected { .. } => "node_connected",
                     GatewayEvent::NodeDisconnected { .. } => "node_disconnected",
                     GatewayEvent::Status { .. } => "status",
+                    GatewayEvent::ScheduledTask { .. } => "scheduled_task",
                     GatewayEvent::Error { .. } => "error",
                 };
                 Some(Ok(Event::default().event(event_type).data(json)))

@@ -241,6 +241,19 @@ impl MemoryStore {
             .collect())
     }
 
+    /// Delete a session and all its messages.
+    ///
+    /// Returns `true` if the session existed and was deleted, `false` if not found.
+    pub fn delete_session(&self, session_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        // Messages are deleted via ON DELETE CASCADE on the foreign key
+        let rows = conn.execute(
+            "DELETE FROM sessions WHERE id = ?1",
+            params![session_id],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// Delete all messages in a session (clear history).
     pub fn clear_session(&self, session_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
