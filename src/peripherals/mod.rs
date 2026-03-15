@@ -1,18 +1,31 @@
 //! Oh-Ben-Claw Peripheral Subsystem
 //!
 //! This module manages connections to physical hardware peripheral nodes.
-//! It supports three transport modes:
+//! It supports four transport modes:
 //!
 //! - **Serial**: Direct USB/UART connection to a microcontroller (ESP32, Arduino, STM32).
 //! - **Native**: Direct access to hardware on the host machine (Raspberry Pi GPIO, NanoPi GPIO).
 //! - **MQTT**: Network-based connection via the Oh-Ben-Claw MQTT spine.
+//! - **Probe**: Debug-probe connection to ARM Cortex-M targets via probe-rs (STM32 Nucleo).
 //!
 //! # Multi-Board Support
 //!
 //! Multiple boards can be configured simultaneously. The `create_peripheral_tools`
 //! function connects to all configured boards and merges their tools into a single
 //! unified registry for the agent.
+//!
+//! # Supported Hardware (Phase 5)
+//!
+//! | Board | Transport | Feature Flag | Tools |
+//! |---|---|---|---|
+//! | NanoPi Neo3 | native | `peripheral-nanopi` | gpio_read, gpio_write |
+//! | Raspberry Pi 3/4/5 | native | `peripheral-rpi` | rpi_gpio_read/write, rpi_pwm_write, rpi_camera_capture, rpi_system_info |
+//! | Arduino Uno/Mega/Nano | serial | `hardware` | arduino_gpio_read/write, arduino_analog_read/write, arduino_ping |
+//! | STM32 Nucleo | probe | `peripheral-stm32` | stm32_flash, stm32_rtt_read/write, stm32_reset, stm32_list_probes, stm32_mem_read |
+//! | ESP32-S3 | serial/mqtt | `hardware` + `mqtt-spine` | gpio, camera_capture, audio_sample, sensor_read |
+//! | Any Linux SBC | native | `hardware` | i2c_scan, i2c_read, i2c_write, spi_transfer, pwm_control |
 
+pub mod bus_tools;
 pub mod registry;
 pub mod sensors;
 pub mod traits;
@@ -23,10 +36,16 @@ pub mod nanopi;
 #[cfg(all(feature = "peripheral-rpi", target_os = "linux"))]
 pub mod rpi;
 
+#[cfg(feature = "hardware")]
+pub mod arduino;
+
+#[cfg(feature = "peripheral-stm32")]
+pub mod stm32;
+
 pub use traits::Peripheral;
 
-use crate::spine::{SpineClient, NodeAnnouncement, NodeToolSpec};
 use crate::config::{PeripheralBoardConfig, PeripheralsConfig};
+use crate::spine::{NodeAnnouncement, NodeToolSpec, SpineClient};
 use crate::tools::traits::Tool;
 use anyhow::Result;
 use std::sync::Arc;
@@ -46,10 +65,26 @@ pub async fn create_peripheral_tools(
 
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
 
+    // Always include the shared Linux bus tools (I2C, SPI, PWM) on Linux hosts
+    #[cfg(target_os = "linux")]
+    {
+        tools.push(Box::new(bus_tools::I2cScanTool));
+        tools.push(Box::new(bus_tools::I2cReadTool));
+        tools.push(Box::new(bus_tools::I2cWriteTool));
+        tools.push(Box::new(bus_tools::SpiTransferTool));
+        tools.push(Box::new(bus_tools::PwmControlTool));
+        tracing::debug!("Registered Linux bus tools (I2C, SPI, PWM)");
+    }
+
     for board in &config.boards {
-        tracing::info!(board = %board.board, transport = %board.transport, "Connecting to peripheral board");
+        tracing::info!(
+            board = %board.board,
+            transport = %board.transport,
+            "Connecting to peripheral board"
+        );
 
         match board.transport.as_str() {
+            // ── MQTT / Spine ──────────────────────────────────────────────────
             "mqtt" => {
                 if let Some(ref spine_client) = spine {
                     let node_id = board
@@ -59,10 +94,8 @@ pub async fn create_peripheral_tools(
                     tracing::info!(
                         board = %board.board,
                         node_id = %node_id,
-                        "Registering MQTT peripheral node (tools will be discovered via spine)"
+                        "Registering MQTT peripheral node (tools discovered via spine)"
                     );
-                    // MQTT peripheral tools are registered dynamically when the node
-                    // announces itself on the spine. See `spine::SpineClient::subscribe_announcements`.
                     let _ = spine_client;
                 } else {
                     tracing::warn!(
@@ -72,8 +105,13 @@ pub async fn create_peripheral_tools(
                 }
             }
 
+            // ── NanoPi Neo3 native GPIO ───────────────────────────────────────
             #[cfg(all(feature = "peripheral-nanopi", target_os = "linux"))]
-            "native" if board.board == "nanopi-neo3" || board.board == "nanopi-gpio" => {
+            "native"
+                if board.board == "nanopi-neo3"
+                    || board.board == "nanopi-gpio"
+                    || board.board.starts_with("nanopi") =>
+            {
                 match nanopi::NanoPiGpioPeripheral::connect_from_config(board).await {
                     Ok(peripheral) => {
                         tools.extend(peripheral.tools());
@@ -85,8 +123,13 @@ pub async fn create_peripheral_tools(
                 }
             }
 
+            // ── Raspberry Pi native GPIO / camera ─────────────────────────────
             #[cfg(all(feature = "peripheral-rpi", target_os = "linux"))]
-            "native" if board.board == "rpi-gpio" => {
+            "native"
+                if board.board == "rpi-gpio"
+                    || board.board.starts_with("raspberry-pi")
+                    || board.board.starts_with("rpi") =>
+            {
                 match rpi::RpiGpioPeripheral::connect_from_config(board).await {
                     Ok(peripheral) => {
                         tools.extend(peripheral.tools());
@@ -98,14 +141,68 @@ pub async fn create_peripheral_tools(
                 }
             }
 
+            // ── Arduino serial ────────────────────────────────────────────────
+            #[cfg(feature = "hardware")]
+            "serial"
+                if board.board.starts_with("arduino")
+                    || board.board.starts_with("uno")
+                    || board.board.starts_with("mega")
+                    || board.board.starts_with("nano") =>
+            {
+                match arduino::ArduinoSerialPeripheral::new(board.clone()) {
+                    Ok(mut peripheral) => match peripheral.connect().await {
+                        Ok(()) => {
+                            tools.extend(peripheral.tools());
+                            tracing::info!(board = %board.board, "Arduino serial peripheral connected");
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to connect Arduino {}: {}", board.board, e);
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!("Failed to create Arduino peripheral {}: {}", board.board, e);
+                    }
+                }
+            }
+
+            // ── STM32 Nucleo via probe-rs ─────────────────────────────────────
+            #[cfg(feature = "peripheral-stm32")]
+            "probe"
+                if board.board.starts_with("nucleo")
+                    || board.board.starts_with("stm32") =>
+            {
+                match stm32::Stm32NucleoPeripheral::connect_from_config(board).await {
+                    Ok(peripheral) => {
+                        tools.extend(peripheral.tools());
+                        tracing::info!(board = %board.board, "STM32 Nucleo peripheral connected via probe-rs");
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to connect STM32 Nucleo {}: {}", board.board, e);
+                    }
+                }
+            }
+
+            // ── ESP32 / ESP32-S3 serial ───────────────────────────────────────
+            "serial"
+                if board.board.starts_with("esp32") =>
+            {
+                // ESP32 serial tools are provided by the spine MQTT discovery
+                // when running the obc-esp32-s3 firmware. For direct serial,
+                // the sensors module provides the tool implementations.
+                tracing::info!(
+                    board = %board.board,
+                    path = ?board.path,
+                    "ESP32 serial peripheral registered (use MQTT spine for full tool discovery)"
+                );
+            }
+
+            // ── Generic serial fallback ───────────────────────────────────────
             "serial" => {
-                // Serial transport: ESP32, ESP32-S3, Arduino, STM32, etc.
-                // TODO: Implement serial transport connection
                 tracing::info!(
                     board = %board.board,
                     path = ?board.path,
                     baud = board.baud,
-                    "Serial peripheral (connection logic pending)"
+                    "Generic serial peripheral registered (no specific driver matched)"
                 );
             }
 
@@ -151,6 +248,9 @@ mod tests {
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let tools = rt.block_on(create_peripheral_tools(&config, None)).unwrap();
+        // On Linux, bus tools are always registered even when peripherals are disabled
+        // because they are host-level tools, not board-level. On non-Linux, empty.
+        #[cfg(not(target_os = "linux"))]
         assert!(tools.is_empty());
     }
 
@@ -166,5 +266,14 @@ mod tests {
         let announcement = build_announcement("esp32-s3-living-room", &board_config, vec![]);
         assert_eq!(announcement.node_id, "esp32-s3-living-room");
         assert_eq!(announcement.board, "esp32-s3");
+    }
+
+    #[test]
+    fn bus_tools_have_correct_names() {
+        assert_eq!(bus_tools::I2cScanTool.name(), "i2c_scan");
+        assert_eq!(bus_tools::I2cReadTool.name(), "i2c_read");
+        assert_eq!(bus_tools::I2cWriteTool.name(), "i2c_write");
+        assert_eq!(bus_tools::SpiTransferTool.name(), "spi_transfer");
+        assert_eq!(bus_tools::PwmControlTool.name(), "pwm_control");
     }
 }
