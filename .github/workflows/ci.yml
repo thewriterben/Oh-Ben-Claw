@@ -1,0 +1,78 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+jobs:
+  # ── Build & Test (host) ────────────────────────────────────────────────────
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build (default features)
+        run: cargo build --workspace --exclude obc-esp32-s3
+      - name: Build (all host features)
+        run: cargo build --features hardware,mqtt-bus --exclude obc-esp32-s3
+      - name: Build (NanoPi feature, Linux only)
+        run: cargo build --features hardware,peripheral-nanopi --exclude obc-esp32-s3
+      - name: Run tests
+        run: cargo test --workspace --exclude obc-esp32-s3
+      - name: Clippy
+        run: cargo clippy --workspace --exclude obc-esp32-s3 -- -D warnings
+      - name: Format check
+        run: cargo fmt --all --check
+  # ── Cross-compile for AArch64 (NanoPi Neo3) ───────────────────────────────
+  cross-aarch64:
+    name: Cross-compile AArch64 (NanoPi Neo3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - name: Install cross-compilation tools
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-aarch64-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cross-compile for AArch64
+        run: |
+          cargo build \
+            --target aarch64-unknown-linux-gnu \
+            --features hardware,peripheral-nanopi \
+            --exclude obc-esp32-s3
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+  # ── Security audit ─────────────────────────────────────────────────────────
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: Run security audit
+        run: cargo audit --exclude obc-esp32-s3
