@@ -4,6 +4,9 @@
 //! calls the LLM, executes any requested tool calls, feeds results back to the
 //! LLM, and repeats until the model produces a final text response.
 
+pub mod handle;
+pub use handle::{AgentEvent, AgentHandle};
+
 use crate::config::AgentConfig;
 use crate::memory::MemoryStore;
 use crate::providers::{ChatMessage, ChatRole, Provider};

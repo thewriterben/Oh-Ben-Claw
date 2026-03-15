@@ -1,9 +1,9 @@
-//! Oh-Ben-Claw REST & WebSocket API Gateway
+//! Oh-Ben-Claw REST & SSE API Gateway
 //!
 //! An Axum-based HTTP server that exposes the agent, peripheral nodes, and
-//! tool registry over a clean REST API and a WebSocket stream. This enables
-//! mobile apps, web browsers, and third-party integrations to interact with
-//! Oh-Ben-Claw over the network.
+//! tool registry over a clean REST API and a Server-Sent Events stream.
+//! This enables mobile apps, web browsers, and third-party integrations to
+//! interact with Oh-Ben-Claw over the network.
 //!
 //! # Endpoints
 //!
@@ -20,7 +20,7 @@
 //! | `POST` | `/api/v1/tools/{name}` | Execute a tool directly |
 //! | `GET` | `/api/v1/nodes` | List peripheral nodes |
 //! | `GET` | `/api/v1/tunnel` | Get tunnel status and URL |
-//! | `GET` | `/events` | SSE stream for real-time events |
+//! | `GET` | `/events` | SSE stream for real-time agent events |
 //!
 //! # Authentication
 //!
@@ -33,19 +33,22 @@
 //!
 //! The SSE stream at `/events` emits named JSON events:
 //! ```json
-//! {"type": "message", "role": "assistant", "content": "..."}
-//! {"type": "tool_call", "name": "shell", "args": {...}}
-//! {"type": "tool_result", "name": "shell", "result": "..."}
-//! {"type": "node_connected", "node_id": "esp32-s3-01", "tools": [...]}
-//! {"type": "node_disconnected", "node_id": "esp32-s3-01"}
-//! {"type": "status", "agent": "running", "nodes": 2}
+//! {"type": "started", "session_id": "...", "user_message": "..."}
+//! {"type": "thinking", "session_id": "...", "iteration": 0}
+//! {"type": "tool_call", "session_id": "...", "tool_name": "shell", "args": {...}}
+//! {"type": "tool_result", "session_id": "...", "tool_name": "shell", "success": true, "output": "..."}
+//! {"type": "response", "session_id": "...", "content": "...", "tool_calls_made": 2}
+//! {"type": "error", "session_id": "...", "message": "..."}
+//! {"type": "node_connected", "node_id": "...", "board": "...", "tools": [...]}
+//! {"type": "node_disconnected", "node_id": "..."}
 //! ```
 
+pub mod middleware;
+pub mod pwa;
 pub mod routes;
 pub mod ws;
-pub mod pwa;
-pub mod middleware;
 
+use crate::agent::AgentHandle;
 use crate::config::GatewayConfig;
 use anyhow::{Context, Result};
 use axum::{
@@ -58,16 +61,26 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
-/// Events broadcast to all WebSocket clients.
+/// Events broadcast to all SSE subscribers.
+///
+/// These are forwarded from `AgentEvent` (agent-internal) and supplemented
+/// with gateway-level events (node connect/disconnect, status).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GatewayEvent {
-    /// A new assistant message.
+    /// A new chat message (user or assistant).
     Message {
         session_id: String,
         role: String,
         content: String,
     },
+    /// The agent started processing.
+    Started {
+        session_id: String,
+        user_message: String,
+    },
+    /// The agent is thinking (waiting for LLM).
+    Thinking { session_id: String, iteration: u32 },
     /// A tool call was dispatched.
     ToolCall {
         session_id: String,
@@ -101,22 +114,44 @@ pub enum GatewayEvent {
     Error { message: String },
 }
 
-/// Shared state for the gateway.
-#[derive(Debug, Clone)]
+/// Shared state for the gateway, accessible from all route handlers.
+#[derive(Clone)]
 pub struct GatewayState {
     pub config: GatewayConfig,
     pub event_tx: broadcast::Sender<GatewayEvent>,
+    /// Live handle to the running agent — `None` until the agent is started.
+    pub agent: Option<AgentHandle>,
+}
+
+impl std::fmt::Debug for GatewayState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayState")
+            .field("config", &self.config)
+            .field("agent_attached", &self.agent.is_some())
+            .finish()
+    }
 }
 
 impl GatewayState {
+    /// Create a new `GatewayState` without an agent attached.
     pub fn new(config: GatewayConfig) -> Self {
-        let (event_tx, _) = broadcast::channel(256);
-        Self { config, event_tx }
+        let (event_tx, _) = broadcast::channel(512);
+        Self {
+            config,
+            event_tx,
+            agent: None,
+        }
     }
 
-    /// Broadcast an event to all connected WebSocket clients.
+    /// Attach a live `AgentHandle` to the gateway state.
+    pub fn with_agent(mut self, handle: AgentHandle) -> Self {
+        self.agent = Some(handle);
+        self
+    }
+
+    /// Broadcast an event to all connected SSE subscribers.
     pub fn broadcast(&self, event: GatewayEvent) {
-        // Ignore errors — no subscribers is fine
+        // Ignore send errors — no subscribers is fine
         let _ = self.event_tx.send(event);
     }
 }
@@ -186,7 +221,10 @@ fn build_cors(config: &GatewayConfig) -> tower_http::cors::CorsLayer {
     }
 }
 
-/// Start the gateway and return the bound address.
+/// Start the gateway and return the shared state and bound URL.
+///
+/// The returned `Arc<GatewayState>` can be used to attach an `AgentHandle`
+/// after the agent is started, and to broadcast events to SSE subscribers.
 pub async fn start(config: GatewayConfig) -> Result<(Arc<GatewayState>, String)> {
     let bind_addr = format!("{}:{}", config.host, config.port);
     let state = Arc::new(GatewayState::new(config));
@@ -210,6 +248,33 @@ pub async fn start(config: GatewayConfig) -> Result<(Arc<GatewayState>, String)>
     Ok((state, url))
 }
 
+/// Start the gateway with a live `AgentHandle` already attached.
+pub async fn start_with_agent(
+    config: GatewayConfig,
+    agent: AgentHandle,
+) -> Result<(Arc<GatewayState>, String)> {
+    let bind_addr = format!("{}:{}", config.host, config.port);
+    let state = Arc::new(GatewayState::new(config).with_agent(agent));
+    let router = build_router(state.clone());
+
+    let listener = TcpListener::bind(&bind_addr)
+        .await
+        .with_context(|| format!("Failed to bind gateway to {bind_addr}"))?;
+
+    let actual_addr = listener.local_addr()?.to_string();
+    let url = format!("http://{actual_addr}");
+
+    tracing::info!(addr = %actual_addr, "Gateway listening (agent attached)");
+
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, router).await {
+            tracing::error!("Gateway error: {e}");
+        }
+    });
+
+    Ok((state, url))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +284,7 @@ mod tests {
         let config = GatewayConfig::default();
         let state = GatewayState::new(config.clone());
         assert_eq!(state.config.port, config.port);
+        assert!(state.agent.is_none());
     }
 
     #[test]
@@ -256,6 +322,60 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"type\":\"node_connected\""));
         assert!(json.contains("esp32-s3-01"));
+    }
+
+    #[test]
+    fn gateway_event_all_variants_have_type_field() {
+        let events = vec![
+            GatewayEvent::Message {
+                session_id: "s1".to_string(),
+                role: "user".to_string(),
+                content: "hi".to_string(),
+            },
+            GatewayEvent::Started {
+                session_id: "s1".to_string(),
+                user_message: "hi".to_string(),
+            },
+            GatewayEvent::Thinking {
+                session_id: "s1".to_string(),
+                iteration: 0,
+            },
+            GatewayEvent::ToolCall {
+                session_id: "s1".to_string(),
+                call_id: "c1".to_string(),
+                name: "shell".to_string(),
+                args: serde_json::json!({}),
+            },
+            GatewayEvent::ToolResult {
+                session_id: "s1".to_string(),
+                call_id: "c1".to_string(),
+                name: "shell".to_string(),
+                success: true,
+                result: "ok".to_string(),
+            },
+            GatewayEvent::NodeConnected {
+                node_id: "n1".to_string(),
+                board: "esp32".to_string(),
+                tools: vec![],
+            },
+            GatewayEvent::NodeDisconnected {
+                node_id: "n1".to_string(),
+            },
+            GatewayEvent::Status {
+                agent_running: false,
+                node_count: 0,
+                tunnel_url: None,
+            },
+            GatewayEvent::Error {
+                message: "oops".to_string(),
+            },
+        ];
+
+        for ev in events {
+            let json = serde_json::to_string(&ev).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert!(v.get("type").is_some(), "Missing 'type' field in: {json}");
+        }
     }
 
     #[test]

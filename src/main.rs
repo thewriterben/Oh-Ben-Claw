@@ -43,7 +43,7 @@ mod security;
 mod tools;
 mod tunnel;
 
-use agent::Agent;
+use agent::{Agent, AgentHandle};
 use channels::CliChannel;
 use config::Config;
 use memory::MemoryStore;
@@ -178,36 +178,6 @@ async fn main() -> Result<()> {
 }
 
 async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<()> {
-    // Start the REST/WebSocket gateway if enabled
-    let _gateway_state = if config.gateway.enabled {
-        match gateway::start(config.gateway.clone()).await {
-            Ok((state, url)) => {
-                info!(url = %url, "Gateway started — PWA available at {}", url);
-                if config.tunnel.enabled {
-                    let mgr = tunnel::TunnelManager::new(config.tunnel.clone());
-                    match mgr.start().await {
-                        Ok(public_url) => {
-                            info!(url = %public_url, "Tunnel started — public access at {}", public_url);
-                            state.broadcast(gateway::GatewayEvent::Status {
-                                agent_running: false,
-                                node_count: 0,
-                                tunnel_url: Some(public_url),
-                            });
-                        }
-                        Err(e) => tracing::warn!("Tunnel failed to start: {}", e),
-                    }
-                }
-                Some(state)
-            }
-            Err(e) => {
-                tracing::warn!("Gateway failed to start: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
     info!("Starting Oh-Ben-Claw v{}", env!("CARGO_PKG_VERSION"));
 
     // Open memory store
@@ -216,7 +186,6 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     let session_id = if session_id == "default" {
         session
     } else {
-        // Create or reuse the named session
         let sessions = memory.list_sessions()?;
         if sessions.iter().any(|s| s.id == session_id) {
             session_id.to_string()
@@ -235,6 +204,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
 
     // Build tool registry
     let mut all_tools = default_tools();
+    let mut node_count = 0usize;
 
     // Connect to MQTT spine and discover peripheral tools
     let spine_client = if !no_spine && config.spine.kind == "mqtt" {
@@ -245,10 +215,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     port = config.spine.port,
                     "Connected to MQTT spine"
                 );
-                // Give nodes a moment to announce themselves
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 let mqtt_tools = client.build_mqtt_tools().await;
                 if !mqtt_tools.is_empty() {
+                    node_count += mqtt_tools.len();
                     info!(count = mqtt_tools.len(), "Discovered MQTT peripheral tools");
                     all_tools.extend(mqtt_tools);
                 }
@@ -271,18 +241,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         )
         .await?;
         if !peripheral_tools.is_empty() {
+            node_count += config.peripherals.boards.len();
             info!(count = peripheral_tools.len(), "Peripheral tools registered");
             all_tools.extend(peripheral_tools);
         }
     }
 
-    info!(
-        tool_count = all_tools.len(),
-        session_id = %session_id,
-        "Agent ready"
-    );
-
-    // Build security context and attach policy engine to agent
+    // Build security context
     let security_ctx = security::SecurityContext::new(&config.security)
         .unwrap_or_else(|e| {
             tracing::warn!("Failed to init security context: {}; using defaults", e);
@@ -296,15 +261,74 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         );
     }
 
-    // Build and start the agent
-    let agent = Arc::new(Agent::new(
-        config.agent.clone(),
-        provider,
-        Arc::clone(&memory),
-        all_tools,
-    ).with_policy(security_ctx.policy));
+    // Build the agent
+    let agent = Arc::new(
+        Agent::new(
+            config.agent.clone(),
+            provider,
+            Arc::clone(&memory),
+            all_tools,
+        )
+        .with_policy(security_ctx.policy),
+    );
 
-    // Run the CLI channel
+    // Wrap in an AgentHandle for thread-safe gateway access
+    let handle = AgentHandle::new(Arc::clone(&agent), config.provider.clone());
+    handle.set_node_count(node_count).await;
+
+    info!(
+        tool_count = agent.tool_count(),
+        node_count = node_count,
+        session_id = %session_id,
+        "Agent ready"
+    );
+
+    // Start the gateway (with live agent attached) if enabled
+    let _gateway_state = if config.gateway.enabled {
+        match gateway::start_with_agent(config.gateway.clone(), handle.clone()).await {
+            Ok((state, url)) => {
+                info!(url = %url, "Gateway started — PWA available at {}", url);
+
+                // Start tunnel if enabled
+                if config.tunnel.enabled {
+                    let mgr = tunnel::TunnelManager::new(config.tunnel.clone());
+                    let handle_clone = handle.clone();
+                    let state_clone = state.clone();
+                    tokio::spawn(async move {
+                        match mgr.start().await {
+                            Ok(public_url) => {
+                                info!(url = %public_url, "Tunnel active — public access at {}", public_url);
+                                handle_clone.set_tunnel_url(Some(public_url.clone())).await;
+                                state_clone.broadcast(gateway::GatewayEvent::Status {
+                                    agent_running: true,
+                                    node_count,
+                                    tunnel_url: Some(public_url),
+                                });
+                            }
+                            Err(e) => tracing::warn!("Tunnel failed to start: {}", e),
+                        }
+                    });
+                }
+
+                // Broadcast initial status to any early SSE subscribers
+                state.broadcast(gateway::GatewayEvent::Status {
+                    agent_running: true,
+                    node_count,
+                    tunnel_url: None,
+                });
+
+                Some(state)
+            }
+            Err(e) => {
+                tracing::warn!("Gateway failed to start: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Run the interactive CLI channel
     let cli_channel = CliChannel::new(agent, config.provider.clone(), session_id);
     cli_channel.run().await?;
 
