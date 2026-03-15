@@ -1,0 +1,57 @@
+[package]
+name = "oh-ben-claw-gui"
+version = "0.1.0"
+description = "Oh-Ben-Claw — native desktop GUI"
+authors = ["thewriterben"]
+license = "MIT"
+repository = "https://github.com/thewriterben/Oh-Ben-Claw"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "oh_ben_claw_gui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri core
+tauri          = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-autostart    = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-shell        = "2"
+tauri-plugin-store        = "2"
+
+# Serialization
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+
+# Async runtime
+tokio       = { version = "1", features = ["full"] }
+
+# Error handling
+anyhow      = "1"
+thiserror   = "1"
+
+# Logging
+tracing             = "0.1"
+tracing-subscriber  = { version = "0.3", features = ["env-filter"] }
+
+# Oh-Ben-Claw core library (shared with CLI)
+oh-ben-claw = { path = "../..", features = [] }
+
+# System info
+sysinfo = "0.32"
+
+[features]
+# This feature is used for production builds or when `devPath` points to the filesystem
+# DO NOT REMOVE!!
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+opt-level    = "z"
+lto          = true
+codegen-units = 1
+panic        = "abort"
+strip        = true
