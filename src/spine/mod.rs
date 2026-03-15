@@ -5,19 +5,19 @@
 //!
 //! # Topic Hierarchy
 //!
-//! ```
+//! ```text
 //! obc/
-//! ├── nodes/
-//! │   ├── {node_id}/
-//! │   │   ├── announce    # Node publishes its capabilities on connect
-//! │   │   ├── heartbeat   # Node publishes a heartbeat every N seconds
-//! │   │   └── status      # Node publishes its current status
-//! ├── tools/
-//! │   ├── {node_id}/
-//! │   │   ├── call/{tool_name}   # Brain publishes a tool call request
-//! │   │   └── result/{call_id}  # Node publishes the tool call result
-//! └── broadcast/
-//!     └── command    # Brain publishes a command to all nodes
+//! +-- nodes/
+//! |   +-- {node_id}/
+//! |   |   +-- announce    # Node publishes its capabilities on connect
+//! |   |   +-- heartbeat   # Node publishes a heartbeat every N seconds
+//! |   |   +-- status      # Node publishes its current status
+//! +-- tools/
+//! |   +-- {node_id}/
+//! |   |   +-- call/{tool_name}   # Brain publishes a tool call request
+//! |   |   +-- result/{call_id}  # Node publishes the tool call result
+//! +-- broadcast/
+//!     +-- command    # Brain publishes a command to all nodes
 //! ```
 
 use crate::config::SpineConfig;  // SpineConfig is defined in config::mod
