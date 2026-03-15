@@ -1,0 +1,22 @@
+[package]
+name = "obc-esp32-s3"
+version = "0.1.0"
+edition = "2021"
+authors = ["thewriterben"]
+description = "Oh-Ben-Claw firmware for ESP32-S3 — GPIO, camera, microphone, sensors, and MQTT."
+
+[dependencies]
+esp-idf-svc = { version = "0.51", features = ["std", "embassy-time-driver"] }
+esp-idf-hal = "0.44"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+log = "0.4"
+embuild = "0.32"
+
+[build-dependencies]
+embuild = "0.32"
+
+[[bin]]
+name = "obc-esp32-s3"
+path = "src/main.rs"

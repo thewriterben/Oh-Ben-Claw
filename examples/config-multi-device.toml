@@ -1,0 +1,65 @@
+# Oh-Ben-Claw — Multi-Device Configuration Example
+#
+# This example shows how to configure a fleet of peripheral nodes:
+# - A Waveshare ESP32-S3 Touch LCD 2.1 connected via USB serial
+# - A NanoPi Neo3 running natively
+# - A Raspberry Pi connected via MQTT (wireless)
+#
+# Copy to ~/.oh-ben-claw/config.toml and adjust as needed.
+
+[agent]
+name = "Oh-Ben-Claw"
+system_prompt = """
+You are Oh-Ben-Claw, an advanced multi-device AI assistant.
+You can see, hear, sense, and act in the physical world through
+a fleet of connected hardware devices. Be helpful, precise, and proactive.
+When asked to interact with hardware, always confirm the action before executing it.
+"""
+max_tool_iterations = 15
+
+[provider]
+name = "openai"
+model = "gpt-4o"
+# api_key = "sk-..."  # Or set OPENAI_API_KEY environment variable
+
+[bus]
+kind = "mqtt"
+host = "localhost"
+port = 1883
+# username = "oh-ben-claw"
+# password = "your-mqtt-password"
+# tls = true
+tool_timeout_secs = 30
+
+[peripherals]
+enabled = true
+datasheet_dir = "docs/datasheets"
+
+# Waveshare ESP32-S3 Touch LCD 2.1 — connected via USB serial
+# Provides: camera_capture, audio_sample, sensor_read, gpio_read, gpio_write
+[[peripherals.boards]]
+board = "waveshare-esp32-s3-touch-lcd-2.1"
+transport = "serial"
+path = "/dev/ttyUSB0"   # Linux: /dev/ttyUSB0 or /dev/ttyACM0; macOS: /dev/cu.usbmodem*
+baud = 115200
+
+# NanoPi Neo3 — running natively on the same Linux host
+# Provides: gpio_read, gpio_write
+# Build with: cargo build --features hardware,peripheral-nanopi
+[[peripherals.boards]]
+board = "nanopi-neo3"
+transport = "native"
+
+# Raspberry Pi — connected wirelessly via MQTT
+# The RPi runs its own Oh-Ben-Claw agent and announces itself on the bus
+# Provides: gpio_read, gpio_write, camera_capture, audio_sample
+[[peripherals.boards]]
+board = "rpi-gpio"
+transport = "mqtt"
+node_id = "rpi-living-room"
+
+[channels.telegram]
+# token = "your-telegram-bot-token"
+
+[channels.discord]
+# token = "your-discord-bot-token"

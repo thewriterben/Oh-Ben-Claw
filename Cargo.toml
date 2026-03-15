@@ -1,0 +1,130 @@
+[workspace]
+members = [
+    ".",
+    "firmware/obc-esp32-s3",
+]
+resolver = "2"
+
+[package]
+name = "oh-ben-claw"
+version = "0.1.0"
+edition = "2021"
+authors = ["thewriterben"]
+license = "MIT"
+description = "Advanced multi-device AI assistant with distributed peripheral nodes, MQTT bus, and multi-modal I/O."
+repository = "https://github.com/thewriterben/Oh-Ben-Claw"
+readme = "README.md"
+keywords = ["ai", "agent", "assistant", "iot", "multi-device"]
+categories = ["command-line-utilities", "api-bindings", "embedded"]
+
+[dependencies]
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Async runtime
+tokio = { version = "1.42", default-features = false, features = [
+    "rt-multi-thread", "macros", "time", "net", "io-util",
+    "sync", "process", "io-std", "fs", "signal"
+] }
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = [
+    "json", "rustls-tls", "blocking", "multipart", "stream"
+] }
+
+# Serialization
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+
+# Config
+directories = "5.0"
+toml = "1.0"
+shellexpand = "3.1"
+
+# Logging
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Async traits
+async-trait = "0.1"
+
+# UUID
+uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }
+
+# Crypto
+chacha20poly1305 = "0.10"
+rand = "0.8"
+
+# Concurrency
+parking_lot = "0.12"
+
+# Memory / persistence
+rusqlite = { version = "0.38", features = ["bundled"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+
+# MQTT bus — the core communication backbone for multi-device coordination
+rumqttc = { version = "0.24", default-features = false, features = ["use-rustls"] }
+
+# Hardware discovery
+nusb = { version = "0.2", default-features = false, optional = true }
+
+# Serial port for peripheral communication
+tokio-serial = { version = "5", default-features = false, optional = true }
+
+# Base64 encoding (screenshots, image data, audio)
+base64 = "0.22"
+
+# HTTP server (gateway)
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+tower = { version = "0.5", default-features = false }
+tower-http = { version = "0.6", default-features = false, features = ["limit", "timeout", "cors"] }
+http-body-util = "0.1"
+
+# Discord WebSocket
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+
+# Cron scheduling
+cron = "0.12"
+
+# Interactive CLI prompts
+dialoguer = { version = "0.12", features = ["fuzzy-select"] }
+console = "0.15"
+
+# Glob patterns
+glob = "0.3"
+
+# Raspberry Pi GPIO (Linux only)
+[target.'cfg(target_os = "linux")'.dependencies]
+rppal = { version = "0.14", optional = true }
+
+[features]
+default = ["hardware", "mqtt-bus"]
+hardware = ["nusb", "tokio-serial"]
+mqtt-bus = []
+peripheral-rpi = ["rppal"]
+peripheral-nanopi = []
+gui = []
+
+[profile.release]
+opt-level = "z"
+lto = "thin"
+codegen-units = 8
+strip = true
+panic = "abort"
+
+[profile.dist]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.14"
