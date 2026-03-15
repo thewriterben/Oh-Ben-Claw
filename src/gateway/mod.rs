@@ -31,7 +31,7 @@ pub mod pwa;
 pub mod routes;
 pub mod ws;
 
-use crate::agent::AgentHandle;
+use crate::agent::{AgentHandle, AgentPool};
 use crate::config::GatewayConfig;
 use crate::memory::MemoryStore;
 use crate::observability::ObsContext;
@@ -116,6 +116,8 @@ pub struct GatewayState {
     pub obs: Option<Arc<ObsContext>>,
     /// Task scheduler — `None` if not initialized.
     pub scheduler: Option<Arc<Scheduler>>,
+    /// Multi-agent pool — `None` if orchestration is disabled.
+    pub agent_pool: Option<AgentPool>,
 }
 
 impl std::fmt::Debug for GatewayState {
@@ -126,6 +128,7 @@ impl std::fmt::Debug for GatewayState {
             .field("memory_attached", &self.memory.is_some())
             .field("obs_attached", &self.obs.is_some())
             .field("scheduler_attached", &self.scheduler.is_some())
+            .field("agent_pool_attached", &self.agent_pool.is_some())
             .finish()
     }
 }
@@ -141,6 +144,7 @@ impl GatewayState {
             memory: None,
             obs: None,
             scheduler: None,
+            agent_pool: None,
         }
     }
 
@@ -168,6 +172,12 @@ impl GatewayState {
         self
     }
 
+    /// Attach an `AgentPool` for multi-agent orchestration.
+    pub fn with_agent_pool(mut self, pool: AgentPool) -> Self {
+        self.agent_pool = Some(pool);
+        self
+    }
+
     /// Broadcast an event to all connected SSE subscribers.
     pub fn broadcast(&self, event: GatewayEvent) {
         let _ = self.event_tx.send(event);
@@ -191,7 +201,12 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .route("/scheduler/tasks", get(routes::list_tasks))
         .route("/scheduler/tasks", post(routes::create_task))
         .route("/scheduler/tasks/{id}", delete(routes::delete_task))
-        .route("/scheduler/tasks/{id}", patch(routes::patch_task));
+        .route("/scheduler/tasks/{id}", patch(routes::patch_task))
+        .route("/agents", get(routes::list_agents))
+        .route("/agents", post(routes::spawn_agent))
+        .route("/agents/{name}", get(routes::get_agent))
+        .route("/agents/{name}", delete(routes::stop_agent))
+        .route("/agents/{name}/delegate", post(routes::delegate_to_agent));
 
     // Apply auth middleware to API routes if a token is configured
     let api_routes = if state.config.api_token.is_some() {

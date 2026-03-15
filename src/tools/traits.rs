@@ -32,6 +32,16 @@ impl ToolResult {
             error: Some(error.into()),
         }
     }
+
+    /// Returns `true` if the tool execution succeeded.
+    pub fn is_ok(&self) -> bool {
+        self.success
+    }
+
+    /// Returns the output string of the tool execution.
+    pub fn output(&self) -> &str {
+        &self.output
+    }
 }
 
 /// A tool that the agent can invoke.

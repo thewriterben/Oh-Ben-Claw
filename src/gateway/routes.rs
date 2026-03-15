@@ -758,3 +758,162 @@ mod tests {
         assert!(req.session_id.is_none());
     }
 }
+
+// ── Multi-Agent Endpoints ─────────────────────────────────────────────────────
+
+/// `GET /api/v1/agents` — List all sub-agents in the pool.
+pub async fn list_agents(State(state): State<Arc<GatewayState>>) -> impl IntoResponse {
+    let Some(pool) = &state.agent_pool else {
+        return Json(json!({ "agents": [], "count": 0 })).into_response();
+    };
+
+    let agents = pool.list();
+    let count = agents.len();
+    Json(json!({ "agents": agents, "count": count })).into_response()
+}
+
+/// Request body for spawning a sub-agent.
+#[derive(Debug, Deserialize)]
+pub struct SpawnAgentRequest {
+    pub name: String,
+    pub role: String,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub max_iterations: Option<usize>,
+}
+
+/// `POST /api/v1/agents` — Spawn a new sub-agent.
+pub async fn spawn_agent(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<SpawnAgentRequest>,
+) -> impl IntoResponse {
+    let Some(pool) = &state.agent_pool else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Multi-agent pool not initialized" })),
+        )
+            .into_response();
+    };
+
+    let mut spec = crate::agent::SubAgentSpec::new(&body.name, &body.role);
+    if let Some(prompt) = body.system_prompt {
+        spec.system_prompt = prompt;
+    }
+    if !body.tools.is_empty() {
+        spec.tools = body.tools;
+    }
+    if let Some(max_iter) = body.max_iterations {
+        spec.max_iterations = max_iter;
+    }
+
+    match pool.spawn(spec) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({ "name": body.name, "role": body.role, "status": "spawned" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `DELETE /api/v1/agents/{name}` — Stop a sub-agent.
+pub async fn stop_agent(
+    State(state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let Some(pool) = &state.agent_pool else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Multi-agent pool not initialized" })),
+        )
+            .into_response();
+    };
+
+    match pool.stop(&name) {
+        Ok(()) => Json(json!({ "name": name, "status": "stopped" })).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Request body for delegating a task to a sub-agent.
+#[derive(Debug, Deserialize)]
+pub struct DelegateRequest {
+    pub task: String,
+    #[serde(default = "default_delegate_session")]
+    pub session_id: String,
+}
+
+fn default_delegate_session() -> String {
+    "gateway-delegate".to_string()
+}
+
+/// `POST /api/v1/agents/{name}/delegate` — Delegate a task to a named sub-agent.
+pub async fn delegate_to_agent(
+    State(state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+    Json(body): Json<DelegateRequest>,
+) -> impl IntoResponse {
+    let Some(pool) = &state.agent_pool else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Multi-agent pool not initialized" })),
+        )
+            .into_response();
+    };
+
+    if let Some(obs) = &state.obs {
+        obs.record_agent_turn(0);
+    }
+
+    match pool.delegate(&name, &body.task, &body.session_id).await {
+        Ok(response) => Json(json!({
+            "agent": name,
+            "session_id": body.session_id,
+            "response": response
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string(), "agent": name })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/v1/agents/{name}` — Get a single sub-agent's info.
+pub async fn get_agent(
+    State(state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let Some(pool) = &state.agent_pool else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Multi-agent pool not initialized" })),
+        )
+            .into_response();
+    };
+
+    let agents = pool.list();
+    if let Some(agent) = agents.iter().find(|a| a.name == name) {
+        Json(json!(agent)).into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Agent not found", "name": name })),
+        )
+            .into_response()
+    }
+}

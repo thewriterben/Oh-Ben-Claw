@@ -332,6 +332,8 @@ pub struct Config {
     pub tunnel: TunnelConfig,
     #[serde(default)]
     pub gateway: GatewayConfig,
+    #[serde(default)]
+    pub orchestrator: crate::agent::OrchestratorConfig,
 }
 
 impl Config {

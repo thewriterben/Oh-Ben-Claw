@@ -44,7 +44,7 @@ mod security;
 mod tools;
 mod tunnel;
 
-use agent::{Agent, AgentHandle};
+use agent::{Agent, AgentHandle, OrchestratorAgent};
 use channels::CliChannel;
 use config::Config;
 use memory::MemoryStore;
@@ -273,34 +273,76 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         .with_policy(security_ctx.policy),
     );
 
-    // Wrap in an AgentHandle for thread-safe gateway access
-    let handle = AgentHandle::new(Arc::clone(&agent), config.provider.clone());
-    handle.set_node_count(node_count).await;
-
-    info!(
-        tool_count = agent.tool_count(),
-        node_count = node_count,
-        session_id = %session_id,
-        "Agent ready"
-    );
+    // Build orchestrator or plain agent handle
+    let (handle, maybe_pool) = if config.orchestrator.enabled {
+        info!("Multi-agent orchestration enabled — building OrchestratorAgent");
+        let orch = OrchestratorAgent::new(
+            config.agent.clone(),
+            config.provider.clone(),
+            Arc::clone(&memory),
+            config.orchestrator.clone(),
+            session_id.clone(),
+        )?;
+        let pool = orch.pool.clone();
+        let h = orch.handle.clone();
+        h.set_node_count(node_count).await;
+        info!(
+            sub_agents = pool.active_count(),
+            tool_count = h.tool_count(),
+            node_count = node_count,
+            session_id = %session_id,
+            "Orchestrator ready"
+        );
+        (h, Some(pool))
+    } else {
+        let handle = AgentHandle::new(Arc::clone(&agent), config.provider.clone());
+        handle.set_node_count(node_count).await;
+        info!(
+            tool_count = agent.tool_count(),
+            node_count = node_count,
+            session_id = %session_id,
+            "Agent ready"
+        );
+        (handle, None)
+    };
 
     // Start the gateway (with live agent attached) if enabled
     let _gateway_state = if config.gateway.enabled {
-        match gateway::start_with_agent(config.gateway.clone(), handle.clone()).await {
-            Ok((state, url)) => {
-                info!(url = %url, "Gateway started — PWA available at {}", url);
-
+        // Build the full gateway state with all subsystems
+        let obs = Arc::new(observability::ObsContext::new());
+        let sched = scheduler::Scheduler::new(&config.agent.name)
+            .unwrap_or_else(|_| scheduler::Scheduler::new("obc").unwrap());
+        let mut gs = gateway::GatewayState::new(config.gateway.clone())
+            .with_agent(handle.clone())
+            .with_memory(Arc::clone(&memory))
+            .with_obs(obs)
+            .with_scheduler(sched);
+        if let Some(pool) = maybe_pool.clone() {
+            gs = gs.with_agent_pool(pool);
+        }
+        let state = Arc::new(gs);
+        let router = gateway::build_router(state.clone());
+        let bind_addr = format!("{}:{}", config.gateway.host, config.gateway.port);
+        match tokio::net::TcpListener::bind(&bind_addr).await {
+            Ok(listener) => {
+                let url = format!("http://{}", listener.local_addr()?);
+                let state_clone = state.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = axum::serve(listener, router).await {
+                        tracing::error!("Gateway error: {e}");
+                    }
+                });
                 // Start tunnel if enabled
                 if config.tunnel.enabled {
                     let mgr = tunnel::TunnelManager::new(config.tunnel.clone());
                     let handle_clone = handle.clone();
-                    let state_clone = state.clone();
+                    let state_clone2 = state.clone();
                     tokio::spawn(async move {
                         match mgr.start().await {
                             Ok(public_url) => {
                                 info!(url = %public_url, "Tunnel active — public access at {}", public_url);
                                 handle_clone.set_tunnel_url(Some(public_url.clone())).await;
-                                state_clone.broadcast(gateway::GatewayEvent::Status {
+                                state_clone2.broadcast(gateway::GatewayEvent::Status {
                                     agent_running: true,
                                     node_count,
                                     tunnel_url: Some(public_url),
@@ -312,7 +354,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 }
 
                 // Broadcast initial status to any early SSE subscribers
-                state.broadcast(gateway::GatewayEvent::Status {
+                state_clone.broadcast(gateway::GatewayEvent::Status {
                     agent_running: true,
                     node_count,
                     tunnel_url: None,
@@ -321,7 +363,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 Some(state)
             }
             Err(e) => {
-                tracing::warn!("Gateway failed to start: {}", e);
+                tracing::warn!("Gateway failed to bind: {}", e);
                 None
             }
         }
