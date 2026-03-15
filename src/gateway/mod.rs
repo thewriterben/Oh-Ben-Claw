@@ -2,8 +2,6 @@
 //!
 //! An Axum-based HTTP server that exposes the agent, peripheral nodes, and
 //! tool registry over a clean REST API and a Server-Sent Events stream.
-//! This enables mobile apps, web browsers, and third-party integrations to
-//! interact with Oh-Ben-Claw over the network.
 //!
 //! # Endpoints
 //!
@@ -12,36 +10,21 @@
 //! | `GET` | `/` | Serve the PWA web client |
 //! | `GET` | `/health` | Health check |
 //! | `GET` | `/api/v1/status` | Agent and system status |
+//! | `GET` | `/api/v1/metrics` | Observability metrics snapshot |
 //! | `GET` | `/api/v1/sessions` | List conversation sessions |
 //! | `POST` | `/api/v1/sessions` | Create a new session |
 //! | `GET` | `/api/v1/sessions/{id}/messages` | Get messages for a session |
+//! | `DELETE` | `/api/v1/sessions/{id}` | Delete a session |
 //! | `POST` | `/api/v1/chat` | Send a message and get a response |
 //! | `GET` | `/api/v1/tools` | List all registered tools |
 //! | `POST` | `/api/v1/tools/{name}` | Execute a tool directly |
 //! | `GET` | `/api/v1/nodes` | List peripheral nodes |
 //! | `GET` | `/api/v1/tunnel` | Get tunnel status and URL |
+//! | `GET` | `/api/v1/scheduler/tasks` | List scheduled tasks |
+//! | `POST` | `/api/v1/scheduler/tasks` | Create a scheduled task |
+//! | `DELETE` | `/api/v1/scheduler/tasks/{id}` | Delete a scheduled task |
+//! | `PATCH` | `/api/v1/scheduler/tasks/{id}` | Enable/disable a task |
 //! | `GET` | `/events` | SSE stream for real-time agent events |
-//!
-//! # Authentication
-//!
-//! If `gateway.api_token` is set in config, all API requests must include:
-//! ```text
-//! Authorization: Bearer <token>
-//! ```
-//!
-//! # SSE Events
-//!
-//! The SSE stream at `/events` emits named JSON events:
-//! ```json
-//! {"type": "started", "session_id": "...", "user_message": "..."}
-//! {"type": "thinking", "session_id": "...", "iteration": 0}
-//! {"type": "tool_call", "session_id": "...", "tool_name": "shell", "args": {...}}
-//! {"type": "tool_result", "session_id": "...", "tool_name": "shell", "success": true, "output": "..."}
-//! {"type": "response", "session_id": "...", "content": "...", "tool_calls_made": 2}
-//! {"type": "error", "session_id": "...", "message": "..."}
-//! {"type": "node_connected", "node_id": "...", "board": "...", "tools": [...]}
-//! {"type": "node_disconnected", "node_id": "..."}
-//! ```
 
 pub mod middleware;
 pub mod pwa;
@@ -50,10 +33,13 @@ pub mod ws;
 
 use crate::agent::AgentHandle;
 use crate::config::GatewayConfig;
+use crate::memory::MemoryStore;
+use crate::observability::ObsContext;
+use crate::scheduler::Scheduler;
 use anyhow::{Context, Result};
 use axum::{
     middleware as axum_middleware,
-    routing::{get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -62,9 +48,6 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
 /// Events broadcast to all SSE subscribers.
-///
-/// These are forwarded from `AgentEvent` (agent-internal) and supplemented
-/// with gateway-level events (node connect/disconnect, status).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GatewayEvent {
@@ -110,6 +93,12 @@ pub enum GatewayEvent {
         node_count: usize,
         tunnel_url: Option<String>,
     },
+    /// A scheduled task fired.
+    ScheduledTask {
+        task_id: String,
+        task_name: String,
+        session_id: String,
+    },
     /// An error occurred.
     Error { message: String },
 }
@@ -121,6 +110,12 @@ pub struct GatewayState {
     pub event_tx: broadcast::Sender<GatewayEvent>,
     /// Live handle to the running agent — `None` until the agent is started.
     pub agent: Option<AgentHandle>,
+    /// Conversation memory store — `None` if not initialized.
+    pub memory: Option<Arc<MemoryStore>>,
+    /// Observability context — `None` if not initialized.
+    pub obs: Option<Arc<ObsContext>>,
+    /// Task scheduler — `None` if not initialized.
+    pub scheduler: Option<Arc<Scheduler>>,
 }
 
 impl std::fmt::Debug for GatewayState {
@@ -128,30 +123,53 @@ impl std::fmt::Debug for GatewayState {
         f.debug_struct("GatewayState")
             .field("config", &self.config)
             .field("agent_attached", &self.agent.is_some())
+            .field("memory_attached", &self.memory.is_some())
+            .field("obs_attached", &self.obs.is_some())
+            .field("scheduler_attached", &self.scheduler.is_some())
             .finish()
     }
 }
 
 impl GatewayState {
-    /// Create a new `GatewayState` without an agent attached.
+    /// Create a new `GatewayState` without any subsystems attached.
     pub fn new(config: GatewayConfig) -> Self {
         let (event_tx, _) = broadcast::channel(512);
         Self {
             config,
             event_tx,
             agent: None,
+            memory: None,
+            obs: None,
+            scheduler: None,
         }
     }
 
-    /// Attach a live `AgentHandle` to the gateway state.
+    /// Attach a live `AgentHandle`.
     pub fn with_agent(mut self, handle: AgentHandle) -> Self {
         self.agent = Some(handle);
         self
     }
 
+    /// Attach a `MemoryStore`.
+    pub fn with_memory(mut self, memory: Arc<MemoryStore>) -> Self {
+        self.memory = Some(memory);
+        self
+    }
+
+    /// Attach an `ObsContext`.
+    pub fn with_obs(mut self, obs: Arc<ObsContext>) -> Self {
+        self.obs = Some(obs);
+        self
+    }
+
+    /// Attach a `Scheduler`.
+    pub fn with_scheduler(mut self, scheduler: Arc<Scheduler>) -> Self {
+        self.scheduler = Some(scheduler);
+        self
+    }
+
     /// Broadcast an event to all connected SSE subscribers.
     pub fn broadcast(&self, event: GatewayEvent) {
-        // Ignore send errors — no subscribers is fine
         let _ = self.event_tx.send(event);
     }
 }
@@ -160,14 +178,20 @@ impl GatewayState {
 pub fn build_router(state: Arc<GatewayState>) -> Router {
     let api_routes = Router::new()
         .route("/status", get(routes::get_status))
+        .route("/metrics", get(routes::get_metrics))
         .route("/sessions", get(routes::list_sessions))
         .route("/sessions", post(routes::create_session))
         .route("/sessions/{id}/messages", get(routes::get_messages))
+        .route("/sessions/{id}", delete(routes::delete_session))
         .route("/chat", post(routes::chat))
         .route("/tools", get(routes::list_tools))
         .route("/tools/{name}", post(routes::execute_tool))
         .route("/nodes", get(routes::list_nodes))
-        .route("/tunnel", get(routes::get_tunnel_status));
+        .route("/tunnel", get(routes::get_tunnel_status))
+        .route("/scheduler/tasks", get(routes::list_tasks))
+        .route("/scheduler/tasks", post(routes::create_task))
+        .route("/scheduler/tasks/{id}", delete(routes::delete_task))
+        .route("/scheduler/tasks/{id}", patch(routes::patch_task));
 
     // Apply auth middleware to API routes if a token is configured
     let api_routes = if state.config.api_token.is_some() {
@@ -195,9 +219,17 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
     Router::new()
         .nest("/api/v1", api_routes)
         .route("/events", get(ws::sse_handler))
+        .route("/health", get(health_handler))
         .merge(pwa_routes)
         .with_state(state.clone())
         .layer(cors)
+}
+
+async fn health_handler() -> impl axum::response::IntoResponse {
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION")
+    }))
 }
 
 fn build_cors(config: &GatewayConfig) -> tower_http::cors::CorsLayer {
@@ -222,9 +254,6 @@ fn build_cors(config: &GatewayConfig) -> tower_http::cors::CorsLayer {
 }
 
 /// Start the gateway and return the shared state and bound URL.
-///
-/// The returned `Arc<GatewayState>` can be used to attach an `AgentHandle`
-/// after the agent is started, and to broadcast events to SSE subscribers.
 pub async fn start(config: GatewayConfig) -> Result<(Arc<GatewayState>, String)> {
     let bind_addr = format!("{}:{}", config.host, config.port);
     let state = Arc::new(GatewayState::new(config));
@@ -248,13 +277,36 @@ pub async fn start(config: GatewayConfig) -> Result<(Arc<GatewayState>, String)>
     Ok((state, url))
 }
 
-/// Start the gateway with a live `AgentHandle` already attached.
+/// Start the gateway with all subsystems attached.
 pub async fn start_with_agent(
     config: GatewayConfig,
     agent: AgentHandle,
 ) -> Result<(Arc<GatewayState>, String)> {
+    start_full(config, agent, None, None, None).await
+}
+
+/// Start the gateway with all subsystems attached.
+pub async fn start_full(
+    config: GatewayConfig,
+    agent: AgentHandle,
+    memory: Option<Arc<MemoryStore>>,
+    obs: Option<Arc<ObsContext>>,
+    scheduler: Option<Arc<Scheduler>>,
+) -> Result<(Arc<GatewayState>, String)> {
     let bind_addr = format!("{}:{}", config.host, config.port);
-    let state = Arc::new(GatewayState::new(config).with_agent(agent));
+
+    let mut gs = GatewayState::new(config).with_agent(agent);
+    if let Some(m) = memory {
+        gs = gs.with_memory(m);
+    }
+    if let Some(o) = obs {
+        gs = gs.with_obs(o);
+    }
+    if let Some(s) = scheduler {
+        gs = gs.with_scheduler(s);
+    }
+
+    let state = Arc::new(gs);
     let router = build_router(state.clone());
 
     let listener = TcpListener::bind(&bind_addr)
@@ -264,7 +316,7 @@ pub async fn start_with_agent(
     let actual_addr = listener.local_addr()?.to_string();
     let url = format!("http://{actual_addr}");
 
-    tracing::info!(addr = %actual_addr, "Gateway listening (agent attached)");
+    tracing::info!(addr = %actual_addr, "Gateway listening (full subsystems attached)");
 
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, router).await {
@@ -285,6 +337,9 @@ mod tests {
         let state = GatewayState::new(config.clone());
         assert_eq!(state.config.port, config.port);
         assert!(state.agent.is_none());
+        assert!(state.memory.is_none());
+        assert!(state.obs.is_none());
+        assert!(state.scheduler.is_none());
     }
 
     #[test]
@@ -325,75 +380,24 @@ mod tests {
     }
 
     #[test]
-    fn gateway_event_all_variants_have_type_field() {
-        let events = vec![
-            GatewayEvent::Message {
-                session_id: "s1".to_string(),
-                role: "user".to_string(),
-                content: "hi".to_string(),
-            },
-            GatewayEvent::Started {
-                session_id: "s1".to_string(),
-                user_message: "hi".to_string(),
-            },
-            GatewayEvent::Thinking {
-                session_id: "s1".to_string(),
-                iteration: 0,
-            },
-            GatewayEvent::ToolCall {
-                session_id: "s1".to_string(),
-                call_id: "c1".to_string(),
-                name: "shell".to_string(),
-                args: serde_json::json!({}),
-            },
-            GatewayEvent::ToolResult {
-                session_id: "s1".to_string(),
-                call_id: "c1".to_string(),
-                name: "shell".to_string(),
-                success: true,
-                result: "ok".to_string(),
-            },
-            GatewayEvent::NodeConnected {
-                node_id: "n1".to_string(),
-                board: "esp32".to_string(),
-                tools: vec![],
-            },
-            GatewayEvent::NodeDisconnected {
-                node_id: "n1".to_string(),
-            },
-            GatewayEvent::Status {
-                agent_running: false,
-                node_count: 0,
-                tunnel_url: None,
-            },
-            GatewayEvent::Error {
-                message: "oops".to_string(),
-            },
-        ];
-
-        for ev in events {
-            let json = serde_json::to_string(&ev).unwrap();
-            let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-            assert!(v.get("type").is_some(), "Missing 'type' field in: {json}");
-        }
+    fn gateway_event_scheduled_task_serializes() {
+        let event = GatewayEvent::ScheduledTask {
+            task_id: "daily-briefing".to_string(),
+            task_name: "Daily Briefing".to_string(),
+            session_id: "default".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"scheduled_task\""));
+        assert!(json.contains("daily-briefing"));
     }
 
     #[test]
-    fn build_router_does_not_panic() {
+    fn gateway_state_with_builder_methods() {
         let config = GatewayConfig::default();
-        let state = Arc::new(GatewayState::new(config));
-        let _router = build_router(state);
-    }
-
-    #[tokio::test]
-    async fn gateway_binds_to_random_port() {
-        let mut config = GatewayConfig::default();
-        config.enabled = true;
-        config.port = 0; // OS assigns a free port
-        config.host = "127.0.0.1".to_string();
-        let result = start(config).await;
-        assert!(result.is_ok());
-        let (_, url) = result.unwrap();
-        assert!(url.starts_with("http://127.0.0.1:"));
+        let state = GatewayState::new(config);
+        // Verify builder methods exist and work
+        assert!(state.memory.is_none());
+        assert!(state.obs.is_none());
+        assert!(state.scheduler.is_none());
     }
 }

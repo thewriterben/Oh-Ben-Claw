@@ -32,5 +32,6 @@ pub mod security;
 pub mod tools;
 pub mod tunnel;
 pub mod gateway;
+pub mod scheduler;
 
 pub use config::Config;

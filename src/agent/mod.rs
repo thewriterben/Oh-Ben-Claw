@@ -262,6 +262,20 @@ impl Agent {
         tool.execute(args).await
     }
 
+    /// Execute a tool directly by name with a JSON `Value` argument.
+    ///
+    /// Bypasses the agent loop — useful for direct tool invocation via the
+    /// gateway's `POST /api/v1/tools/{name}` endpoint.
+    /// Security policy is still evaluated.
+    pub async fn execute_tool_direct(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> Result<crate::tools::traits::ToolResult> {
+        let args_str = args.to_string();
+        self.execute_tool(name, &args_str).await
+    }
+
     /// Return the names of all registered tools.
     pub fn tool_names(&self) -> Vec<&str> {
         self.tools.iter().map(|t| t.name()).collect()

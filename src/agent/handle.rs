@@ -229,6 +229,51 @@ impl AgentHandle {
     pub async fn tunnel_url(&self) -> Option<String> {
         self.tunnel_url.lock().await.clone()
     }
+
+    /// Execute a tool directly by name with JSON args.
+    ///
+    /// Bypasses the agent loop — security policy is still evaluated.
+    pub async fn execute_tool_direct(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> anyhow::Result<crate::tools::traits::ToolResult> {
+        let call_id = uuid::Uuid::new_v4().to_string();
+
+        // Broadcast the tool call event
+        let _ = self.event_tx.send(AgentEvent::ToolCall {
+            session_id: "direct".to_string(),
+            call_id: call_id.clone(),
+            tool_name: name.to_string(),
+            args: args.clone(),
+        });
+
+        let start = std::time::Instant::now();
+        let result = self.agent.execute_tool_direct(name, args).await;
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        // Broadcast the result event
+        match &result {
+            Ok(tr) => {
+                let _ = self.event_tx.send(AgentEvent::ToolResult {
+                    session_id: "direct".to_string(),
+                    call_id,
+                    tool_name: name.to_string(),
+                    success: tr.success,
+                    output: tr.output.clone(),
+                    duration_ms,
+                });
+            }
+            Err(e) => {
+                let _ = self.event_tx.send(AgentEvent::Error {
+                    session_id: "direct".to_string(),
+                    message: e.to_string(),
+                });
+            }
+        }
+
+        result
+    }
 }
 
 impl std::fmt::Debug for AgentHandle {
