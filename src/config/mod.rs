@@ -3,7 +3,6 @@
 //! Configuration is stored in TOML format at `~/.oh-ben-claw/config.toml`.
 //! The `Config` struct is the root of the configuration tree.
 
-use crate::bus::BusConfig;
 use anyhow::Result;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -133,6 +132,64 @@ pub struct PeripheralsConfig {
     /// The list of connected peripheral boards.
     #[serde(default)]
     pub boards: Vec<PeripheralBoardConfig>,
+}
+
+// ── Bus Configuration ───────────────────────────────────────────────────────
+
+/// Configuration for the MQTT communication bus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BusConfig {
+    /// The bus kind (currently only "mqtt" is supported).
+    #[serde(default = "default_bus_kind")]
+    pub kind: String,
+    /// The MQTT broker hostname.
+    #[serde(default = "default_bus_host")]
+    pub host: String,
+    /// The MQTT broker port.
+    #[serde(default = "default_bus_port")]
+    pub port: u16,
+    /// Whether to use TLS for the MQTT connection.
+    #[serde(default)]
+    pub tls: bool,
+    /// Optional MQTT username.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Optional MQTT password.
+    #[serde(default)]
+    pub password: Option<String>,
+    /// Timeout in seconds for tool call responses from peripheral nodes.
+    #[serde(default = "default_tool_timeout_secs")]
+    pub tool_timeout_secs: u64,
+}
+
+fn default_bus_kind() -> String {
+    "mqtt".to_string()
+}
+
+fn default_bus_host() -> String {
+    "localhost".to_string()
+}
+
+fn default_bus_port() -> u16 {
+    1883
+}
+
+fn default_tool_timeout_secs() -> u64 {
+    30
+}
+
+impl Default for BusConfig {
+    fn default() -> Self {
+        Self {
+            kind: default_bus_kind(),
+            host: default_bus_host(),
+            port: default_bus_port(),
+            tls: false,
+            username: None,
+            password: None,
+            tool_timeout_secs: default_tool_timeout_secs(),
+        }
+    }
 }
 
 // ── Channel Configuration ────────────────────────────────────────────────────

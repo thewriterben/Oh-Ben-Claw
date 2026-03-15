@@ -11,3 +11,6 @@
 //! | ngrok        | Planned | ngrok tunnels                                |
 //! | Tailscale    | Planned | WireGuard-based mesh VPN                     |
 //! | Custom       | Planned | User-defined SSH or reverse proxy tunnel     |
+
+/// Phase 5: Cloudflare, ngrok, and Tailscale tunnel support.
+pub fn init() {}

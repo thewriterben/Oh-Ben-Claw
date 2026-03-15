@@ -8,3 +8,6 @@
 //! - **Pairing**: Authenticates peripheral nodes before accepting their tools.
 //! - **Secrets**: Encrypted storage for API keys and other sensitive data.
 //! - **Policy**: Allowlists for tools, file paths, and network access.
+
+/// Phase 3: Sandboxing, pairing, and secrets management.
+pub fn init() {}

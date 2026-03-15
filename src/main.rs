@@ -3,11 +3,14 @@
 //! # Usage
 //!
 //! ```bash
-//! # Run the setup wizard
-//! oh-ben-claw setup
-//!
-//! # Start the agent
+//! # Start the interactive CLI
 //! oh-ben-claw start
+//!
+//! # Start with a specific provider
+//! oh-ben-claw start --provider openai --model gpt-4o
+//!
+//! # Start with Ollama (local)
+//! oh-ben-claw start --provider ollama --model llama3.2
 //!
 //! # Check system status
 //! oh-ben-claw status
@@ -16,14 +19,14 @@
 //! oh-ben-claw peripheral list
 //! oh-ben-claw peripheral add esp32-s3 /dev/ttyUSB0
 //!
-//! # Manage the background service
-//! oh-ben-claw service install
-//! oh-ben-claw service start
-//! oh-ben-claw service stop
+//! # Manage conversation history
+//! oh-ben-claw history list
+//! oh-ben-claw history clear
 //! ```
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
+use std::sync::Arc;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -39,7 +42,11 @@ mod security;
 mod tools;
 mod tunnel;
 
+use agent::Agent;
+use channels::CliChannel;
 use config::Config;
+use memory::MemoryStore;
+use tools::default_tools;
 
 /// Oh-Ben-Claw — Advanced multi-device AI assistant.
 #[derive(Parser, Debug)]
@@ -54,17 +61,20 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Run the interactive setup wizard.
-    Setup,
-
-    /// Start the Oh-Ben-Claw agent.
+    /// Start the Oh-Ben-Claw agent (interactive CLI).
     Start {
-        /// The host to bind the HTTP gateway to.
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-        /// The port to bind the HTTP gateway to.
-        #[arg(long, default_value = "8080")]
-        port: u16,
+        /// LLM provider name (openai, anthropic, ollama, openrouter, or any compatible).
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model name (e.g., gpt-4o, claude-3-5-sonnet-20241022, llama3.2).
+        #[arg(long)]
+        model: Option<String>,
+        /// Session ID for conversation history (default: "default").
+        #[arg(long, default_value = "default")]
+        session: String,
+        /// Skip connecting to the MQTT bus.
+        #[arg(long)]
+        no_bus: bool,
     },
 
     /// Check the status of the agent and all connected peripheral nodes.
@@ -74,9 +84,9 @@ enum Commands {
     #[command(subcommand)]
     Peripheral(PeripheralCommands),
 
-    /// Manage the background service.
+    /// Manage conversation history.
     #[command(subcommand)]
-    Service(ServiceCommands),
+    History(HistoryCommands),
 }
 
 #[derive(Subcommand, Debug)]
@@ -95,7 +105,7 @@ enum PeripheralCommands {
         /// The board type to remove.
         board: String,
     },
-    /// Show the capabilities of a connected peripheral node.
+    /// Show the capabilities of a known board type.
     Capabilities {
         /// The board type to inspect.
         board: String,
@@ -103,17 +113,24 @@ enum PeripheralCommands {
 }
 
 #[derive(Subcommand, Debug)]
-enum ServiceCommands {
-    /// Install the daemon service for auto-start.
-    Install,
-    /// Start the daemon service.
-    Start,
-    /// Stop the daemon service.
-    Stop,
-    /// Check the daemon service status.
-    Status,
-    /// Uninstall the daemon service.
-    Uninstall,
+enum HistoryCommands {
+    /// List all conversation sessions.
+    List,
+    /// Clear the history for a session.
+    Clear {
+        /// Session ID to clear (default: "default").
+        #[arg(default_value = "default")]
+        session: String,
+    },
+    /// Show messages in a session.
+    Show {
+        /// Session ID to show (default: "default").
+        #[arg(default_value = "default")]
+        session: String,
+        /// Maximum number of messages to show.
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
 }
 
 #[tokio::main]
@@ -124,14 +141,18 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     let cli = Cli::parse();
-    let config = Config::load()?;
+    let mut config = Config::load()?;
 
     match cli.command {
-        Commands::Setup => {
-            run_setup().await?;
-        }
-        Commands::Start { host, port } => {
-            run_start(config, &host, port).await?;
+        Commands::Start { provider, model, session, no_bus } => {
+            // Apply CLI overrides to config
+            if let Some(p) = provider {
+                config.provider.name = p;
+            }
+            if let Some(m) = model {
+                config.provider.model = m;
+            }
+            run_start(config, &session, no_bus).await?;
         }
         Commands::Status => {
             run_status(&config).await?;
@@ -139,54 +160,101 @@ async fn main() -> Result<()> {
         Commands::Peripheral(cmd) => {
             run_peripheral(config, cmd).await?;
         }
-        Commands::Service(cmd) => {
-            run_service(cmd).await?;
+        Commands::History(cmd) => {
+            run_history(cmd).await?;
         }
     }
 
     Ok(())
 }
 
-async fn run_setup() -> Result<()> {
-    info!("Starting Oh-Ben-Claw setup wizard...");
-    println!("\n🦀🧠 Welcome to Oh-Ben-Claw Setup!\n");
-    println!("This wizard will guide you through configuring your multi-device AI assistant.");
-    println!("\nConfiguration will be saved to: {:?}", Config::default_config_path()?);
-    println!("\nSetup wizard is not yet fully implemented. Please edit the config file manually.");
-    println!("See README.md for configuration examples.");
-    Ok(())
-}
+async fn run_start(config: Config, session_id: &str, no_bus: bool) -> Result<()> {
+    info!("Starting Oh-Ben-Claw v{}", env!("CARGO_PKG_VERSION"));
 
-async fn run_start(config: Config, host: &str, port: u16) -> Result<()> {
-    info!("Starting Oh-Ben-Claw agent on {}:{}", host, port);
-    println!("\n🦀🧠 Oh-Ben-Claw v{} starting...\n", env!("CARGO_PKG_VERSION"));
+    // Open memory store
+    let memory = Arc::new(MemoryStore::open()?);
+    let session = memory.default_session()?;
+    let session_id = if session_id == "default" {
+        session
+    } else {
+        // Create or reuse the named session
+        let sessions = memory.list_sessions()?;
+        if sessions.iter().any(|s| s.id == session_id) {
+            session_id.to_string()
+        } else {
+            memory.create_session(session_id)?
+        }
+    };
 
-    // Connect to the MQTT bus
-    if config.bus.kind == "mqtt" {
-        info!(
-            host = %config.bus.host,
-            port = config.bus.port,
-            "Connecting to MQTT bus"
-        );
-        println!("📡 Connecting to MQTT bus at {}:{}", config.bus.host, config.bus.port);
-    }
+    // Build LLM provider
+    let provider = providers::from_config(&config.provider)?;
+    info!(
+        provider = %config.provider.name,
+        model = %config.provider.model,
+        "LLM provider ready"
+    );
 
-    // Connect to peripheral nodes
+    // Build tool registry
+    let mut all_tools = default_tools();
+
+    // Connect to MQTT bus and discover peripheral tools
+    let bus_client = if !no_bus && config.bus.kind == "mqtt" {
+        match bus::BusClient::new(config.bus.clone(), "obc-brain").connect().await {
+            Ok(client) => {
+                info!(
+                    host = %config.bus.host,
+                    port = config.bus.port,
+                    "Connected to MQTT bus"
+                );
+                // Give nodes a moment to announce themselves
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let mqtt_tools = client.build_mqtt_tools().await;
+                if !mqtt_tools.is_empty() {
+                    info!(count = mqtt_tools.len(), "Discovered MQTT peripheral tools");
+                    all_tools.extend(mqtt_tools);
+                }
+                Some(client)
+            }
+            Err(e) => {
+                tracing::warn!("Could not connect to MQTT bus: {}. Continuing without bus.", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Connect to directly-wired peripheral boards
     if config.peripherals.enabled {
-        info!("Connecting to {} peripheral boards", config.peripherals.boards.len());
-        let tools = peripherals::create_peripheral_tools(&config.peripherals, None).await?;
-        println!("🔌 Connected {} peripheral tools", tools.len());
+        let peripheral_tools = peripherals::create_peripheral_tools(
+            &config.peripherals,
+            bus_client,
+        )
+        .await?;
+        if !peripheral_tools.is_empty() {
+            info!(count = peripheral_tools.len(), "Peripheral tools registered");
+            all_tools.extend(peripheral_tools);
+        }
     }
 
-    println!("\n✅ Oh-Ben-Claw is running. Press Ctrl+C to stop.\n");
-    println!("Agent: {}", config.agent.name);
-    println!("Provider: {} / {}", config.provider.name, config.provider.model);
-    println!("Bus: {} @ {}:{}", config.bus.kind, config.bus.host, config.bus.port);
+    info!(
+        tool_count = all_tools.len(),
+        session_id = %session_id,
+        "Agent ready"
+    );
 
-    // TODO: Start the full agent loop with channels, tools, and memory.
-    // For now, wait for Ctrl+C.
-    tokio::signal::ctrl_c().await?;
-    info!("Shutting down Oh-Ben-Claw");
+    // Build and start the agent
+    let agent = Arc::new(Agent::new(
+        config.agent.clone(),
+        provider,
+        Arc::clone(&memory),
+        all_tools,
+    ));
+
+    // Run the CLI channel
+    let cli_channel = CliChannel::new(agent, config.provider.clone(), session_id);
+    cli_channel.run().await?;
+
     Ok(())
 }
 
@@ -196,15 +264,33 @@ async fn run_status(config: &Config) -> Result<()> {
     println!("Agent:    {}", config.agent.name);
     println!("Provider: {} / {}", config.provider.name, config.provider.model);
     println!("Bus:      {} @ {}:{}", config.bus.kind, config.bus.host, config.bus.port);
+
+    // Memory stats
+    match MemoryStore::open() {
+        Ok(memory) => {
+            let sessions = memory.list_sessions().unwrap_or_default();
+            println!("\nMemory:   {} session(s)", sessions.len());
+            for s in sessions.iter().take(5) {
+                let count = memory.message_count(&s.id).unwrap_or(0);
+                println!("  [{}] {} — {} messages", s.id, s.title, count);
+            }
+        }
+        Err(e) => println!("Memory:   unavailable ({})", e),
+    }
+
     println!("\nPeripherals ({} configured):", config.peripherals.boards.len());
+    if config.peripherals.boards.is_empty() {
+        println!("  (none)");
+    }
     for board in &config.peripherals.boards {
         println!(
-            "  - {} ({}) via {}",
+            "  {} | transport: {} | path: {}",
             board.board,
-            board.node_id.as_deref().unwrap_or("unnamed"),
-            board.transport
+            board.transport,
+            board.path.as_deref().unwrap_or("native")
         );
     }
+    println!();
     Ok(())
 }
 
@@ -227,7 +313,13 @@ async fn run_peripheral(mut config: Config, cmd: PeripheralCommands) -> Result<(
             }
         }
         PeripheralCommands::Add { board, path } => {
-            let transport = if path == "native" { "native" } else if path.starts_with("mqtt") { "mqtt" } else { "serial" };
+            let transport = if path == "native" {
+                "native"
+            } else if path.starts_with("mqtt") {
+                "mqtt"
+            } else {
+                "serial"
+            };
             let new_board = config::PeripheralBoardConfig {
                 board: board.clone(),
                 transport: transport.to_string(),
@@ -255,20 +347,58 @@ async fn run_peripheral(mut config: Config, cmd: PeripheralCommands) -> Result<(
                 println!("Transport:    {}", info.transport);
                 println!("Capabilities: {}", info.capabilities.join(", "));
             } else {
-                bail!("Unknown board: {}. Use `oh-ben-claw peripheral list` to see configured boards.", board);
+                bail!(
+                    "Unknown board: '{}'. Use `oh-ben-claw peripheral list` to see configured boards.",
+                    board
+                );
             }
         }
     }
     Ok(())
 }
 
-async fn run_service(cmd: ServiceCommands) -> Result<()> {
+async fn run_history(cmd: HistoryCommands) -> Result<()> {
+    let memory = MemoryStore::open()?;
     match cmd {
-        ServiceCommands::Install => println!("Service installation is not yet implemented."),
-        ServiceCommands::Start => println!("Service start is not yet implemented."),
-        ServiceCommands::Stop => println!("Service stop is not yet implemented."),
-        ServiceCommands::Status => println!("Service status is not yet implemented."),
-        ServiceCommands::Uninstall => println!("Service uninstall is not yet implemented."),
+        HistoryCommands::List => {
+            let sessions = memory.list_sessions()?;
+            if sessions.is_empty() {
+                println!("No conversation sessions found.");
+            } else {
+                println!("\n📚 Conversation Sessions\n");
+                for s in &sessions {
+                    let count = memory.message_count(&s.id).unwrap_or(0);
+                    println!(
+                        "  [{}] {} — {} messages (updated {})",
+                        s.id,
+                        s.title,
+                        count,
+                        s.updated_at.format("%Y-%m-%d %H:%M")
+                    );
+                }
+            }
+        }
+        HistoryCommands::Clear { session } => {
+            memory.clear_session(&session)?;
+            println!("✅ Cleared history for session '{}'", session);
+        }
+        HistoryCommands::Show { session, limit } => {
+            let messages = memory.load_recent_messages(&session, limit)?;
+            if messages.is_empty() {
+                println!("No messages in session '{}'.", session);
+            } else {
+                println!("\n📖 Session '{}' (last {} messages)\n", session, limit);
+                for msg in &messages {
+                    let role_label = match msg.role {
+                        providers::ChatRole::System => "system",
+                        providers::ChatRole::User => "you",
+                        providers::ChatRole::Assistant => "obc",
+                    };
+                    println!("[{}] {}", role_label, msg.content);
+                    println!();
+                }
+            }
+        }
     }
     Ok(())
 }
