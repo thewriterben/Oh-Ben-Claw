@@ -16,6 +16,7 @@
 //! 5. Subscribe to the `app_mention` and `message.im` bot events.
 
 use crate::agent::Agent;
+use crate::channels::typing::TypingTask;
 use crate::channels::utils::chunk_text;
 use crate::config::{ProviderConfig, SlackConfig};
 use anyhow::{Context, Result};
@@ -74,6 +75,8 @@ pub struct SlackChannel {
     app_token: String,
     bot_token: String,
     http: reqwest::Client,
+    /// Whether to send typing indicators while the agent processes.
+    typing_indicators: bool,
 }
 
 impl SlackChannel {
@@ -84,6 +87,18 @@ impl SlackChannel {
         config: &SlackConfig,
         agent: Arc<Agent>,
         provider_config: ProviderConfig,
+    ) -> Option<Self> {
+        Self::new_with_typing(config, agent, provider_config, true)
+    }
+
+    /// Create a new `SlackChannel` with explicit typing-indicator control.
+    ///
+    /// Returns `None` if either required token is absent.
+    pub fn new_with_typing(
+        config: &SlackConfig,
+        agent: Arc<Agent>,
+        provider_config: ProviderConfig,
+        typing_indicators: bool,
     ) -> Option<Self> {
         let app_token = config
             .app_token
@@ -100,6 +115,7 @@ impl SlackChannel {
             app_token,
             bot_token,
             http: reqwest::Client::new(),
+            typing_indicators,
         })
     }
 
@@ -235,6 +251,31 @@ impl SlackChannel {
 
         // Session ID per channel.
         let session_id = format!("slack-{}", channel);
+
+        // Slack supports `typing` indicators via `conversations.typing` (Socket
+        // Mode event).  Refresh every 4 s while the agent processes.
+        let _typing = if self.typing_indicators {
+            let channel_owned = channel.clone();
+            let bot_token_owned = self.bot_token.clone();
+            let http_owned = self.http.clone();
+            Some(TypingTask::start(4, move || {
+                let url = format!("{}/conversations.typing", SLACK_API_BASE);
+                let bot_token = bot_token_owned.clone();
+                let http = http_owned.clone();
+                let ch = channel_owned.clone();
+                async move {
+                    let body = serde_json::json!({ "channel": ch });
+                    let _ = http
+                        .post(&url)
+                        .header("Authorization", format!("Bearer {}", bot_token))
+                        .json(&body)
+                        .send()
+                        .await;
+                }
+            }))
+        } else {
+            None
+        };
 
         let response = self
             .agent
