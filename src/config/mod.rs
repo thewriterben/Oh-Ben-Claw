@@ -139,7 +139,7 @@ pub struct PeripheralsConfig {
 /// Configuration for the MQTT communication spine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpineConfig {
-    /// The spine kind (currently only "mqtt" is supported).
+    /// The spine kind: `"mqtt"` (default) or `"p2p"` (broker-free local mesh).
     #[serde(default = "default_bus_kind")]
     pub kind: String,
     /// The MQTT broker hostname.
@@ -169,6 +169,26 @@ pub struct SpineConfig {
     /// Timeout in seconds for tool call responses from peripheral nodes.
     #[serde(default = "default_tool_timeout_secs")]
     pub tool_timeout_secs: u64,
+    // ── P2P-specific fields (used when `kind = "p2p"`) ─────────────────────
+    /// Unique identifier for this node in the P2P mesh.
+    /// Defaults to a random UUID prefix if not set.
+    #[serde(default)]
+    pub p2p_node_id: Option<String>,
+    /// Local address to bind the P2P TCP server to (default: `"0.0.0.0"`).
+    #[serde(default)]
+    pub p2p_bind_host: Option<String>,
+    /// TCP port on which this node accepts P2P tool-call connections (default: 44445).
+    #[serde(default)]
+    pub p2p_tcp_port: Option<u16>,
+    /// UDP port used for P2P peer discovery broadcasts (default: 44444).
+    #[serde(default)]
+    pub p2p_discovery_port: Option<u16>,
+    /// Seconds after which a silent peer is removed from the P2P registry (default: 60).
+    #[serde(default)]
+    pub p2p_peer_timeout_secs: Option<u64>,
+    /// How often (in seconds) to broadcast a P2P presence announcement (default: 10).
+    #[serde(default)]
+    pub p2p_announce_interval_secs: Option<u64>,
 }
 
 fn default_bus_kind() -> String {
@@ -200,6 +220,12 @@ impl Default for SpineConfig {
             username: None,
             password: None,
             tool_timeout_secs: default_tool_timeout_secs(),
+            p2p_node_id: None,
+            p2p_bind_host: None,
+            p2p_tcp_port: None,
+            p2p_discovery_port: None,
+            p2p_peer_timeout_secs: None,
+            p2p_announce_interval_secs: None,
         }
     }
 }
@@ -386,6 +412,46 @@ impl Default for GatewayConfig {
     }
 }
 
+// ── Edge-Native Configuration ─────────────────────────────────────────────────
+
+/// Configuration for the edge-native agent mode (NanoPi Neo3 and similar
+/// Linux single-board computers running Oh-Ben-Claw without a central host).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeConfig {
+    /// Whether edge-native mode is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum number of messages retained in the rolling conversation history.
+    /// Kept small to reduce RAM pressure on resource-constrained devices.
+    #[serde(default = "default_edge_max_history")]
+    pub max_history_messages: usize,
+    /// Maximum tool-use iterations per user message.
+    #[serde(default = "default_edge_max_tool_iterations")]
+    pub max_tool_iterations: usize,
+    /// Whether to start the P2P spine and join the local mesh.
+    #[serde(default)]
+    pub p2p_enabled: bool,
+}
+
+fn default_edge_max_history() -> usize {
+    20
+}
+
+fn default_edge_max_tool_iterations() -> usize {
+    5
+}
+
+impl Default for EdgeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_history_messages: default_edge_max_history(),
+            max_tool_iterations: default_edge_max_tool_iterations(),
+            p2p_enabled: false,
+        }
+    }
+}
+
 // ── Root Configuration ───────────────────────────────────────────────────────
 
 /// The root configuration for Oh-Ben-Claw.
@@ -409,6 +475,8 @@ pub struct Config {
     pub gateway: GatewayConfig,
     #[serde(default)]
     pub orchestrator: crate::agent::OrchestratorConfig,
+    #[serde(default)]
+    pub edge: EdgeConfig,
 }
 
 impl Config {
@@ -528,6 +596,18 @@ impl Config {
                     i, board.board
                 ));
             }
+        }
+
+        // Validate edge mode
+        if self.edge.enabled && self.edge.max_tool_iterations == 0 {
+            anyhow::bail!("edge.max_tool_iterations must be > 0");
+        }
+        if self.edge.enabled && self.spine.kind == "mqtt" && !self.edge.p2p_enabled {
+            warnings.push(
+                "edge mode is enabled with MQTT spine and p2p_enabled=false; \
+                 ensure a reachable MQTT broker is configured or enable p2p_enabled"
+                    .to_string(),
+            );
         }
 
         Ok(warnings)

@@ -5,10 +5,12 @@
 //! LLM, and repeats until the model produces a final text response.
 
 pub mod delegation_tools;
+pub mod edge;
 pub mod handle;
 pub mod orchestrator;
 pub mod pool;
 pub mod reflexion;
+pub use edge::{EdgeAgent, EdgeAgentBuilder};
 pub use handle::{AgentEvent, AgentHandle};
 #[allow(unused_imports)]
 pub use orchestrator::{OrchestratorAgent, OrchestratorConfig, RoutingStrategy};
