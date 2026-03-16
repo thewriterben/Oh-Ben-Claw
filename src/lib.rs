@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 //! Oh-Ben-Claw — Advanced multi-device AI assistant.
 //!
 //! This crate provides the core library for the Oh-Ben-Claw system.
@@ -38,5 +39,6 @@ pub mod security;
 pub mod spine;
 pub mod tools;
 pub mod tunnel;
-
+pub mod mcp;
+pub mod dashboard;
 pub use config::Config;

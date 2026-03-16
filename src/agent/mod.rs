@@ -8,6 +8,7 @@ pub mod delegation_tools;
 pub mod handle;
 pub mod orchestrator;
 pub mod pool;
+pub mod reflexion;
 pub use handle::{AgentEvent, AgentHandle};
 #[allow(unused_imports)]
 pub use orchestrator::{OrchestratorAgent, OrchestratorConfig, RoutingStrategy};
