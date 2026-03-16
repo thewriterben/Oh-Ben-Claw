@@ -2,6 +2,13 @@
 //!
 //! Each provider adapter implements the `Provider` trait, which defines a
 //! common interface for sending messages to an LLM and receiving responses.
+//!
+//! ## Reliability features (inspired by OpenClaw)
+//!
+//! * **Model failover** — configure `[[provider.fallbacks]]` to chain multiple
+//!   providers/models.  If the primary fails, the next fallback is tried.
+//! * **Retry policy** — configure `[provider.retry]` to automatically retry
+//!   transient errors (rate-limits, network blips) with exponential back-off.
 
 use crate::config::ProviderConfig;
 use crate::tools::Tool;
@@ -12,9 +19,14 @@ use std::sync::Arc;
 
 pub mod anthropic;
 pub mod compatible;
+pub mod failover;
 pub mod ollama;
 pub mod openai;
 pub mod openrouter;
+pub mod retry;
+
+pub use failover::FailoverProvider;
+pub use retry::{RetryConfig, RetryProvider};
 
 // ── Provider Trait ───────────────────────────────────────────────────────────
 
@@ -73,7 +85,7 @@ pub trait Provider: Send + Sync {
 
 // ── Provider Factory ─────────────────────────────────────────────────────────
 
-/// Create a provider instance from configuration.
+/// Create a raw provider instance from configuration (no failover/retry wrapping).
 pub fn from_config(config: &ProviderConfig) -> Result<Arc<dyn Provider>> {
     match config.name.as_str() {
         "openai" => Ok(Arc::new(openai::OpenAiProvider::new(config.clone()))),
@@ -85,5 +97,28 @@ pub fn from_config(config: &ProviderConfig) -> Result<Arc<dyn Provider>> {
         _ => Ok(Arc::new(compatible::CompatibleProvider::new(
             config.clone(),
         ))),
+    }
+}
+
+/// Create a fully-configured provider, applying failover and retry wrapping as
+/// specified in `config`.
+///
+/// * If `config.fallbacks` is non-empty a [`FailoverProvider`] is constructed,
+///   wrapping the primary provider and each fallback in order.
+/// * If `config.retry` is `Some(_)` the result is further wrapped in a
+///   [`RetryProvider`].
+pub fn from_config_full(config: &ProviderConfig) -> Result<Arc<dyn Provider>> {
+    // Build failover chain (includes primary + fallbacks).
+    let base: Arc<dyn Provider> = if config.fallbacks.is_empty() {
+        from_config(config)?
+    } else {
+        Arc::new(FailoverProvider::from_config(config.clone())?)
+    };
+
+    // Optionally wrap with retry policy.
+    if let Some(retry_cfg) = &config.retry {
+        Ok(Arc::new(RetryProvider::new(base, retry_cfg.clone())))
+    } else {
+        Ok(base)
     }
 }
