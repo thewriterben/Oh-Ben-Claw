@@ -131,3 +131,16 @@ Enable peripheral nodes to run the full Oh-Ben-Claw agent locally, without a hos
 - [x] Scheduled tasks and cron jobs (`src/scheduler/mod.rs`)
 - [x] Terminal telemetry dashboard — real-time TUI with agent status, nodes, tool log, system metrics (`src/dashboard/mod.rs`)
 - [x] Skill forge (automatic discovery and integration of new skills) (`src/skill_forge/mod.rs`)
+
+## Phase 9: ZeroClaw Parity ✅ Complete
+
+Implements key features from the upstream ZeroClaw project to ensure Oh-Ben-Claw is as robust and advanced.
+
+- [x] Human-in-the-loop approval workflow for supervised mode (`src/approval/mod.rs`)
+- [x] Token cost tracking and budget enforcement (`src/cost/`)
+- [x] System diagnostics CLI command (`oh-ben-claw doctor`) (`src/doctor/mod.rs`)
+- [x] Event lifecycle hooks for extensibility (`src/hooks/`)
+- [x] Enhanced multimodal message handling with image markers (`src/multimodal.rs`)
+- [x] RAG pipeline for hardware datasheet retrieval (`src/rag/mod.rs`)
+- [x] Sandboxed tool execution runtime (native + Docker) (`src/runtime/`)
+- [x] New config sections: `[autonomy]`, `[cost]`, `[runtime]`, `[multimodal]`

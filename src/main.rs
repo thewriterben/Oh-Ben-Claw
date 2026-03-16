@@ -87,6 +87,9 @@ enum Commands {
     /// Manage conversation history.
     #[command(subcommand)]
     History(HistoryCommands),
+
+    /// Run system diagnostics to check configuration and connectivity.
+    Doctor,
 }
 
 #[derive(Subcommand, Debug)]
@@ -175,6 +178,9 @@ async fn main() -> Result<()> {
         }
         Commands::History(cmd) => {
             run_history(cmd).await?;
+        }
+        Commands::Doctor => {
+            oh_ben_claw::doctor::run(&config)?;
         }
     }
 
