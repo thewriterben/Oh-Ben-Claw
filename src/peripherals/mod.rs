@@ -87,10 +87,7 @@ pub async fn create_peripheral_tools(
             // ── MQTT / Spine ──────────────────────────────────────────────────
             "mqtt" => {
                 if let Some(ref spine_client) = spine {
-                    let node_id = board
-                        .node_id
-                        .clone()
-                        .unwrap_or_else(|| board.board.clone());
+                    let node_id = board.node_id.clone().unwrap_or_else(|| board.board.clone());
                     tracing::info!(
                         board = %board.board,
                         node_id = %node_id,
@@ -160,17 +157,18 @@ pub async fn create_peripheral_tools(
                         }
                     },
                     Err(e) => {
-                        tracing::warn!("Failed to create Arduino peripheral {}: {}", board.board, e);
+                        tracing::warn!(
+                            "Failed to create Arduino peripheral {}: {}",
+                            board.board,
+                            e
+                        );
                     }
                 }
             }
 
             // ── STM32 Nucleo via probe-rs ─────────────────────────────────────
             #[cfg(feature = "peripheral-stm32")]
-            "probe"
-                if board.board.starts_with("nucleo")
-                    || board.board.starts_with("stm32") =>
-            {
+            "probe" if board.board.starts_with("nucleo") || board.board.starts_with("stm32") => {
                 match stm32::Stm32NucleoPeripheral::connect_from_config(board).await {
                     Ok(peripheral) => {
                         tools.extend(peripheral.tools());
@@ -183,9 +181,7 @@ pub async fn create_peripheral_tools(
             }
 
             // ── ESP32 / ESP32-S3 serial ───────────────────────────────────────
-            "serial"
-                if board.board.starts_with("esp32") =>
-            {
+            "serial" if board.board.starts_with("esp32") => {
                 // ESP32 serial tools are provided by the spine MQTT discovery
                 // when running the obc-esp32-s3 firmware. For direct serial,
                 // the sensors module provides the tool implementations.

@@ -42,7 +42,9 @@ impl Provider for CompatibleProvider {
         let url = config
             .base_url
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("base_url not set for compatible provider '{}'", config.name))?
+            .ok_or_else(|| {
+                anyhow::anyhow!("base_url not set for compatible provider '{}'", config.name)
+            })?
             .clone();
 
         let compat_messages: Vec<CompatMessage> = messages

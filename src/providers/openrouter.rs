@@ -12,14 +12,12 @@ use serde_json::Value;
 /// The OpenRouter provider.
 #[derive(Debug, Clone)]
 pub struct OpenRouterProvider {
-    config: ProviderConfig,
     client: Client,
 }
 
 impl OpenRouterProvider {
-    pub fn new(config: ProviderConfig) -> Self {
+    pub fn new(_config: ProviderConfig) -> Self {
         Self {
-            config,
             client: Client::new(),
         }
     }

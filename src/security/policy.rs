@@ -17,18 +17,13 @@
 use serde::{Deserialize, Serialize};
 
 /// What to do when a policy matches.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolPolicyAction {
+    #[default]
     Allow,
     Deny,
     Audit,
-}
-
-impl Default for ToolPolicyAction {
-    fn default() -> Self {
-        Self::Allow
-    }
 }
 
 /// A single tool execution policy rule.
@@ -169,8 +164,7 @@ fn glob_match_inner(p: &[char], t: &[char]) -> bool {
         (None, None) => true,
         (Some(&'*'), _) => {
             // '*' matches zero or more characters
-            glob_match_inner(&p[1..], t)
-                || (!t.is_empty() && glob_match_inner(p, &t[1..]))
+            glob_match_inner(&p[1..], t) || (!t.is_empty() && glob_match_inner(p, &t[1..]))
         }
         (Some(&'?'), Some(_)) => glob_match_inner(&p[1..], &t[1..]),
         (Some(pc), Some(tc)) if pc == tc => glob_match_inner(&p[1..], &t[1..]),
@@ -241,10 +235,7 @@ mod tests {
 
     #[test]
     fn first_matching_policy_wins() {
-        let engine = PolicyEngine::new(vec![
-            audit_policy("shell", None),
-            deny_policy("shell"),
-        ]);
+        let engine = PolicyEngine::new(vec![audit_policy("shell", None), deny_policy("shell")]);
         // Audit comes first — should audit, not deny
         let v = engine.evaluate("shell", "{}");
         assert_eq!(v.action, ToolPolicyAction::Audit);

@@ -4,18 +4,20 @@
 //! calls the LLM, executes any requested tool calls, feeds results back to the
 //! LLM, and repeats until the model produces a final text response.
 
-pub mod handle;
-pub mod pool;
 pub mod delegation_tools;
+pub mod handle;
 pub mod orchestrator;
+pub mod pool;
 pub use handle::{AgentEvent, AgentHandle};
-pub use pool::{AgentPool, SubAgentInfo, SubAgentSpec, SubAgentStatus};
+#[allow(unused_imports)]
 pub use orchestrator::{OrchestratorAgent, OrchestratorConfig, RoutingStrategy};
+#[allow(unused_imports)]
+pub use pool::{AgentPool, SubAgentInfo, SubAgentSpec, SubAgentStatus};
 
 use crate::config::AgentConfig;
 use crate::memory::MemoryStore;
 use crate::providers::{ChatMessage, ChatRole, Provider};
-use crate::security::{PolicyEngine, ToolPolicyAction};
+use crate::security::PolicyEngine;
 use crate::tools::traits::Tool;
 use anyhow::Result;
 use std::sync::Arc;
@@ -122,7 +124,9 @@ impl Agent {
                     "Executing tool call"
                 );
 
+                let t0 = std::time::Instant::now();
                 let result = self.execute_tool(&call.name, &call.args).await;
+                let duration_ms = t0.elapsed().as_millis() as u64;
                 let result_str = match &result {
                     Ok(r) => {
                         if r.success {
@@ -141,6 +145,7 @@ impl Agent {
                     name: call.name.clone(),
                     args: call.args.clone(),
                     result: result_str.clone(),
+                    duration_ms,
                 });
 
                 tool_results.push((call.id.clone(), call.name.clone(), result_str));
@@ -164,7 +169,10 @@ impl Agent {
             for (call_id, tool_name, result) in tool_results {
                 messages.push(ChatMessage {
                     role: ChatRole::User,
-                    content: format!("[Tool result for {} (id={})]: {}", tool_name, call_id, result),
+                    content: format!(
+                        "[Tool result for {} (id={})]: {}",
+                        tool_name, call_id, result
+                    ),
                 });
             }
 
@@ -238,10 +246,7 @@ impl Agent {
                     .reason
                     .as_deref()
                     .unwrap_or("blocked by security policy");
-                let policy_name = verdict
-                    .policy_name
-                    .as_deref()
-                    .unwrap_or("unknown");
+                let policy_name = verdict.policy_name.as_deref().unwrap_or("unknown");
                 tracing::warn!(
                     tool = %name,
                     policy = %policy_name,
@@ -261,8 +266,8 @@ impl Agent {
             .find(|t| t.name() == name)
             .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", name))?;
 
-        let args: serde_json::Value = serde_json::from_str(args_str)
-            .unwrap_or_else(|_| serde_json::json!({}));
+        let args: serde_json::Value =
+            serde_json::from_str(args_str).unwrap_or_else(|_| serde_json::json!({}));
 
         tool.execute(args).await
     }
@@ -300,6 +305,8 @@ pub struct ToolCallRecord {
     pub name: String,
     pub args: String,
     pub result: String,
+    /// Wall-clock time the tool call took, in milliseconds.
+    pub duration_ms: u64,
 }
 
 /// The final response from the agent after processing a user message.
@@ -331,6 +338,7 @@ mod tests {
                 name: "shell".to_string(),
                 args: "{}".to_string(),
                 result: "ok".to_string(),
+                duration_ms: 0,
             }],
         };
         assert!(response.used_tools());

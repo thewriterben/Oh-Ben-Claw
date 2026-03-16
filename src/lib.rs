@@ -20,18 +20,23 @@
 //! - `peripheral-nanopi`: Enable NanoPi Neo3 GPIO via sysfs (Linux only).
 //! - `gui`: Enable the native GUI application.
 
+// Public library API — items are exported for use by external consumers (CLI, GUI,
+// tests, and future integrations). Dead-code lint is suppressed at the crate level
+// because the library intentionally exposes a broader surface than the binary uses.
+#![allow(dead_code)]
+
 pub mod agent;
-pub mod spine;
 pub mod channels;
 pub mod config;
+pub mod gateway;
 pub mod memory;
 pub mod observability;
 pub mod peripherals;
 pub mod providers;
+pub mod scheduler;
 pub mod security;
+pub mod spine;
 pub mod tools;
 pub mod tunnel;
-pub mod gateway;
-pub mod scheduler;
 
 pub use config::Config;

@@ -71,17 +71,17 @@ Tauri 2 native desktop application — system tray, chat, device panel, tool log
 
 ---
 
-## Phase 5: Expanded Hardware Ecosystem 📋 Planned
+## Phase 5: Expanded Hardware Ecosystem ✅ Complete
 
-Add support for more hardware devices and capabilities.
+All hardware peripheral drivers and Linux bus tools are implemented.
 
-- [ ] Raspberry Pi GPIO peripheral driver (`src/peripherals/rpi.rs`)
-- [ ] Raspberry Pi camera support (via `libcamera`)
-- [ ] Arduino serial peripheral driver
-- [ ] STM32 Nucleo peripheral driver (via probe-rs)
-- [ ] I2C bus scan tool for NanoPi and Raspberry Pi
-- [ ] SPI bus tool for NanoPi and Raspberry Pi
-- [ ] PWM control tool
+- [x] Raspberry Pi GPIO peripheral driver (`src/peripherals/rpi.rs`)
+- [x] Raspberry Pi camera support (via `libcamera-still`) (`src/peripherals/rpi.rs`)
+- [x] Arduino serial peripheral driver (`src/peripherals/arduino.rs`)
+- [x] STM32 Nucleo peripheral driver (via probe-rs) (`src/peripherals/stm32.rs`)
+- [x] I2C bus scan/read/write tools for Linux SBCs (`src/peripherals/bus_tools.rs`)
+- [x] SPI bus transfer tool for Linux SBCs (`src/peripherals/bus_tools.rs`)
+- [x] PWM control tool for Linux SBCs (`src/peripherals/bus_tools.rs`)
 
 ---
 

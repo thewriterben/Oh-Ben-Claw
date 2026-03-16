@@ -12,14 +12,12 @@ use serde_json::Value;
 /// The Ollama provider.
 #[derive(Debug, Clone)]
 pub struct OllamaProvider {
-    config: ProviderConfig,
     client: Client,
 }
 
 impl OllamaProvider {
-    pub fn new(config: ProviderConfig) -> Self {
+    pub fn new(_config: ProviderConfig) -> Self {
         Self {
-            config,
             client: Client::new(),
         }
     }

@@ -48,10 +48,11 @@ use tokio::sync::Mutex;
 pub type TunnelUrl = String;
 
 /// Status of the tunnel connection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TunnelStatus {
     /// Tunnel is not running.
+    #[default]
     Stopped,
     /// Tunnel is starting up.
     Starting,
@@ -59,12 +60,6 @@ pub enum TunnelStatus {
     Running { url: TunnelUrl },
     /// Tunnel encountered an error.
     Error { message: String },
-}
-
-impl Default for TunnelStatus {
-    fn default() -> Self {
-        Self::Stopped
-    }
 }
 
 impl std::fmt::Display for TunnelStatus {
@@ -158,7 +153,9 @@ impl TunnelManager {
             Err(e) => {
                 let msg = e.to_string();
                 let mut status = self.status.lock().await;
-                *status = TunnelStatus::Error { message: msg.clone() };
+                *status = TunnelStatus::Error {
+                    message: msg.clone(),
+                };
                 bail!("Failed to start tunnel: {msg}")
             }
         }
@@ -168,7 +165,10 @@ impl TunnelManager {
     pub async fn stop(&self) -> Result<()> {
         let mut handle = self.handle.lock().await;
         if let Some(mut h) = handle.take() {
-            h.child.kill().await.context("Failed to kill tunnel process")?;
+            h.child
+                .kill()
+                .await
+                .context("Failed to kill tunnel process")?;
             tracing::info!("Tunnel stopped");
         }
         let mut status = self.status.lock().await;
@@ -193,9 +193,7 @@ impl TunnelManager {
         match self.config.backend.to_lowercase().as_str() {
             "cloudflare" | "cloudflared" => Ok(TunnelBackend::Cloudflare),
             "tailscale" => Ok(TunnelBackend::Tailscale),
-            other => bail!(
-                "Unknown tunnel backend: '{other}'. Use 'cloudflare' or 'tailscale'."
-            ),
+            other => bail!("Unknown tunnel backend: '{other}'. Use 'cloudflare' or 'tailscale'."),
         }
     }
 }

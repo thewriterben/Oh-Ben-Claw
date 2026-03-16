@@ -22,13 +22,20 @@ pub mod pairing;
 pub mod policy;
 pub mod vault;
 
+#[allow(unused_imports)]
 pub use pairing::{NodePairingManager, PairingStatus};
+#[allow(unused_imports)]
 pub use policy::{PolicyEngine, ToolPolicy, ToolPolicyAction};
+#[allow(unused_imports)]
 pub use vault::SecretsVault;
 
 use anyhow::Result;
 
-/// Initialize the security subsystem and return the three components.
+/// Initialize the security subsystem.
+///
+/// Individual security components (`PolicyEngine`, `NodePairingManager`, `SecretsVault`)
+/// are initialized on demand via `SecurityContext::new`. This function is a no-op and
+/// exists for forward-compatibility with future global initialization steps.
 pub fn init() {}
 
 /// A security context passed to the agent loop for enforcement.

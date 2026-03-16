@@ -70,10 +70,7 @@ impl Tool for ShellTool {
 
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
-            Command::new("/bin/sh")
-                .arg("-c")
-                .arg(&command)
-                .output(),
+            Command::new("/bin/sh").arg("-c").arg(&command).output(),
         )
         .await;
 
@@ -135,10 +132,7 @@ mod tests {
     #[tokio::test]
     async fn shell_exit_code_non_zero() {
         let tool = ShellTool::new();
-        let result = tool
-            .execute(json!({"command": "exit 1"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"command": "exit 1"})).await.unwrap();
         assert!(!result.success);
     }
 }
