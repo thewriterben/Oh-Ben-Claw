@@ -151,6 +151,15 @@ pub struct SpineConfig {
     /// Whether to use TLS for the MQTT connection.
     #[serde(default)]
     pub tls: bool,
+    /// Path to a custom CA certificate file for TLS verification.
+    #[serde(default)]
+    pub ca_cert_path: Option<String>,
+    /// Path to a client certificate file for mTLS authentication.
+    #[serde(default)]
+    pub client_cert_path: Option<String>,
+    /// Path to a client private key file for mTLS authentication.
+    #[serde(default)]
+    pub client_key_path: Option<String>,
     /// Optional MQTT username.
     #[serde(default)]
     pub username: Option<String>,
@@ -185,6 +194,9 @@ impl Default for SpineConfig {
             host: default_bus_host(),
             port: default_bus_port(),
             tls: false,
+            ca_cert_path: None,
+            client_cert_path: None,
+            client_key_path: None,
             username: None,
             password: None,
             tool_timeout_secs: default_tool_timeout_secs(),
@@ -371,6 +383,92 @@ impl Config {
             .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
         Ok(dirs.config_dir().join("config.toml"))
     }
+
+    /// Validate the configuration for common misconfigurations.
+    ///
+    /// Returns a list of human-readable warnings. An empty list means the
+    /// configuration is valid. Critical issues are returned as `Err`.
+    pub fn validate(&self) -> Result<Vec<String>> {
+        let mut warnings = Vec::new();
+
+        // Validate agent
+        if self.agent.max_tool_iterations == 0 {
+            anyhow::bail!("agent.max_tool_iterations must be > 0");
+        }
+        if self.agent.max_tool_iterations > 100 {
+            warnings.push(format!(
+                "agent.max_tool_iterations is very high ({}); consider a lower limit",
+                self.agent.max_tool_iterations
+            ));
+        }
+
+        // Validate provider
+        if self.provider.temperature < 0.0 || self.provider.temperature > 2.0 {
+            warnings.push(format!(
+                "provider.temperature ({}) is outside the typical range [0.0, 2.0]",
+                self.provider.temperature
+            ));
+        }
+
+        // Validate spine
+        if self.spine.port == 0 {
+            anyhow::bail!("spine.port must be > 0");
+        }
+        if self.spine.tls && self.spine.port == 1883 {
+            warnings.push(
+                "spine.tls is enabled but port is 1883 (unencrypted MQTT default); \
+                 consider using port 8883 for MQTT over TLS"
+                    .to_string(),
+            );
+        }
+        if self.spine.ca_cert_path.is_some() && !self.spine.tls {
+            warnings.push(
+                "spine.ca_cert_path is set but spine.tls is false; \
+                 the CA certificate will not be used"
+                    .to_string(),
+            );
+        }
+
+        // Validate gateway
+        if self.gateway.enabled && self.gateway.api_token.is_none() {
+            warnings.push(
+                "gateway is enabled without an api_token — the API is unprotected".to_string(),
+            );
+        }
+        if self.gateway.port == 0 {
+            anyhow::bail!("gateway.port must be > 0");
+        }
+
+        // Validate security
+        if self.security.require_pairing && self.security.pairing_secret.is_none() {
+            anyhow::bail!(
+                "security.require_pairing is true but no pairing_secret is set"
+            );
+        }
+        if let Some(ref secret) = self.security.pairing_secret {
+            if let Err(e) = crate::security::pairing::NodePairingManager::validate_secret(secret) {
+                warnings.push(format!("security.pairing_secret: {}", e));
+            }
+        }
+
+        // Validate peripherals
+        for (i, board) in self.peripherals.boards.iter().enumerate() {
+            if board.transport == "serial" && board.path.is_none() {
+                warnings.push(format!(
+                    "peripherals.boards[{}] ({}) uses serial transport but no path is set",
+                    i, board.board
+                ));
+            }
+            if board.transport == "mqtt" && board.node_id.is_none() {
+                warnings.push(format!(
+                    "peripherals.boards[{}] ({}) uses mqtt transport but no node_id is set",
+                    i, board.board
+                ));
+            }
+        }
+
+        Ok(warnings)
+    }
 }
 
 #[cfg(test)]
@@ -394,5 +492,98 @@ mod tests {
         let parsed: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.agent.name, config.agent.name);
         assert_eq!(parsed.provider.model, config.provider.model);
+    }
+
+    #[test]
+    fn default_config_validates_clean() {
+        let config = Config::default();
+        let warnings = config.validate().unwrap();
+        assert!(warnings.is_empty(), "Unexpected warnings: {:?}", warnings);
+    }
+
+    #[test]
+    fn validate_rejects_zero_tool_iterations() {
+        let mut config = Config::default();
+        config.agent.max_tool_iterations = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_warns_high_tool_iterations() {
+        let mut config = Config::default();
+        config.agent.max_tool_iterations = 200;
+        let warnings = config.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("very high")));
+    }
+
+    #[test]
+    fn validate_warns_tls_on_default_port() {
+        let mut config = Config::default();
+        config.spine.tls = true;
+        let warnings = config.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("8883")));
+    }
+
+    #[test]
+    fn validate_warns_gateway_without_token() {
+        let mut config = Config::default();
+        config.gateway.enabled = true;
+        let warnings = config.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("unprotected")));
+    }
+
+    #[test]
+    fn validate_rejects_pairing_without_secret() {
+        let mut config = Config::default();
+        config.security.require_pairing = true;
+        config.security.pairing_secret = None;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_warns_serial_without_path() {
+        let mut config = Config::default();
+        config.peripherals.boards.push(PeripheralBoardConfig {
+            board: "arduino-uno".to_string(),
+            transport: "serial".to_string(),
+            path: None,
+            baud: 115_200,
+            node_id: None,
+        });
+        let warnings = config.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("no path is set")));
+    }
+
+    #[test]
+    fn spine_config_tls_cert_fields_serialize() {
+        let mut config = Config::default();
+        config.spine.tls = true;
+        config.spine.ca_cert_path = Some("/etc/mqtt/ca.crt".to_string());
+        config.spine.client_cert_path = Some("/etc/mqtt/client.crt".to_string());
+        config.spine.client_key_path = Some("/etc/mqtt/client.key".to_string());
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(
+            parsed.spine.ca_cert_path,
+            Some("/etc/mqtt/ca.crt".to_string())
+        );
+        assert_eq!(
+            parsed.spine.client_cert_path,
+            Some("/etc/mqtt/client.crt".to_string())
+        );
+        assert_eq!(
+            parsed.spine.client_key_path,
+            Some("/etc/mqtt/client.key".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_warns_ca_cert_without_tls() {
+        let mut config = Config::default();
+        config.spine.ca_cert_path = Some("/etc/mqtt/ca.crt".to_string());
+        let warnings = config.validate().unwrap();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("ca_cert_path") && w.contains("tls is false")));
     }
 }

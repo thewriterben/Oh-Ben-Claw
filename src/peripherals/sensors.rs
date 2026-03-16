@@ -212,8 +212,11 @@ impl Tool for SensorReadTool {
     fn description(&self) -> &str {
         "Read a value from an I2C or SPI sensor attached to the ESP32-S3 board. \
          Supported sensors include BME280 (temperature, humidity, pressure), \
-         MPU6050 (accelerometer, gyroscope), SHT31 (temperature, humidity), \
-         and BMP180 (temperature, pressure)."
+         BMP388 (pressure, altitude, temperature), MPU6050 (accelerometer, gyroscope), \
+         LSM6DS3 (accelerometer, gyroscope), SHT31 (temperature, humidity), \
+         AHT20 (temperature, humidity), BMP180 (temperature, pressure), \
+         INA260 (voltage, current, power), ADS1115 (ADC channels), \
+         MAX31855 (thermocouple temperature), and DS18B20 (1-Wire temperature)."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -222,12 +225,12 @@ impl Tool for SensorReadTool {
             "properties": {
                 "sensor": {
                     "type": "string",
-                    "description": "The sensor to read from (e.g., 'bme280', 'mpu6050', 'sht31', 'bmp180').",
-                    "enum": ["bme280", "mpu6050", "sht31", "bmp180"]
+                    "description": "The sensor to read from (e.g., 'bme280', 'mpu6050', 'sht31', 'bmp180', 'bmp388', 'lsm6ds3', 'aht20', 'ina260', 'ads1115', 'max31855', 'ds18b20').",
+                    "enum": ["bme280", "mpu6050", "sht31", "bmp180", "bmp388", "lsm6ds3", "aht20", "ina260", "ads1115", "max31855", "ds18b20"]
                 },
                 "field": {
                     "type": "string",
-                    "description": "The field to read (e.g., 'temperature', 'humidity', 'pressure', 'accel_x')."
+                    "description": "The field to read (e.g., 'temperature', 'humidity', 'pressure', 'accel_x', 'accel_y', 'accel_z', 'gyro_x', 'gyro_y', 'gyro_z', 'voltage', 'current', 'power', 'channel_0', 'channel_1', 'channel_2', 'channel_3')."
                 }
             },
             "required": ["sensor", "field"]
