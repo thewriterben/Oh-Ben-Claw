@@ -31,7 +31,10 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use oh_ben_claw::agent::{Agent, AgentHandle, OrchestratorAgent};
-use oh_ben_claw::channels::CliChannel;
+use oh_ben_claw::channels::{
+    CliChannel, DiscordChannel, IMessageChannel, MatrixChannel, SlackChannel, TelegramChannel,
+    WhatsAppChannel,
+};
 use oh_ben_claw::config::Config;
 use oh_ben_claw::memory::MemoryStore;
 use oh_ben_claw::tools::default_tools;
@@ -377,11 +380,101 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         None
     };
 
+    // Spawn background communication channels.
+    spawn_channels(Arc::clone(&agent), &config);
+
     // Run the interactive CLI channel
     let cli_channel = CliChannel::new(agent, config.provider.clone(), session_id);
     cli_channel.run().await?;
 
     Ok(())
+}
+
+/// Spawn all configured communication channels as independent background tasks.
+///
+/// Each channel runs in its own `tokio::spawn` task with an infinite retry
+/// loop so that transient errors (network blips, rate-limits, WebSocket
+/// reconnects) don't crash the entire process.
+fn spawn_channels(agent: Arc<Agent>, config: &Config) {
+    let provider = config.provider.clone();
+
+    // ── Telegram ──────────────────────────────────────────────────────────────
+    if let Some(ch) = TelegramChannel::new(&config.channels.telegram, Arc::clone(&agent), provider.clone()) {
+        info!("Starting Telegram channel");
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = ch.run().await {
+                    tracing::warn!(error = %e, "Telegram channel error; restarting in 10 s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                }
+            }
+        });
+    }
+
+    // ── Discord ───────────────────────────────────────────────────────────────
+    if let Some(ch) = DiscordChannel::new(&config.channels.discord, Arc::clone(&agent), provider.clone()) {
+        info!("Starting Discord channel");
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = ch.run().await {
+                    tracing::warn!(error = %e, "Discord channel error; restarting in 10 s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                }
+            }
+        });
+    }
+
+    // ── Slack ─────────────────────────────────────────────────────────────────
+    if let Some(ch) = SlackChannel::new(&config.channels.slack, Arc::clone(&agent), provider.clone()) {
+        info!("Starting Slack channel");
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = ch.run().await {
+                    tracing::warn!(error = %e, "Slack channel error; restarting in 10 s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                }
+            }
+        });
+    }
+
+    // ── WhatsApp ──────────────────────────────────────────────────────────────
+    if let Some(ch) = WhatsAppChannel::new(&config.channels.whatsapp, Arc::clone(&agent), provider.clone()) {
+        info!("Starting WhatsApp channel");
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = ch.run().await {
+                    tracing::warn!(error = %e, "WhatsApp channel error; restarting in 10 s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                }
+            }
+        });
+    }
+
+    // ── iMessage (macOS only) ─────────────────────────────────────────────────
+    if let Some(ch) = IMessageChannel::new(&config.channels.imessage, Arc::clone(&agent), provider.clone()) {
+        info!("Starting iMessage channel");
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = ch.run().await {
+                    tracing::warn!(error = %e, "iMessage channel error; restarting in 10 s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                }
+            }
+        });
+    }
+
+    // ── Matrix ────────────────────────────────────────────────────────────────
+    if let Some(ch) = MatrixChannel::new(&config.channels.matrix, Arc::clone(&agent), provider) {
+        info!("Starting Matrix channel");
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = ch.run().await {
+                    tracing::warn!(error = %e, "Matrix channel error; restarting in 10 s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                }
+            }
+        });
+    }
 }
 
 async fn run_status(config: &Config) -> Result<()> {
