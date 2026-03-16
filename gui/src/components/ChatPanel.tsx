@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Send, Loader2, Plus, Trash2, ChevronDown, Wrench } from "lucide-react";
 import { useChatStore, useAgentStore } from "../stores/appStore";
-import { sendMessage, listSessions, loadSessionHistory, createSession, clearSession } from "../hooks/useTauri";
+import { sendMessage, listSessions, loadSessionHistory, createSession, clearSession, onAssistantToken, onToolCallEvent } from "../hooks/useTauri";
 import type { ChatMessage } from "../types";
 
 // ── Message Bubble ────────────────────────────────────────────────────────────
@@ -56,13 +56,19 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   }
 
   // assistant
+  const isStreaming = msg.streaming === true;
   return (
     <div className="flex gap-2 items-start animate-slide-up">
       <div className="w-6 h-6 rounded-lg bg-obc-500/20 border border-obc-500/30 flex items-center justify-center flex-shrink-0 mt-0.5 text-xs font-bold text-obc-400">
         O
       </div>
       <div className="flex-1 min-w-0">
-        <div className="chat-bubble-assistant whitespace-pre-wrap">{msg.content}</div>
+        <div className="chat-bubble-assistant whitespace-pre-wrap">
+          {msg.content}
+          {isStreaming && (
+            <span className="inline-block w-0.5 h-3.5 bg-obc-400 ml-0.5 align-middle animate-pulse" />
+          )}
+        </div>
         <div className="text-xs text-slate-600 mt-1 pl-1">{time}</div>
       </div>
     </div>
@@ -170,6 +176,8 @@ export default function ChatPanel() {
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // ID of the currently-streaming assistant message (null when not streaming).
+  const streamingIdRef = useRef<string | null>(null);
 
   const {
     messages,
@@ -202,6 +210,51 @@ export default function ChatPanel() {
       .catch(() => {});
   }, [setSessions, setMessages]);
 
+  // Subscribe to streaming token events
+  useEffect(() => {
+    const unsub = onAssistantToken((token) => {
+      const id = streamingIdRef.current;
+      if (!id) return;
+
+      if (token === "") {
+        // Empty sentinel — streaming complete: clear streaming flag.
+        useChatStore.setState((s) => ({
+          messages: s.messages.map((m) =>
+            m.id === id ? { ...m, streaming: false } : m
+          ),
+        }));
+        streamingIdRef.current = null;
+        return;
+      }
+
+      useChatStore.setState((s) => ({
+        messages: s.messages.map((m) =>
+          m.id === id
+            ? { ...m, content: m.content + token, streaming: true }
+            : m
+        ),
+      }));
+    });
+
+    const unsubTool = onToolCallEvent((entry) => {
+      // Tool-call events from ChatPanel surface as tool_call / tool_result bubbles.
+      const role = entry.status === "pending" ? "tool_call" : "tool_result";
+      addMessage({
+        id: entry.id,
+        role,
+        content: entry.result ?? entry.args,
+        toolName: entry.toolName,
+        toolArgs: entry.args,
+        timestamp: entry.timestamp,
+      });
+    });
+
+    return () => {
+      unsub();
+      unsubTool();
+    };
+  }, [addMessage]);
+
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text || isThinking) return;
@@ -217,23 +270,35 @@ export default function ChatPanel() {
     };
     addMessage(userMsg);
 
+    // Add an empty streaming assistant message placeholder.
+    const assistantId = crypto.randomUUID();
+    streamingIdRef.current = assistantId;
+    addMessage({
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      streaming: true,
+    });
+
     try {
-      const response = await sendMessage(activeSessionId, text);
-      const assistantMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: response,
-        timestamp: Date.now(),
-      };
-      addMessage(assistantMsg);
+      // `sendMessage` drives the backend process; tokens arrive via the
+      // `assistant-token` Tauri event and are stitched into the message above.
+      await sendMessage(activeSessionId, text);
     } catch (err) {
-      const errorMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: `Error: ${err instanceof Error ? err.message : String(err)}`,
-        timestamp: Date.now(),
-      };
-      addMessage(errorMsg);
+      // Replace streaming placeholder with an error message.
+      useChatStore.setState((s) => ({
+        messages: s.messages.map((m) =>
+          m.id === assistantId
+            ? {
+                ...m,
+                content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+                streaming: false,
+              }
+            : m
+        ),
+      }));
+      streamingIdRef.current = null;
     } finally {
       setThinking(false);
       inputRef.current?.focus();
@@ -301,7 +366,9 @@ export default function ChatPanel() {
           <MessageBubble key={msg.id} msg={msg} />
         ))}
 
-        {isThinking && <ThinkingIndicator />}
+        {isThinking && !messages.some((m) => m.role === "assistant" && m.streaming) && (
+          <ThinkingIndicator />
+        )}
         <div ref={messagesEndRef} />
       </div>
 
