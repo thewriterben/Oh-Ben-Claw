@@ -46,11 +46,7 @@ pub async fn require_auth(
 }
 
 fn unauthorized(message: &str) -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(json!({ "error": message })),
-    )
-        .into_response()
+    (StatusCode::UNAUTHORIZED, Json(json!({ "error": message }))).into_response()
 }
 
 /// Constant-time byte comparison to prevent timing attacks.

@@ -115,8 +115,11 @@ impl Tool for I2cScanTool {
             for line in stdout.lines().skip(1) {
                 // Lines look like: "20: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --"
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.is_empty() { continue; }
-                let row_start = u64::from_str_radix(parts[0].trim_end_matches(':'), 16).unwrap_or(0);
+                if parts.is_empty() {
+                    continue;
+                }
+                let row_start =
+                    u64::from_str_radix(parts[0].trim_end_matches(':'), 16).unwrap_or(0);
                 for (i, token) in parts.iter().skip(1).enumerate() {
                     if *token != "--" && *token != "UU" {
                         let addr = row_start + i as u64;
@@ -380,10 +383,7 @@ impl Tool for SpiTransferTool {
             .get("speed_hz")
             .and_then(|v| v.as_u64())
             .unwrap_or(1_000_000);
-        let mode = args
-            .get("mode")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u8;
+        let mode = args.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
 
         let tx_bytes: Vec<u8> = bytes_val
             .iter()
@@ -415,7 +415,10 @@ print(' '.join(f'{{b:02X}}' for b in rx))
 "#,
             device_parts = {
                 // Parse /dev/spidevN.M
-                let parts: Vec<&str> = device.trim_start_matches("/dev/spidev").split('.').collect();
+                let parts: Vec<&str> = device
+                    .trim_start_matches("/dev/spidev")
+                    .split('.')
+                    .collect();
                 if parts.len() == 2 {
                     format!("{}, {}", parts[0], parts[1])
                 } else {
@@ -424,7 +427,11 @@ print(' '.join(f'{{b:02X}}' for b in rx))
             },
             speed_hz = speed_hz,
             mode = mode,
-            tx_bytes = tx_bytes.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(", ")
+            tx_bytes = tx_bytes
+                .iter()
+                .map(|b| b.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
 
         let output = tokio::time::timeout(
@@ -543,11 +550,8 @@ impl Tool for PwmControlTool {
 
             // Export the channel if not already exported
             if !std::path::Path::new(&pwm_base).exists() {
-                std::fs::write(
-                    format!("{chip_path}/export"),
-                    channel.to_string(),
-                )
-                .with_context(|| format!("Failed to export PWM channel {channel}"))?;
+                std::fs::write(format!("{chip_path}/export"), channel.to_string())
+                    .with_context(|| format!("Failed to export PWM channel {channel}"))?;
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
 
@@ -613,7 +617,9 @@ mod tests {
 
     #[tokio::test]
     async fn i2c_read_requires_all_params() {
-        let result = I2cReadTool.execute(json!({"bus": 1, "address": "0x48"})).await;
+        let result = I2cReadTool
+            .execute(json!({"bus": 1, "address": "0x48"}))
+            .await;
         assert!(result.is_err());
     }
 
@@ -627,7 +633,9 @@ mod tests {
 
     #[tokio::test]
     async fn spi_requires_device_and_bytes() {
-        let result = SpiTransferTool.execute(json!({"device": "/dev/spidev0.0"})).await;
+        let result = SpiTransferTool
+            .execute(json!({"device": "/dev/spidev0.0"}))
+            .await;
         assert!(result.is_err());
     }
 

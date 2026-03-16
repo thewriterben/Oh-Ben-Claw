@@ -20,11 +20,11 @@
 //!     +-- command    # Brain publishes a command to all nodes
 //! ```
 
-use crate::config::SpineConfig;  // SpineConfig is defined in config::mod
+use crate::config::SpineConfig; // SpineConfig is defined in config::mod
 use crate::tools::traits::{Tool, ToolResult};
 use anyhow::{bail, Result};
 use async_trait::async_trait;
-use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS};
+use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -137,11 +137,7 @@ impl SpineClient {
     ///
     /// Returns the `SpineClient` and a handle to the background event loop task.
     pub async fn connect(mut self) -> Result<Arc<Self>> {
-        let mut opts = MqttOptions::new(
-            &self.client_id,
-            &self.config.host,
-            self.config.port,
-        );
+        let mut opts = MqttOptions::new(&self.client_id, &self.config.host, self.config.port);
         opts.set_keep_alive(Duration::from_secs(30));
         opts.set_clean_session(true);
 
@@ -183,20 +179,13 @@ impl SpineClient {
                                     tool_count = announcement.tools.len(),
                                     "Node announced on spine"
                                 );
-                                node_registry
-                                    .write()
-                                    .await
-                                    .insert(node_id, announcement);
+                                node_registry.write().await.insert(node_id, announcement);
                             }
                         } else if topic.contains("/result/") {
                             // Parse tool call result and wake the waiting caller
-                            if let Ok(result) =
-                                serde_json::from_slice::<ToolCallResult>(&payload)
-                            {
+                            if let Ok(result) = serde_json::from_slice::<ToolCallResult>(&payload) {
                                 let call_id = result.call_id.clone();
-                                if let Some(sender) =
-                                    pending_calls.lock().await.remove(&call_id)
-                                {
+                                if let Some(sender) = pending_calls.lock().await.remove(&call_id) {
                                     let _ = sender.send(result);
                                 }
                             }
@@ -229,7 +218,9 @@ impl SpineClient {
             .ok_or_else(|| anyhow::anyhow!("Spine not connected"))?;
         let topic = topic_announce(&announcement.node_id);
         let payload = serde_json::to_vec(announcement)?;
-        client.publish(topic, QoS::AtLeastOnce, true, payload).await?;
+        client
+            .publish(topic, QoS::AtLeastOnce, true, payload)
+            .await?;
         Ok(())
     }
 
@@ -257,7 +248,9 @@ impl SpineClient {
 
         let request_topic = topic_tool_call(node_id, tool_name);
         let payload = serde_json::to_vec(&request)?;
-        client.publish(request_topic, QoS::AtLeastOnce, false, payload).await?;
+        client
+            .publish(request_topic, QoS::AtLeastOnce, false, payload)
+            .await?;
 
         let timeout = Duration::from_secs(self.config.tool_timeout_secs);
         match tokio::time::timeout(timeout, rx).await {

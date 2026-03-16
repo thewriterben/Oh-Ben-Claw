@@ -99,7 +99,9 @@ impl Stm32NucleoPeripheral {
             .args(["list"])
             .output()
             .await
-            .with_context(|| "Failed to run probe-rs. Install with: cargo install probe-rs-tools --locked")?;
+            .with_context(|| {
+                "Failed to run probe-rs. Install with: cargo install probe-rs-tools --locked"
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(stdout
@@ -147,12 +149,27 @@ impl Peripheral for Stm32NucleoPeripheral {
         let chip = self.chip.clone();
         let probe_index = self.probe_index;
         vec![
-            Box::new(Stm32FlashTool { chip: chip.clone(), probe_index }),
-            Box::new(Stm32RttReadTool { chip: chip.clone(), probe_index }),
-            Box::new(Stm32RttWriteTool { chip: chip.clone(), probe_index }),
-            Box::new(Stm32ResetTool { chip: chip.clone(), probe_index }),
+            Box::new(Stm32FlashTool {
+                chip: chip.clone(),
+                probe_index,
+            }),
+            Box::new(Stm32RttReadTool {
+                chip: chip.clone(),
+                probe_index,
+            }),
+            Box::new(Stm32RttWriteTool {
+                chip: chip.clone(),
+                probe_index,
+            }),
+            Box::new(Stm32ResetTool {
+                chip: chip.clone(),
+                probe_index,
+            }),
             Box::new(Stm32ListProbesTool),
-            Box::new(Stm32MemReadTool { chip: chip.clone(), probe_index }),
+            Box::new(Stm32MemReadTool {
+                chip: chip.clone(),
+                probe_index,
+            }),
         ]
     }
 }
@@ -279,10 +296,7 @@ impl Tool for Stm32RttReadTool {
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        let max_lines = args
-            .get("max_lines")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(20);
+        let max_lines = args.get("max_lines").and_then(|v| v.as_u64()).unwrap_or(20);
         let timeout_ms = args
             .get("timeout_ms")
             .and_then(|v| v.as_u64())
@@ -478,7 +492,9 @@ impl Tool for Stm32ListProbesTool {
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         let probes = Stm32NucleoPeripheral::list_probes().await?;
         if probes.is_empty() {
-            Ok(ToolResult::ok("No debug probes detected. Is the Nucleo board connected via USB?".into()))
+            Ok(ToolResult::ok(
+                "No debug probes detected. Is the Nucleo board connected via USB?".into(),
+            ))
         } else {
             Ok(ToolResult::ok(format!(
                 "Detected {} probe(s):\n{}",
@@ -534,10 +550,7 @@ impl Tool for Stm32MemReadTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'address' parameter"))?
             .to_string();
-        let count = args
-            .get("count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(4);
+        let count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(4);
 
         let output = tokio::time::timeout(
             PROBE_TIMEOUT,
@@ -604,25 +617,37 @@ mod tests {
 
     #[test]
     fn flash_tool_name() {
-        let t = Stm32FlashTool { chip: "STM32F401RETx".into(), probe_index: 0 };
+        let t = Stm32FlashTool {
+            chip: "STM32F401RETx".into(),
+            probe_index: 0,
+        };
         assert_eq!(t.name(), "stm32_flash");
     }
 
     #[test]
     fn rtt_read_tool_name() {
-        let t = Stm32RttReadTool { chip: "STM32F401RETx".into(), probe_index: 0 };
+        let t = Stm32RttReadTool {
+            chip: "STM32F401RETx".into(),
+            probe_index: 0,
+        };
         assert_eq!(t.name(), "stm32_rtt_read");
     }
 
     #[test]
     fn rtt_write_tool_name() {
-        let t = Stm32RttWriteTool { chip: "STM32F401RETx".into(), probe_index: 0 };
+        let t = Stm32RttWriteTool {
+            chip: "STM32F401RETx".into(),
+            probe_index: 0,
+        };
         assert_eq!(t.name(), "stm32_rtt_write");
     }
 
     #[test]
     fn reset_tool_name() {
-        let t = Stm32ResetTool { chip: "STM32F401RETx".into(), probe_index: 0 };
+        let t = Stm32ResetTool {
+            chip: "STM32F401RETx".into(),
+            probe_index: 0,
+        };
         assert_eq!(t.name(), "stm32_reset");
     }
 
@@ -633,27 +658,41 @@ mod tests {
 
     #[test]
     fn mem_read_tool_name() {
-        let t = Stm32MemReadTool { chip: "STM32F401RETx".into(), probe_index: 0 };
+        let t = Stm32MemReadTool {
+            chip: "STM32F401RETx".into(),
+            probe_index: 0,
+        };
         assert_eq!(t.name(), "stm32_mem_read");
     }
 
     #[tokio::test]
     async fn flash_requires_binary_path() {
-        let t = Stm32FlashTool { chip: "STM32F401RETx".into(), probe_index: 0 };
+        let t = Stm32FlashTool {
+            chip: "STM32F401RETx".into(),
+            probe_index: 0,
+        };
         let result = t.execute(json!({})).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn flash_rejects_missing_file() {
-        let t = Stm32FlashTool { chip: "STM32F401RETx".into(), probe_index: 0 };
-        let result = t.execute(json!({"binary_path": "/nonexistent/firmware.elf"})).await;
+        let t = Stm32FlashTool {
+            chip: "STM32F401RETx".into(),
+            probe_index: 0,
+        };
+        let result = t
+            .execute(json!({"binary_path": "/nonexistent/firmware.elf"}))
+            .await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn mem_read_requires_address() {
-        let t = Stm32MemReadTool { chip: "STM32F401RETx".into(), probe_index: 0 };
+        let t = Stm32MemReadTool {
+            chip: "STM32F401RETx".into(),
+            probe_index: 0,
+        };
         let result = t.execute(json!({})).await;
         assert!(result.is_err());
     }

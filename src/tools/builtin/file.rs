@@ -126,11 +126,7 @@ impl Tool for FileTool {
                 while let Some(entry) = entries.next_entry().await? {
                     let name = entry.file_name().to_string_lossy().to_string();
                     let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
-                    names.push(if is_dir {
-                        format!("{}/", name)
-                    } else {
-                        name
-                    });
+                    names.push(if is_dir { format!("{}/", name) } else { name });
                 }
                 names.sort();
                 Ok(ToolResult::ok(names.join("\n")))
@@ -144,7 +140,11 @@ impl Tool for FileTool {
             "delete" => {
                 if path_buf.is_dir() {
                     tokio::fs::remove_dir_all(&path_buf).await.map_err(|e| {
-                        anyhow::anyhow!("Failed to delete directory '{}': {}", path_buf.display(), e)
+                        anyhow::anyhow!(
+                            "Failed to delete directory '{}': {}",
+                            path_buf.display(),
+                            e
+                        )
                     })?;
                 } else {
                     tokio::fs::remove_file(&path_buf).await.map_err(|e| {

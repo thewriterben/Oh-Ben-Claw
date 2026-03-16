@@ -188,9 +188,8 @@ impl MemoryStore {
     /// Load all messages for a session, in chronological order.
     pub fn load_messages(&self, session_id: &str) -> Result<Vec<ChatMessage>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT role, content FROM messages WHERE session_id = ?1 ORDER BY id ASC",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT role, content FROM messages WHERE session_id = ?1 ORDER BY id ASC")?;
         let messages = stmt
             .query_map(params![session_id], |row| {
                 let role_str: String = row.get(0)?;
@@ -247,10 +246,7 @@ impl MemoryStore {
     pub fn delete_session(&self, session_id: &str) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
         // Messages are deleted via ON DELETE CASCADE on the foreign key
-        let rows = conn.execute(
-            "DELETE FROM sessions WHERE id = ?1",
-            params![session_id],
-        )?;
+        let rows = conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
         Ok(rows > 0)
     }
 
