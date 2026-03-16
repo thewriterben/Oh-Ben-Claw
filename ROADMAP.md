@@ -51,7 +51,7 @@ Tool execution policies, peripheral node pairing, and encrypted secrets vault. *
 
 ---
 
-## Phase 4: Native Desktop GUI 🔄 In Progress
+## Phase 4: Native Desktop GUI ✅ Complete
 
 Tauri 2 native desktop application — system tray, chat, device panel, tool log, vault UI.
 
@@ -66,8 +66,8 @@ Tauri 2 native desktop application — system tray, chat, device panel, tool log
 - [x] System tray — left-click to show, right-click menu (Show / Quit) (`gui/src-tauri/src/lib.rs`)
 - [x] Minimize-to-tray on window close (`gui/src-tauri/src/lib.rs`)
 - [x] Launch-at-login via `tauri-plugin-autostart` (`gui/src-tauri/src/lib.rs`)
-- [ ] Tauri event streaming — `assistant-token`, `tool-call-event`, `node-status-change` events
-- [ ] GUI CI job in `.github/workflows/ci.yml`
+- [x] Tauri event streaming — `assistant-token`, `tool-call-event`, `node-status-change` events
+- [x] GUI CI job in `.github/workflows/ci.yml`
 
 ---
 
@@ -100,13 +100,13 @@ Board registry expansion, security hardening, and config validation from project
 
 ---
 
-## Phase 6: Multi-Channel Support 📋 Planned
+## Phase 6: Multi-Channel Support ✅ Complete
 
 Add support for all major communication channels.
 
-- [ ] Telegram channel
-- [ ] Discord channel
-- [ ] Slack channel
+- [x] Telegram channel — long-polling Bot API adapter (`src/channels/telegram.rs`)
+- [x] Discord channel — Gateway WebSocket adapter (`src/channels/discord.rs`)
+- [x] Slack channel — Socket Mode WebSocket adapter (`src/channels/slack.rs`)
 - [ ] WhatsApp channel
 - [ ] iMessage channel (macOS only)
 - [ ] Matrix channel
@@ -129,4 +129,5 @@ Enable peripheral nodes to run the full Oh-Ben-Claw agent locally, without a hos
 - [ ] Audio pipeline (microphone → speech-to-text → agent → text-to-speech)
 - [ ] Sensor fusion (combine readings from multiple sensors)
 - [x] Scheduled tasks and cron jobs (`src/scheduler/mod.rs`)
+- [x] Terminal telemetry dashboard — real-time TUI with agent status, nodes, tool log, system metrics (`src/dashboard/mod.rs`)
 - [ ] Skill forge (automatic discovery and integration of new skills)

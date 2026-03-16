@@ -218,6 +218,15 @@ pub struct DiscordConfig {
     pub token: Option<String>,
 }
 
+/// Configuration for the Slack channel.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SlackConfig {
+    /// App-Level Token (`xapp-…`) required for Socket Mode.
+    pub app_token: Option<String>,
+    /// Bot User OAuth Token (`xoxb-…`) used to post messages.
+    pub bot_token: Option<String>,
+}
+
 /// Configuration for all channels.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChannelsConfig {
@@ -225,6 +234,8 @@ pub struct ChannelsConfig {
     pub telegram: TelegramConfig,
     #[serde(default)]
     pub discord: DiscordConfig,
+    #[serde(default)]
+    pub slack: SlackConfig,
 }
 
 // ── Tunnel Configuration ────────────────────────────────────────────────────

@@ -9,6 +9,8 @@ export interface ChatMessage {
   toolName?: string;
   toolArgs?: string;
   timestamp: number;
+  /** Set to `true` while the assistant is still streaming tokens into this message. */
+  streaming?: boolean;
 }
 
 export interface Session {
