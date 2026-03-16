@@ -144,3 +144,36 @@ Implements key features from the upstream ZeroClaw project to ensure Oh-Ben-Claw
 - [x] RAG pipeline for hardware datasheet retrieval (`src/rag/mod.rs`)
 - [x] Sandboxed tool execution runtime (native + Docker) (`src/runtime/`)
 - [x] New config sections: `[autonomy]`, `[cost]`, `[runtime]`, `[multimodal]`
+
+---
+
+## Phase 10: OpenClaw Parity ✅ Complete
+
+Analyses the [OpenClaw](https://github.com/openclaw/openclaw) project and brings
+the most valuable features into Oh-Ben-Claw.
+
+### Model Reliability (inspired by OpenClaw's model-failover system)
+
+- [x] **Model failover** — chain ordered fallback providers/models in config (`[[provider.fallbacks]]`); if the primary call fails the next entry is tried automatically (`src/providers/failover.rs`)
+- [x] **Retry policy** — transparent exponential-backoff retries for transient errors (rate-limits, network blips) via `[provider.retry]` config section (`src/providers/retry.rs`)
+- [x] `from_config_full()` factory wires failover + retry together, applied at startup (`src/providers/mod.rs`)
+
+### New Communication Channels (inspired by OpenClaw's multi-channel inbox)
+
+- [x] **IRC channel** — raw-TCP IRC adapter; supports SASL PLAIN auth, channel joins, CTCP, and nick-collision recovery (`src/channels/irc.rs`)
+- [x] **Signal channel** — Signal Messenger via the [signal-cli](https://github.com/AsamK/signal-cli) JSON-RPC HTTP daemon; with sender allowlist (`src/channels/signal.rs`)
+- [x] **Mattermost channel** — Mattermost WebSocket event API; uses personal access token (`src/channels/mattermost.rs`)
+
+### UX Improvements (inspired by OpenClaw's typing indicators)
+
+- [x] **Typing indicators** — `TypingTask` helper spawns a background task that refreshes the platform's "typing…" status while the agent processes; auto-cancelled on response (`src/channels/typing.rs`)
+- [x] Telegram typing via `sendChatAction` (refresh every 4 s) (`src/channels/telegram.rs`)
+- [x] Discord typing via `POST /channels/{id}/typing` (refresh every 8 s) (`src/channels/discord.rs`)
+- [x] Slack typing via `conversations.typing` (refresh every 4 s) (`src/channels/slack.rs`)
+
+### Configuration
+
+- [x] `ProviderConfig` gains `fallbacks: Vec<ProviderConfig>` and `retry: Option<RetryConfig>` fields
+- [x] `ChannelsConfig` gains `irc`, `signal`, `mattermost`, and `typing_indicators` fields
+- [x] `IrcConfig`, `SignalConfig`, `MattermostConfig` structs added to `src/config/mod.rs`
+- [x] Example configuration updated with all new sections (`examples/config-multi-device.toml`)

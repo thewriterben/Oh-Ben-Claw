@@ -17,6 +17,7 @@
 //! messages only.
 
 use crate::agent::Agent;
+use crate::channels::typing::TypingTask;
 use crate::channels::utils::chunk_text;
 use crate::config::{DiscordConfig, ProviderConfig};
 use anyhow::{Context, Result};
@@ -58,6 +59,8 @@ pub struct DiscordChannel {
     provider_config: ProviderConfig,
     token: String,
     http: reqwest::Client,
+    /// Whether to send typing indicators while the agent processes.
+    typing_indicators: bool,
 }
 
 impl DiscordChannel {
@@ -69,6 +72,18 @@ impl DiscordChannel {
         agent: Arc<Agent>,
         provider_config: ProviderConfig,
     ) -> Option<Self> {
+        Self::new_with_typing(config, agent, provider_config, true)
+    }
+
+    /// Create a new `DiscordChannel` with explicit typing-indicator control.
+    ///
+    /// Returns `None` if no token is configured.
+    pub fn new_with_typing(
+        config: &DiscordConfig,
+        agent: Arc<Agent>,
+        provider_config: ProviderConfig,
+        typing_indicators: bool,
+    ) -> Option<Self> {
         let token = config
             .token
             .clone()
@@ -79,6 +94,7 @@ impl DiscordChannel {
             provider_config,
             token,
             http: reqwest::Client::new(),
+            typing_indicators,
         })
     }
 
@@ -245,6 +261,31 @@ impl DiscordChannel {
 
         // Session ID per-channel
         let session_id = format!("discord-{}", channel_id);
+
+        // Start typing indicator — Discord's expires after ~10 s, refresh every 8 s.
+        let _typing = if self.typing_indicators {
+            let channel_id_owned = channel_id.clone();
+            let token_owned = self.token.clone();
+            let http_owned = self.http.clone();
+            Some(TypingTask::start(8, move || {
+                let url = format!(
+                    "{}/channels/{}/typing",
+                    DISCORD_API_BASE, channel_id_owned
+                );
+                let token = token_owned.clone();
+                let http = http_owned.clone();
+                async move {
+                    let _ = http
+                        .post(&url)
+                        .header("Authorization", format!("Bot {}", token))
+                        .header("Content-Length", "0")
+                        .send()
+                        .await;
+                }
+            }))
+        } else {
+            None
+        };
 
         let response = self
             .agent

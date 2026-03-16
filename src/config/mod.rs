@@ -11,6 +11,35 @@ use std::path::PathBuf;
 // ── Provider Configuration ───────────────────────────────────────────────────
 
 /// Configuration for the LLM provider.
+///
+/// ## Reliability (inspired by OpenClaw)
+///
+/// Add `[[provider.fallbacks]]` tables to define an ordered list of backup
+/// providers.  If the primary provider fails the next fallback is tried
+/// automatically via the `FailoverProvider` wrapper.
+///
+/// Add a `[provider.retry]` table to enable transparent exponential-back-off
+/// retries on transient errors (rate-limits, network blips).
+///
+/// ```toml
+/// [provider]
+/// name    = "openai"
+/// model   = "gpt-4o"
+/// api_key = "sk-..."
+///
+/// [provider.retry]
+/// max_retries      = 3
+/// initial_backoff_ms = 500
+///
+/// [[provider.fallbacks]]
+/// name    = "anthropic"
+/// model   = "claude-3-5-sonnet-20241022"
+/// api_key = "sk-ant-..."
+///
+/// [[provider.fallbacks]]
+/// name  = "ollama"
+/// model = "llama3.2"
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     /// The provider name (e.g., "openai", "anthropic", "gemini", "ollama").
@@ -29,6 +58,14 @@ pub struct ProviderConfig {
     /// The default temperature for LLM calls.
     #[serde(default = "default_temperature")]
     pub temperature: f64,
+    /// Ordered list of fallback provider configurations to try when the
+    /// primary provider fails (model failover, inspired by OpenClaw).
+    #[serde(default)]
+    pub fallbacks: Vec<ProviderConfig>,
+    /// Optional retry policy for transient errors (rate-limits, network
+    /// issues).  If unset, no automatic retries are performed.
+    #[serde(default)]
+    pub retry: Option<crate::providers::retry::RetryConfig>,
 }
 
 fn default_provider_name() -> String {
@@ -51,6 +88,8 @@ impl Default for ProviderConfig {
             api_key: None,
             base_url: None,
             temperature: default_temperature(),
+            fallbacks: vec![],
+            retry: None,
         }
     }
 }
@@ -299,6 +338,119 @@ pub struct MatrixConfig {
     pub access_token: Option<String>,
 }
 
+// ── IRC Configuration (new in Phase 10) ──────────────────────────────────────
+
+/// Configuration for the IRC channel adapter.
+///
+/// The adapter connects to an IRC server, joins the configured channels, and
+/// forwards PRIVMSG messages to the Oh-Ben-Claw agent.
+///
+/// ```toml
+/// [channels.irc]
+/// host     = "irc.libera.chat"
+/// port     = 6697
+/// use_tls  = true
+/// nickname = "oh-ben-claw"
+/// channels = ["#ai-bots", "#myserver"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IrcConfig {
+    /// IRC server hostname.
+    #[serde(default)]
+    pub host: Option<String>,
+    /// IRC server port (default: 6697 for TLS, 6667 for plain).
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// Whether to use TLS (default: true).
+    #[serde(default = "default_true")]
+    pub use_tls: bool,
+    /// Bot nickname.
+    #[serde(default = "default_irc_nick")]
+    pub nickname: String,
+    /// Optional NickServ password for automatic identification.
+    #[serde(default)]
+    pub password: Option<String>,
+    /// IRC channels to join (e.g. `["#general", "#bots"]`).
+    #[serde(default)]
+    pub channels: Vec<String>,
+    /// SASL PLAIN username (usually the account name, same as nickname).
+    #[serde(default)]
+    pub sasl_username: Option<String>,
+    /// SASL PLAIN password.
+    #[serde(default)]
+    pub sasl_password: Option<String>,
+}
+
+fn default_irc_nick() -> String {
+    "oh-ben-claw".to_string()
+}
+
+// ── Signal Configuration (new in Phase 10) ────────────────────────────────────
+
+/// Configuration for the Signal channel adapter.
+///
+/// Uses the [signal-cli](https://github.com/AsamK/signal-cli) JSON-RPC HTTP
+/// daemon.  Start signal-cli in daemon mode:
+/// ```shell
+/// signal-cli -a +1234567890 daemon --http localhost:8080
+/// ```
+///
+/// ```toml
+/// [channels.signal]
+/// cli_url        = "http://localhost:8080"
+/// phone_number   = "+1234567890"
+/// allowed_numbers = ["+10987654321"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SignalConfig {
+    /// Base URL of the signal-cli JSON-RPC HTTP daemon.
+    #[serde(default)]
+    pub cli_url: Option<String>,
+    /// The registered phone number of the bot account (E.164 format).
+    #[serde(default)]
+    pub phone_number: Option<String>,
+    /// Optional allowlist of phone numbers that may talk to the bot.
+    /// When empty, all senders are accepted.
+    #[serde(default)]
+    pub allowed_numbers: Vec<String>,
+    /// Polling interval in seconds (default: 2).
+    #[serde(default = "default_signal_poll_secs")]
+    pub poll_interval_secs: u64,
+}
+
+fn default_signal_poll_secs() -> u64 {
+    2
+}
+
+// ── Mattermost Configuration (new in Phase 10) ────────────────────────────────
+
+/// Configuration for the Mattermost channel adapter.
+///
+/// The adapter uses the Mattermost WebSocket event API to receive messages and
+/// the REST API to post replies.
+///
+/// ```toml
+/// [channels.mattermost]
+/// server_url = "https://mattermost.example.com"
+/// token      = "your-personal-access-token"
+/// team_name  = "my-team"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MattermostConfig {
+    /// Mattermost server URL (e.g. `https://mattermost.example.com`).
+    #[serde(default)]
+    pub server_url: Option<String>,
+    /// Personal access token or bot token.
+    #[serde(default)]
+    pub token: Option<String>,
+    /// The bot's Mattermost user ID (auto-detected if not set).
+    #[serde(default)]
+    pub bot_user_id: Option<String>,
+    /// Team name the bot operates in (used for display only).
+    #[serde(default)]
+    pub team_name: Option<String>,
+}
+
 /// Configuration for all channels.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChannelsConfig {
@@ -314,6 +466,19 @@ pub struct ChannelsConfig {
     pub imessage: IMessageConfig,
     #[serde(default)]
     pub matrix: MatrixConfig,
+    /// IRC channel adapter (new in Phase 10).
+    #[serde(default)]
+    pub irc: IrcConfig,
+    /// Signal channel adapter via signal-cli (new in Phase 10).
+    #[serde(default)]
+    pub signal: SignalConfig,
+    /// Mattermost channel adapter (new in Phase 10).
+    #[serde(default)]
+    pub mattermost: MattermostConfig,
+    /// Send "typing…" indicators while the agent processes a message.
+    /// Supported by Telegram, Discord, and Slack (default: true).
+    #[serde(default = "default_true")]
+    pub typing_indicators: bool,
 }
 
 // ── Tunnel Configuration ────────────────────────────────────────────────────

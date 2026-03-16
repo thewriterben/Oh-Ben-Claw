@@ -12,6 +12,7 @@
 //! commands other than `/start`, `/help`, and `/clear` are ignored.
 
 use crate::agent::Agent;
+use crate::channels::typing::TypingTask;
 use crate::channels::utils::chunk_text;
 use crate::config::{ProviderConfig, TelegramConfig};
 use anyhow::{Context, Result};
@@ -72,6 +73,8 @@ pub struct TelegramChannel {
     token: String,
     api_base: String,
     http: reqwest::Client,
+    /// Whether to send "typing…" indicators while the agent processes.
+    typing_indicators: bool,
 }
 
 impl TelegramChannel {
@@ -82,6 +85,18 @@ impl TelegramChannel {
         config: &TelegramConfig,
         agent: Arc<Agent>,
         provider_config: ProviderConfig,
+    ) -> Option<Self> {
+        Self::new_with_typing(config, agent, provider_config, true)
+    }
+
+    /// Create a new `TelegramChannel` with explicit typing-indicator control.
+    ///
+    /// Returns `None` if no token is configured.
+    pub fn new_with_typing(
+        config: &TelegramConfig,
+        agent: Arc<Agent>,
+        provider_config: ProviderConfig,
+        typing_indicators: bool,
     ) -> Option<Self> {
         let token = config
             .token
@@ -94,6 +109,7 @@ impl TelegramChannel {
             api_base: format!("https://api.telegram.org/bot{}", token),
             token,
             http: reqwest::Client::new(),
+            typing_indicators,
         })
     }
 
@@ -189,6 +205,28 @@ impl TelegramChannel {
         Ok(())
     }
 
+    /// Send a `typing` chat action to Telegram.
+    ///
+    /// The indicator expires after ~5 seconds; callers should refresh it
+    /// periodically while long operations are in progress.
+    async fn send_chat_action(&self, chat_id: i64) {
+        let url = format!("{}/sendChatAction", self.api_base);
+        #[derive(serde::Serialize)]
+        struct ChatActionBody {
+            chat_id: i64,
+            action: &'static str,
+        }
+        let _ = self
+            .http
+            .post(&url)
+            .json(&ChatActionBody {
+                chat_id,
+                action: "typing",
+            })
+            .send()
+            .await;
+    }
+
     async fn handle_message(&self, msg: TgMessage) -> Result<()> {
         let text = match &msg.text {
             Some(t) => t.trim().to_string(),
@@ -227,6 +265,36 @@ impl TelegramChannel {
 
         // Session ID per-chat
         let session_id = format!("tg-{}", msg.chat.id);
+
+        // Start typing indicator while the agent processes the message.
+        // Telegram's typing indicator expires after ~5 s, so we refresh it
+        // every 4 s.  The task is dropped (cancelled) once we have a response.
+        let _typing = if self.typing_indicators {
+            let chat_id = msg.chat.id;
+            let api_base = self.api_base.clone();
+            let http = self.http.clone();
+            Some(TypingTask::start(4, move || {
+                let url = format!("{}/sendChatAction", api_base);
+                let http = http.clone();
+                async move {
+                    #[derive(serde::Serialize)]
+                    struct ChatActionBody {
+                        chat_id: i64,
+                        action: &'static str,
+                    }
+                    let _ = http
+                        .post(&url)
+                        .json(&ChatActionBody {
+                            chat_id,
+                            action: "typing",
+                        })
+                        .send()
+                        .await;
+                }
+            }))
+        } else {
+            None
+        };
 
         let response = self
             .agent
