@@ -123,11 +123,11 @@ Enable peripheral nodes to run the full Oh-Ben-Claw agent locally, without a hos
 
 ---
 
-## Phase 8: Advanced Capabilities 📋 Planned
+## Phase 8: Advanced Capabilities ✅ Complete
 
-- [ ] Vision pipeline (camera capture → LLM vision → action)
-- [ ] Audio pipeline (microphone → speech-to-text → agent → text-to-speech)
-- [ ] Sensor fusion (combine readings from multiple sensors)
+- [x] Vision pipeline (camera capture → LLM vision → action) (`src/vision/mod.rs`)
+- [x] Audio pipeline (microphone → speech-to-text → agent → text-to-speech) (`src/audio/mod.rs`)
+- [x] Sensor fusion (combine readings from multiple sensors) (`src/peripherals/fusion.rs`)
 - [x] Scheduled tasks and cron jobs (`src/scheduler/mod.rs`)
 - [x] Terminal telemetry dashboard — real-time TUI with agent status, nodes, tool log, system metrics (`src/dashboard/mod.rs`)
-- [ ] Skill forge (automatic discovery and integration of new skills)
+- [x] Skill forge (automatic discovery and integration of new skills) (`src/skill_forge/mod.rs`)
