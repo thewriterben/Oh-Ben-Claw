@@ -72,10 +72,11 @@ impl RagIndex {
                 }
             }
 
-            // Chunk into ~500 character pieces, splitting on paragraph breaks
+            // Chunk into ~500 character pieces, splitting on paragraph breaks.
+            // We ensure `end > start` on every iteration to guarantee termination.
             let mut start = 0;
             while start < content.len() {
-                let end = if start + 500 >= content.len() {
+                let raw_end = if start + 500 >= content.len() {
                     content.len()
                 } else {
                     // Try to break at a paragraph boundary
@@ -88,6 +89,8 @@ impl RagIndex {
                         start + 500
                     }
                 };
+                // Guard: always advance by at least one byte to prevent infinite loops
+                let end = raw_end.max(start + 1).min(content.len());
 
                 let chunk_text = content[start..end].trim().to_string();
                 if !chunk_text.is_empty() {
@@ -96,9 +99,6 @@ impl RagIndex {
                         source: source.clone(),
                         content: chunk_text,
                     });
-                }
-                if end == start {
-                    break;
                 }
                 start = end;
             }
