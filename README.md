@@ -1,6 +1,3 @@
-<p align="center">
-  <img src="docs/oh-ben-claw.png" alt="Oh-Ben-Claw" width="200" />
-</p>
 <h1 align="center">Oh-Ben-Claw 🦀🧠</h1>
 <p align="center">
   <strong>Advanced. Distributed. Multi-Device. 100% Rust.</strong><br>
