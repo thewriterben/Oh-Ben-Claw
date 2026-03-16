@@ -3,11 +3,11 @@ name = "obc-esp32-s3"
 version = "0.1.0"
 edition = "2021"
 authors = ["thewriterben"]
-description = "Oh-Ben-Claw firmware for ESP32-S3 — GPIO, camera, microphone, sensors, and MQTT."
+description = "Oh-Ben-Claw firmware for ESP32-S3 — GPIO, camera, microphone, sensors, MQTT, and edge-native LLM agent."
 
 [dependencies]
 # esp-idf-svc 0.49.x uses esp-idf-hal 0.44.x — keep them in sync
-esp-idf-svc = { version = "0.49", features = ["std"] }
+esp-idf-svc = { version = "0.49", features = ["std", "experimental"] }
 esp-idf-hal = "0.44"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
