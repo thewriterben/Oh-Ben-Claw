@@ -525,7 +525,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         name: "mcp23017",
         description: "Microchip MCP23017 — 16-bit I2C GPIO expander",
         bus: "i2c",
-        default_i2c_addr: Some(0x20),
+        default_i2c_addr: Some(0x21),
         capabilities: &["gpio"],
         compatible_boards: &[],
     },
@@ -541,7 +541,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
     AccessoryInfo {
         name: "ds18b20",
         description: "Maxim DS18B20 — 1-Wire digital temperature sensor",
-        bus: "i2c",
+        bus: "onewire",
         default_i2c_addr: None,
         capabilities: &["sensor_read"],
         compatible_boards: &[],
