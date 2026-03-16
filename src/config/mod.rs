@@ -452,6 +452,166 @@ impl Default for EdgeConfig {
     }
 }
 
+// ── Autonomy Configuration ────────────────────────────────────────────────────
+
+/// Autonomy level for tool execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AutonomyLevel {
+    /// Full autonomy: all tools execute without approval.
+    #[default]
+    Full,
+    /// Supervised: most tools require approval unless auto_approve'd.
+    Supervised,
+    /// Manual: all tools require explicit approval.
+    Manual,
+}
+
+/// Configuration for the human-in-the-loop approval system.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutonomyConfig {
+    /// The autonomy level.
+    #[serde(default)]
+    pub level: AutonomyLevel,
+    /// Tools that never need approval regardless of level.
+    #[serde(default)]
+    pub auto_approve: Vec<String>,
+    /// Tools that always need approval regardless of level or session allowlist.
+    #[serde(default)]
+    pub always_ask: Vec<String>,
+}
+
+impl Default for AutonomyConfig {
+    fn default() -> Self {
+        Self {
+            level: AutonomyLevel::Full,
+            auto_approve: vec![],
+            always_ask: vec![],
+        }
+    }
+}
+
+// ── Cost Configuration ────────────────────────────────────────────────────────
+
+/// Configuration for token cost tracking and budget enforcement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostConfig {
+    /// Whether cost tracking is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Daily spending limit in USD (0 = no limit).
+    #[serde(default = "default_daily_limit")]
+    pub daily_limit_usd: f64,
+    /// Monthly spending limit in USD (0 = no limit).
+    #[serde(default = "default_monthly_limit")]
+    pub monthly_limit_usd: f64,
+    /// Warning threshold as a fraction of the limit (e.g. 0.8 = warn at 80%).
+    #[serde(default = "default_warn_threshold")]
+    pub warn_threshold: f64,
+}
+
+fn default_daily_limit() -> f64 { 10.0 }
+fn default_monthly_limit() -> f64 { 100.0 }
+fn default_warn_threshold() -> f64 { 0.8 }
+
+impl Default for CostConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            daily_limit_usd: default_daily_limit(),
+            monthly_limit_usd: default_monthly_limit(),
+            warn_threshold: default_warn_threshold(),
+        }
+    }
+}
+
+// ── Docker Configuration ──────────────────────────────────────────────────────
+
+/// Configuration for the Docker runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DockerConfig {
+    /// Docker image to use for sandboxed execution.
+    #[serde(default = "default_docker_image")]
+    pub image: String,
+    /// Docker network to use (default: "none" for isolation).
+    #[serde(default = "default_docker_network")]
+    pub network: String,
+    /// Memory limit in MB for Docker containers.
+    #[serde(default = "default_docker_memory_mb")]
+    pub memory_mb: u64,
+}
+
+fn default_docker_image() -> String { "alpine:latest".to_string() }
+fn default_docker_network() -> String { "none".to_string() }
+fn default_docker_memory_mb() -> u64 { 128 }
+
+impl Default for DockerConfig {
+    fn default() -> Self {
+        Self {
+            image: default_docker_image(),
+            network: default_docker_network(),
+            memory_mb: default_docker_memory_mb(),
+        }
+    }
+}
+
+// ── Runtime Configuration ──────────────────────────────────────────────────────
+
+/// Configuration for the tool execution runtime (sandbox).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeConfig {
+    /// Runtime kind: "native" (default) or "docker".
+    #[serde(default = "default_runtime_kind")]
+    pub kind: String,
+    /// Docker runtime configuration (used when kind = "docker").
+    #[serde(default)]
+    pub docker: DockerConfig,
+}
+
+fn default_runtime_kind() -> String { "native".to_string() }
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            kind: default_runtime_kind(),
+            docker: DockerConfig::default(),
+        }
+    }
+}
+
+// ── Multimodal Configuration ───────────────────────────────────────────────────
+
+/// Configuration for multimodal (image) handling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultimodalConfig {
+    /// Whether multimodal image handling is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Maximum number of images per message.
+    #[serde(default = "default_max_images")]
+    pub max_images: usize,
+    /// Maximum image size in bytes.
+    #[serde(default = "default_max_image_bytes")]
+    pub max_image_bytes: usize,
+    /// Whether to allow fetching remote (URL) images.
+    #[serde(default)]
+    pub allow_remote: bool,
+}
+
+fn default_max_images() -> usize { 5 }
+fn default_max_image_bytes() -> usize { 5 * 1024 * 1024 }
+
+impl Default for MultimodalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_images: default_max_images(),
+            max_image_bytes: default_max_image_bytes(),
+            allow_remote: false,
+        }
+    }
+}
+
 // ── Root Configuration ───────────────────────────────────────────────────────
 
 /// The root configuration for Oh-Ben-Claw.
@@ -477,6 +637,14 @@ pub struct Config {
     pub orchestrator: crate::agent::OrchestratorConfig,
     #[serde(default)]
     pub edge: EdgeConfig,
+    #[serde(default)]
+    pub autonomy: AutonomyConfig,
+    #[serde(default)]
+    pub cost: CostConfig,
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
+    #[serde(default)]
+    pub multimodal: MultimodalConfig,
 }
 
 impl Config {
