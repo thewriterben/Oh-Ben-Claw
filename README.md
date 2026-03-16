@@ -65,6 +65,20 @@ Oh-Ben-Claw is organized around three layers:
 
 **Pluggable LLM Providers** supports all major LLM providers, including OpenAI, Anthropic, Google Gemini, Ollama (local), and any OpenAI-compatible endpoint.
 
+**Human-in-the-Loop Approval** provides a supervised execution mode where tool calls require explicit user approval. Three autonomy levels (`full`, `supervised`, `manual`) control when prompts appear, backed by a session-scoped allowlist and a full audit log.
+
+**Token Cost Tracking** monitors API usage in real time. Budget limits (daily and monthly) can be set in the config to prevent runaway spending, with configurable warning thresholds before hard limits are hit.
+
+**System Diagnostics** (`oh-ben-claw doctor`) runs a comprehensive health check on your configuration, environment, communication channels, and MQTT spine — reporting ✅ / ⚠️ / ❌ for each item.
+
+**Event Lifecycle Hooks** allow external code to observe and intercept all major agent events — session start/stop, incoming messages, tool calls, tool results, and agent responses — with priority-ordered handlers and short-circuit cancellation.
+
+**Enhanced Multimodal Handling** lets you embed `[IMAGE:/path/to/file.png]` markers directly in text messages. The multimodal pipeline strips the markers, reads the images, and injects them as structured content blocks for vision-capable models.
+
+**Hardware Datasheet RAG** indexes your `docs/datasheets/` directory and exposes a `datasheet_search` tool that the agent can use to look up pin layouts, register maps, sensor specs, and I2C addresses — all retrieved via keyword search directly from your markdown and text datasheets.
+
+**Sandboxed Tool Execution** runs shell-based tools through a configurable runtime adapter. The default `native` runtime executes directly on the host; the `docker` runtime wraps every command in a fresh, memory-limited, network-isolated container for maximum safety.
+
 ---
 
 ## Supported Hardware
@@ -163,6 +177,30 @@ transport = "native"
 
 [channels.telegram]
 token = "your-telegram-bot-token"
+
+# Optional: supervised mode — require approval before running tools
+[autonomy]
+level = "supervised"         # "full" (default), "supervised", or "manual"
+auto_approve = ["read_file"] # tools that never need approval
+always_ask = ["delete_file"] # tools that always need approval
+
+# Optional: token cost tracking and budget enforcement
+[cost]
+enabled = true
+daily_limit_usd = 5.0
+monthly_limit_usd = 50.0
+warn_threshold = 0.8
+
+# Optional: sandboxed tool execution
+[runtime]
+kind = "native"              # "native" (default) or "docker"
+
+# Optional: multimodal image handling
+[multimodal]
+enabled = true
+max_images = 5
+max_image_bytes = 5242880    # 5 MB
+allow_remote = false
 ```
 
 ### Running
@@ -170,6 +208,9 @@ token = "your-telegram-bot-token"
 ```bash
 # Start the core agent (connects to MQTT spine and all configured peripherals)
 ./target/release/oh-ben-claw start
+
+# Run system diagnostics to check configuration and connectivity
+./target/release/oh-ben-claw doctor
 
 # Or run as a background service
 ./target/release/oh-ben-claw service install
@@ -213,17 +254,30 @@ cargo build --target aarch64-unknown-linux-gnu --features hardware,peripheral-na
 Oh-Ben-Claw/
 ├── src/
 │   ├── agent/          # Core agent loop, dispatcher, memory loader
-│   ├── spine/          # MQTT communication spine (publish, subscribe, discovery)
+│   ├── approval/       # Human-in-the-loop approval workflow
+│   ├── audio/          # Audio pipeline (microphone → STT → agent → TTS)
 │   ├── channels/       # Communication channels (Telegram, Discord, CLI, etc.)
 │   ├── config/         # Configuration schema and loading
-│   ├── gui/            # Native GUI application (Tauri/egui)
+│   ├── cost/           # Token cost tracking and budget enforcement
+│   ├── dashboard/      # Real-time terminal TUI dashboard
+│   ├── doctor/         # System diagnostics (oh-ben-claw doctor command)
+│   ├── gateway/        # REST/WebSocket API gateway
+│   ├── hooks/          # Event lifecycle hooks
+│   ├── mcp/            # Model Context Protocol client/server
 │   ├── memory/         # Memory backends (SQLite, Markdown, vector)
+│   ├── multimodal.rs   # Enhanced multimodal message handling
 │   ├── observability/  # Logging, metrics, OpenTelemetry
 │   ├── peripherals/    # Hardware peripheral drivers (ESP32-S3, NanoPi, RPi)
 │   ├── providers/      # LLM provider adapters (OpenAI, Anthropic, Gemini, Ollama)
+│   ├── rag/            # RAG pipeline for hardware datasheet retrieval
+│   ├── runtime/        # Sandboxed tool execution (native + Docker)
+│   ├── scheduler/      # Scheduled tasks and cron jobs
 │   ├── security/       # Sandboxing, pairing, secrets management
+│   ├── skill_forge/    # Automatic skill discovery and integration
+│   ├── spine/          # MQTT communication spine (publish, subscribe, discovery)
 │   ├── tools/          # Tool registry (shell, file, browser, hardware, etc.)
-│   └── tunnel/         # Network tunnels (Cloudflare, ngrok, Tailscale)
+│   ├── tunnel/         # Network tunnels (Cloudflare, ngrok, Tailscale)
+│   └── vision/         # Vision pipeline (camera → LLM vision → action)
 ├── firmware/
 │   ├── obc-esp32-s3/   # ESP32-S3 firmware (GPIO + camera + mic + sensors)
 │   ├── obc-nanopi/     # NanoPi Neo3 native agent
@@ -237,14 +291,16 @@ Oh-Ben-Claw/
 
 ---
 
-## Relationship to ZeroClaw / Benji-zeroclaw
+## Relationship to ZeroClaw
 
-Oh-Ben-Claw is built on top of the `Benji-zeroclaw` fork of `zeroclaw-labs/zeroclaw`. It inherits the core architecture — the agent loop, provider system, channel system, tool registry, and peripheral framework — and extends it with:
+Oh-Ben-Claw is built on top of the `zeroclaw-labs/zeroclaw` architecture. It inherits the core architecture — the agent loop, provider system, channel system, tool registry, and peripheral framework — and extends it with:
 
 - A dedicated MQTT-based communication spine for distributed, network-connected peripheral nodes.
-- An expanded hardware ecosystem with more detailed datasheets and firmware.
-- A native GUI application for easier management and monitoring.
+- An expanded hardware ecosystem with more detailed datasheets and firmware for 12+ boards and 13+ I2C/SPI accessories.
+- A native GUI application (Tauri 2 + React) for easier management and monitoring.
 - A more opinionated, production-ready configuration and deployment story.
+- All key features from upstream ZeroClaw: human-in-the-loop approval, token cost tracking, system diagnostics, event lifecycle hooks, multimodal image handling, hardware datasheet RAG, and sandboxed tool execution.
+- Oh-Ben-Claw unique features: MQTT spine, P2P broker-free mesh, vision pipeline, audio pipeline, sensor fusion, TUI dashboard, MCP client/server, skill forge, edge-native mode.
 
 ---
 
