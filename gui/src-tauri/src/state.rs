@@ -5,7 +5,7 @@ use oh_ben_claw::{
     agent::Agent,
     memory::MemoryStore,
     security::SecurityContext,
-    config::{Config, SecurityConfig},
+    config::{Config, ProviderConfig, SecurityConfig},
 };
 
 /// Serializable agent status sent to the frontend.
@@ -127,6 +127,7 @@ pub struct AgentHandle {
     pub agent: Arc<Agent>,
     pub provider: String,
     pub model: String,
+    pub provider_config: ProviderConfig,
     pub session_id: String,
     pub started_at: std::time::Instant,
 }

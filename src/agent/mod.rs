@@ -296,6 +296,11 @@ impl Agent {
     pub fn tool_count(&self) -> usize {
         self.tools.len()
     }
+
+    /// Clear all conversation history for the given session.
+    pub fn clear_session(&self, session_id: &str) -> anyhow::Result<()> {
+        self.memory.clear_session(session_id)
+    }
 }
 
 // ── Response Types ────────────────────────────────────────────────────────────
