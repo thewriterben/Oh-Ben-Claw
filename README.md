@@ -76,10 +76,34 @@ Oh-Ben-Claw is organized around three layers:
 |---|---|---|
 | Waveshare ESP32-S3 Touch LCD 2.1 | Serial / MQTT | GPIO, Camera (OV2640), Microphone (I2S), Sensors (I2C) |
 | ESP32-S3 (generic) | Serial / MQTT | GPIO, Camera, Microphone, Sensors |
+| ESP32-C3 | Serial / MQTT | GPIO, I2C, SPI, Wi-Fi, BLE |
 | NanoPi Neo3 | Native (sysfs) / MQTT | GPIO (sysfs), I2C, SPI |
 | Raspberry Pi (all models) | Native (rppal) / MQTT | GPIO, Camera (libcamera), Microphone |
 | STM32 Nucleo-F401RE | Serial (probe-rs) | GPIO, ADC, Flash, Memory Map |
+| STM32H7 Discovery | Probe (probe-rs) | GPIO, ADC, DAC, I2C, SPI, Flash |
 | Arduino Uno / Mega | Serial | GPIO, Analog Read |
+| Arduino Nano 33 BLE | Serial | GPIO, Analog Read, I2C, SPI, BLE, Sensors |
+| Teensy 4.1 | Serial | GPIO, ADC, DAC, I2C, SPI, PWM, CAN |
+| nRF52840 DK | Serial | GPIO, I2C, SPI, BLE, PWM |
+| BeagleBone Black | Native | GPIO, ADC, I2C, SPI, PWM, CAN |
+| NVIDIA Jetson Nano | Native | GPIO, I2C, SPI, PWM, Camera, CUDA |
+
+### Supported I2C/SPI Accessories
+
+| Accessory | Bus | Default Address | Capabilities |
+|---|---|---|---|
+| BME280 | I2C | 0x76 | Temperature, Humidity, Pressure |
+| BMP388 | I2C | 0x77 | Pressure, Altitude, Temperature |
+| MPU6050 | I2C | 0x68 | Accelerometer, Gyroscope |
+| LSM6DS3 | I2C | 0x6A | Accelerometer, Gyroscope |
+| SHT31 | I2C | 0x44 | Temperature, Humidity |
+| ADS1115 | I2C | 0x48 | 16-bit ADC (4-channel) |
+| INA260 | I2C | 0x40 | Voltage, Current, Power |
+| PCF8574 | I2C | 0x20 | 8-bit GPIO Expander |
+| MCP23017 | I2C | 0x20 | 16-bit GPIO Expander |
+| MAX31855 | SPI | — | Thermocouple Temperature |
+| DS18B20 | 1-Wire | — | Digital Temperature |
+| SSD1306 | I2C | 0x3C | 128×64 OLED Display |
 
 ---
 
