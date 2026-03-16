@@ -126,7 +126,10 @@ impl Tool for SpawnAgentTool {
                 "Sub-agent '{}' spawned successfully with role: {}",
                 name, role
             ))),
-            Err(e) => Ok(ToolResult::err(format!("Failed to spawn agent '{}': {}", name, e))),
+            Err(e) => Ok(ToolResult::err(format!(
+                "Failed to spawn agent '{}': {}",
+                name, e
+            ))),
         }
     }
 }
@@ -238,7 +241,11 @@ impl Tool for DelegateTaskTool {
         // Single delegation mode
         let agent_name = match args["agent"].as_str() {
             Some(n) => n,
-            None => return Ok(ToolResult::err("'agent' is required for single delegation".to_string())),
+            None => {
+                return Ok(ToolResult::err(
+                    "'agent' is required for single delegation".to_string(),
+                ))
+            }
         };
         let task = match args["task"].as_str() {
             Some(t) => t,
@@ -302,14 +309,13 @@ impl Tool for ListAgentsTool {
 
         let filtered: Vec<_> = agents
             .iter()
-            .filter(|a| {
-                include_stopped
-                    || a.status != crate::agent::pool::SubAgentStatus::Stopped
-            })
+            .filter(|a| include_stopped || a.status != crate::agent::pool::SubAgentStatus::Stopped)
             .collect();
 
         if filtered.is_empty() {
-            return Ok(ToolResult::ok("No active sub-agents in the pool.".to_string()));
+            return Ok(ToolResult::ok(
+                "No active sub-agents in the pool.".to_string(),
+            ));
         }
 
         let mut output = format!("{} sub-agent(s) in pool:\n\n", filtered.len());
@@ -475,10 +481,7 @@ mod tests {
             .unwrap();
 
         let stop_tool = StopAgentTool::new(pool.clone());
-        let result = stop_tool
-            .execute(json!({"name": "stopper"}))
-            .await
-            .unwrap();
+        let result = stop_tool.execute(json!({"name": "stopper"})).await.unwrap();
         assert!(result.is_ok());
         assert!(!pool.exists("stopper"));
     }
@@ -496,10 +499,7 @@ mod tests {
         let pool = make_pool();
         let session = make_session();
         let tool = DelegateTaskTool::new(pool, session);
-        let result = tool
-            .execute(json!({"task": "Do something"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"task": "Do something"})).await.unwrap();
         assert!(!result.is_ok());
     }
 

@@ -2,7 +2,6 @@
 members = [
     ".",
     "firmware/obc-esp32-s3",
-    "gui/src-tauri",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI

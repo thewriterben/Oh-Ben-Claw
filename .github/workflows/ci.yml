@@ -29,7 +29,7 @@ jobs:
       - name: Build (default features)
         run: cargo build --workspace --exclude obc-esp32-s3
       - name: Build (all host features)
-        run: cargo build --features hardware,mqtt-bus --exclude obc-esp32-s3
+        run: cargo build --features hardware,mqtt-spine --exclude obc-esp32-s3
       - name: Build (NanoPi feature, Linux only)
         run: cargo build --features hardware,peripheral-nanopi --exclude obc-esp32-s3
       - name: Run tests

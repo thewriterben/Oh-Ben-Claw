@@ -123,7 +123,9 @@ impl OrchestratorAgent {
 
         // Extend the system prompt with orchestrator instructions
         let mut config = agent_config;
-        config.system_prompt.push_str(&orchestrator_config.system_prompt_extension);
+        config
+            .system_prompt
+            .push_str(&orchestrator_config.system_prompt_extension);
 
         // Build the provider
         let provider = providers::from_config(&provider_config)?;
@@ -221,7 +223,9 @@ mod tests {
         let orch = make_orchestrator();
         let tool_names = orch.handle.tool_names();
         // Should have default tools (shell, file_*, http, memory_note)
-        assert!(tool_names.iter().any(|n| n.contains("shell") || n.contains("file")));
+        assert!(tool_names
+            .iter()
+            .any(|n| n.contains("shell") || n.contains("file")));
         // Plus all 4 delegation tools
         assert!(orch.handle.tool_count() >= 4);
     }

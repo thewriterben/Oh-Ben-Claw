@@ -12,14 +12,12 @@ use serde_json::Value;
 /// The Anthropic provider.
 #[derive(Debug, Clone)]
 pub struct AnthropicProvider {
-    config: ProviderConfig,
     client: Client,
 }
 
 impl AnthropicProvider {
-    pub fn new(config: ProviderConfig) -> Self {
+    pub fn new(_config: ProviderConfig) -> Self {
         Self {
-            config,
             client: Client::new(),
         }
     }
@@ -164,5 +162,9 @@ enum AnthropicContent {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "tool_use")]
-    ToolUse { id: String, name: String, input: Value },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
 }

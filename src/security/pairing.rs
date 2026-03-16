@@ -55,9 +55,7 @@ pub struct PairingToken {
 impl PairingToken {
     /// Generate a new pairing token for the given node using the shared secret.
     pub fn generate(secret: &str, node_id: &str) -> Result<Self> {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs();
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
         let message = format!("{}:{}", node_id, timestamp);
         let hmac = compute_hmac(secret, &message)?;
@@ -74,9 +72,7 @@ impl PairingToken {
     /// Returns an error if the HMAC is invalid or the token is older than `max_age_secs`.
     pub fn verify(&self, secret: &str, max_age_secs: u64) -> Result<()> {
         // Check timestamp freshness
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
         if now.saturating_sub(self.timestamp) > max_age_secs {
             anyhow::bail!(
@@ -136,7 +132,11 @@ impl NodePairingManager {
     /// Attempt to pair a node using the token embedded in its announcement metadata.
     ///
     /// Returns the resulting `PairingStatus`.
-    pub fn pair_node(&self, node_id: &str, token_json: Option<&serde_json::Value>) -> PairingStatus {
+    pub fn pair_node(
+        &self,
+        node_id: &str,
+        token_json: Option<&serde_json::Value>,
+    ) -> PairingStatus {
         if !self.is_enabled() {
             // Pairing disabled — all nodes are trusted
             let status = PairingStatus::Paired;
@@ -150,33 +150,31 @@ impl NodePairingManager {
             None => PairingStatus::Quarantined {
                 reason: "no pairing token in announcement".to_string(),
             },
-            Some(token_val) => {
-                match serde_json::from_value::<PairingToken>(token_val.clone()) {
-                    Err(e) => PairingStatus::Quarantined {
-                        reason: format!("invalid token format: {}", e),
-                    },
-                    Ok(token) => {
-                        if token.node_id != node_id {
-                            PairingStatus::Quarantined {
-                                reason: format!(
-                                    "token node_id mismatch: expected '{}', got '{}'",
-                                    node_id, token.node_id
-                                ),
+            Some(token_val) => match serde_json::from_value::<PairingToken>(token_val.clone()) {
+                Err(e) => PairingStatus::Quarantined {
+                    reason: format!("invalid token format: {}", e),
+                },
+                Ok(token) => {
+                    if token.node_id != node_id {
+                        PairingStatus::Quarantined {
+                            reason: format!(
+                                "token node_id mismatch: expected '{}', got '{}'",
+                                node_id, token.node_id
+                            ),
+                        }
+                    } else {
+                        match token.verify(secret, self.max_token_age_secs) {
+                            Ok(()) => {
+                                tracing::info!(node_id = %node_id, "Node paired successfully");
+                                PairingStatus::Paired
                             }
-                        } else {
-                            match token.verify(secret, self.max_token_age_secs) {
-                                Ok(()) => {
-                                    tracing::info!(node_id = %node_id, "Node paired successfully");
-                                    PairingStatus::Paired
-                                }
-                                Err(e) => PairingStatus::Quarantined {
-                                    reason: e.to_string(),
-                                },
-                            }
+                            Err(e) => PairingStatus::Quarantined {
+                                reason: e.to_string(),
+                            },
                         }
                     }
                 }
-            }
+            },
         };
 
         if let PairingStatus::Quarantined { ref reason } = status {

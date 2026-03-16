@@ -90,7 +90,10 @@ impl TaskKind {
             TaskKind::Cron(expr) => {
                 let schedule = Schedule::from_str(expr).ok()?;
                 let after: DateTime<Utc> = Utc.timestamp_opt(after_ts as i64, 0).single()?;
-                schedule.after(&after).next().map(|dt| dt.timestamp() as u64)
+                schedule
+                    .after(&after)
+                    .next()
+                    .map(|dt| dt.timestamp() as u64)
             }
             TaskKind::Interval(secs) => Some(after_ts + secs),
             TaskKind::OneShot(ts) => {
@@ -464,8 +467,7 @@ pub async fn run_scheduler_loop<F, Fut>(
     F: Fn(TaskDispatch) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = ()> + Send,
 {
-    let mut interval =
-        tokio::time::interval(tokio::time::Duration::from_secs(tick_interval_secs));
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(tick_interval_secs));
 
     loop {
         interval.tick().await;
@@ -674,13 +676,7 @@ mod tests {
         let sched = make_scheduler();
         for i in 0..5 {
             sched
-                .add_task(ScheduledTask::interval(
-                    format!("t{i}"),
-                    "T",
-                    "p",
-                    "s",
-                    60,
-                ))
+                .add_task(ScheduledTask::interval(format!("t{i}"), "T", "p", "s", 60))
                 .unwrap();
         }
         assert_eq!(sched.list_tasks().unwrap().len(), 5);

@@ -83,7 +83,13 @@ impl RpiGpioPeripheral {
     /// Create a new Raspberry Pi peripheral from config.
     pub fn new(board: PeripheralBoardConfig) -> Self {
         let capture_dir = std::env::var("HOME")
-            .map(|h| PathBuf::from(h).join(".local").join("share").join("oh-ben-claw").join("captures"))
+            .map(|h| {
+                PathBuf::from(h)
+                    .join(".local")
+                    .join("share")
+                    .join("oh-ben-claw")
+                    .join("captures")
+            })
             .unwrap_or_else(|_| PathBuf::from("/tmp").join("oh-ben-claw").join("captures"));
         Self { board, capture_dir }
     }
@@ -274,10 +280,10 @@ impl Tool for RpiGpioPwmTool {
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        let channel = args
-            .get("channel")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'channel' parameter"))? as u32;
+        let channel =
+            args.get("channel")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'channel' parameter"))? as u32;
         let duty_pct = args
             .get("duty_cycle_pct")
             .and_then(|v| v.as_f64())
@@ -367,7 +373,10 @@ impl Tool for RpiCameraCaptureTool {
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1920);
         let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(1080);
-        let timeout_ms = args.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(500);
+        let timeout_ms = args
+            .get("timeout_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(500);
         let filename = args
             .get("filename")
             .and_then(|v| v.as_str())
@@ -455,7 +464,9 @@ impl Tool for RpiSystemInfoTool {
         let model = model.trim_end_matches('\0').trim().to_string();
 
         // Memory info from /proc/meminfo
-        let meminfo = tokio::fs::read_to_string("/proc/meminfo").await.unwrap_or_default();
+        let meminfo = tokio::fs::read_to_string("/proc/meminfo")
+            .await
+            .unwrap_or_default();
         let mem_total = meminfo
             .lines()
             .find(|l| l.starts_with("MemTotal:"))

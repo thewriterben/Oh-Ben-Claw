@@ -38,8 +38,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::Level;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 // ── Initialization ─────────────────────────────────────────────────────────────
 
@@ -404,6 +404,8 @@ impl Default for MetricsRegistry {
 pub struct ObsContext {
     pub spans: Arc<SpanSink>,
     pub metrics: Arc<MetricsRegistry>,
+    /// Count of active conversation sessions (updated by the gateway metrics handler).
+    active_sessions: Arc<AtomicU64>,
 }
 
 impl ObsContext {
@@ -412,7 +414,13 @@ impl ObsContext {
         Self {
             spans: SpanSink::new(1000),
             metrics: MetricsRegistry::new(),
+            active_sessions: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Update the active session count.
+    pub fn set_active_sessions(&self, count: usize) {
+        self.active_sessions.store(count as u64, Ordering::Relaxed);
     }
 
     /// Start a new span recorder attached to this context's sink.
@@ -434,7 +442,9 @@ impl ObsContext {
     pub fn record_agent_turn(&self, tool_calls: usize) {
         self.metrics.counter("agent_turns_total").inc();
         if tool_calls > 0 {
-            self.metrics.counter("tool_calls_total").add(tool_calls as u64);
+            self.metrics
+                .counter("tool_calls_total")
+                .add(tool_calls as u64);
         }
     }
 
@@ -453,7 +463,10 @@ impl ObsContext {
         let get = |name: &str| self.metrics.counter(name).get();
         let uptime_secs = {
             static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-            START.get_or_init(std::time::Instant::now).elapsed().as_secs()
+            START
+                .get_or_init(std::time::Instant::now)
+                .elapsed()
+                .as_secs()
         };
         MetricsSnapshot {
             requests_total: get("requests_total"),
@@ -461,7 +474,7 @@ impl ObsContext {
             tool_errors_total: get("tool_errors_total"),
             agent_turns_total: get("agent_turns_total"),
             uptime_secs,
-            active_sessions: 0, // TODO: track active sessions
+            active_sessions: self.active_sessions.load(Ordering::Relaxed) as usize,
         }
     }
 }
@@ -513,8 +526,14 @@ mod tests {
         recorder.set_attr("session_id", "s1");
         recorder.set_attr("provider", "openai");
         let record = recorder.finish_ok();
-        assert_eq!(record.attrs.get("session_id").map(|s| s.as_str()), Some("s1"));
-        assert_eq!(record.attrs.get("provider").map(|s| s.as_str()), Some("openai"));
+        assert_eq!(
+            record.attrs.get("session_id").map(|s| s.as_str()),
+            Some("s1")
+        );
+        assert_eq!(
+            record.attrs.get("provider").map(|s| s.as_str()),
+            Some("openai")
+        );
     }
 
     #[test]
@@ -545,9 +564,15 @@ mod tests {
     #[test]
     fn span_sink_by_name_prefix() {
         let sink = SpanSink::new(100);
-        SpanRecorder::new("agent.process").with_sink(sink.clone()).finish_ok();
-        SpanRecorder::new("agent.tool").with_sink(sink.clone()).finish_ok();
-        SpanRecorder::new("gateway.request").with_sink(sink.clone()).finish_ok();
+        SpanRecorder::new("agent.process")
+            .with_sink(sink.clone())
+            .finish_ok();
+        SpanRecorder::new("agent.tool")
+            .with_sink(sink.clone())
+            .finish_ok();
+        SpanRecorder::new("gateway.request")
+            .with_sink(sink.clone())
+            .finish_ok();
         let agent_spans = sink.by_name("agent");
         assert_eq!(agent_spans.len(), 2);
     }
@@ -555,9 +580,15 @@ mod tests {
     #[test]
     fn span_sink_errors_filter() {
         let sink = SpanSink::new(100);
-        SpanRecorder::new("op.ok").with_sink(sink.clone()).finish_ok();
-        SpanRecorder::new("op.err").with_sink(sink.clone()).finish_err("oops");
-        SpanRecorder::new("op.ok2").with_sink(sink.clone()).finish_ok();
+        SpanRecorder::new("op.ok")
+            .with_sink(sink.clone())
+            .finish_ok();
+        SpanRecorder::new("op.err")
+            .with_sink(sink.clone())
+            .finish_err("oops");
+        SpanRecorder::new("op.ok2")
+            .with_sink(sink.clone())
+            .finish_ok();
         assert_eq!(sink.errors().len(), 1);
         assert_eq!(sink.errors()[0].name, "op.err");
     }

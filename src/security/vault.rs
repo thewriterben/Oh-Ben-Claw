@@ -24,8 +24,8 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
 };
 use anyhow::{Context, Result};
-use argon2::{Argon2, PasswordHasher};
-use argon2::password_hash::{rand_core::RngCore, SaltString};
+use argon2::password_hash::SaltString;
+use argon2::Argon2;
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

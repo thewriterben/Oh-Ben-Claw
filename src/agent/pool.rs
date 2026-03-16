@@ -163,7 +163,10 @@ impl AgentPool {
         }
 
         // Build the provider
-        let provider_config = spec.provider.clone().unwrap_or_else(|| self.default_provider.clone());
+        let provider_config = spec
+            .provider
+            .clone()
+            .unwrap_or_else(|| self.default_provider.clone());
         let provider = providers::from_config(&provider_config)?;
 
         // Build the tool registry
@@ -221,7 +224,10 @@ impl AgentPool {
             None => bail!("Sub-agent '{}' not found", name),
             Some(entry) => {
                 if entry.status == SubAgentStatus::Busy {
-                    bail!("Sub-agent '{}' is currently busy — wait for it to finish first", name);
+                    bail!(
+                        "Sub-agent '{}' is currently busy — wait for it to finish first",
+                        name
+                    );
                 }
                 entry.status = SubAgentStatus::Stopped;
                 tracing::info!(agent = %name, "Sub-agent stopped");
@@ -297,7 +303,10 @@ impl AgentPool {
         for handle in handles {
             match handle.await {
                 Ok(result) => results.push(result),
-                Err(e) => results.push(("unknown".to_string(), Err(anyhow::anyhow!("Task panicked: {}", e)))),
+                Err(e) => results.push((
+                    "unknown".to_string(),
+                    Err(anyhow::anyhow!("Task panicked: {}", e)),
+                )),
             }
         }
         results
@@ -377,7 +386,8 @@ mod tests {
     #[test]
     fn spawn_duplicate_active_agent_fails() {
         let pool = make_pool();
-        pool.spawn(SubAgentSpec::new("coder", "Write code")).unwrap();
+        pool.spawn(SubAgentSpec::new("coder", "Write code"))
+            .unwrap();
         let result = pool.spawn(SubAgentSpec::new("coder", "Write more code"));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
@@ -386,7 +396,8 @@ mod tests {
     #[test]
     fn stop_agent_marks_as_stopped() {
         let pool = make_pool();
-        pool.spawn(SubAgentSpec::new("planner", "Plan tasks")).unwrap();
+        pool.spawn(SubAgentSpec::new("planner", "Plan tasks"))
+            .unwrap();
         pool.stop("planner").unwrap();
 
         let agents = pool.list();
@@ -404,10 +415,12 @@ mod tests {
     #[test]
     fn spawn_after_stop_succeeds() {
         let pool = make_pool();
-        pool.spawn(SubAgentSpec::new("writer", "Write content")).unwrap();
+        pool.spawn(SubAgentSpec::new("writer", "Write content"))
+            .unwrap();
         pool.stop("writer").unwrap();
         // Should succeed — the stopped entry is replaced
-        pool.spawn(SubAgentSpec::new("writer", "Write better content")).unwrap();
+        pool.spawn(SubAgentSpec::new("writer", "Write better content"))
+            .unwrap();
         assert!(pool.exists("writer"));
     }
 
