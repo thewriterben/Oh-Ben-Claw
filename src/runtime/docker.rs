@@ -29,7 +29,7 @@ impl RuntimeAdapter for DockerRuntime {
     }
 
     async fn run_shell(&self, cmd: &str, args: &[&str], timeout_secs: u64) -> anyhow::Result<String> {
-        let memory_flag = format!("{}m", self.config.memory_mb); // Docker accepts "m" for mebibytes
+        let memory_flag = format!("{}m", self.config.memory_mb); // Docker accepts "m" for megabytes
 
         let mut docker_args = vec![
             "run",

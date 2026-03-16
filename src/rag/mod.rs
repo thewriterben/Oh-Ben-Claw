@@ -89,8 +89,9 @@ impl RagIndex {
                         start + 500
                     }
                 };
-                // Guard: always advance by at least one byte to prevent infinite loops
-                let end = raw_end.max(start + 1).min(content.len());
+                // Guard: clamp to content.len() first (handles start+1 > len),
+                // then ensure we advance by at least one byte to prevent infinite loops.
+                let end = raw_end.min(content.len()).max(start + 1).min(content.len());
 
                 let chunk_text = content[start..end].trim().to_string();
                 if !chunk_text.is_empty() {
