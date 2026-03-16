@@ -43,11 +43,9 @@ impl CostTracker {
         let records = self.session_costs.lock();
         let now = Utc::now();
 
-        // For simplicity we track only session costs (all in-memory records).
-        // Since we have no persistent store, daily and monthly are approximated
-        // from the session records that fall within the current day/month.
-        let session_total: f64 = records.iter().map(|r| r.usage.cost_usd).sum();
-
+        // Since we have no persistent store, daily and monthly limits are
+        // enforced against session costs that fall within the current day/month.
+        // A session started mid-day will only count costs accrued that day.
         let day_total: f64 = records
             .iter()
             .filter(|r| r.usage.timestamp.date_naive() == now.date_naive())
@@ -102,7 +100,6 @@ impl CostTracker {
             }
         }
 
-        let _ = session_total; // TODO: persist session data for cross-session budget tracking
         Ok(BudgetCheck::Allowed)
     }
 
