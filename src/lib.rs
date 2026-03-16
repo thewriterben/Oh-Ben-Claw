@@ -27,8 +27,10 @@
 #![allow(dead_code)]
 
 pub mod agent;
+pub mod audio;
 pub mod channels;
 pub mod config;
+pub mod dashboard;
 pub mod gateway;
 pub mod memory;
 pub mod observability;
@@ -36,9 +38,10 @@ pub mod peripherals;
 pub mod providers;
 pub mod scheduler;
 pub mod security;
+pub mod skill_forge;
 pub mod spine;
 pub mod tools;
 pub mod tunnel;
 pub mod mcp;
-pub mod dashboard;
+pub mod vision;
 pub use config::Config;

@@ -26,6 +26,7 @@
 //! | Any Linux SBC | native | `hardware` | i2c_scan, i2c_read, i2c_write, spi_transfer, pwm_control |
 
 pub mod bus_tools;
+pub mod fusion;
 pub mod registry;
 pub mod sensors;
 pub mod traits;
