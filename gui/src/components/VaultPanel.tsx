@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { KeyRound, Lock, Unlock, Plus, Trash2, Eye, EyeOff, ShieldCheck } from "lucide-react";
+import { KeyRound, Lock, Plus, Trash2, Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { useVaultStore } from "../stores/appStore";
 import {
   unlockVault,

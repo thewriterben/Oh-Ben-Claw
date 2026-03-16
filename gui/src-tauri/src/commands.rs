@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use anyhow::Context;
 
 use oh_ben_claw::{
@@ -77,6 +77,8 @@ pub async fn start_agent(
         ..Default::default()
     };
 
+    let provider_config = config.provider.clone();
+
     // Build provider
     let llm_provider = providers::build_provider(&config.provider)
         .map_err(|e| format!("Failed to build provider: {e}"))?;
@@ -111,6 +113,7 @@ pub async fn start_agent(
         agent,
         provider: provider.clone(),
         model: model.clone(),
+        provider_config,
         session_id,
         started_at: std::time::Instant::now(),
     });
@@ -136,19 +139,70 @@ pub async fn send_message(
     session_id: String,
     message: String,
     state: State<'_, AppState>,
+    app_handle: AppHandle,
 ) -> Result<String, String> {
-    let agent_guard = state.agent.lock().await;
-    let handle = agent_guard
-        .as_ref()
-        .ok_or("Agent is not running. Start it in Settings first.")?;
+    // Extract the agent and provider config without holding the lock during processing.
+    let (agent, provider_config) = {
+        let guard = state.agent.lock().await;
+        let handle = guard
+            .as_ref()
+            .ok_or("Agent is not running. Start it in Settings first.")?;
+        (Arc::clone(&handle.agent), handle.provider_config.clone())
+    };
 
-    let response = handle
-        .agent
-        .run(&session_id, &message)
+    // Run the full agent loop.
+    let response = agent
+        .process(&session_id, &message, &provider_config)
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(response)
+    // ── Emit tool-call events ─────────────────────────────────────────────────
+    for (i, record) in response.tool_calls.iter().enumerate() {
+        let call_id = format!("{}-{}", session_id, i);
+        let args_json: serde_json::Value =
+            serde_json::from_str(&record.args).unwrap_or_else(|_| serde_json::json!({}));
+
+        let is_error = record.result.starts_with("Tool error:")
+            || record.result.starts_with("Tool execution failed:");
+
+        let entry = ToolCallEntryDto {
+            id: call_id.clone(),
+            tool_name: record.name.clone(),
+            args: args_json.to_string(),
+            result: Some(record.result.clone()),
+            status: if is_error { "error" } else { "success" }.into(),
+            duration_ms: Some(record.duration_ms),
+            timestamp: now_ms(),
+            session_id: session_id.clone(),
+        };
+
+        // Persist to in-memory tool log (newest first).
+        {
+            let mut log = state.tool_log.lock().await;
+            log.insert(0, entry.clone());
+            if log.len() > 500 {
+                log.truncate(500);
+            }
+        }
+
+        // Emit to the frontend.
+        let _ = app_handle.emit("tool-call-event", &entry);
+    }
+
+    // ── Stream assistant tokens word-by-word ──────────────────────────────────
+    let content = response.message.clone();
+    let app = app_handle.clone();
+    tokio::spawn(async move {
+        let words: Vec<&str> = content.split_inclusive(' ').collect();
+        for word in words {
+            let _ = app.emit("assistant-token", word.to_string());
+            tokio::time::sleep(std::time::Duration::from_millis(18)).await;
+        }
+        // Sentinel: empty string signals stream completion.
+        let _ = app.emit("assistant-token", String::new());
+    });
+
+    Ok(response.message)
 }
 
 #[tauri::command]
@@ -275,6 +329,7 @@ pub async fn add_node(
     transport: String,
     path: Option<String>,
     state: State<'_, AppState>,
+    app_handle: AppHandle,
 ) -> Result<(), String> {
     let node = PeripheralNodeDto {
         id: uuid(),
@@ -285,7 +340,8 @@ pub async fn add_node(
         last_seen: None,
         address: path,
     };
-    state.nodes.lock().await.push(node);
+    state.nodes.lock().await.push(node.clone());
+    let _ = app_handle.emit("node-status-change", &node);
     Ok(())
 }
 
@@ -293,8 +349,14 @@ pub async fn add_node(
 pub async fn remove_node(
     node_id: String,
     state: State<'_, AppState>,
+    app_handle: AppHandle,
 ) -> Result<(), String> {
     let mut nodes = state.nodes.lock().await;
+    // Emit a removal event (status = "removed") for any matching node.
+    if let Some(node) = nodes.iter().find(|n| n.id == node_id).cloned() {
+        let removed = PeripheralNodeDto { status: "removed".into(), ..node };
+        let _ = app_handle.emit("node-status-change", &removed);
+    }
     nodes.retain(|n| n.id != node_id);
     Ok(())
 }
