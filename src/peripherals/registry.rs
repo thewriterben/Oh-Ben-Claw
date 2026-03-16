@@ -18,6 +18,11 @@
 //! | `sensor_read` | Environmental sensor (temp, humidity, pressure) |
 //! | `rtt` | SEGGER RTT debug channel (probe-rs) |
 //! | `flash` | Firmware flash via debug probe |
+//! | `ble` | Bluetooth Low Energy |
+//! | `wifi` | Wi-Fi networking |
+//! | `can` | CAN bus interface |
+//! | `dac` | Digital-to-analog conversion |
+//! | `cuda` | NVIDIA CUDA GPU compute |
 
 /// Describes a known hardware board.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +53,10 @@ pub struct BoardInfo {
 /// - `0x0403` = FTDI
 /// - `0x2e8a` = Raspberry Pi Foundation
 /// - `0x2109` = VIA Labs (used by RPi 4/5 USB hub)
+/// - `0x1366` = SEGGER (J-Link / nRF DK)
+/// - `0x0955` = NVIDIA
+/// - `0x1d6b` = Linux Foundation (gadget devices)
+/// - `0x16c0` = PJRC (Teensy)
 pub static KNOWN_BOARDS: &[BoardInfo] = &[
     // ── STM32 Nucleo ──────────────────────────────────────────────────────────
     BoardInfo {
@@ -311,6 +320,79 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         transport: "native",
         capabilities: &["gpio", "i2c", "spi", "pwm", "camera_capture"],
     },
+    // ── ESP32-C3 ──────────────────────────────────────────────────────────────
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "esp32-c3",
+        architecture: Some("ESP32-C3 RISC-V single-core @ 160 MHz (native USB)"),
+        transport: "serial",
+        capabilities: &["gpio", "i2c", "spi", "wifi", "ble"],
+    },
+    // ── nRF52840 DK ───────────────────────────────────────────────────────────
+    BoardInfo {
+        vid: 0x1366,
+        pid: 0x1015,
+        name: "nrf52840-dk",
+        architecture: Some("Nordic nRF52840 ARM Cortex-M4F @ 64 MHz (BLE 5.0)"),
+        transport: "serial",
+        capabilities: &["gpio", "i2c", "spi", "ble", "pwm"],
+    },
+    // ── Arduino Nano 33 BLE ───────────────────────────────────────────────────
+    BoardInfo {
+        vid: 0x2341,
+        pid: 0x805a,
+        name: "arduino-nano-33-ble",
+        architecture: Some("nRF52840 ARM Cortex-M4F @ 64 MHz (BLE, IMU)"),
+        transport: "serial",
+        capabilities: &["gpio", "analog_read", "i2c", "spi", "ble", "sensor_read"],
+    },
+    // ── Teensy 4.1 ────────────────────────────────────────────────────────────
+    BoardInfo {
+        vid: 0x16c0,
+        pid: 0x0483,
+        name: "teensy-4.1",
+        architecture: Some("NXP i.MX RT1062 ARM Cortex-M7 @ 600 MHz"),
+        transport: "serial",
+        capabilities: &["gpio", "analog_read", "analog_write", "i2c", "spi", "pwm", "can"],
+    },
+    // ── BeagleBone Black ──────────────────────────────────────────────────────
+    BoardInfo {
+        vid: 0x1d6b,
+        pid: 0x0104,
+        name: "beaglebone-black",
+        architecture: Some("TI AM3358 ARM Cortex-A8 @ 1 GHz"),
+        transport: "native",
+        capabilities: &["gpio", "analog_read", "i2c", "spi", "pwm", "can"],
+    },
+    // ── NVIDIA Jetson Nano ────────────────────────────────────────────────────
+    BoardInfo {
+        vid: 0x0955,
+        pid: 0x7020,
+        name: "jetson-nano",
+        architecture: Some("NVIDIA Tegra X1 quad-core ARM Cortex-A57 @ 1.43 GHz (128-core Maxwell GPU)"),
+        transport: "native",
+        capabilities: &["gpio", "i2c", "spi", "pwm", "camera_capture", "cuda"],
+    },
+    // ── STM32 Discovery (H7) ─────────────────────────────────────────────────
+    BoardInfo {
+        vid: 0x0483,
+        pid: 0x3758,
+        name: "stm32h7-discovery",
+        architecture: Some("ARM Cortex-M7 @ 480 MHz (STM32H750, external flash)"),
+        transport: "probe",
+        capabilities: &[
+            "gpio",
+            "analog_read",
+            "analog_write",
+            "i2c",
+            "spi",
+            "pwm",
+            "rtt",
+            "flash",
+            "dac",
+        ],
+    },
 ];
 
 /// Look up a board by USB VID and PID.
@@ -336,6 +418,177 @@ pub fn boards_with_transport(transport: &str) -> Vec<&'static BoardInfo> {
     KNOWN_BOARDS
         .iter()
         .filter(|b| b.transport == transport)
+        .collect()
+}
+
+// ── Accessory Registry ────────────────────────────────────────────────────────
+
+/// Describes a known I2C/SPI accessory or add-on module.
+///
+/// Accessories are peripheral devices that attach to a host board via I2C or SPI.
+/// They don't have their own USB VID/PID — they are discovered by scanning the bus.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessoryInfo {
+    /// Short name used in config and sensor references (e.g., `"bme280"`).
+    pub name: &'static str,
+    /// Human-readable description.
+    pub description: &'static str,
+    /// Required bus: `"i2c"` or `"spi"`.
+    pub bus: &'static str,
+    /// Default I2C address (if I2C), `None` for SPI-only devices.
+    pub default_i2c_addr: Option<u8>,
+    /// Capability tokens this accessory provides.
+    pub capabilities: &'static [&'static str],
+    /// Compatible host boards (empty = universal / works with any board that has the bus).
+    pub compatible_boards: &'static [&'static str],
+}
+
+/// Registry of known I2C/SPI accessories and sensor modules.
+pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
+    // ── Environmental Sensors ─────────────────────────────────────────────────
+    AccessoryInfo {
+        name: "bme280",
+        description: "Bosch BME280 — temperature, humidity, and pressure sensor",
+        bus: "i2c",
+        default_i2c_addr: Some(0x76),
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+    },
+    AccessoryInfo {
+        name: "bmp388",
+        description: "Bosch BMP388 — high-accuracy barometric pressure and temperature",
+        bus: "i2c",
+        default_i2c_addr: Some(0x77),
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+    },
+    AccessoryInfo {
+        name: "sht31",
+        description: "Sensirion SHT31 — high-accuracy temperature and humidity",
+        bus: "i2c",
+        default_i2c_addr: Some(0x44),
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+    },
+    AccessoryInfo {
+        name: "aht20",
+        description: "ASAIR AHT20 — temperature and humidity sensor",
+        bus: "i2c",
+        default_i2c_addr: Some(0x38),
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+    },
+    // ── Motion / IMU Sensors ──────────────────────────────────────────────────
+    AccessoryInfo {
+        name: "mpu6050",
+        description: "InvenSense MPU-6050 — 6-axis accelerometer + gyroscope",
+        bus: "i2c",
+        default_i2c_addr: Some(0x68),
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+    },
+    AccessoryInfo {
+        name: "lsm6ds3",
+        description: "ST LSM6DS3 — 6-axis IMU (accelerometer + gyroscope)",
+        bus: "i2c",
+        default_i2c_addr: Some(0x6A),
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+    },
+    // ── ADC / DAC ─────────────────────────────────────────────────────────────
+    AccessoryInfo {
+        name: "ads1115",
+        description: "TI ADS1115 — 16-bit 4-channel ADC with programmable gain",
+        bus: "i2c",
+        default_i2c_addr: Some(0x48),
+        capabilities: &["analog_read"],
+        compatible_boards: &[],
+    },
+    AccessoryInfo {
+        name: "mcp4725",
+        description: "Microchip MCP4725 — 12-bit single-channel DAC",
+        bus: "i2c",
+        default_i2c_addr: Some(0x60),
+        capabilities: &["dac"],
+        compatible_boards: &[],
+    },
+    // ── GPIO Expanders ────────────────────────────────────────────────────────
+    AccessoryInfo {
+        name: "pcf8574",
+        description: "NXP PCF8574 — 8-bit I2C GPIO expander",
+        bus: "i2c",
+        default_i2c_addr: Some(0x20),
+        capabilities: &["gpio"],
+        compatible_boards: &[],
+    },
+    AccessoryInfo {
+        name: "mcp23017",
+        description: "Microchip MCP23017 — 16-bit I2C GPIO expander",
+        bus: "i2c",
+        default_i2c_addr: Some(0x21),
+        capabilities: &["gpio"],
+        compatible_boards: &[],
+    },
+    // ── Thermocouple / Temperature ────────────────────────────────────────────
+    AccessoryInfo {
+        name: "max31855",
+        description: "Maxim MAX31855 — thermocouple-to-digital converter (K-type)",
+        bus: "spi",
+        default_i2c_addr: None,
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+    },
+    AccessoryInfo {
+        name: "ds18b20",
+        description: "Maxim DS18B20 — 1-Wire digital temperature sensor",
+        bus: "onewire",
+        default_i2c_addr: None,
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+    },
+    // ── Power Monitoring ──────────────────────────────────────────────────────
+    AccessoryInfo {
+        name: "ina260",
+        description: "TI INA260 — high/low-side current, voltage, and power monitor",
+        bus: "i2c",
+        default_i2c_addr: Some(0x40),
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+    },
+    // ── Display ───────────────────────────────────────────────────────────────
+    AccessoryInfo {
+        name: "ssd1306",
+        description: "Solomon SSD1306 — 128x64 OLED display",
+        bus: "i2c",
+        default_i2c_addr: Some(0x3C),
+        capabilities: &[],
+        compatible_boards: &[],
+    },
+];
+
+/// Look up an accessory by name.
+pub fn lookup_accessory(name: &str) -> Option<&'static AccessoryInfo> {
+    KNOWN_ACCESSORIES.iter().find(|a| a.name == name)
+}
+
+/// Return all known accessories.
+pub fn known_accessories() -> &'static [AccessoryInfo] {
+    KNOWN_ACCESSORIES
+}
+
+/// Look up an accessory by its default I2C address.
+pub fn accessories_at_address(addr: u8) -> Vec<&'static AccessoryInfo> {
+    KNOWN_ACCESSORIES
+        .iter()
+        .filter(|a| a.default_i2c_addr == Some(addr))
+        .collect()
+}
+
+/// Return all accessories that provide a given capability.
+pub fn accessories_with_capability(capability: &str) -> Vec<&'static AccessoryInfo> {
+    KNOWN_ACCESSORIES
+        .iter()
+        .filter(|a| a.capabilities.contains(&capability))
         .collect()
 }
 
@@ -433,7 +686,9 @@ mod tests {
     fn boards_with_probe_transport() {
         let boards = boards_with_transport("probe");
         assert!(!boards.is_empty());
-        assert!(boards.iter().all(|b| b.name.starts_with("nucleo")));
+        assert!(boards
+            .iter()
+            .all(|b| b.name.starts_with("nucleo") || b.name.starts_with("stm32")));
     }
 
     #[test]
@@ -452,5 +707,143 @@ mod tests {
                 board.name
             );
         }
+    }
+
+    // ── New board tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn lookup_esp32_c3() {
+        let boards: Vec<_> = KNOWN_BOARDS
+            .iter()
+            .filter(|b| b.name == "esp32-c3")
+            .collect();
+        assert!(!boards.is_empty());
+        let b = boards[0];
+        assert!(b.architecture.unwrap().contains("RISC-V"));
+        assert!(b.capabilities.contains(&"wifi"));
+        assert!(b.capabilities.contains(&"ble"));
+    }
+
+    #[test]
+    fn lookup_nrf52840_dk() {
+        let b = lookup_board(0x1366, 0x1015).unwrap();
+        assert_eq!(b.name, "nrf52840-dk");
+        assert!(b.capabilities.contains(&"ble"));
+        assert!(b.architecture.unwrap().contains("nRF52840"));
+    }
+
+    #[test]
+    fn lookup_arduino_nano_33_ble() {
+        let b = lookup_board(0x2341, 0x805a).unwrap();
+        assert_eq!(b.name, "arduino-nano-33-ble");
+        assert!(b.capabilities.contains(&"ble"));
+        assert!(b.capabilities.contains(&"sensor_read"));
+    }
+
+    #[test]
+    fn lookup_teensy_41() {
+        let b = lookup_board(0x16c0, 0x0483).unwrap();
+        assert_eq!(b.name, "teensy-4.1");
+        assert!(b.architecture.unwrap().contains("Cortex-M7"));
+        assert!(b.capabilities.contains(&"can"));
+    }
+
+    #[test]
+    fn lookup_beaglebone_black() {
+        let b = lookup_board(0x1d6b, 0x0104).unwrap();
+        assert_eq!(b.name, "beaglebone-black");
+        assert!(b.capabilities.contains(&"can"));
+        assert_eq!(b.transport, "native");
+    }
+
+    #[test]
+    fn lookup_jetson_nano() {
+        let b = lookup_board(0x0955, 0x7020).unwrap();
+        assert_eq!(b.name, "jetson-nano");
+        assert!(b.capabilities.contains(&"cuda"));
+        assert_eq!(b.transport, "native");
+    }
+
+    #[test]
+    fn lookup_stm32h7_discovery() {
+        let b = lookup_board(0x0483, 0x3758).unwrap();
+        assert_eq!(b.name, "stm32h7-discovery");
+        assert!(b.architecture.unwrap().contains("Cortex-M7"));
+        assert!(b.capabilities.contains(&"dac"));
+        assert_eq!(b.transport, "probe");
+    }
+
+    #[test]
+    fn boards_with_ble_capability() {
+        let boards = boards_with_capability("ble");
+        assert!(boards.len() >= 3);
+        let names: Vec<_> = boards.iter().map(|b| b.name).collect();
+        assert!(names.contains(&"nrf52840-dk"));
+        assert!(names.contains(&"arduino-nano-33-ble"));
+        assert!(names.contains(&"esp32-c3"));
+    }
+
+    // ── Accessory tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn accessory_registry_not_empty() {
+        assert!(!known_accessories().is_empty());
+    }
+
+    #[test]
+    fn lookup_bme280_accessory() {
+        let a = lookup_accessory("bme280").unwrap();
+        assert_eq!(a.bus, "i2c");
+        assert_eq!(a.default_i2c_addr, Some(0x76));
+        assert!(a.capabilities.contains(&"sensor_read"));
+    }
+
+    #[test]
+    fn lookup_ads1115_accessory() {
+        let a = lookup_accessory("ads1115").unwrap();
+        assert_eq!(a.default_i2c_addr, Some(0x48));
+        assert!(a.capabilities.contains(&"analog_read"));
+    }
+
+    #[test]
+    fn lookup_max31855_spi_accessory() {
+        let a = lookup_accessory("max31855").unwrap();
+        assert_eq!(a.bus, "spi");
+        assert_eq!(a.default_i2c_addr, None);
+    }
+
+    #[test]
+    fn accessories_at_i2c_address_0x76() {
+        let accs = accessories_at_address(0x76);
+        assert!(!accs.is_empty());
+        assert!(accs.iter().any(|a| a.name == "bme280"));
+    }
+
+    #[test]
+    fn accessories_with_sensor_read_capability() {
+        let accs = accessories_with_capability("sensor_read");
+        assert!(accs.len() >= 5);
+        let names: Vec<_> = accs.iter().map(|a| a.name).collect();
+        assert!(names.contains(&"bme280"));
+        assert!(names.contains(&"mpu6050"));
+        assert!(names.contains(&"bmp388"));
+    }
+
+    #[test]
+    fn all_i2c_accessories_on_correct_bus() {
+        for accessory in known_accessories() {
+            if accessory.default_i2c_addr.is_some() {
+                assert_eq!(
+                    accessory.bus, "i2c",
+                    "Accessory {} has I2C address but bus is '{}'",
+                    accessory.name, accessory.bus
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_accessory_returns_none() {
+        assert!(lookup_accessory("nonexistent-sensor").is_none());
     }
 }

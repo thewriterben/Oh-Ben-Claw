@@ -83,6 +83,21 @@ All hardware peripheral drivers and Linux bus tools are implemented.
 - [x] SPI bus transfer tool for Linux SBCs (`src/peripherals/bus_tools.rs`)
 - [x] PWM control tool for Linux SBCs (`src/peripherals/bus_tools.rs`)
 
+### Phase 5.5: Audit Enhancements ✅ Complete
+
+Board registry expansion, security hardening, and config validation from project audit.
+
+- [x] Board registry: ESP32-C3, nRF52840 DK, Arduino Nano 33 BLE, Teensy 4.1, BeagleBone Black, NVIDIA Jetson Nano, STM32H7 Discovery
+- [x] New capability tokens: `ble`, `wifi`, `can`, `dac`, `cuda`
+- [x] I2C/SPI accessory registry with 15 known sensors/modules (BME280, BMP388, SHT31, AHT20, MPU6050, LSM6DS3, ADS1115, MCP4725, PCF8574, MCP23017, MAX31855, DS18B20, INA260, SSD1306)
+- [x] Accessory lookup functions: by name, I2C address, and capability
+- [x] Security: fix Mutex `unwrap()` panics with poisoned-lock recovery (`src/security/pairing.rs`)
+- [x] Security: pairing secret strength validation (`NodePairingManager::validate_secret`)
+- [x] Security: glob matching ReDoS mitigation with recursion depth limit (`src/security/policy.rs`)
+- [x] Config: TLS certificate fields for MQTT spine (CA cert, client cert, client key)
+- [x] Config: `Config::validate()` method with comprehensive checks and warnings
+- [x] Sensor tools: expanded to 11 supported sensors (added BMP388, LSM6DS3, AHT20, INA260, ADS1115, MAX31855, DS18B20)
+
 ---
 
 ## Phase 6: Multi-Channel Support 📋 Planned
@@ -113,5 +128,5 @@ Enable peripheral nodes to run the full Oh-Ben-Claw agent locally, without a hos
 - [ ] Vision pipeline (camera capture → LLM vision → action)
 - [ ] Audio pipeline (microphone → speech-to-text → agent → text-to-speech)
 - [ ] Sensor fusion (combine readings from multiple sensors)
-- [ ] Scheduled tasks and cron jobs
+- [x] Scheduled tasks and cron jobs (`src/scheduler/mod.rs`)
 - [ ] Skill forge (automatic discovery and integration of new skills)

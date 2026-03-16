@@ -117,11 +117,37 @@ impl NodePairingManager {
     ///
     /// If `secret` is `None`, pairing is disabled and all nodes are treated as trusted.
     pub fn new(secret: Option<String>) -> Self {
+        if let Some(ref s) = secret {
+            if s.len() < 16 {
+                tracing::warn!(
+                    "Pairing secret is shorter than 16 characters — \
+                     consider using a stronger secret (e.g., `openssl rand -hex 32`)"
+                );
+            }
+        }
         Self {
             secret,
             state: Arc::new(Mutex::new(HashMap::new())),
             max_token_age_secs: 300,
         }
+    }
+
+    /// Validate pairing secret strength.
+    ///
+    /// Returns `Ok(())` if the secret is strong enough, or `Err` with a description
+    /// of the weakness. A strong secret should be at least 32 hex characters.
+    pub fn validate_secret(secret: &str) -> Result<()> {
+        if secret.is_empty() {
+            anyhow::bail!("Pairing secret must not be empty");
+        }
+        if secret.len() < 32 {
+            anyhow::bail!(
+                "Pairing secret should be at least 32 characters \
+                 (current: {} chars). Generate one with: openssl rand -hex 32",
+                secret.len()
+            );
+        }
+        Ok(())
     }
 
     /// Check whether pairing is enabled.
@@ -187,12 +213,17 @@ impl NodePairingManager {
 
     /// Get the current pairing status of a node.
     pub fn status(&self, node_id: &str) -> PairingStatus {
-        self.state
-            .lock()
-            .unwrap()
-            .get(node_id)
-            .cloned()
-            .unwrap_or(PairingStatus::Unpaired)
+        match self.state.lock() {
+            Ok(guard) => guard.get(node_id).cloned().unwrap_or(PairingStatus::Unpaired),
+            Err(poisoned) => {
+                tracing::error!("Pairing state lock poisoned; recovering");
+                poisoned
+                    .into_inner()
+                    .get(node_id)
+                    .cloned()
+                    .unwrap_or(PairingStatus::Unpaired)
+            }
+        }
     }
 
     /// Check whether a node is trusted (Paired or pairing disabled).
@@ -216,14 +247,25 @@ impl NodePairingManager {
 
     /// Return a snapshot of all node pairing states.
     pub fn all_statuses(&self) -> HashMap<String, PairingStatus> {
-        self.state.lock().unwrap().clone()
+        match self.state.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => {
+                tracing::error!("Pairing state lock poisoned; recovering");
+                poisoned.into_inner().clone()
+            }
+        }
     }
 
     fn set_status(&self, node_id: &str, status: PairingStatus) {
-        self.state
-            .lock()
-            .unwrap()
-            .insert(node_id.to_string(), status);
+        match self.state.lock() {
+            Ok(mut guard) => {
+                guard.insert(node_id.to_string(), status);
+            }
+            Err(poisoned) => {
+                tracing::error!("Pairing state lock poisoned; recovering");
+                poisoned.into_inner().insert(node_id.to_string(), status);
+            }
+        }
     }
 }
 
@@ -310,5 +352,32 @@ mod tests {
         let mgr = NodePairingManager::new(Some(SECRET.to_string()));
         assert!(!mgr.is_trusted("unknown-node"));
         assert_eq!(mgr.status("unknown-node"), PairingStatus::Unpaired);
+    }
+
+    #[test]
+    fn validate_secret_rejects_empty() {
+        assert!(NodePairingManager::validate_secret("").is_err());
+    }
+
+    #[test]
+    fn validate_secret_rejects_short() {
+        assert!(NodePairingManager::validate_secret("tooshort").is_err());
+    }
+
+    #[test]
+    fn validate_secret_accepts_strong() {
+        let strong = "a".repeat(32);
+        assert!(NodePairingManager::validate_secret(&strong).is_ok());
+    }
+
+    #[test]
+    fn all_statuses_returns_snapshot() {
+        let mgr = NodePairingManager::new(None);
+        mgr.pair_node("node-a", None);
+        mgr.pair_node("node-b", None);
+        let statuses = mgr.all_statuses();
+        assert_eq!(statuses.len(), 2);
+        assert_eq!(statuses["node-a"], PairingStatus::Paired);
+        assert_eq!(statuses["node-b"], PairingStatus::Paired);
     }
 }
