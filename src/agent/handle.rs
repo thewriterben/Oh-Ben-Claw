@@ -69,10 +69,7 @@ pub enum AgentEvent {
         tool_calls_made: u32,
     },
     /// The agent encountered an error.
-    Error {
-        session_id: String,
-        message: String,
-    },
+    Error { session_id: String, message: String },
 }
 
 /// A thread-safe, cloneable handle to the running agent.
@@ -169,7 +166,7 @@ impl AgentHandle {
                         success: !record.result.starts_with("Tool error:")
                             && !record.result.starts_with("Tool execution failed:"),
                         output: record.result.clone(),
-                        duration_ms: 0, // TODO: instrument timing in Agent::execute_tool
+                        duration_ms: record.duration_ms,
                     });
                 }
 

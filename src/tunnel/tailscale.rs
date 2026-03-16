@@ -117,8 +117,7 @@ async fn get_tailscale_url(port: u16) -> Result<String> {
 
     if let Ok(out) = hostname_output {
         if out.status.success() {
-            let json: serde_json::Value =
-                serde_json::from_slice(&out.stdout).unwrap_or_default();
+            let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
             if let Some(hostname) = json
                 .get("Self")
                 .and_then(|s| s.get("DNSName"))
@@ -146,10 +145,8 @@ async fn parse_tailscale_url(
         if line.contains("https://") {
             if let Some(start) = line.find("https://") {
                 let rest = &line[start..];
-                let end = rest
-                    .find(|c: char| c.is_whitespace())
-                    .unwrap_or(rest.len());
-                let url = rest[..end].trim_end_matches(|c| c == ',' || c == '.');
+                let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
+                let url = rest[..end].trim_end_matches([',', '.']);
                 if url.len() > 8 {
                     return Ok(url.to_string());
                 }

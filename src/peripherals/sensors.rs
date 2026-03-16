@@ -166,10 +166,7 @@ impl Tool for AudioSampleTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(AUDIO_DURATION_DEFAULT_MS)
             .clamp(AUDIO_DURATION_MIN_MS, AUDIO_DURATION_MAX_MS);
-        let raw = args
-            .get("raw")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let raw = args.get("raw").and_then(|v| v.as_bool()).unwrap_or(false);
 
         tracing::debug!(
             node_id = %self.node_id,

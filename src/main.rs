@@ -30,25 +30,14 @@ use std::sync::Arc;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-mod agent;
-mod spine;
-mod channels;
-mod config;
-mod gateway;
-mod memory;
-mod observability;
-mod peripherals;
-mod providers;
-mod scheduler;
-mod security;
-mod tools;
-mod tunnel;
-
-use agent::{Agent, AgentHandle, OrchestratorAgent};
-use channels::CliChannel;
-use config::Config;
-use memory::MemoryStore;
-use tools::default_tools;
+use oh_ben_claw::agent::{Agent, AgentHandle, OrchestratorAgent};
+use oh_ben_claw::channels::CliChannel;
+use oh_ben_claw::config::Config;
+use oh_ben_claw::memory::MemoryStore;
+use oh_ben_claw::tools::default_tools;
+use oh_ben_claw::{
+    config, gateway, observability, peripherals, providers, scheduler, security, spine, tunnel,
+};
 
 /// Oh-Ben-Claw — Advanced multi-device AI assistant.
 #[derive(Parser, Debug)]
@@ -152,7 +141,14 @@ async fn main() -> Result<()> {
     let mut config = Config::load()?;
 
     match cli.command {
-        Commands::Start { provider, model, session, no_spine, gateway, tunnel } => {
+        Commands::Start {
+            provider,
+            model,
+            session,
+            no_spine,
+            gateway,
+            tunnel,
+        } => {
             // Apply CLI overrides to config
             if let Some(p) = provider {
                 config.provider.name = p;
@@ -160,8 +156,12 @@ async fn main() -> Result<()> {
             if let Some(m) = model {
                 config.provider.model = m;
             }
-            if gateway { config.gateway.enabled = true; }
-            if tunnel { config.tunnel.enabled = true; }
+            if gateway {
+                config.gateway.enabled = true;
+            }
+            if tunnel {
+                config.tunnel.enabled = true;
+            }
             run_start(config, &session, no_spine).await?;
         }
         Commands::Status => {
@@ -209,7 +209,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
 
     // Connect to MQTT spine and discover peripheral tools
     let spine_client = if !no_spine && config.spine.kind == "mqtt" {
-        match spine::SpineClient::new(config.spine.clone(), "obc-brain").connect().await {
+        match spine::SpineClient::new(config.spine.clone(), "obc-brain")
+            .connect()
+            .await
+        {
             Ok(client) => {
                 info!(
                     host = %config.spine.host,
@@ -226,7 +229,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 Some(client)
             }
             Err(e) => {
-                tracing::warn!("Could not connect to MQTT spine: {}. Continuing without spine.", e);
+                tracing::warn!(
+                    "Could not connect to MQTT spine: {}. Continuing without spine.",
+                    e
+                );
                 None
             }
         }
@@ -236,24 +242,23 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
 
     // Connect to directly-wired peripheral boards
     if config.peripherals.enabled {
-        let peripheral_tools = peripherals::create_peripheral_tools(
-            &config.peripherals,
-            spine_client,
-        )
-        .await?;
+        let peripheral_tools =
+            peripherals::create_peripheral_tools(&config.peripherals, spine_client).await?;
         if !peripheral_tools.is_empty() {
             node_count += config.peripherals.boards.len();
-            info!(count = peripheral_tools.len(), "Peripheral tools registered");
+            info!(
+                count = peripheral_tools.len(),
+                "Peripheral tools registered"
+            );
             all_tools.extend(peripheral_tools);
         }
     }
 
     // Build security context
-    let security_ctx = security::SecurityContext::new(&config.security)
-        .unwrap_or_else(|e| {
-            tracing::warn!("Failed to init security context: {}; using defaults", e);
-            security::SecurityContext::new(&Default::default()).unwrap()
-        });
+    let security_ctx = security::SecurityContext::new(&config.security).unwrap_or_else(|e| {
+        tracing::warn!("Failed to init security context: {}; using defaults", e);
+        security::SecurityContext::new(&Default::default()).unwrap()
+    });
 
     if security_ctx.policy.policy_count() > 0 {
         info!(
@@ -326,6 +331,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         match tokio::net::TcpListener::bind(&bind_addr).await {
             Ok(listener) => {
                 let url = format!("http://{}", listener.local_addr()?);
+                info!(url = %url, "Gateway listening");
                 let state_clone = state.clone();
                 tokio::spawn(async move {
                     if let Err(e) = axum::serve(listener, router).await {
@@ -382,8 +388,14 @@ async fn run_status(config: &Config) -> Result<()> {
     println!("\n🦀🧠 Oh-Ben-Claw Status\n");
     println!("Version:  {}", env!("CARGO_PKG_VERSION"));
     println!("Agent:    {}", config.agent.name);
-    println!("Provider: {} / {}", config.provider.name, config.provider.model);
-    println!("Spine:    {} @ {}:{}", config.spine.kind, config.spine.host, config.spine.port);
+    println!(
+        "Provider: {} / {}",
+        config.provider.name, config.provider.model
+    );
+    println!(
+        "Spine:    {} @ {}:{}",
+        config.spine.kind, config.spine.host, config.spine.port
+    );
 
     // Memory stats
     match MemoryStore::open() {
@@ -398,7 +410,10 @@ async fn run_status(config: &Config) -> Result<()> {
         Err(e) => println!("Memory:   unavailable ({})", e),
     }
 
-    println!("\nPeripherals ({} configured):", config.peripherals.boards.len());
+    println!(
+        "\nPeripherals ({} configured):",
+        config.peripherals.boards.len()
+    );
     if config.peripherals.boards.is_empty() {
         println!("  (none)");
     }

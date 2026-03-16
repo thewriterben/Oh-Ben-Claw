@@ -109,10 +109,7 @@ impl Peripheral for NanoPiGpioPeripheral {
     }
 
     fn tools(&self) -> Vec<Box<dyn Tool>> {
-        vec![
-            Box::new(NanoPiGpioReadTool),
-            Box::new(NanoPiGpioWriteTool),
-        ]
+        vec![Box::new(NanoPiGpioReadTool), Box::new(NanoPiGpioWriteTool)]
     }
 }
 

@@ -77,9 +77,7 @@ pub trait Provider: Send + Sync {
 pub fn from_config(config: &ProviderConfig) -> Result<Arc<dyn Provider>> {
     match config.name.as_str() {
         "openai" => Ok(Arc::new(openai::OpenAiProvider::new(config.clone()))),
-        "anthropic" => Ok(Arc::new(anthropic::AnthropicProvider::new(
-            config.clone(),
-        ))),
+        "anthropic" => Ok(Arc::new(anthropic::AnthropicProvider::new(config.clone()))),
         "ollama" => Ok(Arc::new(ollama::OllamaProvider::new(config.clone()))),
         "openrouter" => Ok(Arc::new(openrouter::OpenRouterProvider::new(
             config.clone(),

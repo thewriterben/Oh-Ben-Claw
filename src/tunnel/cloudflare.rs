@@ -91,9 +91,7 @@ pub async fn start_cloudflare_tunnel(
 }
 
 /// Read cloudflared stderr line by line until we find the public URL.
-async fn parse_cloudflare_url(
-    stderr: tokio::process::ChildStderr,
-) -> Result<String> {
+async fn parse_cloudflare_url(stderr: tokio::process::ChildStderr) -> Result<String> {
     let reader = BufReader::new(stderr);
     let mut lines = reader.lines();
 
@@ -128,10 +126,8 @@ fn extract_https_url(s: &str) -> Option<String> {
     let start = s.find("https://")?;
     let rest = &s[start..];
     // URL ends at first whitespace or end of string
-    let end = rest
-        .find(|c: char| c.is_whitespace())
-        .unwrap_or(rest.len());
-    let url = rest[..end].trim_end_matches(|c| c == ',' || c == '.' || c == ')');
+    let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
+    let url = rest[..end].trim_end_matches([',', '.', ')']);
     if url.len() > 8 {
         Some(url.to_string())
     } else {
@@ -159,10 +155,7 @@ pub async fn cloudflared_version() -> Option<String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stdout}{stderr}");
-    combined
-        .lines()
-        .next()
-        .map(|l| l.trim().to_string())
+    combined.lines().next().map(|l| l.trim().to_string())
 }
 
 #[cfg(test)]

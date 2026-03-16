@@ -4,7 +4,6 @@ use crate::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 
 /// Tool: make HTTP requests (GET, POST, PUT, DELETE, PATCH).
 pub struct HttpTool {
@@ -102,7 +101,12 @@ impl Tool for HttpTool {
             "PUT" => self.client.put(&url),
             "DELETE" => self.client.delete(&url),
             "PATCH" => self.client.patch(&url),
-            other => return Ok(ToolResult::err(format!("Unsupported HTTP method: {}", other))),
+            other => {
+                return Ok(ToolResult::err(format!(
+                    "Unsupported HTTP method: {}",
+                    other
+                )))
+            }
         };
 
         // Add custom headers
@@ -139,11 +143,21 @@ impl Tool for HttpTool {
         let body = response.text().await.unwrap_or_default();
 
         if status.is_success() {
-            Ok(ToolResult::ok(format!("HTTP {} {}\n{}", status.as_u16(), status.canonical_reason().unwrap_or(""), body)))
+            Ok(ToolResult::ok(format!(
+                "HTTP {} {}\n{}",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or(""),
+                body
+            )))
         } else {
             Ok(ToolResult {
                 success: false,
-                output: format!("HTTP {} {}\n{}", status.as_u16(), status.canonical_reason().unwrap_or(""), body),
+                output: format!(
+                    "HTTP {} {}\n{}",
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or(""),
+                    body
+                ),
                 error: Some(format!("HTTP error: {}", status)),
             })
         }

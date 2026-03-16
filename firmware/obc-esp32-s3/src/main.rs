@@ -134,10 +134,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    info!(
-        "Oh-Ben-Claw ESP32-S3 firmware v{} ready",
-        FIRMWARE_VERSION
-    );
+    info!("Oh-Ben-Claw ESP32-S3 firmware v{} ready", FIRMWARE_VERSION);
     info!("Node ID: {}", NODE_ID);
     info!("Serial: UART0 TX=43, RX=44, 115200 baud");
     info!(
@@ -322,7 +319,9 @@ fn audio_sample(duration_ms: u64, raw: bool) -> anyhow::Result<String> {
     // Replace with actual i2s_read() calls.
     log::info!("audio_sample: duration_ms={}, raw={}", duration_ms, raw);
     if raw {
-        Ok(format!("STUB:audio_sample:duration_ms={duration_ms}:raw_pcm_data_here"))
+        Ok(format!(
+            "STUB:audio_sample:duration_ms={duration_ms}:raw_pcm_data_here"
+        ))
     } else {
         Ok("0.05".to_string()) // Placeholder RMS level
     }

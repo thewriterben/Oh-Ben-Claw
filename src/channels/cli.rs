@@ -16,11 +16,7 @@ pub struct CliChannel {
 
 impl CliChannel {
     /// Create a new CLI channel.
-    pub fn new(
-        agent: Arc<Agent>,
-        provider_config: ProviderConfig,
-        session_id: String,
-    ) -> Self {
+    pub fn new(agent: Arc<Agent>, provider_config: ProviderConfig, session_id: String) -> Self {
         Self {
             agent,
             provider_config,
@@ -106,8 +102,11 @@ impl CliChannel {
                 Ok(response) => {
                     println!("{}", response.message);
                     if response.used_tools() {
-                        let tool_names: Vec<&str> =
-                            response.tool_calls.iter().map(|c| c.name.as_str()).collect();
+                        let tool_names: Vec<&str> = response
+                            .tool_calls
+                            .iter()
+                            .map(|c| c.name.as_str())
+                            .collect();
                         println!(
                             "{}",
                             style(format!("  (used tools: {})", tool_names.join(", "))).dim()
@@ -154,7 +153,10 @@ impl CliChannel {
     fn print_help(&self) {
         println!("{}", style("Built-in commands:").bold());
         println!("  {}  — Show this help message", style("/help").yellow());
-        println!("  {}  — List all registered tools", style("/tools").yellow());
+        println!(
+            "  {}  — List all registered tools",
+            style("/tools").yellow()
+        );
         println!("  {}  — Clear the terminal", style("/clear").yellow());
         println!("  {}  — Exit the REPL", style("/quit").yellow());
         println!();

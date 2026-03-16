@@ -57,6 +57,12 @@ pub async fn get_status(State(state): State<Arc<GatewayState>>) -> impl IntoResp
 /// `GET /api/v1/metrics` — Observability metrics snapshot.
 pub async fn get_metrics(State(state): State<Arc<GatewayState>>) -> impl IntoResponse {
     let metrics = if let Some(obs) = &state.obs {
+        // Sync the active session count from memory before snapshotting
+        if let Some(mem) = &state.memory {
+            if let Ok(sessions) = mem.list_sessions() {
+                obs.set_active_sessions(sessions.len());
+            }
+        }
         let snap = obs.snapshot();
         json!({
             "requests_total": snap.requests_total,
@@ -274,20 +280,31 @@ pub async fn chat(
                 Ok(ev) => {
                     use crate::agent::AgentEvent;
                     let gev = match ev {
-                        AgentEvent::Started { session_id, user_message } => {
-                            Some(GatewayEvent::Started { session_id, user_message })
-                        }
-                        AgentEvent::Thinking { session_id, iteration } => {
-                            Some(GatewayEvent::Thinking { session_id, iteration })
-                        }
-                        AgentEvent::ToolCall { session_id, call_id, tool_name, args } => {
-                            Some(GatewayEvent::ToolCall {
-                                session_id,
-                                call_id,
-                                name: tool_name,
-                                args,
-                            })
-                        }
+                        AgentEvent::Started {
+                            session_id,
+                            user_message,
+                        } => Some(GatewayEvent::Started {
+                            session_id,
+                            user_message,
+                        }),
+                        AgentEvent::Thinking {
+                            session_id,
+                            iteration,
+                        } => Some(GatewayEvent::Thinking {
+                            session_id,
+                            iteration,
+                        }),
+                        AgentEvent::ToolCall {
+                            session_id,
+                            call_id,
+                            tool_name,
+                            args,
+                        } => Some(GatewayEvent::ToolCall {
+                            session_id,
+                            call_id,
+                            name: tool_name,
+                            args,
+                        }),
                         AgentEvent::ToolResult {
                             session_id,
                             call_id,
@@ -302,18 +319,21 @@ pub async fn chat(
                             success,
                             result: output,
                         }),
-                        AgentEvent::Response { session_id, content, .. } => {
-                            Some(GatewayEvent::Message {
-                                session_id,
-                                role: "assistant".to_string(),
-                                content,
-                            })
-                        }
-                        AgentEvent::Error { session_id, message } => {
-                            Some(GatewayEvent::Error {
-                                message: format!("[{session_id}] {message}"),
-                            })
-                        }
+                        AgentEvent::Response {
+                            session_id,
+                            content,
+                            ..
+                        } => Some(GatewayEvent::Message {
+                            session_id,
+                            role: "assistant".to_string(),
+                            content,
+                        }),
+                        AgentEvent::Error {
+                            session_id,
+                            message,
+                        } => Some(GatewayEvent::Error {
+                            message: format!("[{session_id}] {message}"),
+                        }),
                     };
                     if let Some(gev) = gev {
                         let _ = event_tx.send(gev);
@@ -536,15 +556,11 @@ pub async fn create_task(
             .into_response();
     };
 
-    let id = req
-        .id
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let id = req.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let session_id = req.session_id.unwrap_or_else(|| "default".to_string());
 
     let task = match req.kind.as_str() {
-        "cron" => ScheduledTask::cron(
-            &id, &req.name, &req.prompt, &session_id, &req.value,
-        ),
+        "cron" => ScheduledTask::cron(&id, &req.name, &req.prompt, &session_id, &req.value),
         "interval" => {
             let secs: u64 = match req.value.parse() {
                 Ok(s) => s,
@@ -672,7 +688,11 @@ pub async fn get_tunnel_status(State(state): State<Arc<GatewayState>>) -> impl I
         None
     };
 
-    let status = if tunnel_url.is_some() { "running" } else { "stopped" };
+    let status = if tunnel_url.is_some() {
+        "running"
+    } else {
+        "stopped"
+    };
 
     Json(json!({
         "status": status,

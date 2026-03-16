@@ -12,14 +12,12 @@ use serde_json::Value;
 /// The OpenAI provider.
 #[derive(Debug, Clone)]
 pub struct OpenAiProvider {
-    config: ProviderConfig,
     client: Client,
 }
 
 impl OpenAiProvider {
-    pub fn new(config: ProviderConfig) -> Self {
+    pub fn new(_config: ProviderConfig) -> Self {
         Self {
-            config,
             client: Client::new(),
         }
     }

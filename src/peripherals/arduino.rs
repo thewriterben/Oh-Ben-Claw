@@ -31,8 +31,6 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::Mutex;
-use std::sync::Arc;
 
 use crate::{
     config::PeripheralBoardConfig,
@@ -47,9 +45,6 @@ const DEFAULT_BAUD: u32 = 115_200;
 
 /// Timeout for serial read operations.
 const READ_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// Shared serial port handle.
-type SerialHandle = Arc<Mutex<Option<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>>>;
 
 // ── Peripheral Struct ─────────────────────────────────────────────────────────
 
@@ -66,12 +61,19 @@ pub struct ArduinoSerialPeripheral {
 impl ArduinoSerialPeripheral {
     /// Create a new Arduino peripheral from config.
     pub fn new(board: PeripheralBoardConfig) -> anyhow::Result<Self> {
-        let port_path = board
-            .path
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Arduino peripheral requires a 'path' (e.g., /dev/ttyUSB0)"))?;
-        let baud = if board.baud > 0 { board.baud } else { DEFAULT_BAUD };
-        Ok(Self { board, port_path, baud })
+        let port_path = board.path.clone().ok_or_else(|| {
+            anyhow::anyhow!("Arduino peripheral requires a 'path' (e.g., /dev/ttyUSB0)")
+        })?;
+        let baud = if board.baud > 0 {
+            board.baud
+        } else {
+            DEFAULT_BAUD
+        };
+        Ok(Self {
+            board,
+            port_path,
+            baud,
+        })
     }
 
     /// Attempt to connect and verify the Arduino is responsive.
@@ -79,33 +81,6 @@ impl ArduinoSerialPeripheral {
         let mut peripheral = Self::new(board.clone())?;
         peripheral.connect().await?;
         Ok(peripheral)
-    }
-
-    /// Send a JSON command and read the response line.
-    async fn send_command(&self, cmd: Value) -> anyhow::Result<Value> {
-        use tokio_serial::SerialPortBuilderExt;
-
-        let mut port = tokio_serial::new(&self.port_path, self.baud)
-            .timeout(READ_TIMEOUT)
-            .open_native_async()
-            .with_context(|| format!("Failed to open serial port {}", self.port_path))?;
-
-        let mut line = cmd.to_string();
-        line.push('\n');
-        port.write_all(line.as_bytes())
-            .await
-            .with_context(|| "Failed to write to serial port")?;
-        port.flush().await?;
-
-        let mut reader = BufReader::new(port);
-        let mut response = String::new();
-        tokio::time::timeout(READ_TIMEOUT, reader.read_line(&mut response))
-            .await
-            .with_context(|| "Serial read timed out")?
-            .with_context(|| "Failed to read from serial port")?;
-
-        serde_json::from_str(response.trim())
-            .with_context(|| format!("Invalid JSON response from Arduino: {response}"))
     }
 }
 
@@ -148,11 +123,26 @@ impl Peripheral for ArduinoSerialPeripheral {
         let port = self.port_path.clone();
         let baud = self.baud;
         vec![
-            Box::new(ArduinoGpioReadTool { port: port.clone(), baud }),
-            Box::new(ArduinoGpioWriteTool { port: port.clone(), baud }),
-            Box::new(ArduinoAnalogReadTool { port: port.clone(), baud }),
-            Box::new(ArduinoAnalogWriteTool { port: port.clone(), baud }),
-            Box::new(ArduinoPingTool { port: port.clone(), baud }),
+            Box::new(ArduinoGpioReadTool {
+                port: port.clone(),
+                baud,
+            }),
+            Box::new(ArduinoGpioWriteTool {
+                port: port.clone(),
+                baud,
+            }),
+            Box::new(ArduinoAnalogReadTool {
+                port: port.clone(),
+                baud,
+            }),
+            Box::new(ArduinoAnalogWriteTool {
+                port: port.clone(),
+                baud,
+            }),
+            Box::new(ArduinoPingTool {
+                port: port.clone(),
+                baud,
+            }),
         ]
     }
 }
@@ -233,7 +223,11 @@ impl Tool for ArduinoGpioReadTool {
         )
         .await?;
 
-        if response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if response
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             let value = response.get("value").and_then(|v| v.as_u64()).unwrap_or(0);
             Ok(ToolResult::ok(format!("D{pin} = {value}")))
         } else {
@@ -301,7 +295,11 @@ impl Tool for ArduinoGpioWriteTool {
         )
         .await?;
 
-        if response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if response
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             Ok(ToolResult::ok(format!("D{pin} set to {value}")))
         } else {
             let err = response
@@ -361,12 +359,14 @@ impl Tool for ArduinoAnalogReadTool {
         )
         .await?;
 
-        if response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if response
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             let raw = response.get("value").and_then(|v| v.as_u64()).unwrap_or(0);
             let voltage = (raw as f64 / 1023.0) * 5.0;
-            Ok(ToolResult::ok(format!(
-                "A{pin} = {raw} ({voltage:.3}V)"
-            )))
+            Ok(ToolResult::ok(format!("A{pin} = {raw} ({voltage:.3}V)")))
         } else {
             let err = response
                 .get("error")
@@ -434,7 +434,11 @@ impl Tool for ArduinoAnalogWriteTool {
         )
         .await?;
 
-        if response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if response
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             let duty = (value as f64 / 255.0) * 100.0;
             Ok(ToolResult::ok(format!(
                 "D{pin} PWM = {value}/255 ({duty:.1}% duty cycle)"
@@ -477,7 +481,11 @@ impl Tool for ArduinoPingTool {
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         let response = serial_command(&self.port, self.baud, json!({"cmd": "ping"})).await?;
 
-        if response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if response
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             let version = response
                 .get("version")
                 .and_then(|v| v.as_str())
@@ -503,51 +511,75 @@ mod tests {
 
     #[test]
     fn arduino_gpio_read_tool_name() {
-        let t = ArduinoGpioReadTool { port: "/dev/ttyUSB0".into(), baud: 115200 };
+        let t = ArduinoGpioReadTool {
+            port: "/dev/ttyUSB0".into(),
+            baud: 115200,
+        };
         assert_eq!(t.name(), "arduino_gpio_read");
     }
 
     #[test]
     fn arduino_gpio_write_tool_name() {
-        let t = ArduinoGpioWriteTool { port: "/dev/ttyUSB0".into(), baud: 115200 };
+        let t = ArduinoGpioWriteTool {
+            port: "/dev/ttyUSB0".into(),
+            baud: 115200,
+        };
         assert_eq!(t.name(), "arduino_gpio_write");
     }
 
     #[test]
     fn arduino_analog_read_tool_name() {
-        let t = ArduinoAnalogReadTool { port: "/dev/ttyUSB0".into(), baud: 115200 };
+        let t = ArduinoAnalogReadTool {
+            port: "/dev/ttyUSB0".into(),
+            baud: 115200,
+        };
         assert_eq!(t.name(), "arduino_analog_read");
     }
 
     #[test]
     fn arduino_analog_write_tool_name() {
-        let t = ArduinoAnalogWriteTool { port: "/dev/ttyUSB0".into(), baud: 115200 };
+        let t = ArduinoAnalogWriteTool {
+            port: "/dev/ttyUSB0".into(),
+            baud: 115200,
+        };
         assert_eq!(t.name(), "arduino_analog_write");
     }
 
     #[test]
     fn arduino_ping_tool_name() {
-        let t = ArduinoPingTool { port: "/dev/ttyUSB0".into(), baud: 115200 };
+        let t = ArduinoPingTool {
+            port: "/dev/ttyUSB0".into(),
+            baud: 115200,
+        };
         assert_eq!(t.name(), "arduino_ping");
     }
 
     #[tokio::test]
     async fn gpio_read_requires_pin() {
-        let t = ArduinoGpioReadTool { port: "/dev/ttyUSB0".into(), baud: 115200 };
+        let t = ArduinoGpioReadTool {
+            port: "/dev/ttyUSB0".into(),
+            baud: 115200,
+        };
         let result = t.execute(json!({})).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn gpio_write_requires_value() {
-        let t = ArduinoGpioWriteTool { port: "/dev/ttyUSB0".into(), baud: 115200 };
+        let t = ArduinoGpioWriteTool {
+            port: "/dev/ttyUSB0".into(),
+            baud: 115200,
+        };
         let result = t.execute(json!({"pin": 13})).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn analog_read_requires_pin() {
-        let t = ArduinoAnalogReadTool { port: "/dev/ttyUSB0".into(), baud: 115200 };
+        let t = ArduinoAnalogReadTool {
+            port: "/dev/ttyUSB0".into(),
+            baud: 115200,
+        };
         let result = t.execute(json!({})).await;
         assert!(result.is_err());
     }

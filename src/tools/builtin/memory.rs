@@ -167,10 +167,7 @@ mod tests {
         tool.execute(json!({"action": "set", "key": "b", "value": "2"}))
             .await
             .unwrap();
-        let result = tool
-            .execute(json!({"action": "list"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"action": "list"})).await.unwrap();
         assert!(result.output.contains("a"));
         assert!(result.output.contains("b"));
     }
@@ -182,10 +179,7 @@ mod tests {
             .await
             .unwrap();
         tool.execute(json!({"action": "clear"})).await.unwrap();
-        let result = tool
-            .execute(json!({"action": "list"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"action": "list"})).await.unwrap();
         assert!(result.output.contains("No keys"));
     }
 }
