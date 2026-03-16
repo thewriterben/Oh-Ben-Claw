@@ -6,11 +6,17 @@
 
 pub mod cli;
 pub mod discord;
+pub mod imessage;
+pub mod matrix;
 pub mod slack;
 pub mod telegram;
+pub mod whatsapp;
 mod utils;
 
 pub use cli::CliChannel;
 pub use discord::DiscordChannel;
+pub use imessage::IMessageChannel;
+pub use matrix::MatrixChannel;
 pub use slack::SlackChannel;
 pub use telegram::TelegramChannel;
+pub use whatsapp::WhatsAppChannel;

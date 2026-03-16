@@ -107,9 +107,9 @@ Add support for all major communication channels.
 - [x] Telegram channel — long-polling Bot API adapter (`src/channels/telegram.rs`)
 - [x] Discord channel — Gateway WebSocket adapter (`src/channels/discord.rs`)
 - [x] Slack channel — Socket Mode WebSocket adapter (`src/channels/slack.rs`)
-- [ ] WhatsApp channel
-- [ ] iMessage channel (macOS only)
-- [ ] Matrix channel
+- [x] WhatsApp channel — Meta Business Cloud API webhook adapter (`src/channels/whatsapp.rs`)
+- [x] iMessage channel (macOS only) — AppleScript + Messages.app SQLite polling adapter (`src/channels/imessage.rs`)
+- [x] Matrix channel — Client-Server API long-poll adapter (`src/channels/matrix.rs`)
 
 ---
 

@@ -227,6 +227,52 @@ pub struct SlackConfig {
     pub bot_token: Option<String>,
 }
 
+/// Configuration for the WhatsApp Business Cloud API channel.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WhatsAppConfig {
+    /// Meta Graph API access token.
+    pub access_token: Option<String>,
+    /// WhatsApp Business phone number ID.
+    pub phone_number_id: Option<String>,
+    /// Webhook verify token (must match the value set in the Meta dashboard).
+    pub verify_token: Option<String>,
+    /// Local port for the webhook HTTP server (default: 8444).
+    pub webhook_port: Option<u16>,
+}
+
+/// Configuration for the iMessage channel (macOS only).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IMessageConfig {
+    /// Whether the iMessage channel is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Restrict responses to these senders (phone numbers or Apple IDs).
+    /// An empty list means all senders are accepted.
+    #[serde(default)]
+    pub allowed_senders: Vec<String>,
+    /// How often to poll the Messages.app database in seconds (default: 2).
+    pub poll_interval_secs: Option<u64>,
+}
+
+impl Default for IMessageConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allowed_senders: vec![],
+            poll_interval_secs: None,
+        }
+    }
+}
+
+/// Configuration for the Matrix channel.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MatrixConfig {
+    /// Matrix homeserver URL (e.g. `https://matrix.org`).
+    pub homeserver: Option<String>,
+    /// Access token for the bot Matrix account.
+    pub access_token: Option<String>,
+}
+
 /// Configuration for all channels.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChannelsConfig {
@@ -236,6 +282,12 @@ pub struct ChannelsConfig {
     pub discord: DiscordConfig,
     #[serde(default)]
     pub slack: SlackConfig,
+    #[serde(default)]
+    pub whatsapp: WhatsAppConfig,
+    #[serde(default)]
+    pub imessage: IMessageConfig,
+    #[serde(default)]
+    pub matrix: MatrixConfig,
 }
 
 // ── Tunnel Configuration ────────────────────────────────────────────────────
