@@ -20,6 +20,8 @@
 //!     +-- command    # Brain publishes a command to all nodes
 //! ```
 
+pub mod p2p;
+
 use crate::config::SpineConfig; // SpineConfig is defined in config::mod
 use crate::tools::traits::{Tool, ToolResult};
 use anyhow::{bail, Result};

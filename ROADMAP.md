@@ -113,13 +113,13 @@ Add support for all major communication channels.
 
 ---
 
-## Phase 7: Edge-Native Mode 📋 Planned
+## Phase 7: Edge-Native Mode ✅ Complete
 
 Enable peripheral nodes to run the full Oh-Ben-Claw agent locally, without a host.
 
-- [ ] Lightweight agent loop for ESP32-S3 (WiFi + cloud LLM)
-- [ ] Lightweight agent loop for NanoPi Neo3 (local Ollama)
-- [ ] Peer-to-peer node coordination (without a central broker)
+- [x] Lightweight agent loop for ESP32-S3 (WiFi + cloud LLM) (`firmware/obc-esp32-s3/src/main.rs`)
+- [x] Lightweight agent loop for NanoPi Neo3 (local Ollama) (`src/agent/edge.rs`)
+- [x] Peer-to-peer node coordination (without a central broker) (`src/spine/p2p.rs`)
 
 ---
 
