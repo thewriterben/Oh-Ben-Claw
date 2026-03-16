@@ -152,22 +152,30 @@ impl PolicyEngine {
 
 // ── Glob Matching ─────────────────────────────────────────────────────────────
 
+/// Maximum recursion depth for glob matching to prevent ReDoS on pathological
+/// patterns like `*a*a*a*a*` against long input strings.
+const GLOB_MAX_DEPTH: usize = 64;
+
 /// Minimal glob matcher supporting `*` (any sequence) and `?` (any single char).
 fn glob_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
-    glob_match_inner(&p, &t)
+    glob_match_inner(&p, &t, 0)
 }
 
-fn glob_match_inner(p: &[char], t: &[char]) -> bool {
+fn glob_match_inner(p: &[char], t: &[char], depth: usize) -> bool {
+    if depth > GLOB_MAX_DEPTH {
+        return false;
+    }
     match (p.first(), t.first()) {
         (None, None) => true,
         (Some(&'*'), _) => {
             // '*' matches zero or more characters
-            glob_match_inner(&p[1..], t) || (!t.is_empty() && glob_match_inner(p, &t[1..]))
+            glob_match_inner(&p[1..], t, depth + 1)
+                || (!t.is_empty() && glob_match_inner(p, &t[1..], depth + 1))
         }
-        (Some(&'?'), Some(_)) => glob_match_inner(&p[1..], &t[1..]),
-        (Some(pc), Some(tc)) if pc == tc => glob_match_inner(&p[1..], &t[1..]),
+        (Some(&'?'), Some(_)) => glob_match_inner(&p[1..], &t[1..], depth + 1),
+        (Some(pc), Some(tc)) if pc == tc => glob_match_inner(&p[1..], &t[1..], depth + 1),
         _ => false,
     }
 }
@@ -253,5 +261,15 @@ mod tests {
     fn glob_question_matches_single_char() {
         assert!(glob_match("sh?ll", "shell"));
         assert!(!glob_match("sh?ll", "shill_extra"));
+    }
+
+    #[test]
+    fn glob_deep_recursion_is_bounded() {
+        // Pathological pattern that would cause exponential backtracking
+        // without the depth limit. With the limit, this completes instantly.
+        let pattern = "*a*a*a*a*a*a*a*a*a*a*";
+        let text = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        // Should return false (no match) rather than hang
+        assert!(!glob_match(pattern, text));
     }
 }
