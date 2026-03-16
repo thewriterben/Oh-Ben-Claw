@@ -7,15 +7,35 @@
 pub mod builtin;
 pub mod traits;
 
-pub use builtin::{file::FileTool, http::HttpTool, memory::MemoryTool, shell::ShellTool};
 pub use traits::{Tool, ToolResult};
-
+pub use builtin::{
+    shell::ShellTool,
+    file::FileTool,
+    http::HttpTool,
+    memory::MemoryTool,
+    vision::VisionTool,
+    audio::{AudioTranscribeTool, TextToSpeechTool},
+    ota::{OtaUpdateTool, DeviceHealthTool},
+};
 /// Build the default set of built-in tools.
+///
+/// Vision and audio tools read their API keys from environment variables
+/// (`OPENAI_API_KEY`, `OPENAI_API_BASE`) at construction time.
 pub fn default_tools() -> Vec<Box<dyn Tool>> {
-    vec![
+    let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+    let mut tools: Vec<Box<dyn Tool>> = vec![
         Box::new(ShellTool::new()),
         Box::new(FileTool::new()),
         Box::new(HttpTool::new()),
         Box::new(MemoryTool::new()),
-    ]
+        Box::new(AudioTranscribeTool::default()),
+        Box::new(TextToSpeechTool::default()),
+        Box::new(OtaUpdateTool),
+        Box::new(DeviceHealthTool),
+    ];
+    // Vision tool requires an API key; only add if one is available
+    if !api_key.is_empty() {
+        tools.push(Box::new(VisionTool::new(api_key)));
+    }
+    tools
 }
