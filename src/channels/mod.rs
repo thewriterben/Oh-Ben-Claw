@@ -11,9 +11,15 @@
 //! * **Mattermost** — Mattermost WebSocket event API.
 //! * **Typing indicators** — Telegram, Discord, and Slack now show a "typing…"
 //!   status while the agent is processing, improving perceived responsiveness.
+//!
+//! ## New in Phase 11 (Pycoclaw/Mimiclaw Parity)
+//!
+//! * **Feishu/Lark** — Feishu enterprise messaging via webhook event subscription,
+//!   inspired by [MimiClaw](https://github.com/memovai/mimiclaw).
 
 pub mod cli;
 pub mod discord;
+pub mod feishu;
 pub mod imessage;
 pub mod irc;
 pub mod matrix;
@@ -27,6 +33,7 @@ mod utils;
 
 pub use cli::CliChannel;
 pub use discord::DiscordChannel;
+pub use feishu::FeishuChannel;
 pub use imessage::IMessageChannel;
 pub use irc::IrcChannel;
 pub use matrix::MatrixChannel;
