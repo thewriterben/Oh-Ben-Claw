@@ -61,7 +61,7 @@ Oh-Ben-Claw is organized around three layers:
 
 **Multi-Modal I/O** provides a unified interface for interacting with the physical world. The agent can see (via cameras on ESP32-S3 or Raspberry Pi), hear (via I2S microphones), sense (via I2C/SPI sensors like BME280, MPU6050), and act (via GPIO on NanoPi Neo3 or Raspberry Pi).
 
-**Rich Communication Channels** supports all channels from the base ZeroClaw framework, including Telegram, Discord, Slack, WhatsApp, iMessage, IRC, Matrix, and a built-in CLI. A native GUI application is also planned.
+**Rich Communication Channels** supports Telegram, Discord, Slack, WhatsApp, iMessage, IRC, Matrix, Signal, Mattermost, **Feishu/Lark**, and a built-in CLI. A native GUI application is also planned.
 
 **Pluggable LLM Providers** supports all major LLM providers, including OpenAI, Anthropic, Google Gemini, Ollama (local), and any OpenAI-compatible endpoint.
 
@@ -78,6 +78,14 @@ Oh-Ben-Claw is organized around three layers:
 **Hardware Datasheet RAG** indexes your `docs/datasheets/` directory and exposes a `datasheet_search` tool that the agent can use to look up pin layouts, register maps, sensor specs, and I2C addresses — all retrieved via keyword search directly from your markdown and text datasheets.
 
 **Sandboxed Tool Execution** runs shell-based tools through a configurable runtime adapter. The default `native` runtime executes directly on the host; the `docker` runtime wraps every command in a fresh, memory-limited, network-isolated container for maximum safety.
+
+**Personality System** (inspired by [MimiClaw](https://github.com/memovai/mimiclaw)) stores the agent's personality in editable Markdown files. Drop a `SOUL.md` in `~/.oh-ben-claw/` to customise the agent's behaviour without editing `config.toml`. Add a `USER.md` to tell the agent about you — your name, language, preferences.
+
+**Proactive Task Dispatch** (inspired by MimiClaw's heartbeat service) monitors `~/.oh-ben-claw/HEARTBEAT.md` for uncompleted tasks and injects them into the agent loop on a schedule. Write tasks in plain Markdown, check them off with `- [x]`, and the agent acts on the rest autonomously.
+
+**Daily Journal** (inspired by MimiClaw's per-day notes) writes human-readable `YYYY-MM-DD.md` notes alongside the SQLite conversation history. The journal files are easy to browse, back up, and share.
+
+**HTTP Proxy Support** (inspired by MimiClaw's proxy system) routes all outbound HTTP requests (LLM API calls, channel webhooks, …) through a configurable HTTP or SOCKS5 proxy — useful for corporate firewalls or restricted networks.
 
 ---
 
@@ -201,6 +209,48 @@ enabled = true
 max_images = 5
 max_image_bytes = 5242880    # 5 MB
 allow_remote = false
+
+# Optional: HTTP proxy for restricted networks (Phase 11 — MimiClaw parity)
+[proxy]
+enabled = false
+host    = "10.0.0.1"
+port    = 7897
+kind    = "http"             # "http" (default) or "socks5"
+
+# Optional: Feishu/Lark channel (Phase 11 — MimiClaw parity)
+[channels.feishu]
+app_id             = "cli_xxxxxxxxxxxxxx"
+app_secret         = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+verification_token = "your-verification-token"
+webhook_port       = 18790
+```
+
+### Personality Files (Phase 11)
+
+Instead of editing `system_prompt` in `config.toml`, you can drop plain Markdown
+files in `~/.oh-ben-claw/`:
+
+| File | Purpose |
+|------|---------|
+| `SOUL.md` | Agent personality — overrides `[agent].system_prompt` when present |
+| `USER.md` | User profile — appended to the system prompt as a "User Profile" section |
+| `HEARTBEAT.md` | Proactive task list — uncompleted items trigger the agent automatically |
+
+Example `~/.oh-ben-claw/SOUL.md`:
+
+```markdown
+You are Oh-Ben-Claw, a precise and proactive AI assistant running on distributed
+hardware. You prefer short, actionable replies. You never make up tool results.
+```
+
+Example `~/.oh-ben-claw/HEARTBEAT.md` (the agent checks this on a schedule):
+
+```markdown
+# My Tasks
+
+- [ ] Send the weekly status report to the team
+- [x] Order replacement fan for the server room   ← completed, agent skips this
+- [ ] Book dentist appointment
 ```
 
 ### Running
@@ -256,7 +306,7 @@ Oh-Ben-Claw/
 │   ├── agent/          # Core agent loop, dispatcher, memory loader
 │   ├── approval/       # Human-in-the-loop approval workflow
 │   ├── audio/          # Audio pipeline (microphone → STT → agent → TTS)
-│   ├── channels/       # Communication channels (Telegram, Discord, CLI, etc.)
+│   ├── channels/       # Communication channels (Telegram, Discord, Feishu, CLI, etc.)
 │   ├── config/         # Configuration schema and loading
 │   ├── cost/           # Token cost tracking and budget enforcement
 │   ├── dashboard/      # Real-time terminal TUI dashboard
@@ -264,7 +314,7 @@ Oh-Ben-Claw/
 │   ├── gateway/        # REST/WebSocket API gateway
 │   ├── hooks/          # Event lifecycle hooks
 │   ├── mcp/            # Model Context Protocol client/server
-│   ├── memory/         # Memory backends (SQLite, Markdown, vector)
+│   ├── memory/         # Memory backends (SQLite, Markdown personality, journal, heartbeat)
 │   ├── multimodal.rs   # Enhanced multimodal message handling
 │   ├── observability/  # Logging, metrics, OpenTelemetry
 │   ├── peripherals/    # Hardware peripheral drivers (ESP32-S3, NanoPi, RPi)
@@ -301,6 +351,7 @@ Oh-Ben-Claw is built on top of the `zeroclaw-labs/zeroclaw` architecture. It inh
 - A more opinionated, production-ready configuration and deployment story.
 - All key features from upstream ZeroClaw: human-in-the-loop approval, token cost tracking, system diagnostics, event lifecycle hooks, multimodal image handling, hardware datasheet RAG, and sandboxed tool execution.
 - Oh-Ben-Claw unique features: MQTT spine, P2P broker-free mesh, vision pipeline, audio pipeline, sensor fusion, TUI dashboard, MCP client/server, skill forge, edge-native mode.
+- **Phase 11 — Pycoclaw/MimiClaw parity**: personality system (SOUL.md/USER.md), proactive task dispatch (HEARTBEAT.md), daily journal (YYYY-MM-DD.md), HTTP proxy support, and Feishu/Lark channel.
 
 ---
 

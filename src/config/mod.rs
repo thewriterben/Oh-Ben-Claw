@@ -475,13 +475,50 @@ pub struct ChannelsConfig {
     /// Mattermost channel adapter (new in Phase 10).
     #[serde(default)]
     pub mattermost: MattermostConfig,
+    /// Feishu/Lark channel adapter (new in Phase 11).
+    #[serde(default)]
+    pub feishu: FeishuConfig,
     /// Send "typing…" indicators while the agent processes a message.
     /// Supported by Telegram, Discord, and Slack (default: true).
     #[serde(default = "default_true")]
     pub typing_indicators: bool,
 }
 
-// ── Tunnel Configuration ────────────────────────────────────────────────────
+// ── Feishu Configuration (new in Phase 11) ───────────────────────────────────
+
+/// Configuration for the Feishu/Lark channel adapter.
+///
+/// Feishu (Lark outside China) is a popular enterprise messaging platform.
+/// The adapter receives messages via webhook event subscription and sends
+/// replies through the Feishu REST API.
+///
+/// Inspired by [MimiClaw](https://github.com/memovai/mimiclaw)'s Feishu
+/// integration.
+///
+/// ```toml
+/// [channels.feishu]
+/// app_id             = "cli_xxxxxxxxxxxxxx"
+/// app_secret         = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+/// verification_token = "your-verification-token"
+/// webhook_port       = 18790
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FeishuConfig {
+    /// Feishu App ID (e.g. `cli_xxxxxxxxxxxxxx`).
+    #[serde(default)]
+    pub app_id: Option<String>,
+    /// Feishu App Secret.
+    #[serde(default)]
+    pub app_secret: Option<String>,
+    /// Verification token shown in the Event Subscription settings of the app.
+    /// When set, every incoming webhook payload's `token` field must match.
+    #[serde(default)]
+    pub verification_token: Option<String>,
+    /// Local port for the webhook HTTP server (default: 18790).
+    #[serde(default)]
+    pub webhook_port: Option<u16>,
+}
+
 
 /// Configuration for the network tunnel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -777,7 +814,114 @@ impl Default for MultimodalConfig {
     }
 }
 
-// ── Root Configuration ───────────────────────────────────────────────────────
+// ── Proxy Configuration (new in Phase 11) ────────────────────────────────────
+
+/// Configuration for outbound HTTP proxy support.
+///
+/// Inspired by [MimiClaw](https://github.com/memovai/mimiclaw)'s proxy system,
+/// which adds HTTP CONNECT tunnel support for networks behind corporate
+/// firewalls or restricted internet environments.
+///
+/// When configured, the proxy settings are applied to all outbound HTTP
+/// requests made by Oh-Ben-Claw (LLM API calls, channel webhooks, etc.)
+/// via the `HTTPS_PROXY` / `HTTP_PROXY` environment variables.
+///
+/// ```toml
+/// [proxy]
+/// host     = "10.0.0.1"
+/// port     = 7897
+/// kind     = "http"      # "http" (default) or "socks5"
+/// username = "user"      # optional
+/// password = "pass"      # optional
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProxyConfig {
+    /// Whether the proxy is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Proxy server hostname or IP address.
+    #[serde(default)]
+    pub host: Option<String>,
+    /// Proxy server port.
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// Proxy protocol: `"http"` (default) or `"socks5"`.
+    #[serde(default = "default_proxy_kind")]
+    pub kind: String,
+    /// Optional proxy username for authenticated proxies.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Optional proxy password for authenticated proxies.
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+fn default_proxy_kind() -> String {
+    "http".to_string()
+}
+
+impl ProxyConfig {
+    /// Build the proxy URL string (e.g. `http://user:pass@10.0.0.1:7897`).
+    ///
+    /// Returns `None` if `enabled` is false or host/port are not set.
+    pub fn url(&self) -> Option<String> {
+        if !self.enabled {
+            return None;
+        }
+        let host = self.host.as_deref()?;
+        let port = self.port?;
+        let creds = match (&self.username, &self.password) {
+            (Some(u), Some(p)) => format!("{u}:{p}@"),
+            (Some(u), None) => format!("{u}@"),
+            _ => String::new(),
+        };
+        Some(format!("{}://{}{}:{}", self.kind, creds, host, port))
+    }
+
+    /// Apply this proxy configuration to the current process environment.
+    ///
+    /// Sets `HTTP_PROXY` and `HTTPS_PROXY` environment variables so that all
+    /// HTTP clients that respect them (including `reqwest`) pick them up.
+    pub fn apply_to_env(&self) {
+        if let Some(url) = self.url() {
+            std::env::set_var("HTTP_PROXY", &url);
+            std::env::set_var("HTTPS_PROXY", &url);
+            tracing::info!(proxy = %url, "Outbound HTTP proxy configured");
+        }
+    }
+}
+
+// ── Personality Configuration (new in Phase 11) ───────────────────────────────
+
+/// Configuration for the personality file system.
+///
+/// Inspired by [MimiClaw](https://github.com/memovai/mimiclaw)'s approach of
+/// storing the agent's personality in editable Markdown files (`SOUL.md` for
+/// the agent's personality and `USER.md` for the user profile).
+///
+/// By default both files live in `~/.oh-ben-claw/` (next to `memory.db`).
+/// Set custom paths here if you want to keep them elsewhere (e.g. in a shared
+/// config management repository).
+///
+/// ```toml
+/// [personality]
+/// soul_path = "/home/alice/.oh-ben-claw/SOUL.md"   # optional override
+/// user_path = "/home/alice/.oh-ben-claw/USER.md"   # optional override
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PersonalityConfig {
+    /// Custom path to the SOUL.md agent personality file.
+    ///
+    /// When unset the default data-dir path (`~/.oh-ben-claw/SOUL.md`) is used.
+    #[serde(default)]
+    pub soul_path: Option<String>,
+    /// Custom path to the USER.md user profile file.
+    ///
+    /// When unset the default data-dir path (`~/.oh-ben-claw/USER.md`) is used.
+    #[serde(default)]
+    pub user_path: Option<String>,
+}
+
 
 /// The root configuration for Oh-Ben-Claw.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -810,6 +954,12 @@ pub struct Config {
     pub runtime: RuntimeConfig,
     #[serde(default)]
     pub multimodal: MultimodalConfig,
+    /// HTTP proxy for outbound requests (new in Phase 11).
+    #[serde(default)]
+    pub proxy: ProxyConfig,
+    /// Personality file configuration — SOUL.md and USER.md (new in Phase 11).
+    #[serde(default)]
+    pub personality: PersonalityConfig,
 }
 
 impl Config {
@@ -943,6 +1093,22 @@ impl Config {
             );
         }
 
+        // Validate proxy
+        if self.proxy.enabled {
+            if self.proxy.host.is_none() {
+                anyhow::bail!("proxy is enabled but proxy.host is not set");
+            }
+            if self.proxy.port.is_none() {
+                anyhow::bail!("proxy is enabled but proxy.port is not set");
+            }
+            if !["http", "socks5"].contains(&self.proxy.kind.as_str()) {
+                warnings.push(format!(
+                    "proxy.kind '{}' is not recognised; supported values are 'http' and 'socks5'",
+                    self.proxy.kind
+                ));
+            }
+        }
+
         Ok(warnings)
     }
 }
@@ -1061,5 +1227,92 @@ mod tests {
         assert!(warnings
             .iter()
             .any(|w| w.contains("ca_cert_path") && w.contains("tls is false")));
+    }
+
+    // ── Phase 11 tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn proxy_config_url_disabled_returns_none() {
+        let proxy = ProxyConfig::default();
+        assert!(proxy.url().is_none());
+    }
+
+    #[test]
+    fn proxy_config_url_without_creds() {
+        let proxy = ProxyConfig {
+            enabled: true,
+            host: Some("10.0.0.1".to_string()),
+            port: Some(7897),
+            kind: "http".to_string(),
+            username: None,
+            password: None,
+        };
+        assert_eq!(proxy.url(), Some("http://10.0.0.1:7897".to_string()));
+    }
+
+    #[test]
+    fn proxy_config_url_with_creds() {
+        let proxy = ProxyConfig {
+            enabled: true,
+            host: Some("proxy.corp.com".to_string()),
+            port: Some(8080),
+            kind: "socks5".to_string(),
+            username: Some("alice".to_string()),
+            password: Some("s3cr3t".to_string()),
+        };
+        assert_eq!(
+            proxy.url(),
+            Some("socks5://alice:s3cr3t@proxy.corp.com:8080".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_rejects_proxy_enabled_without_host() {
+        let mut config = Config::default();
+        config.proxy.enabled = true;
+        config.proxy.port = Some(8080);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_proxy_enabled_without_port() {
+        let mut config = Config::default();
+        config.proxy.enabled = true;
+        config.proxy.host = Some("10.0.0.1".to_string());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_proxy_warns_unknown_kind() {
+        let mut config = Config::default();
+        config.proxy.enabled = true;
+        config.proxy.host = Some("10.0.0.1".to_string());
+        config.proxy.port = Some(8080);
+        config.proxy.kind = "ftp".to_string();
+        let warnings = config.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("'ftp'")));
+    }
+
+    #[test]
+    fn feishu_config_default_is_empty() {
+        let config = FeishuConfig::default();
+        assert!(config.app_id.is_none());
+        assert!(config.app_secret.is_none());
+        assert!(config.verification_token.is_none());
+        assert!(config.webhook_port.is_none());
+    }
+
+    #[test]
+    fn personality_config_default_is_empty() {
+        let config = PersonalityConfig::default();
+        assert!(config.soul_path.is_none());
+        assert!(config.user_path.is_none());
+    }
+
+    #[test]
+    fn root_config_has_proxy_and_personality_fields() {
+        let config = Config::default();
+        assert!(!config.proxy.enabled);
+        assert!(config.personality.soul_path.is_none());
     }
 }
