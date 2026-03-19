@@ -3,6 +3,22 @@
 //! The memory subsystem stores conversation history in a local SQLite database
 //! at `~/.oh-ben-claw/memory.db`. Each conversation is identified by a
 //! `session_id`, allowing multiple parallel sessions to coexist.
+//!
+//! ## Additional memory backends (Phase 11 — Pycoclaw/Mimiclaw parity)
+//!
+//! | Module | Description |
+//! |--------|-------------|
+//! | [`personality`] | SOUL.md (agent personality) + USER.md (user profile) |
+//! | [`heartbeat`] | HEARTBEAT.md proactive task dispatch |
+//! | [`journal`] | YYYY-MM-DD.md daily journal notes |
+
+pub mod heartbeat;
+pub mod journal;
+pub mod personality;
+
+pub use heartbeat::HeartbeatStore;
+pub use journal::DailyJournal;
+pub use personality::PersonalityStore;
 
 use crate::providers::{ChatMessage, ChatRole};
 use anyhow::Result;

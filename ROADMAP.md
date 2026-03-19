@@ -177,3 +177,68 @@ the most valuable features into Oh-Ben-Claw.
 - [x] `ChannelsConfig` gains `irc`, `signal`, `mattermost`, and `typing_indicators` fields
 - [x] `IrcConfig`, `SignalConfig`, `MattermostConfig` structs added to `src/config/mod.rs`
 - [x] Example configuration updated with all new sections (`examples/config-multi-device.toml`)
+
+---
+
+## Phase 11: Pycoclaw + MimiClaw Parity ✅ Complete
+
+Analyses [PycoClaw](https://github.com/jetpax/pycoclaw) (MicroPython AI agents on
+ESP32-S3/P4) and [MimiClaw](https://github.com/memovai/mimiclaw) (pure-C AI agent
+on ESP32-S3) and brings the most valuable features into Oh-Ben-Claw.
+
+### Personality System (inspired by MimiClaw's SOUL.md / USER.md)
+
+MimiClaw stores the agent's personality and user profile as editable plain-text
+Markdown files rather than hardcoding them in a config file.  Oh-Ben-Claw adopts
+the same pattern.
+
+- [x] **`PersonalityStore`** — reads `SOUL.md` (agent personality) and `USER.md` (user profile) from `~/.oh-ben-claw/`; either file overrides the `system_prompt` in `config.toml` (`src/memory/personality.rs`)
+- [x] `build_system_prompt()` helper merges SOUL.md + USER.md into a single system prompt, with a fallback to the config value when the file is absent
+
+### Proactive Task System (inspired by MimiClaw's HEARTBEAT.md)
+
+MimiClaw periodically checks a Markdown task file and triggers the agent when
+uncompleted items are found.  Oh-Ben-Claw adopts the same pattern on top of the
+existing `Scheduler`.
+
+- [x] **`HeartbeatStore`** — reads `~/.oh-ben-claw/HEARTBEAT.md`, detects uncompleted tasks (skips headers, empty lines, and `- [x]` completed checkboxes), and generates a prompt for the agent (`src/memory/heartbeat.rs`)
+- [x] `append_task()` convenience method appends a new `- [ ] …` line to the file
+- [x] `build_prompt()` returns the heartbeat prompt when actionable tasks exist
+
+### Daily Journal (inspired by MimiClaw's memory_append_today)
+
+MimiClaw writes per-day Markdown notes as `YYYY-MM-DD.md` files to complement
+its SQLite conversation history.  Oh-Ben-Claw adopts the same pattern.
+
+- [x] **`DailyJournal`** — appends timestamped notes to `~/.oh-ben-claw/journal/YYYY-MM-DD.md`; creates file with date header on first write (`src/memory/journal.rs`)
+- [x] `read_recent(days)` reads the last N days of notes, sections separated by `---`
+- [x] `list_dates()` returns all journal dates in descending order
+
+### HTTP Proxy Support (inspired by MimiClaw's proxy system)
+
+MimiClaw supports HTTP CONNECT tunnels for devices behind corporate firewalls.
+Oh-Ben-Claw now exposes the same feature through its TOML configuration.
+
+- [x] **`ProxyConfig`** — `[proxy]` TOML section with `host`, `port`, `kind` (`http`/`socks5`), and optional credentials (`src/config/mod.rs`)
+- [x] `ProxyConfig::url()` builds the proxy URL string
+- [x] `ProxyConfig::apply_to_env()` sets `HTTP_PROXY` / `HTTPS_PROXY` for all downstream HTTP clients
+- [x] `Config::validate()` extended to reject proxy configs missing `host` or `port`
+
+### Feishu/Lark Channel (inspired by MimiClaw's Feishu integration)
+
+MimiClaw is the first OpenClaw-compatible project to support Feishu (Lark outside
+China), a popular enterprise messaging platform. Oh-Ben-Claw now includes a
+webhook-based Feishu channel adapter.
+
+- [x] **`FeishuChannel`** — Axum webhook server; receives `im.message.receive_v1` events, forwards text to the agent, sends reply via Feishu REST API (`src/channels/feishu.rs`)
+- [x] Tenant access token refresh with in-memory cache (auto-refreshes 60 s before expiry)
+- [x] Optional `verification_token` signature check on every inbound webhook
+- [x] URL verification handshake (Feishu challenge/response)
+- [x] Message chunking — long replies are split into ≤ 4 000-character segments
+- [x] **`FeishuConfig`** struct added to `src/config/mod.rs`; wired into `ChannelsConfig`
+
+### Configuration
+
+- [x] `ChannelsConfig` gains `feishu: FeishuConfig` field
+- [x] `Config` gains `proxy: ProxyConfig` and `personality: PersonalityConfig` fields
+- [x] `FeishuConfig`, `ProxyConfig`, `PersonalityConfig` structs in `src/config/mod.rs`
