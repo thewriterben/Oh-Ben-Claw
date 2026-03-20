@@ -46,6 +46,8 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub mod registry;
+
 // ── Skill Manifest ────────────────────────────────────────────────────────────
 
 /// Describes how a skill tool executes its action.
