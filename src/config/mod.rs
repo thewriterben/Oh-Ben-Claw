@@ -923,6 +923,98 @@ pub struct PersonalityConfig {
 }
 
 
+// ── Phase 12 config ───────────────────────────────────────────────────────────
+
+/// Configuration for the browser automation subsystem (Phase 12).
+///
+/// ```toml
+/// [browser]
+/// enabled = true
+/// cdp_url = "http://localhost:9222"
+/// profile = "headless"
+/// timeout_secs = 30
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserConfig {
+    /// Enable browser automation tools (default: true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Chrome DevTools Protocol base URL.
+    ///
+    /// Launch Chrome/Chromium with `--remote-debugging-port=9222` then point
+    /// this at the resulting endpoint.  When unset the default local port is
+    /// used (`http://localhost:9222`).
+    #[serde(default)]
+    pub cdp_url: Option<String>,
+    /// Browser profile — `"headless"` (default) or `"user"` (attach to the
+    /// signed-in desktop browser for auth-aware tasks).
+    #[serde(default = "default_headless_profile")]
+    pub profile: String,
+    /// Seconds before a navigation or selector operation times out (default: 30).
+    #[serde(default = "default_browser_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_headless_profile() -> String {
+    "headless".to_string()
+}
+
+fn default_browser_timeout() -> u64 {
+    30
+}
+
+impl Default for BrowserConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cdp_url: None,
+            profile: default_headless_profile(),
+            timeout_secs: default_browser_timeout(),
+        }
+    }
+}
+
+/// Configuration for the ClawHub community skill registry (Phase 12).
+///
+/// ```toml
+/// [clawhub]
+/// enabled = true
+/// registry_url = "https://hub.openclaw.ai"
+/// auto_update = false
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClawHubConfig {
+    /// Enable the ClawHub skill registry (default: true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Base URL of the ClawHub registry API.
+    #[serde(default = "default_clawhub_url")]
+    pub registry_url: String,
+    /// Automatically check for skill updates on startup (default: false).
+    #[serde(default)]
+    pub auto_update: bool,
+    /// Local directory where installed skills are stored.
+    ///
+    /// When unset, defaults to `~/.oh-ben-claw/skills/`.
+    #[serde(default)]
+    pub skills_dir: Option<String>,
+}
+
+fn default_clawhub_url() -> String {
+    "https://hub.openclaw.ai".to_string()
+}
+
+impl Default for ClawHubConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            registry_url: default_clawhub_url(),
+            auto_update: false,
+            skills_dir: None,
+        }
+    }
+}
+
 /// The root configuration for Oh-Ben-Claw.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -960,6 +1052,12 @@ pub struct Config {
     /// Personality file configuration — SOUL.md and USER.md (new in Phase 11).
     #[serde(default)]
     pub personality: PersonalityConfig,
+    /// Browser automation configuration (new in Phase 12).
+    #[serde(default)]
+    pub browser: BrowserConfig,
+    /// ClawHub community skill registry configuration (new in Phase 12).
+    #[serde(default)]
+    pub clawhub: ClawHubConfig,
 }
 
 impl Config {
@@ -1314,5 +1412,68 @@ mod tests {
         let config = Config::default();
         assert!(!config.proxy.enabled);
         assert!(config.personality.soul_path.is_none());
+    }
+
+    // ── Phase 12 tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn browser_config_default_values() {
+        let cfg = BrowserConfig::default();
+        assert!(cfg.enabled);
+        assert!(cfg.cdp_url.is_none());
+        assert_eq!(cfg.profile, "headless");
+        assert_eq!(cfg.timeout_secs, 30);
+    }
+
+    #[test]
+    fn clawhub_config_default_values() {
+        let cfg = ClawHubConfig::default();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.registry_url, "https://hub.openclaw.ai");
+        assert!(!cfg.auto_update);
+        assert!(cfg.skills_dir.is_none());
+    }
+
+    #[test]
+    fn root_config_has_browser_and_clawhub_fields() {
+        let config = Config::default();
+        assert!(config.browser.enabled);
+        assert!(config.clawhub.enabled);
+        assert_eq!(config.clawhub.registry_url, "https://hub.openclaw.ai");
+    }
+
+    #[test]
+    fn browser_config_deserializes_from_toml() {
+        let toml = r#"
+            [browser]
+            enabled = false
+            cdp_url = "http://192.168.1.5:9222"
+            profile = "user"
+            timeout_secs = 60
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(!config.browser.enabled);
+        assert_eq!(
+            config.browser.cdp_url.as_deref(),
+            Some("http://192.168.1.5:9222")
+        );
+        assert_eq!(config.browser.profile, "user");
+        assert_eq!(config.browser.timeout_secs, 60);
+    }
+
+    #[test]
+    fn clawhub_config_deserializes_from_toml() {
+        let toml = r#"
+            [clawhub]
+            enabled = true
+            registry_url = "https://my-hub.example.com"
+            auto_update = true
+            skills_dir = "/opt/skills"
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.clawhub.enabled);
+        assert_eq!(config.clawhub.registry_url, "https://my-hub.example.com");
+        assert!(config.clawhub.auto_update);
+        assert_eq!(config.clawhub.skills_dir.as_deref(), Some("/opt/skills"));
     }
 }
