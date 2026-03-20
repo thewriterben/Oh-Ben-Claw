@@ -403,28 +403,28 @@ impl Tool for VectorSearchTool {
         })
     }
 
-    async fn execute(&self, args: Value) -> ToolResult {
+    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         let query = match args.get("query").and_then(|v| v.as_str()) {
             Some(q) => q.to_string(),
-            None => return ToolResult::err("Missing required argument: query"),
+            None => return Ok(ToolResult::err("Missing required argument: query")),
         };
         let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
         let min_score = args.get("min_score").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
 
         let embedding = match self.embedder.embed(&query).await {
             Ok(e) => e,
-            Err(e) => return ToolResult::err(format!("Embedding failed: {e}")),
+            Err(e) => return Ok(ToolResult::err(format!("Embedding failed: {e}"))),
         };
 
         let results = match self.store.search(&embedding, top_k) {
             Ok(r) => r,
-            Err(e) => return ToolResult::err(format!("Search failed: {e}")),
+            Err(e) => return Ok(ToolResult::err(format!("Search failed: {e}"))),
         };
 
         let filtered: Vec<&SearchResult> = results.iter().filter(|r| r.score >= min_score).collect();
 
         if filtered.is_empty() {
-            return ToolResult::ok("No relevant memories found for this query.");
+            return Ok(ToolResult::ok("No relevant memories found for this query."));
         }
 
         let output = filtered
@@ -442,7 +442,7 @@ impl Tool for VectorSearchTool {
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        ToolResult::ok(output)
+        Ok(ToolResult::ok(output))
     }
 }
 
@@ -498,10 +498,10 @@ impl Tool for DocumentIngestTool {
         })
     }
 
-    async fn execute(&self, args: Value) -> ToolResult {
+    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         let content_arg = match args.get("content").and_then(|v| v.as_str()) {
             Some(c) => c.to_string(),
-            None => return ToolResult::err("Missing required argument: content"),
+            None => return Ok(ToolResult::err("Missing required argument: content")),
         };
         let source = args
             .get("source")
@@ -524,14 +524,14 @@ impl Tool for DocumentIngestTool {
             match reqwest::get(&content_arg).await {
                 Ok(r) => match r.text().await {
                     Ok(t) => t,
-                    Err(e) => return ToolResult::err(format!("Failed to fetch URL: {e}")),
+                    Err(e) => return Ok(ToolResult::err(format!("Failed to fetch URL: {e}"))),
                 },
-                Err(e) => return ToolResult::err(format!("Failed to fetch URL: {e}")),
+                Err(e) => return Ok(ToolResult::err(format!("Failed to fetch URL: {e}"))),
             }
         } else if std::path::Path::new(&content_arg).exists() {
             match std::fs::read_to_string(&content_arg) {
                 Ok(t) => t,
-                Err(e) => return ToolResult::err(format!("Failed to read file: {e}")),
+                Err(e) => return Ok(ToolResult::err(format!("Failed to read file: {e}"))),
             }
         } else {
             content_arg.clone()
@@ -540,14 +540,14 @@ impl Tool for DocumentIngestTool {
         // Chunk the text
         let chunks = chunk_text(&text, chunk_size, 50);
         if chunks.is_empty() {
-            return ToolResult::err("No content to ingest after chunking");
+            return Ok(ToolResult::err("No content to ingest after chunking"));
         }
 
         // Embed all chunks
         let chunk_refs: Vec<&str> = chunks.iter().map(|s| s.as_str()).collect();
         let embeddings = match self.embedder.embed_batch(&chunk_refs).await {
             Ok(e) => e,
-            Err(e) => return ToolResult::err(format!("Embedding failed: {e}")),
+            Err(e) => return Ok(ToolResult::err(format!("Embedding failed: {e}"))),
         };
 
         // Store each chunk
@@ -571,10 +571,10 @@ impl Tool for DocumentIngestTool {
             }
         }
 
-        ToolResult::ok(format!(
+        Ok(ToolResult::ok(format!(
             "Ingested {stored}/{} chunks from '{source}' into semantic memory.",
             chunks.len()
-        ))
+        )))
     }
 }
 

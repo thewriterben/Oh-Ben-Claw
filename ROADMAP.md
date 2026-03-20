@@ -242,3 +242,61 @@ webhook-based Feishu channel adapter.
 - [x] `ChannelsConfig` gains `feishu: FeishuConfig` field
 - [x] `Config` gains `proxy: ProxyConfig` and `personality: PersonalityConfig` fields
 - [x] `FeishuConfig`, `ProxyConfig`, `PersonalityConfig` structs in `src/config/mod.rs`
+
+---
+
+## Phase 12: OpenClaw 3.13 Parity ✅ Complete
+
+Analyses the [OpenClaw 3.13](https://github.com/openclaw/openclaw/releases/tag/v2026.3.13)
+release (March 2026) and brings the most impactful new features into Oh-Ben-Claw.
+
+### Browser Automation (inspired by OpenClaw 3.13's stable CDP browser layer)
+
+OpenClaw 3.13 delivered a major browser automation overhaul: Chrome DevTools
+Protocol (CDP) attach mode, batched DOM actions, flexible CSS/XPath selector
+targeting, and human-like delayed-click support.  Oh-Ben-Claw adopts the same
+architecture.
+
+- [x] **`BrowserSession`** — manages a CDP connection to a headless or user Chrome/Chromium instance; supports `"headless"` (default) and `"user"` profiles; falls back to HTTP fetch when no CDP endpoint is reachable (`src/tools/builtin/browser.rs`)
+- [x] **`BrowserNavigateTool`** (`browser_navigate`) — navigate to a URL with optional post-navigation delay; validates URL scheme; returns page title
+- [x] **`BrowserSnapshotTool`** (`browser_snapshot`) — capture stripped-HTML text snapshot of the active page; configurable `max_chars`; suitable for feeding page content to the LLM
+- [x] **`BrowserClickTool`** (`browser_click`) — click an element matched by CSS selector; optional human-like `delay_ms` before the click
+- [x] **`BrowserTypeTool`** (`browser_type`) — type text into a focused element or a selector-identified input; optional `submit` (Enter) and keystroke `delay_ms`
+- [x] **`BrowserScrollTool`** (`browser_scroll`) — scroll the page up / down / to top / to bottom or directly to a CSS selector; configurable `amount_px`
+- [x] **`BrowserNewTabTool`** (`browser_new_tab`) — open a new browser tab, optionally navigating to a URL immediately; tab ID tracked in session state
+- [x] **`BrowserCloseTabTool`** (`browser_close_tab`) — close the active tab; session state updated to reflect the next available tab
+- [x] `all_browser_tools()` convenience constructor shares a single `BrowserSession` across all seven tools; CDP URL configurable via `OBC_BROWSER_CDP_URL` env var
+- [x] HTML helpers: `extract_title()` (no-dependency `<title>` extractor) and `strip_html()` (script/style-aware tag stripper with 8 000-char limit)
+
+### ClawHub Skill Registry (inspired by OpenClaw's community skill marketplace)
+
+OpenClaw popularised the concept of a public skill registry ("ClawHub") where
+the community shares pre-built automation scripts.  Oh-Ben-Claw now has a
+first-class client for this registry.
+
+- [x] **`ClawHubEntry`** — typed representation of a registry entry: name, version, description, author, download count, star rating, tags, verified status, and manifest URL (`src/skill_forge/registry.rs`)
+- [x] **`SkillRegistryIndex`** — locally cached index with `search(query)` (name + description + tags), `find(name)`, `len()`, and `is_empty()` helpers
+- [x] **`ClawHubClient`** — async HTTP client for a ClawHub REST API (`GET /api/v1/skills`, `GET /api/v1/skills/{name}`, `GET /api/v1/skills/{name}/{version}/manifest`); local index cache avoids redundant network round-trips; `install()` downloads and writes a `.skill.json` to the configured skills directory
+- [x] `pub mod registry` added to `src/skill_forge/mod.rs`
+
+### Image Memory (inspired by OpenClaw 3.13's multimodal image memory)
+
+OpenClaw 3.13 introduced persistent image memory so agents can store and
+retrieve visual context across sessions.  Oh-Ben-Claw now provides the same
+capability via a SQLite-backed store.
+
+- [x] **`ImageEntry`** — stored image with UUID, MIME type, base64 data, description, tags, session ID, timestamp, and file name; `decode_bytes()`, `estimated_bytes()`, and `has_any_tag()` helpers (`src/memory/image.rs`)
+- [x] **`ImageMemoryStore`** — SQLite WAL-mode store with `store()`, `get()`, `delete()`, `search()` (case-insensitive LIKE on description + tags), `list_by_session()`, and `count()` operations; `open_in_memory()` for tests
+- [x] `pub mod image` + `pub use image::ImageMemoryStore` added to `src/memory/mod.rs`
+- [x] Pre-existing `src/memory/vector.rs` `Tool::execute` return-type bug fixed (`ToolResult` → `anyhow::Result<ToolResult>`) so the vector module can be compiled and exported (`pub mod vector` added to `src/memory/mod.rs`)
+
+### Browser Automation in `default_tools()`
+
+- [x] `default_tools()` now calls `all_browser_tools()` and extends the default tool set with all seven browser tools; CDP URL read from `OBC_BROWSER_CDP_URL` env var at startup (`src/tools/mod.rs`)
+- [x] `src/tools/builtin/mod.rs` gains `pub mod browser` declaration
+
+### Configuration
+
+- [x] **`BrowserConfig`** — `[browser]` TOML section: `enabled`, `cdp_url`, `profile` (`"headless"` / `"user"`), `timeout_secs` (`src/config/mod.rs`)
+- [x] **`ClawHubConfig`** — `[clawhub]` TOML section: `enabled`, `registry_url`, `auto_update`, `skills_dir` (`src/config/mod.rs`)
+- [x] `Config` gains `browser: BrowserConfig` and `clawhub: ClawHubConfig` fields
