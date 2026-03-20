@@ -11,12 +11,21 @@
 //! | [`personality`] | SOUL.md (agent personality) + USER.md (user profile) |
 //! | [`heartbeat`] | HEARTBEAT.md proactive task dispatch |
 //! | [`journal`] | YYYY-MM-DD.md daily journal notes |
+//!
+//! ## Additional memory backends (Phase 12 — OpenClaw 3.13 parity)
+//!
+//! | Module | Description |
+//! |--------|-------------|
+//! | [`image`] | Multimodal image storage and retrieval |
 
 pub mod heartbeat;
+pub mod image;
 pub mod journal;
 pub mod personality;
+pub mod vector;
 
 pub use heartbeat::HeartbeatStore;
+pub use image::ImageMemoryStore;
 pub use journal::DailyJournal;
 pub use personality::PersonalityStore;
 

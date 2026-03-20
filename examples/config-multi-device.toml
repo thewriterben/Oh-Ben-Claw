@@ -206,3 +206,38 @@ local_port = 8080
 # 2. Run: sudo tailscale up
 # 3. Set backend = "tailscale"
 # tailscale_funnel = false   # Set to true for public HTTPS access via Tailscale Funnel
+
+# ── Browser Automation (Phase 12) ─────────────────────────────────────────────
+
+[browser]
+# Enable the browser automation tools (browser_navigate, browser_click, etc.).
+# Requires Chrome/Chromium running with --remote-debugging-port=9222, or set
+# the OBC_BROWSER_CDP_URL env var to point at a remote CDP endpoint.
+enabled = true
+
+# Chrome DevTools Protocol endpoint.  Defaults to http://localhost:9222.
+# cdp_url = "http://localhost:9222"
+
+# Browser profile:
+#   "headless" — use Oh-Ben-Claw's managed sandboxed headless Chrome (default).
+#   "user"     — attach to the signed-in desktop browser for auth-aware tasks.
+profile = "headless"
+
+# Seconds before navigation / selector operations time out.
+timeout_secs = 30
+
+# ── ClawHub Skill Registry (Phase 12) ─────────────────────────────────────────
+
+[clawhub]
+# Enable the ClawHub community skill registry.  Use `oh-ben-claw skills search`
+# to browse and install community-built automation skills.
+enabled = true
+
+# ClawHub registry base URL.
+registry_url = "https://hub.openclaw.ai"
+
+# Automatically check for skill updates on every startup.
+auto_update = false
+
+# Directory where installed skills are stored.  Defaults to ~/.oh-ben-claw/skills/.
+# skills_dir = "~/.oh-ben-claw/skills"
