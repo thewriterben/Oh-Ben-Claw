@@ -6,13 +6,7 @@
 use super::{JsonRpcRequest, JsonRpcResponse, McpContent, McpToolDef};
 use crate::tools::Tool;
 use anyhow::Result;
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -111,9 +105,7 @@ impl McpServer {
             "tools/list" => self.handle_tools_list(id),
             "tools/call" => self.handle_tools_call(id, req.params).await,
             "ping" => JsonRpcResponse::ok(id, json!({})),
-            method => {
-                JsonRpcResponse::err(id, -32601, &format!("Method not found: {method}"))
-            }
+            method => JsonRpcResponse::err(id, -32601, &format!("Method not found: {method}")),
         }
     }
 
@@ -155,11 +147,7 @@ impl McpServer {
         let tool = match self.tools.get(&name) {
             Some(t) => t.clone(),
             None => {
-                return JsonRpcResponse::err(
-                    id,
-                    -32602,
-                    &format!("Tool not found: {name}"),
-                );
+                return JsonRpcResponse::err(id, -32602, &format!("Tool not found: {name}"));
             }
         };
 
@@ -173,7 +161,10 @@ impl McpServer {
         let text = if tool_result.success {
             tool_result.output.clone()
         } else {
-            tool_result.error.clone().unwrap_or_else(|| tool_result.output.clone())
+            tool_result
+                .error
+                .clone()
+                .unwrap_or_else(|| tool_result.output.clone())
         };
         let content = vec![McpContent {
             content_type: "text".to_string(),

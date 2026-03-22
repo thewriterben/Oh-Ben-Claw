@@ -8,7 +8,7 @@
 use crate::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 // ── Transcription Tool ────────────────────────────────────────────────────────
@@ -81,13 +81,16 @@ impl Tool for AudioTranscribeTool {
         };
 
         if !file_path.exists() {
-            return Ok(ToolResult::err(&format!(
+            return Ok(ToolResult::err(format!(
                 "Audio file not found: {}",
                 file_path.display()
             )));
         }
 
-        let use_local = args.get("use_local").and_then(|v| v.as_bool()).unwrap_or(false);
+        let use_local = args
+            .get("use_local")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         if use_local {
             return transcribe_local(&file_path, &args).await;
@@ -96,11 +99,9 @@ impl Tool for AudioTranscribeTool {
         // Use OpenAI Whisper API
         let api_key = match &self.api_key {
             Some(k) => k.clone(),
-            None => {
-                return Ok(ToolResult::err(
-                    "OPENAI_API_KEY not set. Use use_local=true for local whisper.cpp transcription."
-                ))
-            }
+            None => return Ok(ToolResult::err(
+                "OPENAI_API_KEY not set. Use use_local=true for local whisper.cpp transcription.",
+            )),
         };
 
         transcribe_openai(&file_path, &api_key, &self.api_base, &self.model, &args).await
@@ -108,7 +109,7 @@ impl Tool for AudioTranscribeTool {
 }
 
 async fn transcribe_openai(
-    file_path: &PathBuf,
+    file_path: &Path,
     api_key: &str,
     api_base: &str,
     model: &str,
@@ -116,11 +117,14 @@ async fn transcribe_openai(
 ) -> anyhow::Result<ToolResult> {
     let language = args.get("language").and_then(|v| v.as_str());
     let prompt = args.get("prompt").and_then(|v| v.as_str());
-    let timestamps = args.get("timestamps").and_then(|v| v.as_bool()).unwrap_or(false);
+    let timestamps = args
+        .get("timestamps")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let file_bytes = match std::fs::read(file_path) {
         Ok(b) => b,
-        Err(e) => return Ok(ToolResult::err(&format!("Failed to read audio file: {e}"))),
+        Err(e) => return Ok(ToolResult::err(format!("Failed to read audio file: {e}"))),
     };
 
     let file_name = file_path
@@ -142,7 +146,7 @@ async fn transcribe_openai(
         .build()
     {
         Ok(c) => c,
-        Err(e) => return Ok(ToolResult::err(&format!("Failed to build HTTP client: {e}"))),
+        Err(e) => return Ok(ToolResult::err(format!("Failed to build HTTP client: {e}"))),
     };
 
     let response_format = if timestamps { "verbose_json" } else { "text" };
@@ -181,20 +185,22 @@ async fn transcribe_openai(
         Ok(r) => {
             let status = r.status();
             let body = r.text().await.unwrap_or_default();
-            Ok(ToolResult::err(&format!("Whisper API error {status}: {body}")))
+            Ok(ToolResult::err(format!(
+                "Whisper API error {status}: {body}"
+            )))
         }
-        Err(e) => Ok(ToolResult::err(&format!("HTTP request failed: {e}"))),
+        Err(e) => Ok(ToolResult::err(format!("HTTP request failed: {e}"))),
     }
 }
 
-async fn transcribe_local(file_path: &PathBuf, args: &Value) -> anyhow::Result<ToolResult> {
+async fn transcribe_local(file_path: &Path, args: &Value) -> anyhow::Result<ToolResult> {
     let language = args
         .get("language")
         .and_then(|v| v.as_str())
         .unwrap_or("auto");
 
     // Try whisper.cpp CLI
-    let mut cmd_args = vec![
+    let cmd_args = vec![
         "-m",
         "/usr/local/share/whisper/ggml-base.en.bin",
         "-f",
@@ -217,7 +223,7 @@ async fn transcribe_local(file_path: &PathBuf, args: &Value) -> anyhow::Result<T
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            Ok(ToolResult::err(&format!("whisper.cpp failed: {stderr}")))
+            Ok(ToolResult::err(format!("whisper.cpp failed: {stderr}")))
         }
         Err(_) => {
             // Try whisper-cpp as alternative binary name
@@ -233,7 +239,7 @@ async fn transcribe_local(file_path: &PathBuf, args: &Value) -> anyhow::Result<T
                 }
                 _ => Ok(ToolResult::err(
                     "whisper.cpp not found. Install from https://github.com/ggerganov/whisper.cpp \
-                    or set use_local=false to use the OpenAI Whisper API."
+                    or set use_local=false to use the OpenAI Whisper API.",
                 )),
             }
         }
@@ -319,18 +325,12 @@ impl Tool for TextToSpeechTool {
             None => return Ok(ToolResult::err("OPENAI_API_KEY not set")),
         };
 
-        let voice = args
-            .get("voice")
-            .and_then(|v| v.as_str())
-            .unwrap_or("nova");
+        let voice = args.get("voice").and_then(|v| v.as_str()).unwrap_or("nova");
         let model = args
             .get("model")
             .and_then(|v| v.as_str())
             .unwrap_or("tts-1");
-        let format = args
-            .get("format")
-            .and_then(|v| v.as_str())
-            .unwrap_or("mp3");
+        let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("mp3");
 
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -348,7 +348,7 @@ impl Tool for TextToSpeechTool {
             .build()
         {
             Ok(c) => c,
-            Err(e) => return Ok(ToolResult::err(&format!("Failed to build HTTP client: {e}"))),
+            Err(e) => return Ok(ToolResult::err(format!("Failed to build HTTP client: {e}"))),
         };
 
         let body = json!({
@@ -376,17 +376,17 @@ impl Tool for TextToSpeechTool {
                         Size: {} bytes\n\
                         Voice: {voice}\n\
                         Model: {model}",
-                        bytes.len())
-                    )),
-                    Err(e) => Ok(ToolResult::err(&format!("Failed to save audio file: {e}"))),
+                        bytes.len()
+                    ))),
+                    Err(e) => Ok(ToolResult::err(format!("Failed to save audio file: {e}"))),
                 }
             }
             Ok(r) => {
                 let status = r.status();
                 let body = r.text().await.unwrap_or_default();
-                Ok(ToolResult::err(&format!("TTS API error {status}: {body}")))
+                Ok(ToolResult::err(format!("TTS API error {status}: {body}")))
             }
-            Err(e) => Ok(ToolResult::err(&format!("HTTP request failed: {e}"))),
+            Err(e) => Ok(ToolResult::err(format!("HTTP request failed: {e}"))),
         }
     }
 }
@@ -412,7 +412,11 @@ mod tests {
         let tool = AudioTranscribeTool::default();
         let result = tool.execute(json!({})).await.unwrap();
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or(&result.output).contains("file_path"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or(&result.output)
+            .contains("file_path"));
     }
 
     #[tokio::test]
@@ -420,9 +424,14 @@ mod tests {
         let tool = AudioTranscribeTool::default();
         let result = tool
             .execute(json!({"file_path": "/nonexistent/audio.mp3"}))
-            .await.unwrap();
+            .await
+            .unwrap();
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or(&result.output).contains("not found"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or(&result.output)
+            .contains("not found"));
     }
 
     #[tokio::test]
@@ -430,7 +439,11 @@ mod tests {
         let tool = TextToSpeechTool::default();
         let result = tool.execute(json!({})).await.unwrap();
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or(&result.output).contains("text"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or(&result.output)
+            .contains("text"));
     }
 
     #[tokio::test]
@@ -439,7 +452,11 @@ mod tests {
         let long_text = "a".repeat(5000);
         let result = tool.execute(json!({"text": long_text})).await.unwrap();
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or(&result.output).contains("4096"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or(&result.output)
+            .contains("4096"));
     }
 
     #[test]

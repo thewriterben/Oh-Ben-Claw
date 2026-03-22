@@ -26,13 +26,25 @@ pub struct DiagResult {
 
 impl DiagResult {
     fn ok(category: &str, message: impl Into<String>) -> Self {
-        Self { severity: Severity::Ok, category: category.to_string(), message: message.into() }
+        Self {
+            severity: Severity::Ok,
+            category: category.to_string(),
+            message: message.into(),
+        }
     }
     fn warn(category: &str, message: impl Into<String>) -> Self {
-        Self { severity: Severity::Warn, category: category.to_string(), message: message.into() }
+        Self {
+            severity: Severity::Warn,
+            category: category.to_string(),
+            message: message.into(),
+        }
     }
     fn error(category: &str, message: impl Into<String>) -> Self {
-        Self { severity: Severity::Error, category: category.to_string(), message: message.into() }
+        Self {
+            severity: Severity::Error,
+            category: category.to_string(),
+            message: message.into(),
+        }
     }
 }
 
@@ -41,11 +53,22 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
     let mut results = Vec::new();
 
     // ── Config semantics ─────────────────────────────────────────────────────
-    let api_key_set = config.provider.api_key.as_deref().map(|k| !k.is_empty()).unwrap_or(false)
+    let api_key_set = config
+        .provider
+        .api_key
+        .as_deref()
+        .map(|k| !k.is_empty())
+        .unwrap_or(false)
         || match config.provider.name.as_str() {
-            "openai" => std::env::var("OPENAI_API_KEY").map(|v| !v.is_empty()).unwrap_or(false),
-            "anthropic" => std::env::var("ANTHROPIC_API_KEY").map(|v| !v.is_empty()).unwrap_or(false),
-            "openrouter" => std::env::var("OPENROUTER_API_KEY").map(|v| !v.is_empty()).unwrap_or(false),
+            "openai" => std::env::var("OPENAI_API_KEY")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false),
+            "anthropic" => std::env::var("ANTHROPIC_API_KEY")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false),
+            "openrouter" => std::env::var("OPENROUTER_API_KEY")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false),
             "ollama" => true, // no key needed
             _ => false,
         };
@@ -53,12 +76,18 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
     if api_key_set {
         results.push(DiagResult::ok("config", "Provider API key is set"));
     } else if config.provider.name == "ollama" {
-        results.push(DiagResult::ok("config", "Ollama provider — no API key needed"));
+        results.push(DiagResult::ok(
+            "config",
+            "Ollama provider — no API key needed",
+        ));
     } else {
-        results.push(DiagResult::warn("config", format!(
-            "No API key found for provider '{}' — set it in config or environment",
-            config.provider.name
-        )));
+        results.push(DiagResult::warn(
+            "config",
+            format!(
+                "No API key found for provider '{}' — set it in config or environment",
+                config.provider.name
+            ),
+        ));
     }
 
     if config.agent.system_prompt.trim().is_empty() {
@@ -70,19 +99,28 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
     if config.agent.name.trim().is_empty() {
         results.push(DiagResult::error("config", "Agent name is empty"));
     } else {
-        results.push(DiagResult::ok("config", format!("Agent name: '{}'", config.agent.name)));
+        results.push(DiagResult::ok(
+            "config",
+            format!("Agent name: '{}'", config.agent.name),
+        ));
     }
 
     // ── Environment ──────────────────────────────────────────────────────────
     if std::env::var("RUST_LOG").is_ok() {
         results.push(DiagResult::ok("environment", "RUST_LOG is set"));
     } else {
-        results.push(DiagResult::warn("environment", "RUST_LOG not set — consider setting it for debugging"));
+        results.push(DiagResult::warn(
+            "environment",
+            "RUST_LOG not set — consider setting it for debugging",
+        ));
     }
 
     let home_set = std::env::var("HOME").is_ok() || std::env::var("USERPROFILE").is_ok();
     if home_set {
-        results.push(DiagResult::ok("environment", "HOME/USERPROFILE is available"));
+        results.push(DiagResult::ok(
+            "environment",
+            "HOME/USERPROFILE is available",
+        ));
     } else {
         results.push(DiagResult::warn("environment", "HOME/USERPROFILE not set"));
     }
@@ -92,20 +130,32 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
         Ok(path) => {
             let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
             if dir.exists() {
-                results.push(DiagResult::ok("workspace", format!("Config directory exists: {}", dir.display())));
+                results.push(DiagResult::ok(
+                    "workspace",
+                    format!("Config directory exists: {}", dir.display()),
+                ));
             } else {
-                results.push(DiagResult::warn("workspace", format!("Config directory not found: {}", dir.display())));
+                results.push(DiagResult::warn(
+                    "workspace",
+                    format!("Config directory not found: {}", dir.display()),
+                ));
             }
         }
         Err(e) => {
-            results.push(DiagResult::error("workspace", format!("Cannot determine config path: {e}")));
+            results.push(DiagResult::error(
+                "workspace",
+                format!("Cannot determine config path: {e}"),
+            ));
         }
     }
 
     // ── Channels ─────────────────────────────────────────────────────────────
     if let Some(ref token) = config.channels.telegram.token {
         if token.is_empty() {
-            results.push(DiagResult::warn("channels", "Telegram token is set but empty"));
+            results.push(DiagResult::warn(
+                "channels",
+                "Telegram token is set but empty",
+            ));
         } else {
             results.push(DiagResult::ok("channels", "Telegram token is configured"));
         }
@@ -113,7 +163,10 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
 
     if let Some(ref token) = config.channels.discord.token {
         if token.is_empty() {
-            results.push(DiagResult::warn("channels", "Discord token is set but empty"));
+            results.push(DiagResult::warn(
+                "channels",
+                "Discord token is set but empty",
+            ));
         } else {
             results.push(DiagResult::ok("channels", "Discord token is configured"));
         }
@@ -121,7 +174,10 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
 
     if let Some(ref token) = config.channels.slack.app_token {
         if token.is_empty() {
-            results.push(DiagResult::warn("channels", "Slack app token is set but empty"));
+            results.push(DiagResult::warn(
+                "channels",
+                "Slack app token is set but empty",
+            ));
         } else {
             results.push(DiagResult::ok("channels", "Slack app token is configured"));
         }
@@ -133,10 +189,16 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
         let addr = format!("{}:80", host);
         match addr.to_socket_addrs() {
             Ok(_) => {
-                results.push(DiagResult::ok("spine", format!("Spine host '{}' resolved OK", host)));
+                results.push(DiagResult::ok(
+                    "spine",
+                    format!("Spine host '{}' resolved OK", host),
+                ));
             }
             Err(_) => {
-                results.push(DiagResult::warn("spine", format!("Spine host '{}' could not be resolved (DNS check)", host)));
+                results.push(DiagResult::warn(
+                    "spine",
+                    format!("Spine host '{}' could not be resolved (DNS check)", host),
+                ));
             }
         }
     }
@@ -174,13 +236,22 @@ pub fn run(config: &Config) -> anyhow::Result<()> {
         println!();
     }
 
-    let errors = results.iter().filter(|r| r.severity == Severity::Error).count();
-    let warnings = results.iter().filter(|r| r.severity == Severity::Warn).count();
+    let errors = results
+        .iter()
+        .filter(|r| r.severity == Severity::Error)
+        .count();
+    let warnings = results
+        .iter()
+        .filter(|r| r.severity == Severity::Warn)
+        .count();
     println!(
         "  Summary: {} error(s), {} warning(s), {} ok\n",
         errors,
         warnings,
-        results.iter().filter(|r| r.severity == Severity::Ok).count()
+        results
+            .iter()
+            .filter(|r| r.severity == Severity::Ok)
+            .count()
     );
 
     Ok(())
@@ -203,9 +274,9 @@ mod tests {
         let mut config = Config::default();
         config.agent.name = String::new();
         let results = diagnose(&config);
-        let has_name_error = results.iter().any(|r| {
-            r.severity == Severity::Error && r.message.contains("name")
-        });
+        let has_name_error = results
+            .iter()
+            .any(|r| r.severity == Severity::Error && r.message.contains("name"));
         assert!(has_name_error);
     }
 
@@ -214,9 +285,9 @@ mod tests {
         let mut config = Config::default();
         config.agent.system_prompt = String::new();
         let results = diagnose(&config);
-        let has_prompt_error = results.iter().any(|r| {
-            r.severity == Severity::Error && r.message.contains("system prompt")
-        });
+        let has_prompt_error = results
+            .iter()
+            .any(|r| r.severity == Severity::Error && r.message.contains("system prompt"));
         assert!(has_prompt_error);
     }
 

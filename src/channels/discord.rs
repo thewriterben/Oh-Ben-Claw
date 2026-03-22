@@ -118,7 +118,9 @@ impl DiscordChannel {
             let hb_pending = if let Some(ref mut iv) = heartbeat_interval {
                 futures_util::future::Either::Left(iv.tick())
             } else {
-                futures_util::future::Either::Right(futures_util::future::pending::<tokio::time::Instant>())
+                futures_util::future::Either::Right(futures_util::future::pending::<
+                    tokio::time::Instant,
+                >())
             };
 
             tokio::select! {
@@ -268,10 +270,7 @@ impl DiscordChannel {
             let token_owned = self.token.clone();
             let http_owned = self.http.clone();
             Some(TypingTask::start(8, move || {
-                let url = format!(
-                    "{}/channels/{}/typing",
-                    DISCORD_API_BASE, channel_id_owned
-                );
+                let url = format!("{}/channels/{}/typing", DISCORD_API_BASE, channel_id_owned);
                 let token = token_owned.clone();
                 let http = http_owned.clone();
                 async move {
@@ -297,12 +296,7 @@ impl DiscordChannel {
             .await
     }
 
-    async fn send_reply(
-        &self,
-        channel_id: &str,
-        message_id: &str,
-        text: &str,
-    ) -> Result<()> {
+    async fn send_reply(&self, channel_id: &str, message_id: &str, text: &str) -> Result<()> {
         let url = format!("{}/channels/{}/messages", DISCORD_API_BASE, channel_id);
 
         // Discord message limit is 2000 characters.

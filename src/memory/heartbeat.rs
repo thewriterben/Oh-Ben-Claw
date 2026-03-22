@@ -62,8 +62,8 @@ impl HeartbeatStore {
     /// Create a `HeartbeatStore` that uses the default Oh-Ben-Claw data
     /// directory (`~/.oh-ben-claw/HEARTBEAT.md`).
     pub fn new() -> Self {
-        let path = Self::default_path()
-            .unwrap_or_else(|_| PathBuf::from(".oh-ben-claw/HEARTBEAT.md"));
+        let path =
+            Self::default_path().unwrap_or_else(|_| PathBuf::from(".oh-ben-claw/HEARTBEAT.md"));
         Self { path }
     }
 
@@ -85,7 +85,9 @@ impl HeartbeatStore {
     /// Returns `false` when the file is missing, empty, or contains only
     /// headers and completed checkboxes.
     pub fn has_tasks(&self) -> bool {
-        self.actionable_tasks().map(|t| !t.is_empty()).unwrap_or(false)
+        self.actionable_tasks()
+            .map(|t| !t.is_empty())
+            .unwrap_or(false)
     }
 
     /// Collect all actionable lines from `HEARTBEAT.md`.
@@ -281,9 +283,6 @@ mod tests {
     fn write_replaces_file_content() {
         let (store, _dir) = store_with_content("old content");
         store.write("new content").unwrap();
-        assert_eq!(
-            store.actionable_tasks().unwrap(),
-            vec!["new content"]
-        );
+        assert_eq!(store.actionable_tasks().unwrap(), vec!["new content"]);
     }
 }

@@ -169,7 +169,10 @@ impl DeploymentScheme {
 mod tests {
     use super::*;
 
-    fn make_scheme(assignments: Vec<AgentAssignment>, suggestions: Vec<SuggestedHardware>) -> DeploymentScheme {
+    fn make_scheme(
+        assignments: Vec<AgentAssignment>,
+        suggestions: Vec<SuggestedHardware>,
+    ) -> DeploymentScheme {
         DeploymentScheme {
             scenario_name: "test".to_string(),
             host_board: "nanopi-neo3".to_string(),

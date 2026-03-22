@@ -80,7 +80,10 @@ impl Tool for OtaUpdateTool {
             None => return Ok(ToolResult::err("Missing required parameter: board_type")),
         };
 
-        let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
+        let dry_run = args
+            .get("dry_run")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let result = match board_type.as_str() {
             "esp32" => {
@@ -110,13 +113,13 @@ impl Tool for OtaUpdateTool {
                 ota_arduino(&node_name, &path, port, dry_run).await
             }
             other => {
-                return Ok(ToolResult::err(&format!("Unsupported board type: {other}")));
+                return Ok(ToolResult::err(format!("Unsupported board type: {other}")));
             }
         };
 
         match result {
             Ok(output) => Ok(ToolResult::ok(output)),
-            Err(e) => Ok(ToolResult::err(&format!("OTA update failed: {e}"))),
+            Err(e) => Ok(ToolResult::err(format!("OTA update failed: {e}"))),
         }
     }
 }
@@ -423,7 +426,11 @@ mod tests {
         let tool = OtaUpdateTool;
         let result = tool.execute(json!({"board_type": "esp32"})).await.unwrap();
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or(&result.output).contains("node_name"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or(&result.output)
+            .contains("node_name"));
     }
 
     #[tokio::test]
@@ -431,7 +438,11 @@ mod tests {
         let tool = OtaUpdateTool;
         let result = tool.execute(json!({"node_name": "test"})).await.unwrap();
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or(&result.output).contains("board_type"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or(&result.output)
+            .contains("board_type"));
     }
 
     #[tokio::test]
@@ -439,9 +450,14 @@ mod tests {
         let tool = OtaUpdateTool;
         let result = tool
             .execute(json!({"node_name": "test", "board_type": "unknown_board"}))
-            .await.unwrap();
+            .await
+            .unwrap();
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or(&result.output).contains("Unsupported board type"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or(&result.output)
+            .contains("Unsupported board type"));
     }
 
     #[tokio::test]
@@ -453,9 +469,14 @@ mod tests {
                 "board_type": "stm32",
                 "firmware_path": "/nonexistent/firmware.bin"
             }))
-            .await.unwrap();
+            .await
+            .unwrap();
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or(&result.output).contains("not found"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or(&result.output)
+            .contains("not found"));
     }
 
     #[tokio::test]
@@ -468,7 +489,8 @@ mod tests {
                 "firmware_path": "/nonexistent/sketch.hex",
                 "dry_run": true
             }))
-            .await.unwrap();
+            .await
+            .unwrap();
         assert!(!result.success);
     }
 
@@ -477,10 +499,19 @@ mod tests {
         let tool = DeviceHealthTool;
         let result = tool
             .execute(json!({"node_name": "esp32-sensor-1"}))
-            .await.unwrap();
+            .await
+            .unwrap();
         assert!(result.success);
-        assert!(result.error.as_deref().unwrap_or(&result.output).contains("Device Health Report"));
-        assert!(result.error.as_deref().unwrap_or(&result.output).contains("esp32-sensor-1"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or(&result.output)
+            .contains("Device Health Report"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or(&result.output)
+            .contains("esp32-sensor-1"));
     }
 
     #[tokio::test]

@@ -204,9 +204,7 @@ impl MatrixChannel {
                                     continue; // skip own messages
                                 }
                                 if event.event_type == "m.room.message" {
-                                    if let Err(e) =
-                                        self.handle_event(&room_id, event).await
-                                    {
+                                    if let Err(e) = self.handle_event(&room_id, event).await {
                                         tracing::error!(
                                             room_id = %room_id,
                                             error = %e,

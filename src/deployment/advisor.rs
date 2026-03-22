@@ -46,7 +46,10 @@ impl HardwareAdvisor {
     }
 
     /// Check whether a single feature desire is satisfied.
-    pub fn check_desire(inventory: &HardwareInventory, desire: &FeatureDesire) -> SatisfactionResult {
+    pub fn check_desire(
+        inventory: &HardwareInventory,
+        desire: &FeatureDesire,
+    ) -> SatisfactionResult {
         let required = desire.required_capabilities();
 
         // Desires with no required capability tokens are always satisfied if
@@ -205,10 +208,7 @@ impl HardwareAdvisor {
             .is_none()
         {
             // Try to find a native-transport board as implicit host
-            let native = inventory
-                .items
-                .iter()
-                .find(|i| i.transport == "native");
+            let native = inventory.items.iter().find(|i| i.transport == "native");
             if native.is_none() {
                 warnings.push(
                     "No host board found. Add a board with transport='native' or \
@@ -308,10 +308,7 @@ mod tests {
         let warnings = HardwareAdvisor::validate(&inv);
         // Should be empty or only contain informational notes, not critical errors
         for w in &warnings {
-            assert!(
-                !w.contains("No host board"),
-                "Unexpected host warning: {w}"
-            );
+            assert!(!w.contains("No host board"), "Unexpected host warning: {w}");
         }
     }
 
@@ -327,6 +324,8 @@ mod tests {
     fn boards_for_capability_returns_non_empty_for_camera() {
         let boards = HardwareAdvisor::boards_for_capability("camera_capture");
         assert!(!boards.is_empty());
-        assert!(boards.iter().any(|b| b.contains("esp32-s3") || b.contains("xiao")));
+        assert!(boards
+            .iter()
+            .any(|b| b.contains("esp32-s3") || b.contains("xiao")));
     }
 }

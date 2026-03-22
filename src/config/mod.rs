@@ -306,7 +306,7 @@ pub struct WhatsAppConfig {
 }
 
 /// Configuration for the iMessage channel (macOS only).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IMessageConfig {
     /// Whether the iMessage channel is enabled.
     #[serde(default)]
@@ -317,16 +317,6 @@ pub struct IMessageConfig {
     pub allowed_senders: Vec<String>,
     /// How often to poll the Messages.app database in seconds (default: 2).
     pub poll_interval_secs: Option<u64>,
-}
-
-impl Default for IMessageConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            allowed_senders: vec![],
-            poll_interval_secs: None,
-        }
-    }
 }
 
 /// Configuration for the Matrix channel.
@@ -518,7 +508,6 @@ pub struct FeishuConfig {
     #[serde(default)]
     pub webhook_port: Option<u16>,
 }
-
 
 /// Configuration for the network tunnel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -712,9 +701,15 @@ pub struct CostConfig {
     pub warn_threshold: f64,
 }
 
-fn default_daily_limit() -> f64 { 10.0 }
-fn default_monthly_limit() -> f64 { 100.0 }
-fn default_warn_threshold() -> f64 { 0.8 }
+fn default_daily_limit() -> f64 {
+    10.0
+}
+fn default_monthly_limit() -> f64 {
+    100.0
+}
+fn default_warn_threshold() -> f64 {
+    0.8
+}
 
 impl Default for CostConfig {
     fn default() -> Self {
@@ -743,9 +738,15 @@ pub struct DockerConfig {
     pub memory_mb: u64,
 }
 
-fn default_docker_image() -> String { "alpine:latest".to_string() }
-fn default_docker_network() -> String { "none".to_string() }
-fn default_docker_memory_mb() -> u64 { 128 }
+fn default_docker_image() -> String {
+    "alpine:latest".to_string()
+}
+fn default_docker_network() -> String {
+    "none".to_string()
+}
+fn default_docker_memory_mb() -> u64 {
+    128
+}
 
 impl Default for DockerConfig {
     fn default() -> Self {
@@ -770,7 +771,9 @@ pub struct RuntimeConfig {
     pub docker: DockerConfig,
 }
 
-fn default_runtime_kind() -> String { "native".to_string() }
+fn default_runtime_kind() -> String {
+    "native".to_string()
+}
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
@@ -800,8 +803,12 @@ pub struct MultimodalConfig {
     pub allow_remote: bool,
 }
 
-fn default_max_images() -> usize { 5 }
-fn default_max_image_bytes() -> usize { 5 * 1024 * 1024 }
+fn default_max_images() -> usize {
+    5
+}
+fn default_max_image_bytes() -> usize {
+    5 * 1024 * 1024
+}
 
 impl Default for MultimodalConfig {
     fn default() -> Self {
@@ -921,7 +928,6 @@ pub struct PersonalityConfig {
     #[serde(default)]
     pub user_path: Option<String>,
 }
-
 
 // ── Phase 12 config ───────────────────────────────────────────────────────────
 
@@ -1271,9 +1277,7 @@ impl Config {
 
         // Validate security
         if self.security.require_pairing && self.security.pairing_secret.is_none() {
-            anyhow::bail!(
-                "security.require_pairing is true but no pairing_secret is set"
-            );
+            anyhow::bail!("security.require_pairing is true but no pairing_secret is set");
         }
         if let Some(ref secret) = self.security.pairing_secret {
             if let Err(e) = crate::security::pairing::NodePairingManager::validate_secret(secret) {

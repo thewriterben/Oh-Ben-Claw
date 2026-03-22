@@ -17,8 +17,8 @@
 //!
 //! Both patterns use the existing `Provider` trait and work with any LLM.
 
-use crate::providers::{ChatMessage, ChatRole, Provider};
 use crate::config::ProviderConfig;
+use crate::providers::{ChatMessage, ChatRole, Provider};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -89,12 +89,18 @@ pub async fn reflexion_loop(
     for round in 1..=config.max_rounds {
         // Step 1: Generate (or revise) a response
         let generate_messages = if round == 1 {
-            vec![ChatMessage { role: ChatRole::User, content: task.to_string() }]
+            vec![ChatMessage {
+                role: ChatRole::User,
+                content: task.to_string(),
+            }]
         } else {
             // Revision round: include original task, previous response, and critique
             let last_round = rounds.last().unwrap() as &ReflexionRound;
             vec![
-                ChatMessage { role: ChatRole::System, content: config.revision_prompt.clone() },
+                ChatMessage {
+                    role: ChatRole::System,
+                    content: config.revision_prompt.clone(),
+                },
                 ChatMessage {
                     role: ChatRole::User,
                     content: format!(
@@ -112,19 +118,19 @@ pub async fn reflexion_loop(
         };
 
         let gen_response = provider
-            .chat_completion(&generate_messages, &[], &reflexion_provider_config(system.as_deref()))
+            .chat_completion(
+                &generate_messages,
+                &[],
+                &reflexion_provider_config(system.as_deref()),
+            )
             .await?;
         current_response = gen_response.message.clone();
 
         // Step 2: Critique the response
-        let critique_messages = vec![
-            ChatMessage {
-                role: ChatRole::User,
-                content: format!(
-                    "TASK:\n{task}\n\nRESPONSE TO EVALUATE:\n{current_response}"
-                ),
-            },
-        ];
+        let critique_messages = vec![ChatMessage {
+            role: ChatRole::User,
+            content: format!("TASK:\n{task}\n\nRESPONSE TO EVALUATE:\n{current_response}"),
+        }];
 
         let critique_response = provider
             .chat_completion(
@@ -271,9 +277,14 @@ pub async fn create_plan(
         TASK: {task}"
     );
 
-    let messages = vec![ChatMessage { role: ChatRole::User, content: plan_prompt }];
+    let messages = vec![ChatMessage {
+        role: ChatRole::User,
+        content: plan_prompt,
+    }];
 
-    let response = provider.chat_completion(&messages, &[], &reflexion_provider_config(None)).await?;
+    let response = provider
+        .chat_completion(&messages, &[], &reflexion_provider_config(None))
+        .await?;
     let steps = parse_plan_steps(&response.message);
 
     let now = std::time::SystemTime::now()
@@ -305,7 +316,11 @@ fn parse_plan_steps(text: &str) -> Vec<PlanStep> {
         {
             rest.trim().to_string()
         } else if line.to_lowercase().starts_with("step ") {
-            line.splitn(2, ':').nth(1).unwrap_or(line).trim().to_string()
+            line.split_once(':')
+                .map(|x| x.1)
+                .unwrap_or(line)
+                .trim()
+                .to_string()
         } else {
             continue;
         };
@@ -359,7 +374,10 @@ pub async fn synthesize_results(
                 _ => "?".to_string(),
             };
             let result = s.result.as_deref().unwrap_or("(no result)");
-            format!("{status} Step {}: {}\n   Result: {result}", s.step_number, s.description)
+            format!(
+                "{status} Step {}: {}\n   Result: {result}",
+                s.step_number, s.description
+            )
         })
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -372,19 +390,23 @@ pub async fn synthesize_results(
         plan.task
     );
 
-    let messages = vec![ChatMessage { role: ChatRole::User, content: synthesis_prompt }];
+    let messages = vec![ChatMessage {
+        role: ChatRole::User,
+        content: synthesis_prompt,
+    }];
 
-    let response = provider.chat_completion(&messages, &[], &reflexion_provider_config(None)).await?;
+    let response = provider
+        .chat_completion(&messages, &[], &reflexion_provider_config(None))
+        .await?;
     Ok(response.message)
 }
-
 
 /// Create a minimal ProviderConfig for use in reflexion/plan-and-execute calls.
 ///
 /// The system prompt is injected as the first message in the conversation,
 /// so we only need a default config here.
 fn reflexion_provider_config(system_prompt: Option<&str>) -> crate::config::ProviderConfig {
-    let mut config = crate::config::ProviderConfig::default();
+    let config = crate::config::ProviderConfig::default();
     // System prompt is passed via messages, not config
     let _ = system_prompt; // used by caller to build messages
     config

@@ -263,7 +263,7 @@ fn read_disk_info() -> (f32, f32) {
         let path = CString::new("/").unwrap();
         let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } == 0 {
-            let block_size = stat.f_frsize as u64;
+            let block_size = stat.f_frsize;
             let total = (stat.f_blocks * block_size) as f32 / (1024.0 * 1024.0 * 1024.0);
             let free = (stat.f_bfree * block_size) as f32 / (1024.0 * 1024.0 * 1024.0);
             return (total - free, total);
@@ -311,10 +311,7 @@ pub enum ColorTheme {
 ///
 /// Requires the `dashboard` feature flag.
 #[cfg(feature = "dashboard")]
-pub async fn run_dashboard(
-    state: Arc<DashboardState>,
-    config: DashboardConfig,
-) -> Result<()> {
+pub async fn run_dashboard(state: Arc<DashboardState>, config: DashboardConfig) -> Result<()> {
     use crossterm::{
         event::{self, Event, KeyCode, KeyModifiers},
         execute,
@@ -372,20 +369,27 @@ pub async fn run_dashboard(
                     Style::default().fg(Color::White),
                 ),
             ]))
-            .block(Block::default().borders(Borders::ALL).border_style(
-                Style::default().fg(Color::Cyan),
-            ));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            );
             f.render_widget(header, chunks[0]);
 
             // Tabs
-            let tabs = Tabs::new(tab_titles.iter().map(|t| Line::from(*t)).collect::<Vec<_>>())
-                .select(selected_tab)
-                .block(Block::default().borders(Borders::ALL))
-                .highlight_style(
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                );
+            let tabs = Tabs::new(
+                tab_titles
+                    .iter()
+                    .map(|t| Line::from(*t))
+                    .collect::<Vec<_>>(),
+            )
+            .select(selected_tab)
+            .block(Block::default().borders(Borders::ALL))
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            );
             f.render_widget(tabs, chunks[1]);
 
             // Content area
@@ -486,7 +490,12 @@ fn render_overview(
     let agent_info = vec![
         Line::from(vec![
             Span::raw("  Status:   "),
-            Span::styled(status_text, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                status_text,
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(format!("  Provider:  {} / {}", agent.provider, agent.model)),
         Line::from(format!("  Session:   {}", agent.current_session)),
@@ -495,10 +504,12 @@ fn render_overview(
         Line::from(format!("  Nodes:     {online_nodes} online")),
     ];
 
-    let agent_block = Paragraph::new(agent_info)
-        .block(Block::default().title(" Agent ").borders(Borders::ALL).border_style(
-            Style::default().fg(status_color),
-        ));
+    let agent_block = Paragraph::new(agent_info).block(
+        Block::default()
+            .title(" Agent ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(status_color)),
+    );
     f.render_widget(agent_block, chunks[0]);
 
     // Memory gauge
@@ -568,7 +579,11 @@ fn render_devices(
         Row::new(vec!["Name", "Board", "Status", "Tools", "Latency"])
             .style(Style::default().add_modifier(Modifier::BOLD)),
     )
-    .block(Block::default().title(" Peripheral Nodes ").borders(Borders::ALL));
+    .block(
+        Block::default()
+            .title(" Peripheral Nodes ")
+            .borders(Borders::ALL),
+    );
 
     f.render_widget(table, area);
 }
@@ -603,26 +618,18 @@ fn render_events(
                     format!("[{}] ", e.level.label()),
                     Style::default().fg(level_color),
                 ),
-                Span::styled(
-                    format!("{}: ", e.source),
-                    Style::default().fg(Color::Cyan),
-                ),
+                Span::styled(format!("{}: ", e.source), Style::default().fg(Color::Cyan)),
                 Span::raw(e.message.clone()),
             ]))
         })
         .collect();
 
-    let list = List::new(items)
-        .block(Block::default().title(" Event Log ").borders(Borders::ALL));
+    let list = List::new(items).block(Block::default().title(" Event Log ").borders(Borders::ALL));
     f.render_widget(list, area);
 }
 
 #[cfg(feature = "dashboard")]
-fn render_system(
-    f: &mut ratatui::Frame,
-    area: ratatui::layout::Rect,
-    state: &Arc<DashboardState>,
-) {
+fn render_system(f: &mut ratatui::Frame, area: ratatui::layout::Rect, state: &Arc<DashboardState>) {
     use ratatui::{
         layout::{Constraint, Direction, Layout},
         style::{Color, Style},

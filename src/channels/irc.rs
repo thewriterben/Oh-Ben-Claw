@@ -35,13 +35,12 @@ use tokio::sync::mpsc;
 /// Parse an IRC message line into `(prefix, command, params)`.
 fn parse_irc_line(line: &str) -> (Option<&str>, &str, Vec<&str>) {
     let line = line.trim_end_matches(['\r', '\n']);
-    let (prefix, rest): (Option<&str>, &str) =
-        if let Some(stripped) = line.strip_prefix(':') {
-            let idx = stripped.find(' ').unwrap_or(stripped.len());
-            (Some(&stripped[..idx]), stripped[idx..].trim_start())
-        } else {
-            (None, line)
-        };
+    let (prefix, rest): (Option<&str>, &str) = if let Some(stripped) = line.strip_prefix(':') {
+        let idx = stripped.find(' ').unwrap_or(stripped.len());
+        (Some(&stripped[..idx]), stripped[idx..].trim_start())
+    } else {
+        (None, line)
+    };
 
     // Split trailing parameter (after " :")
     let (params_str, trailing): (&str, Option<&str>) = if let Some(idx) = rest.find(" :") {
@@ -121,10 +120,7 @@ impl IrcSink {
                 (remaining, "")
             } else {
                 // Split on word boundary if possible
-                let split_at = remaining[..CHUNK]
-                    .rfind(' ')
-                    .unwrap_or(CHUNK)
-                    .max(1);
+                let split_at = remaining[..CHUNK].rfind(' ').unwrap_or(CHUNK).max(1);
                 (&remaining[..split_at], remaining[split_at..].trim_start())
             };
             self.send_raw(format!("PRIVMSG {} :{}", target, chunk))
@@ -148,7 +144,11 @@ impl IrcChannel {
     /// Create a new `IrcChannel`.
     ///
     /// Returns `None` if no host is configured.
-    pub fn new(config: &IrcConfig, agent: Arc<Agent>, provider_config: ProviderConfig) -> Option<Self> {
+    pub fn new(
+        config: &IrcConfig,
+        agent: Arc<Agent>,
+        provider_config: ProviderConfig,
+    ) -> Option<Self> {
         config.host.as_ref()?;
         Some(Self {
             agent,
@@ -162,7 +162,10 @@ impl IrcChannel {
     pub async fn run(&self) -> Result<()> {
         let host = self.config.host.as_deref().unwrap_or("localhost");
         let use_tls = self.config.use_tls;
-        let port = self.config.port.unwrap_or(if use_tls { 6697 } else { 6667 });
+        let port = self
+            .config
+            .port
+            .unwrap_or(if use_tls { 6697 } else { 6667 });
 
         let addr = format!("{}:{}", host, port);
         tracing::info!(addr, "Connecting to IRC server");
@@ -263,9 +266,7 @@ impl IrcChannel {
 
                 // ── PRIVMSG ───────────────────────────────────────────────────
                 "PRIVMSG" if registered => {
-                    let sender_nick = prefix
-                        .map(nick_from_prefix)
-                        .unwrap_or("unknown");
+                    let sender_nick = prefix.map(nick_from_prefix).unwrap_or("unknown");
                     let target = params.first().copied().unwrap_or("");
                     let text = params.last().copied().unwrap_or("").trim();
 
@@ -294,10 +295,7 @@ impl IrcChannel {
                     let sender_nick_owned = sender_nick.to_string();
 
                     tokio::spawn(async move {
-                        match agent_clone
-                            .process(&session_id, &input, &pc_clone)
-                            .await
-                        {
+                        match agent_clone.process(&session_id, &input, &pc_clone).await {
                             Ok(response) => {
                                 let prefix_str = if reply_target_owned.starts_with('#')
                                     || reply_target_owned.starts_with('&')
@@ -307,8 +305,7 @@ impl IrcChannel {
                                     String::new()
                                 };
                                 let full = format!("{}{}", prefix_str, response.message);
-                                if let Err(e) =
-                                    sink_clone.privmsg(&reply_target_owned, &full).await
+                                if let Err(e) = sink_clone.privmsg(&reply_target_owned, &full).await
                                 {
                                     tracing::error!(error = %e, "IRC: failed to send reply");
                                 }
@@ -329,11 +326,7 @@ impl IrcChannel {
                 // ── Nick-in-use fallback ───────────────────────────────────────
                 "433" => {
                     let new_nick = format!("{}_", nick);
-                    tracing::warn!(
-                        nick,
-                        new_nick,
-                        "IRC: nickname in use, trying alternate"
-                    );
+                    tracing::warn!(nick, new_nick, "IRC: nickname in use, trying alternate");
                     sink.send_raw(format!("NICK {}", new_nick)).await?;
                 }
 

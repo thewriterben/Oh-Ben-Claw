@@ -83,9 +83,7 @@ impl ImageEntry {
     /// (case-insensitive).
     pub fn has_any_tag(&self, tags: &[&str]) -> bool {
         let lower: Vec<String> = tags.iter().map(|t| t.to_lowercase()).collect();
-        self.tags
-            .iter()
-            .any(|t| lower.contains(&t.to_lowercase()))
+        self.tags.iter().any(|t| lower.contains(&t.to_lowercase()))
     }
 }
 
@@ -352,7 +350,14 @@ mod tests {
     fn search_by_description() {
         let store = open();
         store
-            .store("chart.png", "image/png", b"X", "bar chart of sales data", &[], None)
+            .store(
+                "chart.png",
+                "image/png",
+                b"X",
+                "bar chart of sales data",
+                &[],
+                None,
+            )
             .unwrap();
         store
             .store("photo.jpg", "image/jpeg", b"Y", "holiday photo", &[], None)
@@ -392,13 +397,34 @@ mod tests {
     fn list_by_session() {
         let store = open();
         store
-            .store("a.jpg", "image/jpeg", b"A", "session A image 1", &[], Some("sess-A"))
+            .store(
+                "a.jpg",
+                "image/jpeg",
+                b"A",
+                "session A image 1",
+                &[],
+                Some("sess-A"),
+            )
             .unwrap();
         store
-            .store("b.jpg", "image/jpeg", b"B", "session A image 2", &[], Some("sess-A"))
+            .store(
+                "b.jpg",
+                "image/jpeg",
+                b"B",
+                "session A image 2",
+                &[],
+                Some("sess-A"),
+            )
             .unwrap();
         store
-            .store("c.jpg", "image/jpeg", b"C", "session B image", &[], Some("sess-B"))
+            .store(
+                "c.jpg",
+                "image/jpeg",
+                b"C",
+                "session B image",
+                &[],
+                Some("sess-B"),
+            )
             .unwrap();
 
         let sess_a = store.list_by_session("sess-A", 10).unwrap();
@@ -474,7 +500,14 @@ mod tests {
     fn search_is_case_insensitive() {
         let store = open();
         store
-            .store("a.png", "image/png", b"A", "Dashboard Screenshot", &[], None)
+            .store(
+                "a.png",
+                "image/png",
+                b"A",
+                "Dashboard Screenshot",
+                &[],
+                None,
+            )
             .unwrap();
         let results = store.search("dashboard", 10).unwrap();
         assert_eq!(results.len(), 1);

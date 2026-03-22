@@ -1,0 +1,16 @@
+# cargo-audit configuration for Oh-Ben-Claw
+#
+# This file lists advisories that are acknowledged but cannot be immediately
+# resolved because they affect transitive dependencies outside our control.
+# Each entry includes a justification and a tracking note.
+
+[advisories]
+
+# RUSTSEC-2025-0134 — rustls-pemfile 2.2.0 is unmaintained.
+# Affected crate: rustls-pemfile 2.2.0 (transitive via rumqttc 0.24)
+# The advisory notes that rustls-pemfile has been superseded by rustls-pki-types,
+# but rumqttc 0.24 has not yet adopted that replacement.  There is no known
+# exploitable vulnerability; the "unmaintained" classification reflects only the
+# maintenance status of the crate.
+# Tracking: upgrade rumqttc when a release that drops rustls-pemfile is available.
+ignore = ["RUSTSEC-2025-0134"]
