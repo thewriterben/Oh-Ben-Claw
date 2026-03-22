@@ -1015,6 +1015,121 @@ impl Default for ClawHubConfig {
     }
 }
 
+// ── Deployment Configuration (new in Phase 13) ────────────────────────────────
+
+/// Configuration for a single hardware item in a deployment scenario.
+///
+/// Used inside `DeploymentConfig.hardware` to describe every board or
+/// accessory that is part of the deployment.
+///
+/// ```toml
+/// [[deployment.hardware]]
+/// name       = "nanopi-neo3"
+/// board_name = "nanopi-neo3"
+/// transport  = "native"
+/// role       = "host"
+/// accessories = ["dht22"]
+///
+/// [[deployment.hardware]]
+/// name       = "xiao-esp32s3-sense"
+/// board_name = "xiao-esp32s3-sense"
+/// transport  = "serial"
+/// role       = "vision"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeploymentHardwareConfig {
+    /// Human-readable label for this item.
+    pub name: String,
+    /// Board registry name (e.g. `"nanopi-neo3"`, `"xiao-esp32s3-sense"`).
+    pub board_name: String,
+    /// Transport type: `"native"`, `"serial"`, `"mqtt"`.
+    pub transport: String,
+    /// Serial device path (for serial transport).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// MQTT node ID (for mqtt transport).
+    #[serde(default)]
+    pub node_id: Option<String>,
+    /// Operator-assigned role: `"host"`, `"display"`, `"vision"`, `"listening"`,
+    /// `"sensing"`, `"peripheral"`.  Leave empty for auto-assignment.
+    #[serde(default)]
+    pub role: String,
+    /// Accessory names attached to this board (e.g. `["dht22"]`).
+    #[serde(default)]
+    pub accessories: Vec<String>,
+}
+
+/// Configuration for the deployment scheme generator (Phase 13).
+///
+/// Describes the hardware inventory and feature desires for a deployment.
+/// When `auto_plan` is true, Oh-Ben-Claw generates a deployment scheme at
+/// startup and optionally pre-spawns the required sub-agents.
+///
+/// ```toml
+/// [deployment]
+/// enabled      = true
+/// scenario     = "NanoPi Home Assistant"
+/// auto_plan    = true
+/// auto_spawn   = true
+///
+/// feature_desires = [
+///     "vision", "listening", "speech", "environmental_sensing",
+///     "display_output", "touch_input", "wireless_mesh",
+/// ]
+///
+/// [[deployment.hardware]]
+/// name = "nanopi-neo3"; board_name = "nanopi-neo3"; transport = "native"
+/// role = "host"; accessories = ["dht22"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeploymentConfig {
+    /// Whether the deployment subsystem is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Human-readable name for this deployment scenario.
+    #[serde(default = "default_scenario_name")]
+    pub scenario: String,
+    /// When true, generate and print the deployment scheme at startup.
+    #[serde(default)]
+    pub auto_plan: bool,
+    /// When true (and `auto_plan` is true), pre-spawn the sub-agents in the
+    /// orchestrator pool after planning.
+    #[serde(default)]
+    pub auto_spawn: bool,
+    /// The hardware items in the deployment.
+    #[serde(default)]
+    pub hardware: Vec<DeploymentHardwareConfig>,
+    /// High-level features the operator wants (see `FeatureDesire` variants).
+    ///
+    /// Recognised values: `"vision"`, `"listening"`, `"speech"`,
+    /// `"environmental_sensing"`, `"display_output"`, `"touch_input"`,
+    /// `"edge_inference"`, `"wireless_mesh"`, `"persistent_memory"`.
+    #[serde(default)]
+    pub feature_desires: Vec<String>,
+    /// Whether to enable LLM-powered swarm refinement of the deployment scheme.
+    /// When false (default), only the rule-based planner is used.
+    #[serde(default)]
+    pub llm_swarm: bool,
+}
+
+fn default_scenario_name() -> String {
+    "Oh-Ben-Claw Deployment".to_string()
+}
+
+impl Default for DeploymentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            scenario: default_scenario_name(),
+            auto_plan: false,
+            auto_spawn: false,
+            hardware: Vec::new(),
+            feature_desires: Vec::new(),
+            llm_swarm: false,
+        }
+    }
+}
+
 /// The root configuration for Oh-Ben-Claw.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -1058,6 +1173,9 @@ pub struct Config {
     /// ClawHub community skill registry configuration (new in Phase 12).
     #[serde(default)]
     pub clawhub: ClawHubConfig,
+    /// Deployment scheme generator configuration (new in Phase 13).
+    #[serde(default)]
+    pub deployment: DeploymentConfig,
 }
 
 impl Config {
