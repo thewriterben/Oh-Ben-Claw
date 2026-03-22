@@ -356,7 +356,15 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         name: "teensy-4.1",
         architecture: Some("NXP i.MX RT1062 ARM Cortex-M7 @ 600 MHz"),
         transport: "serial",
-        capabilities: &["gpio", "analog_read", "analog_write", "i2c", "spi", "pwm", "can"],
+        capabilities: &[
+            "gpio",
+            "analog_read",
+            "analog_write",
+            "i2c",
+            "spi",
+            "pwm",
+            "can",
+        ],
     },
     // ── BeagleBone Black ──────────────────────────────────────────────────────
     BoardInfo {
@@ -372,7 +380,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         vid: 0x0955,
         pid: 0x7020,
         name: "jetson-nano",
-        architecture: Some("NVIDIA Tegra X1 quad-core ARM Cortex-A57 @ 1.43 GHz (128-core Maxwell GPU)"),
+        architecture: Some(
+            "NVIDIA Tegra X1 quad-core ARM Cortex-A57 @ 1.43 GHz (128-core Maxwell GPU)",
+        ),
         transport: "native",
         capabilities: &["gpio", "i2c", "spi", "pwm", "camera_capture", "cuda"],
     },
@@ -451,9 +461,7 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         vid: 0x2b04,
         pid: 0x00fe,
         name: "sipeed-6plus1-mic-array",
-        architecture: Some(
-            "STM32F103 @ 72 MHz, 6+1 MEMS microphone array with USB audio (UAC1)",
-        ),
+        architecture: Some("STM32F103 @ 72 MHz, 6+1 MEMS microphone array with USB audio (UAC1)"),
         transport: "serial",
         capabilities: &["audio_sample", "gpio"],
     },

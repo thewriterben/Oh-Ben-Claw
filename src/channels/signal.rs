@@ -116,7 +116,11 @@ impl SignalChannel {
 
     /// Start the polling loop.
     pub async fn run(&self) -> Result<()> {
-        let url = self.config.cli_url.as_deref().unwrap_or("http://localhost:8080");
+        let url = self
+            .config
+            .cli_url
+            .as_deref()
+            .unwrap_or("http://localhost:8080");
         let account = self.config.phone_number.as_deref().unwrap_or("");
         let poll_secs = self.config.poll_interval_secs;
 
@@ -145,11 +149,7 @@ impl SignalChannel {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
-    async fn receive_messages(
-        &self,
-        url: &str,
-        account: &str,
-    ) -> Result<Vec<SignalEnvelope>> {
+    async fn receive_messages(&self, url: &str, account: &str) -> Result<Vec<SignalEnvelope>> {
         #[derive(Serialize)]
         struct ReceiveParams<'a> {
             account: &'a str,
@@ -182,10 +182,7 @@ impl SignalChannel {
         }
 
         let results = resp.result.unwrap_or_default();
-        Ok(results
-            .into_iter()
-            .filter_map(|r| r.envelope)
-            .collect())
+        Ok(results.into_iter().filter_map(|r| r.envelope).collect())
     }
 
     async fn handle_envelope(&self, url: &str, account: &str, env: SignalEnvelope) {
@@ -212,9 +209,16 @@ impl SignalChannel {
         tracing::debug!(sender, text = %text, "Signal: received message");
 
         let session_id = format!("signal:{}", sender);
-        match self.agent.process(&session_id, &text, &self.provider_config).await {
+        match self
+            .agent
+            .process(&session_id, &text, &self.provider_config)
+            .await
+        {
             Ok(response) => {
-                if let Err(e) = self.send_message(url, account, &sender, &response.message).await {
+                if let Err(e) = self
+                    .send_message(url, account, &sender, &response.message)
+                    .await
+                {
                     tracing::error!(error = %e, "Signal: failed to send reply");
                 }
             }
@@ -295,8 +299,7 @@ mod tests {
 
     #[test]
     fn allowlist_blocks_unknown_sender() {
-        let allowed: HashSet<String> =
-            ["+10987654321".to_string()].into_iter().collect();
+        let allowed: HashSet<String> = ["+10987654321".to_string()].into_iter().collect();
         assert!(!allowed.contains("+19999999999"));
         assert!(allowed.contains("+10987654321"));
     }
@@ -306,9 +309,6 @@ mod tests {
         let json = r#"{"source":"+1234567890","dataMessage":{"message":"hello"}}"#;
         let env: SignalEnvelope = serde_json::from_str(json).unwrap();
         assert_eq!(env.source.as_deref(), Some("+1234567890"));
-        assert_eq!(
-            env.data_message.unwrap().message.as_deref(),
-            Some("hello")
-        );
+        assert_eq!(env.data_message.unwrap().message.as_deref(), Some("hello"));
     }
 }

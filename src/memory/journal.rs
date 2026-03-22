@@ -42,8 +42,8 @@ impl DailyJournal {
     /// Create a `DailyJournal` using the default Oh-Ben-Claw data directory
     /// (`~/.oh-ben-claw/journal/`).
     pub fn new() -> Self {
-        let journal_dir = Self::default_journal_dir()
-            .unwrap_or_else(|_| PathBuf::from(".oh-ben-claw/journal"));
+        let journal_dir =
+            Self::default_journal_dir().unwrap_or_else(|_| PathBuf::from(".oh-ben-claw/journal"));
         Self { journal_dir }
     }
 
@@ -129,9 +129,7 @@ impl DailyJournal {
         let mut sections = Vec::new();
 
         for i in 0..days {
-            let date = today
-                .checked_sub_days(Days::new(i as u64))
-                .unwrap_or(today);
+            let date = today.checked_sub_days(Days::new(i as u64)).unwrap_or(today);
             let content = self.read_date(date)?;
             if !content.trim().is_empty() {
                 sections.push(content);

@@ -32,7 +32,10 @@ pub struct RagIndex {
 impl RagIndex {
     /// Create an empty `RagIndex`.
     pub fn new() -> Self {
-        Self { chunks: Vec::new(), aliases: HashMap::new() }
+        Self {
+            chunks: Vec::new(),
+            aliases: HashMap::new(),
+        }
     }
 
     /// Load all `.md` and `.txt` files from the given directory, chunk them,
@@ -113,15 +116,12 @@ impl RagIndex {
     /// Scores each chunk by the number of query words it contains (case-insensitive).
     /// Optionally filters by board name. Returns the top `top_k` results.
     pub fn search(&self, query: &str, board: Option<&str>, top_k: usize) -> Vec<&DatasheetChunk> {
-        let words: Vec<String> = query
-            .split_whitespace()
-            .map(|w| w.to_lowercase())
-            .collect();
+        let words: Vec<String> = query.split_whitespace().map(|w| w.to_lowercase()).collect();
 
         let mut scored: Vec<(usize, &DatasheetChunk)> = self
             .chunks
             .iter()
-            .filter(|c| board.map_or(true, |b| c.board.as_deref() == Some(b)))
+            .filter(|c| board.is_none_or(|b| c.board.as_deref() == Some(b)))
             .map(|c| {
                 let lower = c.content.to_lowercase();
                 let score = words.iter().filter(|w| lower.contains(w.as_str())).count();
@@ -257,14 +257,7 @@ impl Tool for DatasheetSearchTool {
         let output = results
             .iter()
             .enumerate()
-            .map(|(i, c)| {
-                format!(
-                    "[{}] Source: {}\n{}",
-                    i + 1,
-                    c.source,
-                    c.content
-                )
-            })
+            .map(|(i, c)| format!("[{}] Source: {}\n{}", i + 1, c.source, c.content))
             .collect::<Vec<_>>()
             .join("\n\n---\n\n");
 
@@ -361,7 +354,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("testboard.md");
         let mut f = std::fs::File::create(&file_path).unwrap();
-        writeln!(f, "## Pin Aliases\nLED: 13\n\nSome content about the board GPIO.").unwrap();
+        writeln!(
+            f,
+            "## Pin Aliases\nLED: 13\n\nSome content about the board GPIO."
+        )
+        .unwrap();
 
         let index = RagIndex::load_dir(dir.path()).unwrap();
         assert!(!index.chunks.is_empty());

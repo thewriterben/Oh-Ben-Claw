@@ -409,7 +409,10 @@ impl Tool for VectorSearchTool {
             None => return Ok(ToolResult::err("Missing required argument: query")),
         };
         let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
-        let min_score = args.get("min_score").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
+        let min_score = args
+            .get("min_score")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.3) as f32;
 
         let embedding = match self.embedder.embed(&query).await {
             Ok(e) => e,
@@ -421,7 +424,8 @@ impl Tool for VectorSearchTool {
             Err(e) => return Ok(ToolResult::err(format!("Search failed: {e}"))),
         };
 
-        let filtered: Vec<&SearchResult> = results.iter().filter(|r| r.score >= min_score).collect();
+        let filtered: Vec<&SearchResult> =
+            results.iter().filter(|r| r.score >= min_score).collect();
 
         if filtered.is_empty() {
             return Ok(ToolResult::ok("No relevant memories found for this query."));
@@ -436,7 +440,10 @@ impl Tool for VectorSearchTool {
                     i + 1,
                     r.score,
                     r.content,
-                    r.metadata.get("source").and_then(|s| s.as_str()).unwrap_or("unknown")
+                    r.metadata
+                        .get("source")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("unknown")
                 )
             })
             .collect::<Vec<_>>()
@@ -508,7 +515,10 @@ impl Tool for DocumentIngestTool {
             .and_then(|v| v.as_str())
             .unwrap_or("agent_memory")
             .to_string();
-        let chunk_size = args.get("chunk_size").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
+        let chunk_size = args
+            .get("chunk_size")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(200) as usize;
         let tags: Vec<String> = args
             .get("tags")
             .and_then(|v| v.as_array())
@@ -566,7 +576,11 @@ impl Tool for DocumentIngestTool {
                 "tags": tags,
                 "ingested_at": timestamp
             });
-            if self.store.add(&id, chunk, metadata, embedding.clone()).is_ok() {
+            if self
+                .store
+                .add(&id, chunk, metadata, embedding.clone())
+                .is_ok()
+            {
                 stored += 1;
             }
         }
@@ -642,9 +656,15 @@ mod tests {
         let v2 = vec![0.0f32, 1.0, 0.0];
         let v3 = vec![0.9f32, 0.1, 0.0];
 
-        store.add("doc1", "content one", json!({}), v1.clone()).unwrap();
-        store.add("doc2", "content two", json!({}), v2.clone()).unwrap();
-        store.add("doc3", "content three", json!({}), v3.clone()).unwrap();
+        store
+            .add("doc1", "content one", json!({}), v1.clone())
+            .unwrap();
+        store
+            .add("doc2", "content two", json!({}), v2.clone())
+            .unwrap();
+        store
+            .add("doc3", "content three", json!({}), v3.clone())
+            .unwrap();
 
         assert_eq!(store.count().unwrap(), 3);
 
@@ -658,7 +678,9 @@ mod tests {
     #[test]
     fn test_vector_store_delete() {
         let store = VectorStore::in_memory().unwrap();
-        store.add("doc1", "hello", json!({}), vec![1.0, 0.0]).unwrap();
+        store
+            .add("doc1", "hello", json!({}), vec![1.0, 0.0])
+            .unwrap();
         assert_eq!(store.count().unwrap(), 1);
         assert!(store.delete("doc1").unwrap());
         assert_eq!(store.count().unwrap(), 0);

@@ -143,11 +143,7 @@ impl BrowserSession {
     /// Close a tab by its target ID.
     async fn close_target(&self, target_id: &str) -> anyhow::Result<()> {
         let url = format!("{}/json/close/{}", self.cdp_url, target_id);
-        self.client
-            .get(&url)
-            .timeout(self.timeout)
-            .send()
-            .await?;
+        self.client.get(&url).timeout(self.timeout).send().await?;
         Ok(())
     }
 
@@ -300,7 +296,11 @@ fn strip_html(html: &str) -> String {
                 // opening '<', so a closing </script> produces "/script>".
                 let is_closing = tag_lower.starts_with('/');
                 // Match on the element name (skip the leading '/' for closing tags).
-                let name = if is_closing { &tag_lower[1..] } else { &tag_lower[..] };
+                let name = if is_closing {
+                    &tag_lower[1..]
+                } else {
+                    &tag_lower[..]
+                };
                 if name.starts_with("script") || name.starts_with("script ") {
                     in_script = !is_closing;
                 }
@@ -418,9 +418,7 @@ impl Tool for BrowserNavigateTool {
             Ok(title) => Ok(ToolResult::ok(format!(
                 "Navigated to {url}\nPage title: {title}"
             ))),
-            Err(e) => Ok(ToolResult::err(format!(
-                "Navigation failed for {url}: {e}"
-            ))),
+            Err(e) => Ok(ToolResult::err(format!("Navigation failed for {url}: {e}"))),
         }
     }
 }
@@ -553,7 +551,11 @@ impl Tool for BrowserClickTool {
 
         let url = match self.session.current_url() {
             Some(u) => u,
-            None => return Ok(ToolResult::err("No page loaded; call browser_navigate first")),
+            None => {
+                return Ok(ToolResult::err(
+                    "No page loaded; call browser_navigate first",
+                ))
+            }
         };
 
         // For CDP-attached sessions this would send a Runtime.evaluate command
@@ -637,12 +639,14 @@ impl Tool for BrowserTypeTool {
 
         let url = match self.session.current_url() {
             Some(u) => u,
-            None => return Ok(ToolResult::err("No page loaded; call browser_navigate first")),
+            None => {
+                return Ok(ToolResult::err(
+                    "No page loaded; call browser_navigate first",
+                ))
+            }
         };
 
-        let target = selector
-            .as_deref()
-            .unwrap_or("focused element");
+        let target = selector.as_deref().unwrap_or("focused element");
 
         tracing::debug!(
             text = %text,
@@ -711,7 +715,11 @@ impl Tool for BrowserScrollTool {
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         let url = match self.session.current_url() {
             Some(u) => u,
-            None => return Ok(ToolResult::err("No page loaded; call browser_navigate first")),
+            None => {
+                return Ok(ToolResult::err(
+                    "No page loaded; call browser_navigate first",
+                ))
+            }
         };
 
         if let Some(selector) = args.get("selector").and_then(|v| v.as_str()) {
@@ -785,16 +793,9 @@ impl Tool for BrowserNewTabTool {
 
         match self.session.new_target(url.as_deref()).await {
             Ok(target) => {
-                let id = target["id"]
-                    .as_str()
-                    .unwrap_or("unknown")
-                    .to_string();
+                let id = target["id"].as_str().unwrap_or("unknown").to_string();
                 {
-                    let mut state = self
-                        .session
-                        .state
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner());
+                    let mut state = self.session.state.lock().unwrap_or_else(|p| p.into_inner());
                     state.active_target_id = Some(id.clone());
                     state.open_tabs.push(id.clone());
                 }
@@ -842,11 +843,7 @@ impl Tool for BrowserCloseTabTool {
 
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         let target_id = {
-            let state = self
-                .session
-                .state
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let state = self.session.state.lock().unwrap_or_else(|p| p.into_inner());
             state.active_target_id.clone()
         };
 
@@ -857,11 +854,7 @@ impl Tool for BrowserCloseTabTool {
 
         match self.session.close_target(&target_id).await {
             Ok(()) => {
-                let mut state = self
-                    .session
-                    .state
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner());
+                let mut state = self.session.state.lock().unwrap_or_else(|p| p.into_inner());
                 state.open_tabs.retain(|id| id != &target_id);
                 state.active_target_id = state.open_tabs.last().cloned();
                 state.current_url = None;
@@ -981,7 +974,10 @@ mod tests {
         let html = "<script>var x = 1;</script><p>After script</p>";
         let text = strip_html(html);
         assert!(!text.contains("var x"), "script content should be stripped");
-        assert!(text.contains("After script"), "text after </script> should be visible");
+        assert!(
+            text.contains("After script"),
+            "text after </script> should be visible"
+        );
     }
 
     #[test]
@@ -997,7 +993,10 @@ mod tests {
         let html = "<style>body { margin: 0; }</style><p>After style</p>";
         let text = strip_html(html);
         assert!(!text.contains("margin"), "style content should be stripped");
-        assert!(text.contains("After style"), "text after </style> should be visible");
+        assert!(
+            text.contains("After style"),
+            "text after </style> should be visible"
+        );
     }
 
     #[test]
@@ -1070,7 +1069,10 @@ mod tests {
     async fn navigate_rejects_non_http_urls() {
         let s = make_session();
         let tool = BrowserNavigateTool::new(s);
-        let result = tool.execute(json!({"url": "ftp://example.com"})).await.unwrap();
+        let result = tool
+            .execute(json!({"url": "ftp://example.com"}))
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(result.error.as_deref().unwrap_or("").contains("http"));
     }
@@ -1127,7 +1129,11 @@ mod tests {
         let tool = BrowserCloseTabTool::new(s);
         let result = tool.execute(json!({})).await.unwrap();
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap_or("").contains("No active tab"));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("No active tab"));
     }
 
     #[tokio::test]

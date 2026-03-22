@@ -42,8 +42,7 @@ impl TokenUsage {
         } else {
             0.0
         };
-        let cost_usd =
-            (input_tokens as f64 / 1_000_000.0) * safe_in
+        let cost_usd = (input_tokens as f64 / 1_000_000.0) * safe_in
             + (output_tokens as f64 / 1_000_000.0) * safe_out;
 
         Self {

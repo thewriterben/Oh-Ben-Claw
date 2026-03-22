@@ -405,7 +405,11 @@ fn spawn_channels(agent: Arc<Agent>, config: &Config) {
     let provider = config.provider.clone();
 
     // ── Telegram ──────────────────────────────────────────────────────────────
-    if let Some(ch) = TelegramChannel::new(&config.channels.telegram, Arc::clone(&agent), provider.clone()) {
+    if let Some(ch) = TelegramChannel::new(
+        &config.channels.telegram,
+        Arc::clone(&agent),
+        provider.clone(),
+    ) {
         info!("Starting Telegram channel");
         tokio::spawn(async move {
             loop {
@@ -418,7 +422,11 @@ fn spawn_channels(agent: Arc<Agent>, config: &Config) {
     }
 
     // ── Discord ───────────────────────────────────────────────────────────────
-    if let Some(ch) = DiscordChannel::new(&config.channels.discord, Arc::clone(&agent), provider.clone()) {
+    if let Some(ch) = DiscordChannel::new(
+        &config.channels.discord,
+        Arc::clone(&agent),
+        provider.clone(),
+    ) {
         info!("Starting Discord channel");
         tokio::spawn(async move {
             loop {
@@ -431,7 +439,9 @@ fn spawn_channels(agent: Arc<Agent>, config: &Config) {
     }
 
     // ── Slack ─────────────────────────────────────────────────────────────────
-    if let Some(ch) = SlackChannel::new(&config.channels.slack, Arc::clone(&agent), provider.clone()) {
+    if let Some(ch) =
+        SlackChannel::new(&config.channels.slack, Arc::clone(&agent), provider.clone())
+    {
         info!("Starting Slack channel");
         tokio::spawn(async move {
             loop {
@@ -444,7 +454,11 @@ fn spawn_channels(agent: Arc<Agent>, config: &Config) {
     }
 
     // ── WhatsApp ──────────────────────────────────────────────────────────────
-    if let Some(ch) = WhatsAppChannel::new(&config.channels.whatsapp, Arc::clone(&agent), provider.clone()) {
+    if let Some(ch) = WhatsAppChannel::new(
+        &config.channels.whatsapp,
+        Arc::clone(&agent),
+        provider.clone(),
+    ) {
         info!("Starting WhatsApp channel");
         tokio::spawn(async move {
             loop {
@@ -457,7 +471,11 @@ fn spawn_channels(agent: Arc<Agent>, config: &Config) {
     }
 
     // ── iMessage (macOS only) ─────────────────────────────────────────────────
-    if let Some(ch) = IMessageChannel::new(&config.channels.imessage, Arc::clone(&agent), provider.clone()) {
+    if let Some(ch) = IMessageChannel::new(
+        &config.channels.imessage,
+        Arc::clone(&agent),
+        provider.clone(),
+    ) {
         info!("Starting iMessage channel");
         tokio::spawn(async move {
             loop {

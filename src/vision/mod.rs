@@ -191,8 +191,7 @@ impl VisionPipeline {
                 height,
                 timeout_ms,
             } => {
-                capture_libcamera(*width, *height, *timeout_ms, &self.config.capture_dir, now)
-                    .await
+                capture_libcamera(*width, *height, *timeout_ms, &self.config.capture_dir, now).await
             }
             CameraSource::V4l2 { device } => {
                 capture_v4l2(device, &self.config.capture_dir, now).await
@@ -262,11 +261,7 @@ impl VisionPipeline {
 
 fn capture_from_file(path: &str, now: u64) -> anyhow::Result<CapturedFrame> {
     let p = std::path::Path::new(path);
-    let mime_type = mime_from_extension(
-        p.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("jpg"),
-    );
+    let mime_type = mime_from_extension(p.extension().and_then(|e| e.to_str()).unwrap_or("jpg"));
     let bytes = std::fs::read(p)?;
     Ok(CapturedFrame {
         mime_type,

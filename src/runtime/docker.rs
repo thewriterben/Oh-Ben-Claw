@@ -28,7 +28,12 @@ impl RuntimeAdapter for DockerRuntime {
         true
     }
 
-    async fn run_shell(&self, cmd: &str, args: &[&str], timeout_secs: u64) -> anyhow::Result<String> {
+    async fn run_shell(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        timeout_secs: u64,
+    ) -> anyhow::Result<String> {
         let memory_flag = format!("{}m", self.config.memory_mb); // Docker accepts "m" for megabytes
 
         let mut docker_args = vec![
@@ -50,13 +55,11 @@ impl RuntimeAdapter for DockerRuntime {
             .spawn()
             .context("failed to spawn docker process")?;
 
-        let output = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            child.wait_with_output(),
-        )
-        .await
-        .context("docker command timed out")?
-        .context("failed to wait for docker process")?;
+        let output =
+            tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output())
+                .await
+                .context("docker command timed out")?
+                .context("failed to wait for docker process")?;
 
         let mut result = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();

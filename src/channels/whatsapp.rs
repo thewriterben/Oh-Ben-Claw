@@ -157,10 +157,7 @@ impl WhatsAppChannel {
     /// `https://<host>/whatsapp/webhook`.
     pub async fn run(&self) -> Result<()> {
         let bind_addr = format!("0.0.0.0:{}", self.webhook_port);
-        tracing::info!(
-            port = self.webhook_port,
-            "WhatsApp webhook server starting"
-        );
+        tracing::info!(port = self.webhook_port, "WhatsApp webhook server starting");
 
         let state = self.state.clone();
         let router = Router::new()

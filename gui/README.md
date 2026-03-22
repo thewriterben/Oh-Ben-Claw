@@ -23,13 +23,13 @@ Communication between the two layers uses Tauri's IPC bridge: the frontend calls
 The following must be installed before building the GUI:
 
 - **Rust** (stable, 1.77+): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- **Node.js** (18+) and **pnpm**: `npm install -g pnpm`
+- **Node.js 20+** and **pnpm**: `npm install -g pnpm`
 - **Tauri system dependencies** (Linux):
   ```bash
   sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
     libayatana-appindicator3-dev librsvg2-dev libssl-dev
   ```
-- **Tauri system dependencies** (macOS): Xcode Command Line Tools
+- **Tauri system dependencies** (macOS): Xcode Command Line Tools (`xcode-select --install`)
 - **Tauri system dependencies** (Windows): Microsoft Visual C++ Build Tools + WebView2
 
 ## Development

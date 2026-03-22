@@ -62,7 +62,9 @@ impl FeatureDesire {
             Self::Vision => "visual perception via camera".to_string(),
             Self::Listening => "audio input via microphone".to_string(),
             Self::Speech => "speech output via speaker or TTS".to_string(),
-            Self::EnvironmentalSensing => "environmental sensing (temperature, humidity, etc.)".to_string(),
+            Self::EnvironmentalSensing => {
+                "environmental sensing (temperature, humidity, etc.)".to_string()
+            }
             Self::DisplayOutput => "display output on a screen".to_string(),
             Self::TouchInput => "capacitive or resistive touch input".to_string(),
             Self::EdgeInference => "on-device LLM inference without cloud dependency".to_string(),
@@ -139,7 +141,11 @@ pub struct HardwareItem {
 
 impl HardwareItem {
     /// Create a new hardware item with the given board name.
-    pub fn new(name: impl Into<String>, board_name: impl Into<String>, transport: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        board_name: impl Into<String>,
+        transport: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             board_name: board_name.into(),
@@ -305,8 +311,12 @@ impl HardwareInventory {
 
         // ── Listening ─────────────────────────────────────────────────────────
         inv.add_item(
-            HardwareItem::new("sipeed-6plus1-mic-array", "sipeed-6plus1-mic-array", "serial")
-                .with_role(ItemRole::Listening),
+            HardwareItem::new(
+                "sipeed-6plus1-mic-array",
+                "sipeed-6plus1-mic-array",
+                "serial",
+            )
+            .with_role(ItemRole::Listening),
         );
 
         // ── Feature desires ───────────────────────────────────────────────────
@@ -333,9 +343,21 @@ mod tests {
     fn hardware_item_resolves_capabilities_from_registry() {
         let item = HardwareItem::new("xiao", "xiao-esp32s3-sense", "serial");
         let caps = item.resolved_capabilities();
-        assert!(caps.iter().any(|c| c == "camera_capture"), "expected camera_capture in {:?}", caps);
-        assert!(caps.iter().any(|c| c == "audio_sample"), "expected audio_sample in {:?}", caps);
-        assert!(caps.iter().any(|c| c == "wifi"), "expected wifi in {:?}", caps);
+        assert!(
+            caps.iter().any(|c| c == "camera_capture"),
+            "expected camera_capture in {:?}",
+            caps
+        );
+        assert!(
+            caps.iter().any(|c| c == "audio_sample"),
+            "expected audio_sample in {:?}",
+            caps
+        );
+        assert!(
+            caps.iter().any(|c| c == "wifi"),
+            "expected wifi in {:?}",
+            caps
+        );
     }
 
     #[test]
@@ -343,7 +365,11 @@ mod tests {
         let item = HardwareItem::new("host", "nanopi-neo3", "native")
             .with_accessories(vec!["dht22".to_string()]);
         let caps = item.resolved_capabilities();
-        assert!(caps.iter().any(|c| c == "sensor_read"), "expected sensor_read from dht22 in {:?}", caps);
+        assert!(
+            caps.iter().any(|c| c == "sensor_read"),
+            "expected sensor_read from dht22 in {:?}",
+            caps
+        );
     }
 
     #[test]
@@ -358,7 +384,10 @@ mod tests {
     fn inventory_finds_items_by_role() {
         let inv = HardwareInventory::nanopi_scenario();
         assert!(inv.find_role(&ItemRole::Host).is_some());
-        assert_eq!(inv.find_role(&ItemRole::Host).unwrap().board_name, "nanopi-neo3");
+        assert_eq!(
+            inv.find_role(&ItemRole::Host).unwrap().board_name,
+            "nanopi-neo3"
+        );
         assert!(inv.find_role(&ItemRole::Vision).is_some());
         assert!(inv.find_role(&ItemRole::Listening).is_some());
     }
@@ -387,13 +416,24 @@ mod tests {
         let inv = HardwareInventory::nanopi_scenario();
         assert!(inv.feature_desires.contains(&FeatureDesire::Vision));
         assert!(inv.feature_desires.contains(&FeatureDesire::Listening));
-        assert!(inv.feature_desires.contains(&FeatureDesire::EnvironmentalSensing));
+        assert!(inv
+            .feature_desires
+            .contains(&FeatureDesire::EnvironmentalSensing));
     }
 
     #[test]
     fn feature_desire_required_capabilities() {
-        assert_eq!(FeatureDesire::Vision.required_capabilities(), &["camera_capture"]);
-        assert_eq!(FeatureDesire::Listening.required_capabilities(), &["audio_sample"]);
-        assert_eq!(FeatureDesire::DisplayOutput.required_capabilities(), &["display"]);
+        assert_eq!(
+            FeatureDesire::Vision.required_capabilities(),
+            &["camera_capture"]
+        );
+        assert_eq!(
+            FeatureDesire::Listening.required_capabilities(),
+            &["audio_sample"]
+        );
+        assert_eq!(
+            FeatureDesire::DisplayOutput.required_capabilities(),
+            &["display"]
+        );
     }
 }

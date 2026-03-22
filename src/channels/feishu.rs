@@ -41,13 +41,7 @@ use crate::agent::Agent;
 use crate::channels::utils::chunk_text;
 use crate::config::{FeishuConfig, ProviderConfig};
 use anyhow::{Context, Result};
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -297,17 +291,19 @@ async fn receive_event(
         {
             Ok(response) => {
                 for chunk in chunk_text(&response.message, 4000) {
-                    if let Err(e) =
-                        send_message(&state_clone, &chat_id_clone, chunk).await
-                    {
+                    if let Err(e) = send_message(&state_clone, &chat_id_clone, chunk).await {
                         tracing::error!("Feishu send error: {e}");
                     }
                 }
             }
             Err(e) => {
                 tracing::error!("Feishu agent error: {e}");
-                let _ =
-                    send_message(&state_clone, &chat_id_clone, "Sorry, I encountered an error.").await;
+                let _ = send_message(
+                    &state_clone,
+                    &chat_id_clone,
+                    "Sorry, I encountered an error.",
+                )
+                .await;
             }
         }
     });
@@ -334,7 +330,9 @@ async fn get_token(state: &FeishuState) -> Result<String> {
 
     let resp: TokenResponse = state
         .http
-        .post(format!("{FEISHU_API_BASE}/auth/v3/tenant_access_token/internal"))
+        .post(format!(
+            "{FEISHU_API_BASE}/auth/v3/tenant_access_token/internal"
+        ))
         .json(&body)
         .send()
         .await?
@@ -353,10 +351,8 @@ async fn get_token(state: &FeishuState) -> Result<String> {
     {
         let mut cache = state.token_cache.write().await;
         cache.token = token.clone();
-        cache.expires_at = Some(
-            std::time::Instant::now()
-                + std::time::Duration::from_secs(expires_secs),
-        );
+        cache.expires_at =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(expires_secs));
     }
 
     Ok(token)

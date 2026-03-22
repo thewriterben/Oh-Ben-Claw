@@ -169,12 +169,7 @@ impl TelegramChannel {
         Ok(resp.result.unwrap_or_default())
     }
 
-    async fn send_text(
-        &self,
-        chat_id: i64,
-        text: &str,
-        reply_to: Option<i64>,
-    ) -> Result<()> {
+    async fn send_text(&self, chat_id: i64, text: &str, reply_to: Option<i64>) -> Result<()> {
         let url = format!("{}/sendMessage", self.api_base);
         // Split long messages to respect the 4096-char Telegram limit.
         for chunk in chunk_text(text, 4000) {
