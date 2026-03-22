@@ -31,8 +31,8 @@ max_tool_iterations = 15
 # ── LLM Provider ─────────────────────────────────────────────────────────────
 
 [provider]
-name    = "openai"
-model   = "gpt-4o"
+name    = "claude"
+model   = "sonnet 4.6"
 # api_key = "sk-..."  # Or set OPENAI_API_KEY
 
 # Fallback to local Ollama when the cloud is unreachable
