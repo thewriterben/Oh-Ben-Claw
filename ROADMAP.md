@@ -300,3 +300,51 @@ capability via a SQLite-backed store.
 - [x] **`BrowserConfig`** — `[browser]` TOML section: `enabled`, `cdp_url`, `profile` (`"headless"` / `"user"`), `timeout_secs` (`src/config/mod.rs`)
 - [x] **`ClawHubConfig`** — `[clawhub]` TOML section: `enabled`, `registry_url`, `auto_update`, `skills_dir` (`src/config/mod.rs`)
 - [x] `Config` gains `browser: BrowserConfig` and `clawhub: ClawHubConfig` fields
+
+---
+
+## Phase 13: Hardware-Driven Deployment Scheme Generator ✅ Complete
+
+Implements a comprehensive multi-agent swarm system to create custom deployment
+schemes based on available hardware and desired features.  The system analyses
+a `HardwareInventory`, maps capabilities to roles, generates a full agent
+topology, identifies hardware gaps, and renders a ready-to-use TOML
+configuration.
+
+### New Hardware (Board Registry)
+
+Three new boards and two new accessories are added to the registry:
+
+- [x] **Waveshare ESP32-S3-Touch-LCD-2.1** — 2.1" round capacitive touch display with integrated I2S speaker; capability tokens: `display`, `touch`, `audio_sample`, `wifi`, `ble` (`src/peripherals/registry.rs`)
+- [x] **Seeed XIAO ESP32S3-Sense** — compact ESP32-S3 module with OV2640 camera and PDM microphone; capability tokens: `camera_capture`, `audio_sample`, `wifi`, `ble`, `sensor_read` (`src/peripherals/registry.rs`)
+- [x] **Sipeed 6+1 Mic Array** — USB far-field 6+1 MEMS microphone array (STM32F103 MCU, UAC1 audio class); capability tokens: `audio_sample` (`src/peripherals/registry.rs`)
+- [x] **DHT22** accessory — single-wire GPIO temperature & humidity sensor; added to `KNOWN_ACCESSORIES` with `bus = "gpio"` and `compatible_boards` listing (`src/peripherals/registry.rs`)
+- [x] **DHT11** accessory — basic single-wire temperature & humidity sensor (`src/peripherals/registry.rs`)
+- [x] New capability tokens documented: `display` (integrated display output), `touch` (capacitive/resistive touch input)
+
+### Deployment Subsystem (`src/deployment/`)
+
+- [x] **`HardwareInventory`** — describes boards and accessories available for a deployment, their operator-assigned roles, and the feature desires the operator wants to fulfil (`src/deployment/inventory.rs`)
+- [x] **`HardwareItem`** — single board/accessory entry with capability resolution from the registry; resolves board + accessory capabilities at query time (`src/deployment/inventory.rs`)
+- [x] **`ItemRole`** — enum: `Host`, `Display`, `Vision`, `Listening`, `Sensing`, `Peripheral`, `Unassigned` (`src/deployment/inventory.rs`)
+- [x] **`FeatureDesire`** — enum of high-level features: `Vision`, `Listening`, `Speech`, `EnvironmentalSensing`, `DisplayOutput`, `TouchInput`, `EdgeInference`, `WirelessMesh`, `PersistentMemory`, `Custom` (`src/deployment/inventory.rs`)
+- [x] `HardwareInventory::nanopi_scenario()` — pre-built reference scenario for the NanoPi-Neo3 + ESP32 deployment (`src/deployment/inventory.rs`)
+- [x] **`HardwareAdvisor`** — gap analyser that checks which feature desires are satisfied, identifies missing capabilities, and suggests specific boards from the registry (`src/deployment/advisor.rs`)
+- [x] `HardwareAdvisor::analyse()`, `suggest_missing()`, `compatibility_report()`, `validate()` (`src/deployment/advisor.rs`)
+- [x] **`DeploymentScheme`** — output type: agent assignments, hardware suggestions, warnings, TOML config snippet, and human-readable report (`src/deployment/scheme.rs`)
+- [x] **`AgentAssignment`** — describes a single sub-agent: name, `NodeRole`, hardware item, tools, TOML snippet (`src/deployment/scheme.rs`)
+- [x] **`NodeRole`** — enum: `Orchestrator`, `VisionAgent`, `AudioAgent`, `SpeechDisplayAgent`, `SensingAgent`, `PeripheralAgent` (`src/deployment/scheme.rs`)
+- [x] **`DeploymentPlanner`** — deterministic rule-based planner that maps hardware to agent topology and renders full TOML config (no LLM required) (`src/deployment/planner.rs`)
+- [x] **`DeploymentSwarm`** — LLM-powered multi-agent swarm with three specialised sub-agents: `hardware-advisor`, `architect`, `requirements-checker`; wraps `DeploymentPlanner` output with LLM refinement (`src/deployment/swarm.rs`)
+- [x] `DeploymentSwarm::plan_static()` for offline/test use; `DeploymentSwarm::plan()` for full LLM-enhanced planning (`src/deployment/swarm.rs`)
+- [x] `pub mod deployment` registered in `src/lib.rs`
+
+### Configuration
+
+- [x] **`DeploymentConfig`** — `[deployment]` TOML section: `enabled`, `scenario`, `auto_plan`, `auto_spawn`, `feature_desires`, `hardware`, `llm_swarm` (`src/config/mod.rs`)
+- [x] **`DeploymentHardwareConfig`** — `[[deployment.hardware]]` entries: `name`, `board_name`, `transport`, `path`, `node_id`, `role`, `accessories` (`src/config/mod.rs`)
+- [x] `Config` gains `deployment: DeploymentConfig` field
+
+### Example
+
+- [x] **`examples/config-nanopi-deployment.toml`** — complete reference configuration for the NanoPi-Neo3 scenario with all five hardware items, four pre-spawned sub-agents, full orchestrator config, and deployment scheme section

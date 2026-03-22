@@ -31,6 +31,7 @@ pub mod audio;
 pub mod channels;
 pub mod config;
 pub mod dashboard;
+pub mod deployment;
 pub mod gateway;
 pub mod memory;
 pub mod observability;
