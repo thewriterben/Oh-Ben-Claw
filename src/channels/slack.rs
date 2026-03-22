@@ -288,12 +288,7 @@ impl SlackChannel {
             .await
     }
 
-    async fn post_message(
-        &self,
-        channel: &str,
-        text: &str,
-        thread_ts: Option<&str>,
-    ) -> Result<()> {
+    async fn post_message(&self, channel: &str, text: &str, thread_ts: Option<&str>) -> Result<()> {
         // Slack message limit is 40,000 chars; split at 3,000 for safety.
         for chunk in chunk_text(text, 3000) {
             let mut body = json!({

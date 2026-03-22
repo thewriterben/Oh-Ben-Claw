@@ -28,8 +28,8 @@ pub mod signal;
 pub mod slack;
 pub mod telegram;
 pub mod typing;
-pub mod whatsapp;
 mod utils;
+pub mod whatsapp;
 
 pub use cli::CliChannel;
 pub use discord::DiscordChannel;

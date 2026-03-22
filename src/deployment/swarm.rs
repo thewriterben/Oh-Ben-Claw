@@ -118,7 +118,11 @@ impl DeploymentSwarm {
     ///
     /// If `config.enabled` is false, falls back to `plan_static`.
     /// If `config.enabled` is true, spawns sub-agents and delegates refinement tasks.
-    pub async fn plan(&self, inventory: &HardwareInventory, session_id: &str) -> Result<SwarmResult> {
+    pub async fn plan(
+        &self,
+        inventory: &HardwareInventory,
+        session_id: &str,
+    ) -> Result<SwarmResult> {
         // Always start with the deterministic rule-based plan
         let base_scheme = DeploymentPlanner::plan(inventory);
 
@@ -161,7 +165,11 @@ impl DeploymentSwarm {
             "Review this hardware inventory and deployment plan. Identify any risks, \
              limitations, or missing capabilities.\n\n{context}"
         );
-        match self.pool.delegate("hardware-advisor", &advisor_task, session_id).await {
+        match self
+            .pool
+            .delegate("hardware-advisor", &advisor_task, session_id)
+            .await
+        {
             Ok(response) => annotations.push(AgentAnnotation {
                 agent: "hardware-advisor".to_string(),
                 text: response,
@@ -174,7 +182,11 @@ impl DeploymentSwarm {
             "Review the agent topology for this deployment. Suggest improvements to \
              the sub-agent structure, communication patterns, and resource allocation.\n\n{context}"
         );
-        match self.pool.delegate("architect", &arch_task, session_id).await {
+        match self
+            .pool
+            .delegate("architect", &arch_task, session_id)
+            .await
+        {
             Ok(response) => annotations.push(AgentAnnotation {
                 agent: "architect".to_string(),
                 text: response,
@@ -187,7 +199,11 @@ impl DeploymentSwarm {
             "Check that all feature desires are satisfied by the deployment plan. \
              For each unsatisfied desire, suggest the minimum additional hardware needed.\n\n{context}"
         );
-        match self.pool.delegate("requirements-checker", &reqs_task, session_id).await {
+        match self
+            .pool
+            .delegate("requirements-checker", &reqs_task, session_id)
+            .await
+        {
             Ok(response) => annotations.push(AgentAnnotation {
                 agent: "requirements-checker".to_string(),
                 text: response,
@@ -231,7 +247,6 @@ impl DeploymentSwarm {
                  capabilities, and suggest specific hardware additions. Be concise \
                  and actionable. Return structured findings.",
             ),
-
             SubAgentSpec {
                 name: "architect".to_string(),
                 role: "Multi-agent system architect. Designs optimal agent topologies \
@@ -246,7 +261,6 @@ impl DeploymentSwarm {
                 tools: vec!["memory_note".to_string()],
                 max_iterations,
             },
-
             SubAgentSpec {
                 name: "requirements-checker".to_string(),
                 role: "Requirements validation specialist. Verifies that all feature \

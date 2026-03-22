@@ -109,7 +109,11 @@ impl ApprovalManager {
     pub fn request_approval(&self, req: &ApprovalRequest) -> ApprovalResponse {
         let args_summary = {
             let s = req.arguments.to_string();
-            if s.len() > 120 { format!("{}…", &s[..120]) } else { s }
+            if s.len() > 120 {
+                format!("{}…", &s[..120])
+            } else {
+                s
+            }
         };
 
         let decision = if self.non_interactive {
@@ -142,7 +146,11 @@ impl ApprovalManager {
             tool_name: req.tool_name.clone(),
             arguments_summary: args_summary,
             decision: decision.clone(),
-            channel: if self.non_interactive { "non-interactive".to_string() } else { "cli".to_string() },
+            channel: if self.non_interactive {
+                "non-interactive".to_string()
+            } else {
+                "cli".to_string()
+            },
         };
         self.audit_log.lock().push(entry);
 
@@ -161,13 +169,25 @@ mod tests {
     use crate::config::AutonomyLevel;
 
     fn config_full() -> AutonomyConfig {
-        AutonomyConfig { level: AutonomyLevel::Full, auto_approve: vec![], always_ask: vec![] }
+        AutonomyConfig {
+            level: AutonomyLevel::Full,
+            auto_approve: vec![],
+            always_ask: vec![],
+        }
     }
     fn config_supervised() -> AutonomyConfig {
-        AutonomyConfig { level: AutonomyLevel::Supervised, auto_approve: vec![], always_ask: vec![] }
+        AutonomyConfig {
+            level: AutonomyLevel::Supervised,
+            auto_approve: vec![],
+            always_ask: vec![],
+        }
     }
     fn config_manual() -> AutonomyConfig {
-        AutonomyConfig { level: AutonomyLevel::Manual, auto_approve: vec![], always_ask: vec![] }
+        AutonomyConfig {
+            level: AutonomyLevel::Manual,
+            auto_approve: vec![],
+            always_ask: vec![],
+        }
     }
 
     #[test]

@@ -27,7 +27,10 @@ pub fn create_runtime(config: &RuntimeConfig) -> anyhow::Result<Box<dyn RuntimeA
     match config.kind.as_str() {
         "native" => Ok(Box::new(NativeRuntime)),
         "docker" => Ok(Box::new(DockerRuntime::new(config.docker.clone()))),
-        other => anyhow::bail!("Unknown runtime kind: '{}'. Valid values are 'native' and 'docker'.", other),
+        other => anyhow::bail!(
+            "Unknown runtime kind: '{}'. Valid values are 'native' and 'docker'.",
+            other
+        ),
     }
 }
 
@@ -38,7 +41,10 @@ mod tests {
 
     #[test]
     fn create_native_runtime() {
-        let config = RuntimeConfig { kind: "native".to_string(), docker: DockerConfig::default() };
+        let config = RuntimeConfig {
+            kind: "native".to_string(),
+            docker: DockerConfig::default(),
+        };
         let runtime = create_runtime(&config).unwrap();
         assert_eq!(runtime.name(), "native");
         assert!(runtime.has_shell_access());
@@ -46,20 +52,29 @@ mod tests {
 
     #[test]
     fn create_docker_runtime() {
-        let config = RuntimeConfig { kind: "docker".to_string(), docker: DockerConfig::default() };
+        let config = RuntimeConfig {
+            kind: "docker".to_string(),
+            docker: DockerConfig::default(),
+        };
         let runtime = create_runtime(&config).unwrap();
         assert_eq!(runtime.name(), "docker");
     }
 
     #[test]
     fn unknown_runtime_returns_error() {
-        let config = RuntimeConfig { kind: "kubernetes".to_string(), docker: DockerConfig::default() };
+        let config = RuntimeConfig {
+            kind: "kubernetes".to_string(),
+            docker: DockerConfig::default(),
+        };
         assert!(create_runtime(&config).is_err());
     }
 
     #[test]
     fn empty_kind_returns_error() {
-        let config = RuntimeConfig { kind: String::new(), docker: DockerConfig::default() };
+        let config = RuntimeConfig {
+            kind: String::new(),
+            docker: DockerConfig::default(),
+        };
         assert!(create_runtime(&config).is_err());
     }
 }

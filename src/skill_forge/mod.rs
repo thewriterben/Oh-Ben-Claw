@@ -494,9 +494,7 @@ impl Tool for SkillForgeTool {
 
         match action.as_str() {
             "list" => match self.forge.list_manifests() {
-                Ok(manifests) if manifests.is_empty() => {
-                    Ok(ToolResult::ok("No skills installed."))
-                }
+                Ok(manifests) if manifests.is_empty() => Ok(ToolResult::ok("No skills installed.")),
                 Ok(manifests) => {
                     let summary: Vec<Value> = manifests
                         .iter()
@@ -623,7 +621,10 @@ mod tests {
         let template = "curl https://example.com/{city}/weather?units={units}";
         let args = json!({"city": "london", "units": "metric"});
         let result = SkillTool::substitute(template, &args);
-        assert_eq!(result, "curl https://example.com/london/weather?units=metric");
+        assert_eq!(
+            result,
+            "curl https://example.com/london/weather?units=metric"
+        );
     }
 
     #[test]
@@ -728,8 +729,12 @@ mod tests {
     fn forge_list_manifests() {
         let tmp = TempDir::new().unwrap();
         let forge = SkillForge::new(tmp.path());
-        forge.install_skill(&sample_shell_manifest("skill_a")).unwrap();
-        forge.install_skill(&sample_shell_manifest("skill_b")).unwrap();
+        forge
+            .install_skill(&sample_shell_manifest("skill_a"))
+            .unwrap();
+        forge
+            .install_skill(&sample_shell_manifest("skill_b"))
+            .unwrap();
 
         let manifests = forge.list_manifests().unwrap();
         assert_eq!(manifests.len(), 2);
@@ -748,10 +753,7 @@ mod tests {
     async fn forge_tool_list_action_empty() {
         let tmp = TempDir::new().unwrap();
         let forge_tool = SkillForgeTool::new(SkillForge::new(tmp.path()));
-        let result = forge_tool
-            .execute(json!({"action": "list"}))
-            .await
-            .unwrap();
+        let result = forge_tool.execute(json!({"action": "list"})).await.unwrap();
         assert!(result.success);
         assert!(result.output.contains("No skills"));
     }
@@ -773,10 +775,7 @@ mod tests {
             .unwrap();
         assert!(install_result.success, "{:?}", install_result.error);
 
-        let list_result = forge_tool
-            .execute(json!({"action": "list"}))
-            .await
-            .unwrap();
+        let list_result = forge_tool.execute(json!({"action": "list"})).await.unwrap();
         assert!(list_result.success);
         assert!(list_result.output.contains("forge_tool_test"));
     }
@@ -839,10 +838,7 @@ mod tests {
             ..sample_shell_manifest("delegate_skill")
         };
         let tool = SkillTool::new(m).unwrap();
-        let result = tool
-            .execute(json!({"runtime": "arg"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"runtime": "arg"})).await.unwrap();
         assert!(result.success);
         assert!(result.output.contains("shell"));
     }

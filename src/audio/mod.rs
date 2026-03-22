@@ -24,7 +24,7 @@ use crate::tools::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -328,7 +328,7 @@ impl AudioPipeline {
 
 // ── Recording helpers ─────────────────────────────────────────────────────────
 
-async fn record_alsa(duration_secs: u32, device: &str, out: &PathBuf) -> anyhow::Result<PathBuf> {
+async fn record_alsa(duration_secs: u32, device: &str, out: &Path) -> anyhow::Result<PathBuf> {
     let status = tokio::process::Command::new("arecord")
         .args([
             "-D",
@@ -345,13 +345,13 @@ async fn record_alsa(duration_secs: u32, device: &str, out: &PathBuf) -> anyhow:
         .await;
 
     match status {
-        Ok(s) if s.success() => Ok(out.clone()),
+        Ok(s) if s.success() => Ok(out.to_path_buf()),
         Ok(s) => anyhow::bail!("arecord exited with status {s}"),
         Err(e) => anyhow::bail!("Failed to run arecord: {e}"),
     }
 }
 
-async fn record_sox(duration_secs: u32, out: &PathBuf) -> anyhow::Result<PathBuf> {
+async fn record_sox(duration_secs: u32, out: &Path) -> anyhow::Result<PathBuf> {
     let status = tokio::process::Command::new("sox")
         .args([
             "-d",
@@ -368,17 +368,13 @@ async fn record_sox(duration_secs: u32, out: &PathBuf) -> anyhow::Result<PathBuf
         .await;
 
     match status {
-        Ok(s) if s.success() => Ok(out.clone()),
+        Ok(s) if s.success() => Ok(out.to_path_buf()),
         Ok(s) => anyhow::bail!("sox exited with status {s}"),
         Err(e) => anyhow::bail!("Failed to run sox: {e}"),
     }
 }
 
-async fn record_ffmpeg(
-    duration_secs: u32,
-    device: &str,
-    out: &PathBuf,
-) -> anyhow::Result<PathBuf> {
+async fn record_ffmpeg(duration_secs: u32, device: &str, out: &Path) -> anyhow::Result<PathBuf> {
     let status = tokio::process::Command::new("ffmpeg")
         .args([
             "-y",
@@ -394,7 +390,7 @@ async fn record_ffmpeg(
         .await;
 
     match status {
-        Ok(s) if s.success() => Ok(out.clone()),
+        Ok(s) if s.success() => Ok(out.to_path_buf()),
         Ok(s) => anyhow::bail!("ffmpeg exited with status {s}"),
         Err(e) => anyhow::bail!("Failed to run ffmpeg: {e}"),
     }
@@ -495,7 +491,11 @@ impl Tool for AudioPipelineTool {
             "transcribe" => {
                 let path = match args.get("path").and_then(|v| v.as_str()) {
                     Some(p) => PathBuf::from(p),
-                    None => return Ok(ToolResult::err("Missing required argument: path for transcribe action")),
+                    None => {
+                        return Ok(ToolResult::err(
+                            "Missing required argument: path for transcribe action",
+                        ))
+                    }
                 };
                 if !path.exists() {
                     return Ok(ToolResult::err(format!(
@@ -522,7 +522,11 @@ impl Tool for AudioPipelineTool {
             "synthesise" | "synthesize" => {
                 let text = match args.get("text").and_then(|v| v.as_str()) {
                     Some(t) => t.to_string(),
-                    None => return Ok(ToolResult::err("Missing required argument: text for synthesise action")),
+                    None => {
+                        return Ok(ToolResult::err(
+                            "Missing required argument: text for synthesise action",
+                        ))
+                    }
                 };
 
                 // Apply per-call voice override if provided
@@ -624,10 +628,7 @@ mod tests {
     #[tokio::test]
     async fn tool_returns_error_on_missing_path_for_transcribe() {
         let tool = AudioPipelineTool::default_config();
-        let result = tool
-            .execute(json!({"action": "transcribe"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"action": "transcribe"})).await.unwrap();
         assert!(!result.success);
     }
 
@@ -649,10 +650,7 @@ mod tests {
     #[tokio::test]
     async fn tool_returns_error_on_missing_text_for_synthesise() {
         let tool = AudioPipelineTool::default_config();
-        let result = tool
-            .execute(json!({"action": "synthesise"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"action": "synthesise"})).await.unwrap();
         assert!(!result.success);
     }
 

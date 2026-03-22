@@ -5,7 +5,114 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-03-22
+
+### Fixed — Audit: CI Build & Clippy
+
+This release resolves all 25 clippy errors that were blocking the CI pipeline,
+applies `rustfmt` formatting to all source files, and addresses security audit
+advisories in transitive dependencies.
+
+#### Clippy Fixes
+
+- **`src/lib.rs`** — removed duplicate `#![allow(dead_code)]` attribute
+  (`clippy::duplicated_attributes`)
+- **`src/agent/reflexion.rs`** — removed unnecessary `mut` on `config` binding
+  (`unused_mut`); replaced `splitn(2, ':').nth(1)` with `split_once(':')`
+  (`clippy::manual_split_once`)
+- **`src/audio/mod.rs`** — changed three `&PathBuf` parameters to `&Path` in
+  `record_alsa`, `record_sox`, and `record_ffmpeg`; added `use std::path::Path`
+  (`clippy::ptr_arg`)
+- **`src/tools/builtin/audio.rs`** — removed unnecessary `mut` on `cmd_args`
+  (`unused_mut`); changed ten `&format!(...)` arguments to `format!(...)`
+  (`clippy::needless_borrows_for_generic_args`); changed four `&PathBuf`
+  parameters (`transcribe_openai`, `transcribe_local`) to `&Path`
+  (`clippy::ptr_arg`); added `use std::path::Path`
+- **`src/tools/builtin/ota.rs`** — changed two `&format!(...)` arguments to
+  `format!(...)` (`clippy::needless_borrows_for_generic_args`)
+- **`src/config/mod.rs`** — replaced manual `Default` impl for `IMessageConfig`
+  with `#[derive(Default)]` (`clippy::derivable_impls`)
+- **`src/dashboard/mod.rs`** — removed unnecessary `as u64` cast on
+  `stat.f_frsize` which is already `u64` (`clippy::unnecessary_cast`)
+- **`src/peripherals/fusion.rs`** — replaced `sorted.len() % 2 == 0` with
+  `sorted.len().is_multiple_of(2)` (`clippy::manual_is_multiple_of`)
+- **`src/hooks/runner.rs`** — replaced `sort_by(|a, b| b.priority().cmp(&a.priority()))`
+  with `sort_by_key(|h| Reverse(h.priority()))` (`clippy::unnecessary_sort_by`);
+  added `use std::cmp::Reverse`
+- **`src/rag/mod.rs`** — replaced `board.map_or(true, |b| ...)` with
+  `board.is_none_or(|b| ...)` (`clippy::unnecessary_map_or`)
+
+#### Formatting
+
+- Applied `cargo fmt --all` to all Rust source files including
+  `firmware/obc-esp32-s3/src/main.rs` and multiple `src/` modules
+
+#### Dependency Updates
+
+- **`ratatui`** upgraded from `0.29` → `0.30` — resolves
+  `RUSTSEC-2024-0436` (`paste` unmaintained, now removed) and
+  `RUSTSEC-2026-0002` (`lru 0.12.5` unsound iterator, now `lru 0.16.3`)
+- Added **`.cargo/audit.toml`** to acknowledge `RUSTSEC-2025-0134`
+  (`rustls-pemfile 2.2.0` unmaintained via `rumqttc 0.24`) with tracking note;
+  no exploitable vulnerability — purely a maintenance classification
+
+#### Documentation
+
+- **`README.md`** — full rewrite: added table of contents, Phases 12 & 13
+  features (browser automation, ClawHub, image memory, deployment scheme
+  generator), new hardware (Seeed XIAO ESP32S3-Sense, Sipeed 6+1 mic array,
+  DHT22/DHT11), quick-start section, full CLI reference, updated project
+  structure tree, comprehensive feature-comparison table vs ZeroClaw
+- **`docs/architecture/ARCHITECTURE.md`** — full rewrite: added deployment
+  subsystem section, security model details (vault, pairing, policy engine),
+  P2P mesh section, updated component diagram and relationship table (removed
+  stale "planned" entries for GUI and pairing that are now implemented)
+- **`CHANGELOG.md`** — added this Phase 13 + audit entry (previously missing)
+- **`CONTRIBUTING.md`** — improved development setup, added `pnpm` note for
+  GUI, deployment and firmware cross-compile sections
+- **`SECURITY.md`** — expanded with Docker runtime sandbox, tool policy engine,
+  and security audit advisory details
+
+### Test Results
+
+```
+test result: ok. 554 passed; 0 failed; 0 ignored; 0 measured
+```
+
+554 unit tests pass. Doc-tests: 12 passed, 0 failed, 2 ignored.
+
+---
+
 ## [Unreleased] — 2026-03-20
+
+### Added — Phase 13: Hardware-Driven Deployment Scheme Generator
+
+Three new boards and two new accessories are added to the peripheral registry
+(`src/peripherals/registry.rs`): **Waveshare ESP32-S3-Touch-LCD-2.1**
+(display, touch, audio), **Seeed XIAO ESP32S3-Sense** (camera, audio, WiFi,
+BLE), **Sipeed 6+1 Mic Array** (far-field USB audio), **DHT22**, and **DHT11**.
+New capability tokens: `display`, `touch`.
+
+A new `src/deployment/` module implements:
+
+- **`HardwareInventory`** / **`HardwareItem`** / **`ItemRole`** / **`FeatureDesire`** —
+  structured description of available hardware and desired features
+- **`HardwareAdvisor`** — gap analysis: checks which features are satisfied,
+  identifies missing capabilities, suggests boards from the registry
+- **`DeploymentScheme`** / **`AgentAssignment`** / **`NodeRole`** — output types
+  describing the generated agent topology and TOML config snippet
+- **`DeploymentPlanner`** — deterministic rule-based planner (no LLM required)
+  that maps hardware to agent roles and renders a complete TOML configuration
+- **`DeploymentSwarm`** — optional LLM-powered multi-agent swarm (three
+  sub-agents: hardware-advisor, architect, requirements-checker)
+- `pub mod deployment` registered in `src/lib.rs`
+
+Configuration: **`DeploymentConfig`** (`[deployment]`) and
+**`DeploymentHardwareConfig`** (`[[deployment.hardware]]`) added to
+`src/config/mod.rs`; `Config` gains `deployment: DeploymentConfig`.
+
+Example: **`examples/config-nanopi-deployment.toml`** — complete reference
+configuration for the NanoPi Neo3 + 4-device scenario.
 
 ### Added — Phase 12: OpenClaw 3.13 Parity
 

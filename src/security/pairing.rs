@@ -214,7 +214,10 @@ impl NodePairingManager {
     /// Get the current pairing status of a node.
     pub fn status(&self, node_id: &str) -> PairingStatus {
         match self.state.lock() {
-            Ok(guard) => guard.get(node_id).cloned().unwrap_or(PairingStatus::Unpaired),
+            Ok(guard) => guard
+                .get(node_id)
+                .cloned()
+                .unwrap_or(PairingStatus::Unpaired),
             Err(poisoned) => {
                 tracing::error!("Pairing state lock poisoned; recovering");
                 poisoned

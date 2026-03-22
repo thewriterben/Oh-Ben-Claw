@@ -258,7 +258,7 @@ fn median(values: &[f64]) -> f64 {
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mid = sorted.len() / 2;
-    if sorted.len() % 2 == 0 {
+    if sorted.len().is_multiple_of(2) {
         (sorted[mid - 1] + sorted[mid]) / 2.0
     } else {
         sorted[mid]
@@ -339,7 +339,11 @@ impl Tool for SensorFusionTool {
 
         let readings_val = match args.get("readings").and_then(|v| v.as_array()) {
             Some(r) => r,
-            None => return Ok(ToolResult::err("Missing required argument: readings (array)")),
+            None => {
+                return Ok(ToolResult::err(
+                    "Missing required argument: readings (array)",
+                ))
+            }
         };
 
         if readings_val.is_empty() {
@@ -370,7 +374,11 @@ impl Tool for SensorFusionTool {
                 .to_string();
             let value = match rv.get("value").and_then(|v| v.as_f64()) {
                 Some(v) => v,
-                None => return Ok(ToolResult::err("Each reading must have a numeric 'value' field")),
+                None => {
+                    return Ok(ToolResult::err(
+                        "Each reading must have a numeric 'value' field",
+                    ))
+                }
             };
             let weight = rv.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0);
             fusion.add_reading(SensorReading::new(sensor_id, value).with_weight(weight));
@@ -382,7 +390,9 @@ impl Tool for SensorFusionTool {
                     .unwrap_or_else(|_| format!("{{\"value\": {}}}", result.value));
                 Ok(ToolResult::ok(json_out))
             }
-            None => Ok(ToolResult::err("No readings provided — cannot compute fusion")),
+            None => Ok(ToolResult::err(
+                "No readings provided — cannot compute fusion",
+            )),
         }
     }
 }
