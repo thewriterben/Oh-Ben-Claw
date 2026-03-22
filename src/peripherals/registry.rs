@@ -23,6 +23,8 @@
 //! | `can` | CAN bus interface |
 //! | `dac` | Digital-to-analog conversion |
 //! | `cuda` | NVIDIA CUDA GPU compute |
+//! | `display` | Integrated display output |
+//! | `touch` | Capacitive or resistive touch input |
 
 /// Describes a known hardware board.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -393,6 +395,68 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "dac",
         ],
     },
+    // ── Waveshare ESP32-S3-Touch-LCD-2.1 ─────────────────────────────────────
+    // 2.1-inch round touch display with ESP32-S3, integrated speaker, and
+    // capacitive multi-touch.  Acts as the display/sound interface node.
+    // Native USB VID=0x303a; PID=0x8135 (Waveshare Touch LCD 2.1 variant).
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x8135,
+        name: "waveshare-esp32-s3-touch-lcd-2.1",
+        architecture: Some(
+            "ESP32-S3 Xtensa LX7 dual-core @ 240 MHz, 2.1\" round touch LCD, I2S speaker",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio",
+            "i2c",
+            "spi",
+            "wifi",
+            "ble",
+            "audio_sample",
+            "display",
+            "touch",
+        ],
+    },
+    // ── Seeed XIAO ESP32S3-Sense ──────────────────────────────────────────────
+    // Compact ESP32-S3 module with OV2640 camera, PDM microphone, and
+    // expandable microSD.  Used as the primary vision node.
+    // USB VID=0x2886 (Seeed Studio), PID=0x0058 (XIAO ESP32-S3 Sense).
+    BoardInfo {
+        vid: 0x2886,
+        pid: 0x0058,
+        name: "xiao-esp32s3-sense",
+        architecture: Some(
+            "ESP32-S3 Xtensa LX7 dual-core @ 240 MHz, OV2640 camera, PDM microphone",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio",
+            "analog_read",
+            "i2c",
+            "spi",
+            "wifi",
+            "ble",
+            "camera_capture",
+            "audio_sample",
+            "sensor_read",
+        ],
+    },
+    // ── Sipeed 6+1 Mic Array ──────────────────────────────────────────────────
+    // Circular microphone array with 6 peripheral mics and 1 center mic,
+    // powered by an STM32F103 MCU.  Appears as a USB audio device and
+    // provides far-field voice capture for the listening node.
+    // USB VID=0x2b04 (Sipeed), PID=0x00fe (Mic Array v2).
+    BoardInfo {
+        vid: 0x2b04,
+        pid: 0x00fe,
+        name: "sipeed-6plus1-mic-array",
+        architecture: Some(
+            "STM32F103 @ 72 MHz, 6+1 MEMS microphone array with USB audio (UAC1)",
+        ),
+        transport: "serial",
+        capabilities: &["audio_sample", "gpio"],
+    },
 ];
 
 /// Look up a board by USB VID and PID.
@@ -562,6 +626,30 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         bus: "i2c",
         default_i2c_addr: Some(0x3C),
         capabilities: &[],
+        compatible_boards: &[],
+    },
+    // ── Single-Wire / GPIO-Protocol Sensors ───────────────────────────────────
+    AccessoryInfo {
+        name: "dht22",
+        description: "AOSONG DHT22 (AM2302) — capacitive humidity and temperature sensor, single-wire protocol",
+        bus: "gpio",
+        default_i2c_addr: None,
+        capabilities: &["sensor_read"],
+        compatible_boards: &[
+            "nanopi-neo3",
+            "raspberry-pi-4",
+            "raspberry-pi-5",
+            "esp32-s3",
+            "xiao-esp32s3-sense",
+            "waveshare-esp32-s3-touch-lcd-2.1",
+        ],
+    },
+    AccessoryInfo {
+        name: "dht11",
+        description: "AOSONG DHT11 — basic humidity and temperature sensor, single-wire protocol",
+        bus: "gpio",
+        default_i2c_addr: None,
+        capabilities: &["sensor_read"],
         compatible_boards: &[],
     },
 ];
@@ -845,5 +933,76 @@ mod tests {
     #[test]
     fn unknown_accessory_returns_none() {
         assert!(lookup_accessory("nonexistent-sensor").is_none());
+    }
+
+    // ── New hardware tests (Phase 13) ─────────────────────────────────────────
+
+    #[test]
+    fn lookup_waveshare_esp32s3_touch_lcd() {
+        let b = lookup_board(0x303a, 0x8135).unwrap();
+        assert_eq!(b.name, "waveshare-esp32-s3-touch-lcd-2.1");
+        assert!(b.architecture.unwrap().contains("ESP32-S3"));
+        assert!(b.capabilities.contains(&"display"));
+        assert!(b.capabilities.contains(&"touch"));
+        assert!(b.capabilities.contains(&"audio_sample"));
+        assert!(b.capabilities.contains(&"wifi"));
+        assert_eq!(b.transport, "serial");
+    }
+
+    #[test]
+    fn lookup_xiao_esp32s3_sense() {
+        let b = lookup_board(0x2886, 0x0058).unwrap();
+        assert_eq!(b.name, "xiao-esp32s3-sense");
+        assert!(b.architecture.unwrap().contains("OV2640"));
+        assert!(b.capabilities.contains(&"camera_capture"));
+        assert!(b.capabilities.contains(&"audio_sample"));
+        assert!(b.capabilities.contains(&"wifi"));
+        assert!(b.capabilities.contains(&"ble"));
+        assert_eq!(b.transport, "serial");
+    }
+
+    #[test]
+    fn lookup_sipeed_mic_array() {
+        let b = lookup_board(0x2b04, 0x00fe).unwrap();
+        assert_eq!(b.name, "sipeed-6plus1-mic-array");
+        assert!(b.architecture.unwrap().contains("STM32F103"));
+        assert!(b.capabilities.contains(&"audio_sample"));
+        assert_eq!(b.transport, "serial");
+    }
+
+    #[test]
+    fn lookup_dht22_accessory() {
+        let a = lookup_accessory("dht22").unwrap();
+        assert_eq!(a.bus, "gpio");
+        assert_eq!(a.default_i2c_addr, None);
+        assert!(a.capabilities.contains(&"sensor_read"));
+        assert!(a.compatible_boards.contains(&"nanopi-neo3"));
+        assert!(a.compatible_boards.contains(&"xiao-esp32s3-sense"));
+    }
+
+    #[test]
+    fn boards_with_display_capability() {
+        let boards = boards_with_capability("display");
+        assert!(!boards.is_empty());
+        assert!(boards
+            .iter()
+            .any(|b| b.name == "waveshare-esp32-s3-touch-lcd-2.1"));
+    }
+
+    #[test]
+    fn boards_with_touch_capability() {
+        let boards = boards_with_capability("touch");
+        assert!(!boards.is_empty());
+        assert!(boards
+            .iter()
+            .any(|b| b.name == "waveshare-esp32-s3-touch-lcd-2.1"));
+    }
+
+    #[test]
+    fn all_new_boards_are_in_known_boards() {
+        let names: Vec<_> = KNOWN_BOARDS.iter().map(|b| b.name).collect();
+        assert!(names.contains(&"waveshare-esp32-s3-touch-lcd-2.1"));
+        assert!(names.contains(&"xiao-esp32s3-sense"));
+        assert!(names.contains(&"sipeed-6plus1-mic-array"));
     }
 }
