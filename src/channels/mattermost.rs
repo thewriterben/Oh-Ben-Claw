@@ -122,7 +122,9 @@ impl MattermostChannel {
         // Build WebSocket URL
         let ws_url = format!(
             "{}/api/v4/websocket",
-            server.replace("https://", "wss://").replace("http://", "ws://")
+            server
+                .replace("https://", "wss://")
+                .replace("http://", "ws://")
         );
 
         let (ws_stream, _) = connect_async(&ws_url)
@@ -294,7 +296,8 @@ mod tests {
 
     #[test]
     fn deserialize_mm_post() {
-        let json = r#"{"id":"abc123","channel_id":"ch1","user_id":"u1","message":"hello","type":""}"#;
+        let json =
+            r#"{"id":"abc123","channel_id":"ch1","user_id":"u1","message":"hello","type":""}"#;
         let post: MmPost = serde_json::from_str(json).unwrap();
         assert_eq!(post.message, "hello");
         assert_eq!(post.channel_id, "ch1");
@@ -305,7 +308,9 @@ mod tests {
         let server = "https://mattermost.example.com";
         let ws_url = format!(
             "{}/api/v4/websocket",
-            server.replace("https://", "wss://").replace("http://", "ws://")
+            server
+                .replace("https://", "wss://")
+                .replace("http://", "ws://")
         );
         assert_eq!(ws_url, "wss://mattermost.example.com/api/v4/websocket");
     }

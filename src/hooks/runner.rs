@@ -2,6 +2,7 @@
 
 use crate::hooks::traits::{HookHandler, HookResult};
 use serde_json::Value;
+use std::cmp::Reverse;
 
 /// Dispatches lifecycle events to a sorted list of [`HookHandler`]s.
 pub struct HookRunner {
@@ -11,13 +12,15 @@ pub struct HookRunner {
 impl HookRunner {
     /// Create an empty `HookRunner`.
     pub fn new() -> Self {
-        Self { handlers: Vec::new() }
+        Self {
+            handlers: Vec::new(),
+        }
     }
 
     /// Register a handler, then re-sort all handlers by descending priority.
     pub fn register(&mut self, handler: Box<dyn HookHandler>) {
         self.handlers.push(handler);
-        self.handlers.sort_by(|a, b| b.priority().cmp(&a.priority()));
+        self.handlers.sort_by_key(|h| Reverse(h.priority()));
     }
 
     /// Notify all handlers that a session has started (fire-and-forget).
@@ -102,10 +105,14 @@ mod tests {
     }
 
     impl HookHandler for TrackingHook {
-        fn priority(&self) -> i32 { self.priority }
+        fn priority(&self) -> i32 {
+            self.priority
+        }
 
         fn on_session_start(&self, session_id: &str, _channel: &str) {
-            self.calls.lock().push(format!("session_start:{}", session_id));
+            self.calls
+                .lock()
+                .push(format!("session_start:{}", session_id));
         }
 
         fn on_message_received(&self, _session_id: &str, content: &str) -> HookResult {
@@ -123,17 +130,24 @@ mod tests {
 
     impl HookHandler for CancellingHook {
         fn on_message_received(&self, _session_id: &str, _content: &str) -> HookResult {
-            HookResult::Cancel { reason: "blocked".to_string() }
+            HookResult::Cancel {
+                reason: "blocked".to_string(),
+            }
         }
         fn on_tool_call(&self, _tool_name: &str, _args: &serde_json::Value) -> HookResult {
-            HookResult::Cancel { reason: "blocked".to_string() }
+            HookResult::Cancel {
+                reason: "blocked".to_string(),
+            }
         }
     }
 
     #[test]
     fn session_start_dispatched() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let hook = TrackingHook { calls: calls.clone(), priority: 0 };
+        let hook = TrackingHook {
+            calls: calls.clone(),
+            priority: 0,
+        };
         let mut runner = HookRunner::new();
         runner.register(Box::new(hook));
         runner.fire_session_start("s1", "cli");
@@ -143,7 +157,10 @@ mod tests {
     #[test]
     fn message_cancel_short_circuits() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let tracking = TrackingHook { calls: calls.clone(), priority: -1 };
+        let tracking = TrackingHook {
+            calls: calls.clone(),
+            priority: -1,
+        };
         let mut runner = HookRunner::new();
         runner.register(Box::new(CancellingHook));
         runner.register(Box::new(tracking));
@@ -164,8 +181,14 @@ mod tests {
     #[test]
     fn priority_ordering() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let low = TrackingHook { calls: calls.clone(), priority: 1 };
-        let high = TrackingHook { calls: calls.clone(), priority: 10 };
+        let low = TrackingHook {
+            calls: calls.clone(),
+            priority: 1,
+        };
+        let high = TrackingHook {
+            calls: calls.clone(),
+            priority: 10,
+        };
         let mut runner = HookRunner::new();
         runner.register(Box::new(low));
         runner.register(Box::new(high));

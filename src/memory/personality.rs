@@ -46,8 +46,7 @@ impl PersonalityStore {
     /// Create a `PersonalityStore` that uses the default Oh-Ben-Claw data
     /// directory (`~/.oh-ben-claw/`).
     pub fn new() -> Self {
-        let data_dir = Self::default_data_dir()
-            .unwrap_or_else(|_| PathBuf::from(".oh-ben-claw"));
+        let data_dir = Self::default_data_dir().unwrap_or_else(|_| PathBuf::from(".oh-ben-claw"));
         Self { data_dir }
     }
 

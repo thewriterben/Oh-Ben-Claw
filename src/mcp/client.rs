@@ -4,10 +4,10 @@ use super::{JsonRpcRequest, JsonRpcResponse, McpServerConfig, McpToolDef};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
-use std::sync::Arc;
 
 // ── Transport ─────────────────────────────────────────────────────────────────
 
@@ -69,8 +69,14 @@ impl McpClient {
         }
 
         let mut child = cmd.spawn()?;
-        let stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("No stdin"))?;
-        let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("No stdout"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("No stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("No stdout"))?;
 
         let mut client = Self {
             transport: Transport::Stdio(StdioTransport {
@@ -151,8 +157,8 @@ impl McpClient {
     /// List all tools available on the connected server.
     pub async fn list_tools(&mut self) -> Result<Vec<McpToolDef>> {
         let result = self.request("tools/list", json!({})).await?;
-        let tools: Vec<McpToolDef> = serde_json::from_value(result["tools"].clone())
-            .unwrap_or_default();
+        let tools: Vec<McpToolDef> =
+            serde_json::from_value(result["tools"].clone()).unwrap_or_default();
         Ok(tools)
     }
 

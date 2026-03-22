@@ -224,7 +224,11 @@ impl ClawHubClient {
     /// Install a skill by downloading its manifest and writing it to `skills_dir`.
     ///
     /// Returns the path of the written `.skill.json` file.
-    pub async fn install(&self, entry: &ClawHubEntry, skills_dir: &Path) -> Result<std::path::PathBuf> {
+    pub async fn install(
+        &self,
+        entry: &ClawHubEntry,
+        skills_dir: &Path,
+    ) -> Result<std::path::PathBuf> {
         // Download the manifest JSON.
         let manifest_json: serde_json::Value = self
             .client
@@ -424,7 +428,8 @@ mod tests {
         // Populate the index directly (bypassing HTTP).
         {
             let mut idx = client.index.write().await;
-            idx.entries.push(make_entry("weather_check", &["weather"], true));
+            idx.entries
+                .push(make_entry("weather_check", &["weather"], true));
             idx.entries.push(make_entry("joke_gen", &["fun"], false));
         }
 

@@ -1,7 +1,9 @@
 //! Token cost tracker — records usage events and enforces budget limits.
 
 use crate::config::CostConfig;
-use crate::cost::types::{BudgetCheck, CostRecord, CostSummary, ModelStats, TokenUsage, UsagePeriod};
+use crate::cost::types::{
+    BudgetCheck, CostRecord, CostSummary, ModelStats, TokenUsage, UsagePeriod,
+};
 use chrono::Utc;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -170,7 +172,13 @@ mod tests {
         let tracker = CostTracker::new(enabled_config());
         // daily limit is $10; estimate $11
         let result = tracker.check_budget(11.0).unwrap();
-        assert!(matches!(result, BudgetCheck::Exceeded { period: UsagePeriod::Day, .. }));
+        assert!(matches!(
+            result,
+            BudgetCheck::Exceeded {
+                period: UsagePeriod::Day,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -178,7 +186,13 @@ mod tests {
         let tracker = CostTracker::new(enabled_config());
         // $8.5 / $10 = 85% > 80% warn threshold
         let result = tracker.check_budget(8.5).unwrap();
-        assert!(matches!(result, BudgetCheck::Warning { period: UsagePeriod::Day, .. }));
+        assert!(matches!(
+            result,
+            BudgetCheck::Warning {
+                period: UsagePeriod::Day,
+                ..
+            }
+        ));
     }
 
     #[test]

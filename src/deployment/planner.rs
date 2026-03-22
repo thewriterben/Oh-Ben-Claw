@@ -126,7 +126,10 @@ impl DeploymentPlanner {
                     item.path.as_deref().map(|p| format!("\npath = \"{}\"", p)).unwrap_or_default()
                 ),
             });
-        } else if inventory.feature_desires.contains(&FeatureDesire::Listening) {
+        } else if inventory
+            .feature_desires
+            .contains(&FeatureDesire::Listening)
+        {
             warnings.push(
                 "Listening desired but no audio_sample hardware found. \
                  Add a Sipeed 6+1 Mic Array or similar microphone board."
@@ -162,7 +165,10 @@ impl DeploymentPlanner {
                     item.path.as_deref().map(|p| format!("\npath = \"{}\"", p)).unwrap_or_default()
                 ),
             });
-        } else if inventory.feature_desires.contains(&FeatureDesire::DisplayOutput) {
+        } else if inventory
+            .feature_desires
+            .contains(&FeatureDesire::DisplayOutput)
+        {
             warnings.push(
                 "Display output desired but no 'display' capability hardware found. \
                  Add a Waveshare ESP32-S3-Touch-LCD-2.1 or similar display board."
@@ -173,7 +179,10 @@ impl DeploymentPlanner {
         // ── Sensing agent ─────────────────────────────────────────────────────
         // Collect boards/accessories that provide sensor_read without being used
         // for another primary role already.
-        let assigned: Vec<String> = assignments.iter().map(|a| a.hardware_item.clone()).collect();
+        let assigned: Vec<String> = assignments
+            .iter()
+            .map(|a| a.hardware_item.clone())
+            .collect();
         let sensing_items: Vec<_> = inventory
             .items
             .iter()
@@ -269,12 +278,17 @@ impl DeploymentPlanner {
 
         // [agent]
         out.push_str("[agent]\n");
-        out.push_str(&format!("name = \"Oh-Ben-Claw ({})\"\n", inventory.scenario_name));
-        out.push_str("system_prompt = \"\"\"\n\
+        out.push_str(&format!(
+            "name = \"Oh-Ben-Claw ({})\"\n",
+            inventory.scenario_name
+        ));
+        out.push_str(
+            "system_prompt = \"\"\"\n\
             You are Oh-Ben-Claw, an advanced multi-device AI assistant deployed on a\n\
             hardware swarm. You can see, hear, sense, and display information through\n\
             your connected peripheral agents. Coordinate them efficiently.\n\
-            \"\"\"\n");
+            \"\"\"\n",
+        );
         out.push_str("max_tool_iterations = 15\n\n");
 
         // [provider]
@@ -312,10 +326,7 @@ impl DeploymentPlanner {
                 out.push_str(&format!("board = \"{}\"\n", item.board_name));
                 out.push_str("transport = \"native\"\n");
                 if !item.accessories.is_empty() {
-                    out.push_str(&format!(
-                        "# accessories: {}\n",
-                        item.accessories.join(", ")
-                    ));
+                    out.push_str(&format!("# accessories: {}\n", item.accessories.join(", ")));
                 }
                 out.push('\n');
             } else {

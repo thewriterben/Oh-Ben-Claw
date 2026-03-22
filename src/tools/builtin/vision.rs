@@ -183,7 +183,8 @@ impl Tool for VisionTool {
         let detail = input.detail.unwrap_or_else(|| "auto".to_string());
 
         // Encode the image
-        let encoded = if input.source.starts_with("http://") || input.source.starts_with("https://") {
+        let encoded = if input.source.starts_with("http://") || input.source.starts_with("https://")
+        {
             match encode_remote_image(&input.source).await {
                 Ok(e) => e,
                 Err(e) => return Ok(ToolResult::err(format!("Failed to fetch image: {e}"))),
@@ -296,8 +297,14 @@ impl Tool for AudioTranscriptionTool {
             Some(p) => p.to_string(),
             None => return Ok(ToolResult::err("Missing required argument: path")),
         };
-        let language = args.get("language").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let timestamps = args.get("timestamps").and_then(|v| v.as_bool()).unwrap_or(false);
+        let language = args
+            .get("language")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let timestamps = args
+            .get("timestamps")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         // Read the audio file
         let file_bytes = match std::fs::read(&path) {
@@ -312,7 +319,12 @@ impl Tool for AudioTranscriptionTool {
             .to_string();
 
         // Determine MIME type
-        let mime = match file_name.rsplit('.').next().map(|e| e.to_lowercase()).as_deref() {
+        let mime = match file_name
+            .rsplit('.')
+            .next()
+            .map(|e| e.to_lowercase())
+            .as_deref()
+        {
             Some("mp3") => "audio/mpeg",
             Some("mp4") => "audio/mp4",
             Some("wav") => "audio/wav",
@@ -331,7 +343,10 @@ impl Tool for AudioTranscriptionTool {
         let mut form = reqwest::multipart::Form::new()
             .part("file", part)
             .text("model", self.model.clone())
-            .text("response_format", if timestamps { "verbose_json" } else { "text" });
+            .text(
+                "response_format",
+                if timestamps { "verbose_json" } else { "text" },
+            );
 
         if let Some(lang) = language {
             form = form.text("language", lang);
@@ -352,7 +367,9 @@ impl Tool for AudioTranscriptionTool {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Ok(ToolResult::err(format!("Whisper API error {status}: {body}")));
+            return Ok(ToolResult::err(format!(
+                "Whisper API error {status}: {body}"
+            )));
         }
 
         let transcript = if timestamps {
@@ -496,7 +513,9 @@ impl Tool for StructuredOutputTool {
 
         // Validate that it's valid JSON
         match serde_json::from_str::<Value>(&content) {
-            Ok(v) => Ok(ToolResult::ok(serde_json::to_string_pretty(&v).unwrap_or(content))),
+            Ok(v) => Ok(ToolResult::ok(
+                serde_json::to_string_pretty(&v).unwrap_or(content),
+            )),
             Err(_) => Ok(ToolResult::ok(content)),
         }
     }
@@ -540,7 +559,10 @@ mod tests {
         let schema = tool.parameters_schema();
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["source"].is_object());
-        assert!(schema["required"].as_array().unwrap().contains(&json!("source")));
+        assert!(schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("source")));
     }
 
     #[test]

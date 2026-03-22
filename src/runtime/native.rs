@@ -18,7 +18,12 @@ impl RuntimeAdapter for NativeRuntime {
         true
     }
 
-    async fn run_shell(&self, cmd: &str, args: &[&str], timeout_secs: u64) -> anyhow::Result<String> {
+    async fn run_shell(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        timeout_secs: u64,
+    ) -> anyhow::Result<String> {
         let mut command = Command::new(cmd);
         command.args(args);
         command.stdout(std::process::Stdio::piped());
@@ -26,13 +31,11 @@ impl RuntimeAdapter for NativeRuntime {
 
         let child = command.spawn().context("failed to spawn process")?;
 
-        let output = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            child.wait_with_output(),
-        )
-        .await
-        .context("command timed out")?
-        .context("failed to wait for process")?;
+        let output =
+            tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output())
+                .await
+                .context("command timed out")?
+                .context("failed to wait for process")?;
 
         let mut result = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();

@@ -318,9 +318,7 @@ fn main() -> anyhow::Result<()> {
                     if b == b'\n' {
                         if !line.is_empty() {
                             if let Ok(line_str) = std::str::from_utf8(&line) {
-                                if let Ok(resp) =
-                                    handle_request(line_str, &mut agent_state)
-                                {
+                                if let Ok(resp) = handle_request(line_str, &mut agent_state) {
                                     let out = serde_json::to_string(&resp).unwrap_or_default();
                                     let _ = uart.write(format!("{}\n", out).as_bytes());
                                 }
@@ -432,7 +430,6 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
         }
 
         // ── Edge-Native Agent Commands ─────────────────────────────────────
-
         "agent_config" => {
             if let Some(ssid) = req.args.get("wifi_ssid").and_then(|v| v.as_str()) {
                 state.wifi_ssid = ssid.to_string();
@@ -666,8 +663,14 @@ fn execute_local_tool(name: &str, args: &serde_json::Value) -> anyhow::Result<St
             audio_sample(dur, raw)
         }
         "sensor_read" => {
-            let sensor = args.get("sensor").and_then(|v| v.as_str()).unwrap_or("bme280");
-            let field = args.get("field").and_then(|v| v.as_str()).unwrap_or("temperature");
+            let sensor = args
+                .get("sensor")
+                .and_then(|v| v.as_str())
+                .unwrap_or("bme280");
+            let field = args
+                .get("field")
+                .and_then(|v| v.as_str())
+                .unwrap_or("temperature");
             sensor_read(sensor, field)
         }
         unknown => Err(anyhow::anyhow!("Unknown local tool: {}", unknown)),
@@ -682,7 +685,10 @@ fn execute_local_tool(name: &str, args: &serde_json::Value) -> anyhow::Result<St
 fn llm_chat_completion(state: &AgentState) -> anyhow::Result<LlmResponse> {
     use esp_idf_svc::http::client::{Configuration as HttpConfig, EspHttpConnection};
 
-    let url = format!("{}/v1/chat/completions", state.llm.base_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/v1/chat/completions",
+        state.llm.base_url.trim_end_matches('/')
+    );
 
     let request_body = serde_json::to_string(&LlmRequest {
         model: &state.llm.model,
@@ -707,11 +713,7 @@ fn llm_chat_completion(state: &AgentState) -> anyhow::Result<LlmResponse> {
     ];
 
     let request_bytes = request_body.as_bytes();
-    client.initiate_request(
-        esp_idf_svc::http::Method::Post,
-        &url,
-        &headers,
-    )?;
+    client.initiate_request(esp_idf_svc::http::Method::Post, &url, &headers)?;
     client.write(request_bytes)?;
     client.initiate_response()?;
 

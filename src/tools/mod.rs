@@ -7,7 +7,6 @@
 pub mod builtin;
 pub mod traits;
 
-pub use traits::{Tool, ToolResult};
 pub use builtin::{
     audio::{AudioTranscribeTool, TextToSpeechTool},
     browser::{
@@ -21,6 +20,7 @@ pub use builtin::{
     shell::ShellTool,
     vision::VisionTool,
 };
+pub use traits::{Tool, ToolResult};
 /// Build the default set of built-in tools.
 ///
 /// Vision and audio tools read their API keys from environment variables

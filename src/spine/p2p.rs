@@ -216,7 +216,10 @@ impl P2pSpine {
         let discovery_bind = format!("0.0.0.0:{}", arc.config.discovery_port);
         let udp_rx = UdpSocket::bind(&discovery_bind).await?;
         udp_rx.set_broadcast(true)?;
-        tracing::info!(port = arc.config.discovery_port, "P2P discovery UDP socket bound");
+        tracing::info!(
+            port = arc.config.discovery_port,
+            "P2P discovery UDP socket bound"
+        );
 
         let peer_registry = Arc::clone(&arc.peer_registry);
         let peer_timeout = arc.config.peer_timeout_secs;
@@ -358,13 +361,11 @@ impl P2pSpine {
         let payload = serde_json::to_vec(&request)?;
 
         // Connect and send
-        let mut stream = tokio::time::timeout(
-            Duration::from_secs(10),
-            TcpStream::connect(tcp_addr),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("TCP connect timed out for node={}", node_id))?
-        .map_err(|e| anyhow::anyhow!("TCP connect failed for node={}: {}", node_id, e))?;
+        let mut stream =
+            tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(tcp_addr))
+                .await
+                .map_err(|_| anyhow::anyhow!("TCP connect timed out for node={}", node_id))?
+                .map_err(|e| anyhow::anyhow!("TCP connect failed for node={}: {}", node_id, e))?;
 
         write_framed(&mut stream, &payload).await?;
 
@@ -445,10 +446,7 @@ async fn read_framed(stream: &mut TcpStream) -> Result<Vec<u8>> {
 /// caller that originally invoked `invoke_tool()`).  For cross-node calls the
 /// responding node writes a `ToolCallResult` frame back over the same
 /// connection.
-async fn handle_tcp_connection(
-    mut stream: TcpStream,
-    pending_calls: PendingCalls,
-) -> Result<()> {
+async fn handle_tcp_connection(mut stream: TcpStream, pending_calls: PendingCalls) -> Result<()> {
     let payload = read_framed(&mut stream).await?;
 
     // Try to interpret as a ToolCallResult (response from a remote node)
@@ -521,7 +519,9 @@ impl Tool for P2pNodeTool {
             Ok(ToolResult::ok(result.output.unwrap_or_default()))
         } else {
             Ok(ToolResult::err(
-                result.error.unwrap_or_else(|| "Unknown P2P error".to_string()),
+                result
+                    .error
+                    .unwrap_or_else(|| "Unknown P2P error".to_string()),
             ))
         }
     }

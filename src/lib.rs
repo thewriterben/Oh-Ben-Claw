@@ -24,32 +24,31 @@
 // Public library API — items are exported for use by external consumers (CLI, GUI,
 // tests, and future integrations). Dead-code lint is suppressed at the crate level
 // because the library intentionally exposes a broader surface than the binary uses.
-#![allow(dead_code)]
 
 pub mod agent;
+pub mod approval;
 pub mod audio;
 pub mod channels;
 pub mod config;
+pub mod cost;
 pub mod dashboard;
 pub mod deployment;
+pub mod doctor;
 pub mod gateway;
+pub mod hooks;
+pub mod mcp;
 pub mod memory;
+pub mod multimodal;
 pub mod observability;
 pub mod peripherals;
 pub mod providers;
+pub mod rag;
+pub mod runtime;
 pub mod scheduler;
 pub mod security;
 pub mod skill_forge;
 pub mod spine;
 pub mod tools;
 pub mod tunnel;
-pub mod mcp;
 pub mod vision;
-pub mod approval;
-pub mod cost;
-pub mod doctor;
-pub mod hooks;
-pub mod multimodal;
-pub mod rag;
-pub mod runtime;
 pub use config::Config;

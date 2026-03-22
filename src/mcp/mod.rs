@@ -170,10 +170,8 @@ impl McpRegistry {
         self.clients.insert(name.to_string(), client_arc.clone());
 
         for tool_def in tool_defs {
-            self.tools.insert(
-                tool_def.name.clone(),
-                (name.to_string(), tool_def),
-            );
+            self.tools
+                .insert(tool_def.name.clone(), (name.to_string(), tool_def));
         }
 
         tracing::info!("Connected to MCP server '{}' with {} tools", name, count);

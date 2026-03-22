@@ -109,16 +109,15 @@ impl IMessageChannel {
         tokio::task::spawn_blocking(move || -> Result<i64> {
             let conn = rusqlite::Connection::open_with_flags(
                 &db_path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
             )
             .context("Failed to open Messages.app database")?;
 
             let rowid: i64 = conn
-                .query_row(
-                    "SELECT COALESCE(MAX(ROWID), 0) FROM message",
-                    [],
-                    |row| row.get(0),
-                )
+                .query_row("SELECT COALESCE(MAX(ROWID), 0) FROM message", [], |row| {
+                    row.get(0)
+                })
                 .context("Failed to query max ROWID")?;
             Ok(rowid)
         })
