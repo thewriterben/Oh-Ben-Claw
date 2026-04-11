@@ -10,6 +10,7 @@ pub mod handle;
 pub mod orchestrator;
 pub mod pool;
 pub mod reflexion;
+pub mod streaming;
 pub use edge::{EdgeAgent, EdgeAgentBuilder};
 pub use handle::{AgentEvent, AgentHandle};
 #[allow(unused_imports)]

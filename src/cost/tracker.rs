@@ -6,23 +6,67 @@ use crate::cost::types::{
 };
 use chrono::Utc;
 use parking_lot::Mutex;
+use rusqlite::Connection;
+use std::path::Path;
 use std::sync::Arc;
 
 /// Tracks token usage and enforces spending budgets for the current session.
+///
+/// When constructed with [`CostTracker::with_db`], cost records are persisted to
+/// a SQLite database so that daily/monthly budgets survive process restarts.
+/// The in-memory-only mode ([`CostTracker::new`]) is still available for tests.
 pub struct CostTracker {
     config: CostConfig,
     session_costs: Arc<Mutex<Vec<CostRecord>>>,
     session_id: String,
+    db: Option<Arc<Mutex<Connection>>>,
 }
 
 impl CostTracker {
-    /// Create a new `CostTracker` with an in-memory store.
+    /// Create a new `CostTracker` with an in-memory store (no persistence).
     pub fn new(config: CostConfig) -> Self {
         Self {
             config,
             session_costs: Arc::new(Mutex::new(Vec::new())),
             session_id: uuid::Uuid::new_v4().to_string(),
+            db: None,
         }
+    }
+
+    /// Create a `CostTracker` backed by a SQLite database at `db_path`.
+    ///
+    /// The database file (and parent directories) are created if they do not
+    /// exist.  WAL journal mode is enabled for better concurrency.
+    pub fn with_db(config: CostConfig, db_path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let db_path = db_path.as_ref();
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let conn = Connection::open(db_path)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
+             CREATE TABLE IF NOT EXISTS cost_records (
+                 id                      INTEGER PRIMARY KEY,
+                 session_id              TEXT    NOT NULL,
+                 model                   TEXT    NOT NULL,
+                 input_tokens            INTEGER NOT NULL,
+                 output_tokens           INTEGER NOT NULL,
+                 total_tokens            INTEGER NOT NULL,
+                 cost_usd                REAL    NOT NULL,
+                 input_cost_per_million  REAL    NOT NULL,
+                 output_cost_per_million REAL    NOT NULL,
+                 timestamp               TEXT    NOT NULL
+             );",
+        )?;
+
+        Ok(Self {
+            config,
+            session_costs: Arc::new(Mutex::new(Vec::new())),
+            session_id: uuid::Uuid::new_v4().to_string(),
+            db: Some(Arc::new(Mutex::new(conn))),
+        })
     }
 
     /// The unique identifier for the current session.
@@ -33,6 +77,29 @@ impl CostTracker {
     /// Record a token usage event.
     pub fn record_usage(&self, usage: TokenUsage) {
         let record = CostRecord::new(&self.session_id, usage);
+
+        if let Some(db) = &self.db {
+            let conn = db.lock();
+            // Best-effort insert — do not lose the in-memory record on DB failure.
+            let _ = conn.execute(
+                "INSERT INTO cost_records
+                     (session_id, model, input_tokens, output_tokens, total_tokens,
+                      cost_usd, input_cost_per_million, output_cost_per_million, timestamp)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    record.session_id,
+                    record.usage.model,
+                    record.usage.input_tokens as i64,
+                    record.usage.output_tokens as i64,
+                    record.usage.total_tokens as i64,
+                    record.usage.cost_usd,
+                    0.0_f64, // price info is not retained in TokenUsage
+                    0.0_f64,
+                    record.usage.timestamp.to_rfc3339(),
+                ],
+            );
+        }
+
         self.session_costs.lock().push(record);
     }
 
@@ -42,26 +109,39 @@ impl CostTracker {
             return Ok(BudgetCheck::Allowed);
         }
 
-        let records = self.session_costs.lock();
         let now = Utc::now();
-
-        // Since we have no persistent store, daily and monthly limits are
-        // enforced against session costs that fall within the current day/month.
-        // A session started mid-day will only count costs accrued that day.
-        let day_total: f64 = records
-            .iter()
-            .filter(|r| r.usage.timestamp.date_naive() == now.date_naive())
-            .map(|r| r.usage.cost_usd)
-            .sum();
-
-        let month_total: f64 = records
-            .iter()
-            .filter(|r| {
-                let t = r.usage.timestamp;
-                t.format("%Y-%m").to_string() == now.format("%Y-%m").to_string()
-            })
-            .map(|r| r.usage.cost_usd)
-            .sum();
+        let (day_total, month_total) = if let Some(db) = &self.db {
+            let conn = db.lock();
+            let day: f64 = conn.query_row(
+                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM cost_records
+                 WHERE date(timestamp) = date(?1)",
+                [now.to_rfc3339()],
+                |row| row.get(0),
+            )?;
+            let month: f64 = conn.query_row(
+                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM cost_records
+                 WHERE strftime('%Y-%m', timestamp) = strftime('%Y-%m', ?1)",
+                [now.to_rfc3339()],
+                |row| row.get(0),
+            )?;
+            (day, month)
+        } else {
+            let records = self.session_costs.lock();
+            let day: f64 = records
+                .iter()
+                .filter(|r| r.usage.timestamp.date_naive() == now.date_naive())
+                .map(|r| r.usage.cost_usd)
+                .sum();
+            let month: f64 = records
+                .iter()
+                .filter(|r| {
+                    let t = r.usage.timestamp;
+                    t.format("%Y-%m").to_string() == now.format("%Y-%m").to_string()
+                })
+                .map(|r| r.usage.cost_usd)
+                .sum();
+            (day, month)
+        };
 
         let projected_day = day_total + estimated_cost_usd;
         let projected_month = month_total + estimated_cost_usd;
@@ -127,9 +207,30 @@ impl CostTracker {
             stats.request_count += 1;
         }
 
-        // Since we have only session data, daily and monthly equal session for now.
-        summary.daily_cost_usd = summary.session_cost_usd;
-        summary.monthly_cost_usd = summary.session_cost_usd;
+        if let Some(db) = &self.db {
+            let conn = db.lock();
+            let now = Utc::now();
+            summary.daily_cost_usd = conn
+                .query_row(
+                    "SELECT COALESCE(SUM(cost_usd), 0.0) FROM cost_records
+                     WHERE date(timestamp) = date(?1)",
+                    [now.to_rfc3339()],
+                    |row| row.get(0),
+                )
+                .unwrap_or(summary.session_cost_usd);
+            summary.monthly_cost_usd = conn
+                .query_row(
+                    "SELECT COALESCE(SUM(cost_usd), 0.0) FROM cost_records
+                     WHERE strftime('%Y-%m', timestamp) = strftime('%Y-%m', ?1)",
+                    [now.to_rfc3339()],
+                    |row| row.get(0),
+                )
+                .unwrap_or(summary.session_cost_usd);
+        } else {
+            summary.daily_cost_usd = summary.session_cost_usd;
+            summary.monthly_cost_usd = summary.session_cost_usd;
+        }
+
         summary
     }
 }

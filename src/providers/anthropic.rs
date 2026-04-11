@@ -1,7 +1,7 @@
 //! Anthropic provider adapter.
 
 use crate::config::ProviderConfig;
-use crate::providers::{ChatCompletion, ChatMessage, ChatRole, Provider, ToolCall};
+use crate::providers::{ChatCompletion, ChatMessage, ChatRole, Provider, ResponseFormat, ToolCall};
 use crate::tools::Tool;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -95,6 +95,43 @@ impl Provider for AnthropicProvider {
         if let Some(sys) = system_prompt {
             body["system"] = Value::String(sys);
         }
+
+        // Anthropic does not have a native `response_format` field. We emulate
+        // JSON mode by appending an instruction to the system prompt and, for
+        // structured schemas, including the schema definition.
+        if let Some(ref fmt) = config.response_format {
+            match fmt {
+                ResponseFormat::Text => {} // default — nothing to do
+                ResponseFormat::JsonObject => {
+                    let existing = body
+                        .get("system")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let suffix =
+                        "\n\nYou must respond with valid JSON only. No markdown, no explanation.";
+                    body["system"] = Value::String(format!("{existing}{suffix}"));
+                }
+                ResponseFormat::JsonSchema {
+                    name,
+                    schema,
+                    strict: _,
+                } => {
+                    let existing = body
+                        .get("system")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let suffix = format!(
+                        "\n\nYou must respond with valid JSON that conforms to the \
+                         following JSON schema named \"{name}\":\n{schema}\n\
+                         Output only the JSON object. No markdown, no explanation."
+                    );
+                    body["system"] = Value::String(format!("{existing}{suffix}"));
+                }
+            }
+        }
+
         if let Some(t) = anth_tools {
             body["tools"] = serde_json::to_value(t)?;
             body["tool_choice"] = serde_json::json!({"type": "auto"});

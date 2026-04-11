@@ -19,9 +19,20 @@
 //! {"id":"1","ok":true,"result":"<base64-encoded JPEG>"}
 //! ```
 
+use crate::spine::{SpineClient, ToolCallResult};
 use crate::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::Arc;
+
+/// Convert a spine `ToolCallResult` into a `ToolResult`.
+fn tool_result_from_spine(result: ToolCallResult) -> ToolResult {
+    if result.ok {
+        ToolResult::ok(result.output.unwrap_or_default())
+    } else {
+        ToolResult::err(result.error.unwrap_or_else(|| "Unknown error".to_string()))
+    }
+}
 
 /// JPEG quality bounds — must match firmware constants.
 pub(crate) const CAMERA_QUALITY_MIN: u64 = 1;
@@ -38,12 +49,21 @@ pub(crate) const AUDIO_DURATION_DEFAULT_MS: u64 = 100;
 /// Tool: capture a JPEG image from the camera module on an ESP32-S3 board.
 pub struct CameraCaptureTool {
     node_id: String,
+    spine_client: Option<Arc<SpineClient>>,
 }
 
 impl CameraCaptureTool {
     pub fn new(node_id: impl Into<String>) -> Self {
         Self {
             node_id: node_id.into(),
+            spine_client: None,
+        }
+    }
+
+    pub fn with_spine(node_id: impl Into<String>, spine_client: Arc<SpineClient>) -> Self {
+        Self {
+            node_id: node_id.into(),
+            spine_client: Some(spine_client),
         }
     }
 }
@@ -99,17 +119,27 @@ impl Tool for CameraCaptureTool {
             "Capturing camera image"
         );
 
-        // TODO: Send command to the peripheral node via serial or MQTT spine
-        // and return the base64-encoded JPEG result.
-        Ok(ToolResult {
-            success: true,
-            output: format!(
-                "Camera capture requested from node '{}' (quality={}, format={}). \
-                 Full implementation requires serial/MQTT connection.",
-                self.node_id, quality, format
-            ),
-            error: None,
-        })
+        // Send command via MQTT spine if available, otherwise return stub.
+        if let Some(ref spine) = self.spine_client {
+            let args = json!({
+                "quality": quality,
+                "format": format,
+            });
+            let result = spine
+                .invoke_tool(&self.node_id, "camera_capture", args)
+                .await?;
+            Ok(tool_result_from_spine(result))
+        } else {
+            Ok(ToolResult {
+                success: true,
+                output: format!(
+                    "Camera capture requested from node '{}' (quality={}, format={}). \
+                     No spine client configured — running in stub mode.",
+                    self.node_id, quality, format
+                ),
+                error: None,
+            })
+        }
     }
 }
 
@@ -118,12 +148,21 @@ impl Tool for CameraCaptureTool {
 /// Tool: sample audio from the I2S microphone on an ESP32-S3 board.
 pub struct AudioSampleTool {
     node_id: String,
+    spine_client: Option<Arc<SpineClient>>,
 }
 
 impl AudioSampleTool {
     pub fn new(node_id: impl Into<String>) -> Self {
         Self {
             node_id: node_id.into(),
+            spine_client: None,
+        }
+    }
+
+    pub fn with_spine(node_id: impl Into<String>, spine_client: Arc<SpineClient>) -> Self {
+        Self {
+            node_id: node_id.into(),
+            spine_client: Some(spine_client),
         }
     }
 }
@@ -175,16 +214,27 @@ impl Tool for AudioSampleTool {
             "Sampling audio"
         );
 
-        // TODO: Send command to the peripheral node via serial or MQTT spine.
-        Ok(ToolResult {
-            success: true,
-            output: format!(
-                "Audio sample requested from node '{}' (duration={}ms, raw={}). \
-                 Full implementation requires serial/MQTT connection.",
-                self.node_id, duration_ms, raw
-            ),
-            error: None,
-        })
+        // Send command via MQTT spine if available, otherwise return stub.
+        if let Some(ref spine) = self.spine_client {
+            let args = json!({
+                "duration_ms": duration_ms,
+                "raw": raw,
+            });
+            let result = spine
+                .invoke_tool(&self.node_id, "audio_sample", args)
+                .await?;
+            Ok(tool_result_from_spine(result))
+        } else {
+            Ok(ToolResult {
+                success: true,
+                output: format!(
+                    "Audio sample requested from node '{}' (duration={}ms, raw={}). \
+                     No spine client configured — running in stub mode.",
+                    self.node_id, duration_ms, raw
+                ),
+                error: None,
+            })
+        }
     }
 }
 
@@ -193,12 +243,21 @@ impl Tool for AudioSampleTool {
 /// Tool: read a value from an I2C/SPI sensor on an ESP32-S3 board.
 pub struct SensorReadTool {
     node_id: String,
+    spine_client: Option<Arc<SpineClient>>,
 }
 
 impl SensorReadTool {
     pub fn new(node_id: impl Into<String>) -> Self {
         Self {
             node_id: node_id.into(),
+            spine_client: None,
+        }
+    }
+
+    pub fn with_spine(node_id: impl Into<String>, spine_client: Arc<SpineClient>) -> Self {
+        Self {
+            node_id: node_id.into(),
+            spine_client: Some(spine_client),
         }
     }
 }
@@ -256,16 +315,27 @@ impl Tool for SensorReadTool {
             "Reading sensor"
         );
 
-        // TODO: Send command to the peripheral node via serial or MQTT spine.
-        Ok(ToolResult {
-            success: true,
-            output: format!(
-                "Sensor read requested from node '{}' (sensor={}, field={}). \
-                 Full implementation requires serial/MQTT connection.",
-                self.node_id, sensor, field
-            ),
-            error: None,
-        })
+        // Send command via MQTT spine if available, otherwise return stub.
+        if let Some(ref spine) = self.spine_client {
+            let args = json!({
+                "sensor": sensor,
+                "field": field,
+            });
+            let result = spine
+                .invoke_tool(&self.node_id, "sensor_read", args)
+                .await?;
+            Ok(tool_result_from_spine(result))
+        } else {
+            Ok(ToolResult {
+                success: true,
+                output: format!(
+                    "Sensor read requested from node '{}' (sensor={}, field={}). \
+                     No spine client configured — running in stub mode.",
+                    self.node_id, sensor, field
+                ),
+                error: None,
+            })
+        }
     }
 }
 
