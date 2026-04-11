@@ -19,11 +19,20 @@
 //! {"id":"1","ok":true,"result":"<base64-encoded JPEG>"}
 //! ```
 
-use crate::spine::SpineClient;
+use crate::spine::{SpineClient, ToolCallResult};
 use crate::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
+
+/// Convert a spine `ToolCallResult` into a `ToolResult`.
+fn tool_result_from_spine(result: ToolCallResult) -> ToolResult {
+    if result.ok {
+        ToolResult::ok(result.output.unwrap_or_default())
+    } else {
+        ToolResult::err(result.error.unwrap_or_else(|| "Unknown error".to_string()))
+    }
+}
 
 /// JPEG quality bounds — must match firmware constants.
 pub(crate) const CAMERA_QUALITY_MIN: u64 = 1;
@@ -119,13 +128,7 @@ impl Tool for CameraCaptureTool {
             let result = spine
                 .invoke_tool(&self.node_id, "camera_capture", args)
                 .await?;
-            if result.ok {
-                Ok(ToolResult::ok(result.output.unwrap_or_default()))
-            } else {
-                Ok(ToolResult::err(
-                    result.error.unwrap_or_else(|| "Unknown error".to_string()),
-                ))
-            }
+            Ok(tool_result_from_spine(result))
         } else {
             Ok(ToolResult {
                 success: true,
@@ -220,13 +223,7 @@ impl Tool for AudioSampleTool {
             let result = spine
                 .invoke_tool(&self.node_id, "audio_sample", args)
                 .await?;
-            if result.ok {
-                Ok(ToolResult::ok(result.output.unwrap_or_default()))
-            } else {
-                Ok(ToolResult::err(
-                    result.error.unwrap_or_else(|| "Unknown error".to_string()),
-                ))
-            }
+            Ok(tool_result_from_spine(result))
         } else {
             Ok(ToolResult {
                 success: true,
@@ -327,13 +324,7 @@ impl Tool for SensorReadTool {
             let result = spine
                 .invoke_tool(&self.node_id, "sensor_read", args)
                 .await?;
-            if result.ok {
-                Ok(ToolResult::ok(result.output.unwrap_or_default()))
-            } else {
-                Ok(ToolResult::err(
-                    result.error.unwrap_or_else(|| "Unknown error".to_string()),
-                ))
-            }
+            Ok(tool_result_from_spine(result))
         } else {
             Ok(ToolResult {
                 success: true,
