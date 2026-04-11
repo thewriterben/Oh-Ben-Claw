@@ -311,8 +311,7 @@ mod tests {
 
     #[test]
     fn deserialize_mm_post() {
-        let json =
-            r#"{"id":"abc123","channel_id":"ch1","user_id":"u1","message":"hello","type":"","root_id":""}"#;
+        let json = r#"{"id":"abc123","channel_id":"ch1","user_id":"u1","message":"hello","type":"","root_id":""}"#;
         let post: MmPost = serde_json::from_str(json).unwrap();
         assert_eq!(post.message, "hello");
         assert_eq!(post.channel_id, "ch1");
@@ -321,8 +320,7 @@ mod tests {
 
     #[test]
     fn deserialize_mm_post_with_root_id() {
-        let json =
-            r#"{"id":"reply1","channel_id":"ch1","user_id":"u1","message":"reply","type":"","root_id":"root123"}"#;
+        let json = r#"{"id":"reply1","channel_id":"ch1","user_id":"u1","message":"reply","type":"","root_id":"root123"}"#;
         let post: MmPost = serde_json::from_str(json).unwrap();
         assert_eq!(post.root_id, "root123");
     }

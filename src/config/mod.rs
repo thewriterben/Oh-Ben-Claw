@@ -1455,16 +1455,12 @@ impl Config {
         }
         if let Some(p) = self.channels.irc.port {
             if p == 0 {
-                warnings.push(
-                    "channels.irc.port is 0; this is unlikely to be valid".to_string(),
-                );
+                warnings.push("channels.irc.port is 0; this is unlikely to be valid".to_string());
             }
         }
         if let Some(p) = self.spine.p2p_tcp_port {
             if p == 0 {
-                warnings.push(
-                    "spine.p2p_tcp_port is 0; this is unlikely to be valid".to_string(),
-                );
+                warnings.push("spine.p2p_tcp_port is 0; this is unlikely to be valid".to_string());
             }
         }
         if let Some(p) = self.spine.p2p_discovery_port {
@@ -1481,10 +1477,7 @@ impl Config {
                 if id.trim().is_empty() {
                     anyhow::bail!("spine.p2p_node_id is set but empty");
                 }
-                if !id
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
-                {
+                if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
                     warnings.push(format!(
                         "spine.p2p_node_id '{}' contains characters other than \
                          alphanumerics and hyphens",
@@ -1573,10 +1566,7 @@ impl Config {
             if let Some(ref p) = path_opt {
                 if !std::path::Path::new(p).exists() {
                     tracing::warn!("{} points to '{}' which does not exist", label, p);
-                    warnings.push(format!(
-                        "{} points to '{}' which does not exist",
-                        label, p
-                    ));
+                    warnings.push(format!("{} points to '{}' which does not exist", label, p));
                 }
             }
         }
@@ -1866,9 +1856,7 @@ mod tests {
         let mut config = Config::default();
         config.channels.whatsapp.webhook_port = Some(0);
         let warnings = config.validate().unwrap();
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("whatsapp.webhook_port")));
+        assert!(warnings.iter().any(|w| w.contains("whatsapp.webhook_port")));
     }
 
     #[test]
@@ -1876,9 +1864,7 @@ mod tests {
         let mut config = Config::default();
         config.channels.feishu.webhook_port = Some(0);
         let warnings = config.validate().unwrap();
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("feishu.webhook_port")));
+        assert!(warnings.iter().any(|w| w.contains("feishu.webhook_port")));
     }
 
     #[test]
@@ -2062,8 +2048,7 @@ mod tests {
         let mut config = Config::default();
         config.spine.tls = true;
         config.spine.port = 8883;
-        config.spine.ca_cert_path =
-            Some("/nonexistent/path/to/ca.crt".to_string());
+        config.spine.ca_cert_path = Some("/nonexistent/path/to/ca.crt".to_string());
         let warnings = config.validate().unwrap();
         assert!(warnings
             .iter()

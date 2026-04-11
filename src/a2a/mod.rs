@@ -117,7 +117,10 @@ impl A2AClient {
 
     /// Discover the remote agent's capabilities via `/.well-known/agent.json`.
     pub async fn discover(&self) -> Result<AgentCard> {
-        let url = format!("{}/.well-known/agent.json", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/.well-known/agent.json",
+            self.base_url.trim_end_matches('/')
+        );
         let card: AgentCard = self.client.get(&url).send().await?.json().await?;
         Ok(card)
     }
@@ -138,7 +141,11 @@ impl A2AClient {
 
     /// Check the status of a previously submitted task.
     pub async fn get_task_status(&self, task_id: &str) -> Result<TaskStatus> {
-        let url = format!("{}/tasks/{}/status", self.base_url.trim_end_matches('/'), task_id);
+        let url = format!(
+            "{}/tasks/{}/status",
+            self.base_url.trim_end_matches('/'),
+            task_id
+        );
         let status: TaskStatus = self.client.get(&url).send().await?.json().await?;
         Ok(status)
     }

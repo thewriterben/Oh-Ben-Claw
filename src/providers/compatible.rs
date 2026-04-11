@@ -92,7 +92,11 @@ impl Provider for CompatibleProvider {
                 ResponseFormat::JsonObject => {
                     request["response_format"] = serde_json::json!({"type": "json_object"});
                 }
-                ResponseFormat::JsonSchema { name, schema, strict } => {
+                ResponseFormat::JsonSchema {
+                    name,
+                    schema,
+                    strict,
+                } => {
                     request["response_format"] = serde_json::json!({
                         "type": "json_schema",
                         "json_schema": {

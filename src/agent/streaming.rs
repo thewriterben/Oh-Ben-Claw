@@ -199,7 +199,12 @@ mod tests {
     fn accumulator_multiple_tool_calls() {
         let mut acc = StreamingToolCallAccumulator::new();
         acc.push_delta(0, Some("call_1"), Some("shell"), Some(r#"{"cmd":"ls"}"#));
-        acc.push_delta(1, Some("call_2"), Some("read_file"), Some(r#"{"path":"a.txt"}"#));
+        acc.push_delta(
+            1,
+            Some("call_2"),
+            Some("read_file"),
+            Some(r#"{"path":"a.txt"}"#),
+        );
 
         assert_eq!(acc.len(), 2);
         let calls = acc.finalize();
