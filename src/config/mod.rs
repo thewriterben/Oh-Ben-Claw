@@ -1412,6 +1412,11 @@ impl Config {
             if self.proxy.host.is_none() {
                 anyhow::bail!("proxy is enabled but proxy.host is not set");
             }
+            if let Some(ref h) = self.proxy.host {
+                if h.trim().is_empty() {
+                    anyhow::bail!("proxy is enabled but proxy.host is empty");
+                }
+            }
             if self.proxy.port.is_none() {
                 anyhow::bail!("proxy is enabled but proxy.port is not set");
             }
@@ -1420,6 +1425,159 @@ impl Config {
                     "proxy.kind '{}' is not recognised; supported values are 'http' and 'socks5'",
                     self.proxy.kind
                 ));
+            }
+        }
+
+        // ── Port range validation ──────────────────────────────────────────────
+        // u16 already caps at 65535, so we only need to reject 0 for ports that
+        // are not yet checked above.
+        if self.tunnel.local_port == 0 {
+            warnings.push("tunnel.local_port is 0; this is unlikely to be valid".to_string());
+        }
+        if let Some(p) = self.proxy.port {
+            if p == 0 {
+                warnings.push("proxy.port is 0; this is unlikely to be valid".to_string());
+            }
+        }
+        if let Some(p) = self.channels.whatsapp.webhook_port {
+            if p == 0 {
+                warnings.push(
+                    "channels.whatsapp.webhook_port is 0; this is unlikely to be valid".to_string(),
+                );
+            }
+        }
+        if let Some(p) = self.channels.feishu.webhook_port {
+            if p == 0 {
+                warnings.push(
+                    "channels.feishu.webhook_port is 0; this is unlikely to be valid".to_string(),
+                );
+            }
+        }
+        if let Some(p) = self.channels.irc.port {
+            if p == 0 {
+                warnings.push(
+                    "channels.irc.port is 0; this is unlikely to be valid".to_string(),
+                );
+            }
+        }
+        if let Some(p) = self.spine.p2p_tcp_port {
+            if p == 0 {
+                warnings.push(
+                    "spine.p2p_tcp_port is 0; this is unlikely to be valid".to_string(),
+                );
+            }
+        }
+        if let Some(p) = self.spine.p2p_discovery_port {
+            if p == 0 {
+                warnings.push(
+                    "spine.p2p_discovery_port is 0; this is unlikely to be valid".to_string(),
+                );
+            }
+        }
+
+        // ── P2P node_id format ─────────────────────────────────────────────────
+        if self.spine.kind == "p2p" {
+            if let Some(ref id) = self.spine.p2p_node_id {
+                if id.trim().is_empty() {
+                    anyhow::bail!("spine.p2p_node_id is set but empty");
+                }
+                if !id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+                {
+                    warnings.push(format!(
+                        "spine.p2p_node_id '{}' contains characters other than \
+                         alphanumerics and hyphens",
+                        id
+                    ));
+                }
+            }
+        }
+
+        // ── Channel token format validation ────────────────────────────────────
+        if let Some(ref token) = self.channels.telegram.token {
+            // Telegram bot tokens look like "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+            let parts: Vec<&str> = token.splitn(2, ':').collect();
+            if parts.len() != 2
+                || !parts[0].chars().all(|c| c.is_ascii_digit())
+                || parts[0].is_empty()
+                || parts[1].is_empty()
+            {
+                warnings.push(
+                    "channels.telegram.token does not match expected format \
+                     (digits:alphanumeric)"
+                        .to_string(),
+                );
+            }
+        }
+        if let Some(ref token) = self.channels.discord.token {
+            if token.len() < 50 {
+                warnings.push(format!(
+                    "channels.discord.token is only {} chars; \
+                     Discord bot tokens are typically 70+ characters",
+                    token.len()
+                ));
+            }
+        }
+        if let Some(ref token) = self.channels.slack.bot_token {
+            if !token.starts_with("xoxb-") {
+                warnings.push(
+                    "channels.slack.bot_token does not start with 'xoxb-'; \
+                     Slack bot tokens should begin with this prefix"
+                        .to_string(),
+                );
+            }
+        }
+
+        // ── MQTT credential validation ─────────────────────────────────────────
+        match (&self.spine.username, &self.spine.password) {
+            (Some(_), None) => {
+                warnings.push(
+                    "spine.username is set but spine.password is not; \
+                     MQTT brokers usually require both"
+                        .to_string(),
+                );
+            }
+            (None, Some(_)) => {
+                warnings.push(
+                    "spine.password is set but spine.username is not; \
+                     MQTT brokers usually require both"
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+
+        // ── Provider validation ────────────────────────────────────────────────
+        {
+            let primary_has_model = !self.provider.model.trim().is_empty();
+            let any_fallback_has_model = self
+                .provider
+                .fallbacks
+                .iter()
+                .any(|f| !f.model.trim().is_empty());
+            if !primary_has_model && !any_fallback_has_model {
+                anyhow::bail!(
+                    "no provider has a model set; \
+                     at least provider.model or a fallback model must be configured"
+                );
+            }
+        }
+
+        // ── File path validation (non-fatal) ───────────────────────────────────
+        for (label, path_opt) in [
+            ("spine.ca_cert_path", &self.spine.ca_cert_path),
+            ("spine.client_cert_path", &self.spine.client_cert_path),
+            ("spine.client_key_path", &self.spine.client_key_path),
+        ] {
+            if let Some(ref p) = path_opt {
+                if !std::path::Path::new(p).exists() {
+                    tracing::warn!("{} points to '{}' which does not exist", label, p);
+                    warnings.push(format!(
+                        "{} points to '{}' which does not exist",
+                        label, p
+                    ));
+                }
             }
         }
 
@@ -1691,5 +1849,232 @@ mod tests {
         assert_eq!(config.clawhub.registry_url, "https://my-hub.example.com");
         assert!(config.clawhub.auto_update);
         assert_eq!(config.clawhub.skills_dir.as_deref(), Some("/opt/skills"));
+    }
+
+    // ── Enhanced validation tests ──────────────────────────────────────────────
+
+    #[test]
+    fn validate_warns_zero_tunnel_port() {
+        let mut config = Config::default();
+        config.tunnel.local_port = 0;
+        let warnings = config.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("tunnel.local_port")));
+    }
+
+    #[test]
+    fn validate_warns_zero_whatsapp_webhook_port() {
+        let mut config = Config::default();
+        config.channels.whatsapp.webhook_port = Some(0);
+        let warnings = config.validate().unwrap();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("whatsapp.webhook_port")));
+    }
+
+    #[test]
+    fn validate_warns_zero_feishu_webhook_port() {
+        let mut config = Config::default();
+        config.channels.feishu.webhook_port = Some(0);
+        let warnings = config.validate().unwrap();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("feishu.webhook_port")));
+    }
+
+    #[test]
+    fn validate_warns_zero_irc_port() {
+        let mut config = Config::default();
+        config.channels.irc.port = Some(0);
+        let warnings = config.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("irc.port")));
+    }
+
+    #[test]
+    fn validate_warns_zero_p2p_tcp_port() {
+        let mut config = Config::default();
+        config.spine.p2p_tcp_port = Some(0);
+        let warnings = config.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("p2p_tcp_port")));
+    }
+
+    #[test]
+    fn validate_warns_zero_p2p_discovery_port() {
+        let mut config = Config::default();
+        config.spine.p2p_discovery_port = Some(0);
+        let warnings = config.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("p2p_discovery_port")));
+    }
+
+    #[test]
+    fn validate_warns_zero_proxy_port() {
+        let mut config = Config::default();
+        config.proxy.port = Some(0);
+        let warnings = config.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("proxy.port")));
+    }
+
+    #[test]
+    fn validate_rejects_empty_p2p_node_id() {
+        let mut config = Config::default();
+        config.spine.kind = "p2p".to_string();
+        config.spine.p2p_node_id = Some("  ".to_string());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_warns_p2p_node_id_bad_chars() {
+        let mut config = Config::default();
+        config.spine.kind = "p2p".to_string();
+        config.spine.p2p_node_id = Some("node_one!".to_string());
+        let warnings = config.validate().unwrap();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("p2p_node_id") && w.contains("characters")));
+    }
+
+    #[test]
+    fn validate_accepts_good_p2p_node_id() {
+        let mut config = Config::default();
+        config.spine.kind = "p2p".to_string();
+        config.spine.p2p_node_id = Some("node-42-abc".to_string());
+        let warnings = config.validate().unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("p2p_node_id")));
+    }
+
+    #[test]
+    fn validate_rejects_proxy_empty_host() {
+        let mut config = Config::default();
+        config.proxy.enabled = true;
+        config.proxy.host = Some("  ".to_string());
+        config.proxy.port = Some(8080);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_warns_bad_telegram_token() {
+        let mut config = Config::default();
+        config.channels.telegram.token = Some("not-a-valid-token".to_string());
+        let warnings = config.validate().unwrap();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("telegram.token") && w.contains("format")));
+    }
+
+    #[test]
+    fn validate_accepts_good_telegram_token() {
+        let mut config = Config::default();
+        config.channels.telegram.token = Some("123456789:ABCdefGHIjklMNOpqrs".to_string());
+        let warnings = config.validate().unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("telegram.token")));
+    }
+
+    #[test]
+    fn validate_warns_short_discord_token() {
+        let mut config = Config::default();
+        config.channels.discord.token = Some("short".to_string());
+        let warnings = config.validate().unwrap();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("discord.token") && w.contains("chars")));
+    }
+
+    #[test]
+    fn validate_accepts_long_discord_token() {
+        let mut config = Config::default();
+        config.channels.discord.token = Some("A".repeat(72));
+        let warnings = config.validate().unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("discord.token")));
+    }
+
+    #[test]
+    fn validate_warns_slack_token_wrong_prefix() {
+        let mut config = Config::default();
+        config.channels.slack.bot_token = Some("xoxp-bad-prefix".to_string());
+        let warnings = config.validate().unwrap();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("slack.bot_token") && w.contains("xoxb-")));
+    }
+
+    #[test]
+    fn validate_accepts_good_slack_token() {
+        let mut config = Config::default();
+        config.channels.slack.bot_token = Some("xoxb-good-token".to_string());
+        let warnings = config.validate().unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("slack.bot_token")));
+    }
+
+    #[test]
+    fn validate_warns_mqtt_username_without_password() {
+        let mut config = Config::default();
+        config.spine.username = Some("admin".to_string());
+        config.spine.password = None;
+        let warnings = config.validate().unwrap();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("username") && w.contains("password")));
+    }
+
+    #[test]
+    fn validate_warns_mqtt_password_without_username() {
+        let mut config = Config::default();
+        config.spine.username = None;
+        config.spine.password = Some("secret".to_string());
+        let warnings = config.validate().unwrap();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("password") && w.contains("username")));
+    }
+
+    #[test]
+    fn validate_accepts_mqtt_both_creds_set() {
+        let mut config = Config::default();
+        config.spine.username = Some("admin".to_string());
+        config.spine.password = Some("secret".to_string());
+        let warnings = config.validate().unwrap();
+        assert!(!warnings
+            .iter()
+            .any(|w| w.contains("username") && w.contains("password")));
+    }
+
+    #[test]
+    fn validate_rejects_empty_provider_model() {
+        let mut config = Config::default();
+        config.provider.model = "  ".to_string();
+        config.provider.fallbacks = vec![];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_fallback_with_model() {
+        let mut config = Config::default();
+        config.provider.model = "  ".to_string();
+        config.provider.fallbacks = vec![ProviderConfig {
+            model: "claude-3-5-sonnet".to_string(),
+            ..ProviderConfig::default()
+        }];
+        let warnings = config.validate().unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("provider")));
+    }
+
+    #[test]
+    fn validate_warns_nonexistent_cert_path() {
+        let mut config = Config::default();
+        config.spine.tls = true;
+        config.spine.port = 8883;
+        config.spine.ca_cert_path =
+            Some("/nonexistent/path/to/ca.crt".to_string());
+        let warnings = config.validate().unwrap();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("ca_cert_path") && w.contains("does not exist")));
+    }
+
+    #[test]
+    fn default_config_still_validates_clean() {
+        // Ensure all new validations don't break the default config.
+        let config = Config::default();
+        let warnings = config.validate().unwrap();
+        assert!(warnings.is_empty(), "Unexpected warnings: {:?}", warnings);
     }
 }
