@@ -166,14 +166,13 @@ fn mime_from_extension(path: &Path) -> Option<&'static str> {
 
 /// Read a local image file, infer its MIME type, and validate it.
 pub fn fetch_local_image(path: &Path) -> Result<ImageData, MultimodalError> {
-    let mime = mime_from_extension(path)
-        .ok_or_else(|| MultimodalError::UnsupportedMime {
-            mime: path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("unknown")
-                .to_string(),
-        })?;
+    let mime = mime_from_extension(path).ok_or_else(|| MultimodalError::UnsupportedMime {
+        mime: path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("unknown")
+            .to_string(),
+    })?;
 
     validate_mime_type(mime)?;
 
@@ -276,7 +275,10 @@ mod tests {
     #[test]
     fn resolve_http_url() {
         let src = resolve_image_source("http://example.com/img.png");
-        assert_eq!(src, ImageSource::Remote("http://example.com/img.png".into()));
+        assert_eq!(
+            src,
+            ImageSource::Remote("http://example.com/img.png".into())
+        );
     }
 
     #[test]
@@ -311,7 +313,10 @@ mod tests {
     #[test]
     fn valid_mime_types_accepted() {
         for mime in ALLOWED_IMAGE_MIME_TYPES {
-            assert!(validate_mime_type(mime).is_ok(), "expected {mime} to be valid");
+            assert!(
+                validate_mime_type(mime).is_ok(),
+                "expected {mime} to be valid"
+            );
         }
     }
 

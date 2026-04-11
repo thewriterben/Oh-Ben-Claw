@@ -74,7 +74,7 @@ impl WasmRuntime {
 impl Default for WasmRuntime {
     fn default() -> Self {
         Self {
-            max_memory_pages: 256,  // 16 MiB
+            max_memory_pages: 256, // 16 MiB
             max_fuel: 1_000_000,
             allowed_dirs: Vec::new(),
         }
@@ -153,7 +153,10 @@ mod tests {
         let rt = WasmRuntime::default();
         let err = rt.run_shell("echo", &["hello"], 10).await.unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("does not support shell execution"), "got: {msg}");
+        assert!(
+            msg.contains("does not support shell execution"),
+            "got: {msg}"
+        );
         assert!(msg.contains("run_wasm"), "got: {msg}");
     }
 }
