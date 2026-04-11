@@ -20,7 +20,6 @@
 //! # Limitations
 //!
 //! * Only processes posts in channels the bot belongs to.
-//! * Replies are posted as new messages (thread replies are not yet supported).
 //! * The bot ignores its own messages to avoid feedback loops.
 
 use crate::agent::Agent;
@@ -52,6 +51,9 @@ struct MmPost {
     channel_id: String,
     user_id: String,
     message: String,
+    /// Thread root post ID. Empty string for top-level posts.
+    #[serde(default)]
+    root_id: String,
     #[serde(rename = "type")]
     post_type: String,
 }
@@ -74,6 +76,8 @@ struct MmCreatePostResponse {
 struct MmCreatePost<'a> {
     channel_id: &'a str,
     message: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    root_id: Option<&'a str>,
 }
 
 // ── MattermostChannel ─────────────────────────────────────────────────────────
@@ -187,6 +191,15 @@ impl MattermostChannel {
                                                     continue;
                                                 }
                                                 let channel_id = post.channel_id.clone();
+                                                // Determine the thread root for the reply:
+                                                // if the incoming post already belongs to a
+                                                // thread, continue in that thread; otherwise
+                                                // start a new thread rooted at the incoming post.
+                                                let reply_root_id = if post.root_id.is_empty() {
+                                                    post.id.clone()
+                                                } else {
+                                                    post.root_id.clone()
+                                                };
                                                 let session_id = format!("mattermost:{}", post.user_id);
                                                 let agent_clone = agent.clone();
                                                 let pc_clone = provider_config.clone();
@@ -198,14 +211,14 @@ impl MattermostChannel {
                                                     match agent_clone.process(&session_id, &message, &pc_clone).await {
                                                         Ok(response) => {
                                                             for chunk in chunk_text(&response.message, 4000) {
-                                                                if let Err(e) = post_message(&http_clone, &server_clone, &token_clone, &channel_id, chunk).await {
+                                                                if let Err(e) = post_message(&http_clone, &server_clone, &token_clone, &channel_id, chunk, Some(&reply_root_id)).await {
                                                                     tracing::error!(error = %e, "Mattermost: failed to post reply");
                                                                 }
                                                             }
                                                         }
                                                         Err(e) => {
                                                             tracing::error!(error = %e, "Mattermost: agent processing error");
-                                                            let _ = post_message(&http_clone, &server_clone, &token_clone, &channel_id, "Sorry, I ran into an error. Please try again.").await;
+                                                            let _ = post_message(&http_clone, &server_clone, &token_clone, &channel_id, "Sorry, I ran into an error. Please try again.", Some(&reply_root_id)).await;
                                                         }
                                                     }
                                                 });
@@ -249,18 +262,20 @@ impl MattermostChannel {
     }
 }
 
-/// Post a message to a Mattermost channel.
+/// Post a message to a Mattermost channel, optionally as a threaded reply.
 async fn post_message(
     http: &reqwest::Client,
     server: &str,
     token: &str,
     channel_id: &str,
     message: &str,
+    root_id: Option<&str>,
 ) -> Result<()> {
     let url = format!("{}/api/v4/posts", server);
     let body = MmCreatePost {
         channel_id,
         message,
+        root_id,
     };
     http.post(&url)
         .header("Authorization", format!("Bearer {}", token))
@@ -297,10 +312,85 @@ mod tests {
     #[test]
     fn deserialize_mm_post() {
         let json =
-            r#"{"id":"abc123","channel_id":"ch1","user_id":"u1","message":"hello","type":""}"#;
+            r#"{"id":"abc123","channel_id":"ch1","user_id":"u1","message":"hello","type":"","root_id":""}"#;
         let post: MmPost = serde_json::from_str(json).unwrap();
         assert_eq!(post.message, "hello");
         assert_eq!(post.channel_id, "ch1");
+        assert!(post.root_id.is_empty());
+    }
+
+    #[test]
+    fn deserialize_mm_post_with_root_id() {
+        let json =
+            r#"{"id":"reply1","channel_id":"ch1","user_id":"u1","message":"reply","type":"","root_id":"root123"}"#;
+        let post: MmPost = serde_json::from_str(json).unwrap();
+        assert_eq!(post.root_id, "root123");
+    }
+
+    #[test]
+    fn deserialize_mm_post_missing_root_id_defaults_to_empty() {
+        let json =
+            r#"{"id":"abc123","channel_id":"ch1","user_id":"u1","message":"hello","type":""}"#;
+        let post: MmPost = serde_json::from_str(json).unwrap();
+        assert!(post.root_id.is_empty());
+    }
+
+    #[test]
+    fn reply_root_id_uses_post_id_when_root_id_empty() {
+        let post = MmPost {
+            id: "post1".into(),
+            channel_id: "ch1".into(),
+            user_id: "u1".into(),
+            message: "hello".into(),
+            root_id: String::new(),
+            post_type: String::new(),
+        };
+        let reply_root = if post.root_id.is_empty() {
+            &post.id
+        } else {
+            &post.root_id
+        };
+        assert_eq!(reply_root, "post1");
+    }
+
+    #[test]
+    fn reply_root_id_uses_existing_root_id() {
+        let post = MmPost {
+            id: "reply1".into(),
+            channel_id: "ch1".into(),
+            user_id: "u1".into(),
+            message: "hello".into(),
+            root_id: "root123".into(),
+            post_type: String::new(),
+        };
+        let reply_root = if post.root_id.is_empty() {
+            &post.id
+        } else {
+            &post.root_id
+        };
+        assert_eq!(reply_root, "root123");
+    }
+
+    #[test]
+    fn create_post_serializes_root_id() {
+        let body = MmCreatePost {
+            channel_id: "ch1",
+            message: "hi",
+            root_id: Some("root123"),
+        };
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["root_id"], "root123");
+    }
+
+    #[test]
+    fn create_post_omits_root_id_when_none() {
+        let body = MmCreatePost {
+            channel_id: "ch1",
+            message: "hi",
+            root_id: None,
+        };
+        let json = serde_json::to_value(&body).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("root_id"));
     }
 
     #[test]
