@@ -763,12 +763,15 @@ impl Default for DockerConfig {
 /// Configuration for the tool execution runtime (sandbox).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeConfig {
-    /// Runtime kind: "native" (default) or "docker".
+    /// Runtime kind: "native" (default), "docker", or "wasm".
     #[serde(default = "default_runtime_kind")]
     pub kind: String,
     /// Docker runtime configuration (used when kind = "docker").
     #[serde(default)]
     pub docker: DockerConfig,
+    /// WASM runtime configuration (used when kind = "wasm").
+    #[serde(default)]
+    pub wasm: WasmConfig,
 }
 
 fn default_runtime_kind() -> String {
@@ -780,6 +783,46 @@ impl Default for RuntimeConfig {
         Self {
             kind: default_runtime_kind(),
             docker: DockerConfig::default(),
+            wasm: WasmConfig::default(),
+        }
+    }
+}
+
+// ── WASM Configuration ───────────────────────────────────────────────────────
+
+/// Configuration for the WebAssembly sandbox runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmConfig {
+    /// Whether the WASM runtime is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum number of WASM linear-memory pages (1 page = 64 KiB).
+    /// Default: 256 (= 16 MiB).
+    #[serde(default = "default_wasm_max_memory_pages")]
+    pub max_memory_pages: u32,
+    /// Execution fuel limit — controls how many instructions the guest may run.
+    /// Default: 1_000_000.
+    #[serde(default = "default_wasm_max_fuel")]
+    pub max_fuel: u64,
+    /// Host directories the WASI layer may expose to the guest module.
+    #[serde(default)]
+    pub allowed_dirs: Vec<String>,
+}
+
+fn default_wasm_max_memory_pages() -> u32 {
+    256
+}
+fn default_wasm_max_fuel() -> u64 {
+    1_000_000
+}
+
+impl Default for WasmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_memory_pages: default_wasm_max_memory_pages(),
+            max_fuel: default_wasm_max_fuel(),
+            allowed_dirs: Vec::new(),
         }
     }
 }
