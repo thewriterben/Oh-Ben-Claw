@@ -1,0 +1,297 @@
+# Oh-Ben-Claw — Cutting-Edge Deployment Configuration
+#
+# This example showcases every Phase 14 feature in a single realistic config:
+#   • A2A (Agent-to-Agent) protocol with skills advertisement
+#   • Structured output via response_format (JSON Schema mode)
+#   • WASM sandboxed runtime for tool execution
+#   • Cost tracking with daily/monthly budget guardrails
+#   • Provider failover chain + retry policy
+#   • Multi-channel deployment with typing indicators
+#   • P2P spine for zero-broker mesh networking
+#
+# Copy to ~/.oh-ben-claw/config.toml and customise for your environment.
+
+# ── Agent Identity ────────────────────────────────────────────────────────────
+
+[agent]
+name = "Nexus-Prime"
+system_prompt = """
+You are Nexus-Prime, a cutting-edge AI operations agent deployed on the edge.
+You coordinate a mesh of peer agents, execute sandboxed WASM tools, and interact
+with users across multiple chat platforms. Respond concisely and accurately.
+When performing destructive actions, always confirm intent first.
+"""
+max_tool_iterations = 25
+
+# ── Primary Provider with Structured Output ───────────────────────────────────
+# Use OpenAI as the primary model with JSON-Schema structured output so that
+# every response conforms to a predictable envelope.
+
+[provider]
+name = "openai"
+model = "gpt-4o"
+# api_key = "sk-..."          # Or set OPENAI_API_KEY env var
+temperature = 0.4
+
+# Structured output — force the model to return JSON matching this schema.
+# Downstream consumers can deserialize responses without free-text parsing.
+[provider.response_format]
+type = "json_schema"
+name = "agent_response"
+strict = true
+
+[provider.response_format.schema]
+type = "object"
+required = ["answer", "confidence"]
+
+[provider.response_format.schema.properties.answer]
+type = "string"
+description = "The agent's answer to the user query"
+
+[provider.response_format.schema.properties.confidence]
+type = "number"
+description = "Confidence score between 0 and 1"
+
+# ── Provider Failover Chain ───────────────────────────────────────────────────
+# If OpenAI is unavailable, fall back to Anthropic, then to a local Ollama model.
+
+[[provider.fallbacks]]
+name  = "anthropic"
+model = "claude-3-5-sonnet-20241022"
+# api_key = "sk-ant-..."
+
+[[provider.fallbacks]]
+name  = "ollama"
+model = "llama3.2"
+# base_url = "http://localhost:11434"
+
+# ── Retry Policy ──────────────────────────────────────────────────────────────
+# Automatically retry transient errors (rate-limits, network blips) with
+# exponential backoff before falling through to the next provider.
+
+[provider.retry]
+max_retries        = 4
+initial_backoff_ms = 500
+max_backoff_ms     = 15000
+backoff_multiplier = 2.0
+
+# ── P2P Spine ─────────────────────────────────────────────────────────────────
+# Instead of a central MQTT broker, use the built-in P2P mesh so peripheral
+# nodes discover each other via mDNS and communicate directly over TCP.
+
+[spine]
+kind              = "p2p"
+host              = "0.0.0.0"
+port              = 1883                   # Ignored for P2P but kept for compat
+tool_timeout_secs = 45
+
+# P2P-specific settings
+p2p_node_id              = "nexus-prime-01"
+p2p_bind_host            = "0.0.0.0"
+p2p_tcp_port             = 9701
+p2p_discovery_port       = 5353
+p2p_peer_timeout_secs    = 120
+p2p_announce_interval_secs = 15
+
+# ── Cost Tracking & Budget Limits ─────────────────────────────────────────────
+# Monitor LLM spend in real time.  The agent pauses and notifies the operator
+# when spending approaches the configured thresholds.
+
+[cost]
+enabled          = true
+daily_limit_usd  = 25.00
+monthly_limit_usd = 500.00
+warn_threshold   = 0.80          # Alert at 80 % of each limit
+
+# ── WASM Sandboxed Runtime ────────────────────────────────────────────────────
+# Execute community-installed tools inside a Wasmtime sandbox.  Memory and CPU
+# are capped, and filesystem access is restricted to an explicit allowlist.
+
+[runtime]
+kind = "wasm"
+
+[runtime.wasm]
+enabled         = true
+max_memory_pages = 256            # 256 × 64 KiB = 16 MiB guest memory
+max_fuel         = 500_000_000    # Instruction fuel budget per invocation
+allowed_dirs     = [
+    "~/.oh-ben-claw/skills",
+    "~/.oh-ben-claw/data",
+]
+
+# Docker runtime kept at defaults for tools that need a full Linux environment.
+[runtime.docker]
+image     = "ghcr.io/oh-ben-claw/sandbox:latest"
+network   = "none"
+memory_mb = 512
+
+# ── Channels ──────────────────────────────────────────────────────────────────
+# Deploy across Telegram, Discord, Slack, and Matrix simultaneously.
+# Each channel runs in its own async task; typing indicators keep users engaged.
+
+[channels]
+typing_indicators = true
+
+[channels.telegram]
+# token = "123456:ABC-DEF..."     # @BotFather token
+
+[channels.discord]
+# token = "MTIz..."               # Discord bot token
+
+[channels.slack]
+# app_token = "xapp-..."          # Slack Socket Mode app token
+# bot_token = "xoxb-..."          # Slack bot OAuth token
+
+[channels.matrix]
+# homeserver   = "https://matrix.example.com"
+# access_token = "syt_..."
+
+[channels.irc]
+host     = "irc.libera.chat"
+port     = 6697
+use_tls  = true
+nickname = "nexus-prime"
+channels = ["#oh-ben-claw", "#edge-ai"]
+# sasl_username = "nexus-prime"
+# sasl_password = "your-password"
+
+[channels.signal]
+# cli_url      = "http://localhost:8080"
+# phone_number = "+15551234567"
+# allowed_numbers = ["+15559876543"]
+
+[channels.mattermost]
+# server_url = "https://mm.example.com"
+# token      = "your-personal-access-token"
+
+# ── A2A (Agent-to-Agent) Protocol ─────────────────────────────────────────────
+# Advertise this agent on the A2A network so peer agents can discover and
+# invoke its skills.  Skills are listed as free-form capability tags.
+
+[a2a]
+enabled           = true
+agent_name        = "Nexus-Prime"
+agent_description = "Edge operations agent with hardware control, browser automation, and data-pipeline skills"
+agent_url         = "https://nexus-prime.example.com/.well-known/agent.json"
+skills = [
+    "hardware-control",
+    "browser-automation",
+    "data-pipeline",
+    "sensor-fusion",
+    "alerting",
+]
+
+# ── Peripherals ───────────────────────────────────────────────────────────────
+
+[peripherals]
+enabled       = true
+datasheet_dir = "docs/datasheets"
+
+[[peripherals.boards]]
+board     = "waveshare-esp32-s3-touch-lcd-2.1"
+transport = "serial"
+path      = "/dev/ttyUSB0"
+baud      = 115200
+
+[[peripherals.boards]]
+board     = "rpi-gpio"
+transport = "mqtt"
+node_id   = "rpi-edge-node"
+
+# ── Security ──────────────────────────────────────────────────────────────────
+
+[security]
+require_pairing = true
+# pairing_secret = "generate-with-openssl-rand-hex-32"
+vault_enabled   = true
+# vault_path    = "~/.oh-ben-claw/vault.db"
+
+[[security.policies]]
+name         = "audit-all-shell"
+tool_pattern = "shell"
+action       = "audit"
+reason       = "Log every shell command for post-hoc review"
+
+[[security.policies]]
+name         = "deny-etc"
+tool_pattern = "file_write"
+arg_contains = "/etc/"
+action       = "deny"
+reason       = "Block writes to system directories"
+
+# ── Autonomy ──────────────────────────────────────────────────────────────────
+
+[autonomy]
+level        = "supervised"
+auto_approve = ["sensor_read", "camera_capture", "browser_navigate"]
+always_ask   = ["gpio_write", "file_write", "shell"]
+
+# ── Gateway & Tunnel ──────────────────────────────────────────────────────────
+
+[gateway]
+enabled   = true
+host      = "0.0.0.0"
+port      = 8443
+serve_pwa = true
+# api_token = "generate-with-openssl-rand-hex-32"
+
+[tunnel]
+enabled    = true
+backend    = "cloudflare"
+local_port = 8443
+
+# ── Browser Automation ────────────────────────────────────────────────────────
+
+[browser]
+enabled      = true
+profile      = "headless"
+timeout_secs = 30
+
+# ── ClawHub Skill Registry ───────────────────────────────────────────────────
+
+[clawhub]
+enabled      = true
+registry_url = "https://hub.openclaw.ai"
+auto_update  = true
+
+# ── Edge Computing ────────────────────────────────────────────────────────────
+
+[edge]
+enabled              = true
+max_history_messages = 10
+max_tool_iterations  = 5
+p2p_enabled          = true
+
+# ── Multimodal ────────────────────────────────────────────────────────────────
+
+[multimodal]
+enabled         = true
+max_images      = 5
+max_image_bytes = 10485760   # 10 MiB
+allow_remote    = true
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+
+[deployment]
+enabled    = true
+scenario   = "edge-mesh"
+auto_plan  = true
+auto_spawn = false
+llm_swarm  = false
+feature_desires = ["low-latency", "offline-capable", "secure"]
+
+[[deployment.hardware]]
+name       = "primary-sensor"
+board_name = "waveshare-esp32-s3-touch-lcd-2.1"
+transport  = "serial"
+path       = "/dev/ttyUSB0"
+role       = "sensor"
+accessories = ["camera", "microphone", "touch-lcd"]
+
+[[deployment.hardware]]
+name       = "edge-actuator"
+board_name = "rpi-gpio"
+transport  = "mqtt"
+node_id    = "rpi-edge-node"
+role       = "actuator"
+accessories = ["relay-hat", "servo-hat"]
