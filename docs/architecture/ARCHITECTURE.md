@@ -68,6 +68,8 @@ Peripheral nodes are the sensory and motor organs of the system. Each node runs 
 | Vision | `src/vision/` | Camera → LLM vision → action pipeline |
 | Audio | `src/audio/` | Microphone → STT → agent → TTS pipeline |
 | Dashboard | `src/dashboard/` | Ratatui TUI dashboard (optional feature) |
+| A2A | `src/a2a/` | Agent-to-Agent protocol (Google A2A) for inter-agent interoperability |
+| Streaming | `src/agent/streaming.rs` | Streaming tool call accumulation and response building |
 
 ---
 
@@ -84,9 +86,11 @@ Peripheral nodes are the sensory and motor organs of the system. Each node runs 
 │  │  Feishu     │          │                                                  │
 │  │  IRC/Signal │          ▼                                                  │
 │  │  CLI / GUI  │   ┌───────────────┐   ┌──────────────┐                    │
-│  └─────────────┘   │  Spine Client │   │  Deployment  │                    │
-│                    └──────┬────────┘   │  Planner     │                    │
-└───────────────────────────┼────────────└──────────────┘────────────────────┘
+│  └─────────────┘   │  Spine Client │   │  Deployment  │  ┌─────────┐      │
+│                    └──────┬────────┘   │  Planner     │  │  A2A    │      │
+│                           │            │              │  │         │      │
+│                           │            └──────────────┘  └─────────┘      │
+└───────────────────────────┼────────────────────────────────────────────────┘
                             │ MQTT
                     ┌───────┴────────┐
                     │  MQTT Broker   │  (Mosquitto / EMQX / HiveMQ)
@@ -212,3 +216,8 @@ Oh-Ben-Claw is built on top of the [ZeroClaw](https://github.com/zeroclaw-labs/z
 | Docker sandbox | ✗ | ✅ |
 | Reflexion / Plan-and-Execute | ✗ | ✅ |
 | Edge-native mode | ✗ | ✅ (ESP32-S3, NanoPi) |
+| A2A protocol | ✗ | ✅ Client + server |
+| Structured output | ✗ | ✅ JSON mode / JSON Schema |
+| Streaming tool calls | ✗ | ✅ Accumulator + builder |
+| WASM sandbox | ✗ | ✅ Runtime adapter |
+| Persistent cost tracking | ✗ | ✅ SQLite-backed |
