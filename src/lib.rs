@@ -25,6 +25,7 @@
 // tests, and future integrations). Dead-code lint is suppressed at the crate level
 // because the library intentionally exposes a broader surface than the binary uses.
 
+pub mod a2a;
 pub mod agent;
 pub mod approval;
 pub mod audio;

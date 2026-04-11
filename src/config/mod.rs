@@ -1183,6 +1183,50 @@ impl Default for DeploymentConfig {
     }
 }
 
+/// Agent-to-Agent (A2A) protocol configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct A2AConfig {
+    /// Whether A2A protocol support is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The name this agent advertises in its A2A agent card.
+    #[serde(default = "default_a2a_agent_name")]
+    pub agent_name: String,
+    /// A human-readable description of this agent.
+    #[serde(default = "default_a2a_agent_description")]
+    pub agent_description: String,
+    /// The URL where this agent's A2A endpoint is reachable.
+    #[serde(default = "default_a2a_agent_url")]
+    pub agent_url: String,
+    /// List of skill names this agent exposes via A2A.
+    #[serde(default)]
+    pub skills: Vec<String>,
+}
+
+fn default_a2a_agent_name() -> String {
+    "oh-ben-claw".to_string()
+}
+
+fn default_a2a_agent_description() -> String {
+    "Oh-Ben-Claw AI assistant".to_string()
+}
+
+fn default_a2a_agent_url() -> String {
+    "http://localhost:8080".to_string()
+}
+
+impl Default for A2AConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            agent_name: default_a2a_agent_name(),
+            agent_description: default_a2a_agent_description(),
+            agent_url: default_a2a_agent_url(),
+            skills: Vec::new(),
+        }
+    }
+}
+
 /// The root configuration for Oh-Ben-Claw.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -1229,6 +1273,9 @@ pub struct Config {
     /// Deployment scheme generator configuration (new in Phase 13).
     #[serde(default)]
     pub deployment: DeploymentConfig,
+    /// Agent-to-Agent (A2A) protocol configuration.
+    #[serde(default)]
+    pub a2a: A2AConfig,
 }
 
 impl Config {
