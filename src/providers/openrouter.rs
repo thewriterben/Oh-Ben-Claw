@@ -1,7 +1,7 @@
 //! OpenRouter provider adapter.
 
 use crate::config::ProviderConfig;
-use crate::providers::{ChatCompletion, ChatMessage, ChatRole, Provider, ToolCall};
+use crate::providers::{ChatCompletion, ChatMessage, ChatRole, Provider, ResponseFormat, ToolCall};
 use crate::tools::Tool;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -83,6 +83,26 @@ impl Provider for OpenRouterProvider {
             "tool_choice": if tools.is_empty() { Value::Null } else { Value::String("auto".into()) },
             "temperature": config.temperature,
         });
+
+        let mut request = request;
+        if let Some(ref fmt) = config.response_format {
+            match fmt {
+                ResponseFormat::Text => {}
+                ResponseFormat::JsonObject => {
+                    request["response_format"] = serde_json::json!({"type": "json_object"});
+                }
+                ResponseFormat::JsonSchema { name, schema, strict } => {
+                    request["response_format"] = serde_json::json!({
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": name,
+                            "schema": schema,
+                            "strict": strict,
+                        }
+                    });
+                }
+            }
+        }
 
         let response: OrResponse = self
             .client

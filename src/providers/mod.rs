@@ -28,6 +28,25 @@ pub mod retry;
 pub use failover::FailoverProvider;
 pub use retry::{RetryConfig, RetryProvider};
 
+// ── Response Format ──────────────────────────────────────────────────────────
+
+/// Requested response format for the LLM.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum ResponseFormat {
+    /// Plain text (default). Omits `response_format` from the API request.
+    #[default]
+    Text,
+    /// Ask the model to return valid JSON (`{"type":"json_object"}`).
+    JsonObject,
+    /// Ask the model to return JSON conforming to a specific schema.
+    JsonSchema {
+        name: String,
+        schema: serde_json::Value,
+        strict: bool,
+    },
+}
+
 // ── Provider Trait ───────────────────────────────────────────────────────────
 
 /// A message in a conversation.
@@ -120,5 +139,98 @@ pub fn from_config_full(config: &ProviderConfig) -> Result<Arc<dyn Provider>> {
         Ok(Arc::new(RetryProvider::new(base, retry_cfg.clone())))
     } else {
         Ok(base)
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_format_default_is_text() {
+        let fmt = ResponseFormat::default();
+        assert!(matches!(fmt, ResponseFormat::Text));
+    }
+
+    #[test]
+    fn response_format_serialize_text() {
+        let fmt = ResponseFormat::Text;
+        let json = serde_json::to_value(&fmt).unwrap();
+        assert_eq!(json["type"], "text");
+    }
+
+    #[test]
+    fn response_format_serialize_json_object() {
+        let fmt = ResponseFormat::JsonObject;
+        let json = serde_json::to_value(&fmt).unwrap();
+        assert_eq!(json["type"], "json_object");
+    }
+
+    #[test]
+    fn response_format_serialize_json_schema() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "answer": { "type": "string" } },
+            "required": ["answer"]
+        });
+        let fmt = ResponseFormat::JsonSchema {
+            name: "my_schema".to_string(),
+            schema: schema.clone(),
+            strict: true,
+        };
+        let json = serde_json::to_value(&fmt).unwrap();
+        assert_eq!(json["type"], "json_schema");
+        assert_eq!(json["name"], "my_schema");
+        assert_eq!(json["schema"], schema);
+        assert_eq!(json["strict"], true);
+    }
+
+    #[test]
+    fn response_format_roundtrip_text() {
+        let fmt = ResponseFormat::Text;
+        let json_str = serde_json::to_string(&fmt).unwrap();
+        let decoded: ResponseFormat = serde_json::from_str(&json_str).unwrap();
+        assert!(matches!(decoded, ResponseFormat::Text));
+    }
+
+    #[test]
+    fn response_format_roundtrip_json_object() {
+        let fmt = ResponseFormat::JsonObject;
+        let json_str = serde_json::to_string(&fmt).unwrap();
+        let decoded: ResponseFormat = serde_json::from_str(&json_str).unwrap();
+        assert!(matches!(decoded, ResponseFormat::JsonObject));
+    }
+
+    #[test]
+    fn response_format_roundtrip_json_schema() {
+        let schema = serde_json::json!({ "type": "object" });
+        let fmt = ResponseFormat::JsonSchema {
+            name: "test".to_string(),
+            schema: schema.clone(),
+            strict: false,
+        };
+        let json_str = serde_json::to_string(&fmt).unwrap();
+        let decoded: ResponseFormat = serde_json::from_str(&json_str).unwrap();
+        match decoded {
+            ResponseFormat::JsonSchema {
+                name,
+                schema: s,
+                strict,
+            } => {
+                assert_eq!(name, "test");
+                assert_eq!(s, schema);
+                assert!(!strict);
+            }
+            _ => panic!("Expected JsonSchema variant"),
+        }
+    }
+
+    #[test]
+    fn response_format_deserialize_from_json_literal() {
+        let input = r#"{"type":"json_object"}"#;
+        let decoded: ResponseFormat = serde_json::from_str(input).unwrap();
+        assert!(matches!(decoded, ResponseFormat::JsonObject));
     }
 }

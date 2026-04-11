@@ -66,6 +66,9 @@ pub struct ProviderConfig {
     /// issues).  If unset, no automatic retries are performed.
     #[serde(default)]
     pub retry: Option<crate::providers::retry::RetryConfig>,
+    /// Optional response format (structured output / JSON mode).
+    #[serde(default)]
+    pub response_format: Option<crate::providers::ResponseFormat>,
 }
 
 fn default_provider_name() -> String {
@@ -90,6 +93,7 @@ impl Default for ProviderConfig {
             temperature: default_temperature(),
             fallbacks: vec![],
             retry: None,
+            response_format: None,
         }
     }
 }
