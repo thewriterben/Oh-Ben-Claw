@@ -1,7 +1,7 @@
 //! Ollama provider adapter.
 
 use crate::config::ProviderConfig;
-use crate::providers::{ChatCompletion, ChatMessage, ChatRole, Provider, ToolCall};
+use crate::providers::{ChatCompletion, ChatMessage, ChatRole, Provider, ResponseFormat, ToolCall};
 use crate::tools::Tool;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -76,6 +76,21 @@ impl Provider for OllamaProvider {
             "tools": ollama_tools,
             "stream": false,
         });
+
+        // Ollama supports a `format` field: `"json"` for free-form JSON or an
+        // inline JSON schema object for structured output.
+        let mut request = request;
+        if let Some(ref fmt) = config.response_format {
+            match fmt {
+                ResponseFormat::Text => {}
+                ResponseFormat::JsonObject => {
+                    request["format"] = Value::String("json".into());
+                }
+                ResponseFormat::JsonSchema { schema, .. } => {
+                    request["format"] = schema.clone();
+                }
+            }
+        }
 
         let response: OllamaResponse = self
             .client
