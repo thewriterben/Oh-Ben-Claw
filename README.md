@@ -135,6 +135,16 @@ Oh-Ben-Claw is organized around three layers:
 
 **HTTP Proxy Support** routes all outbound HTTP requests (LLM API calls, channel webhooks, …) through a configurable HTTP or SOCKS5 proxy — useful for corporate firewalls or restricted networks.
 
+**A2A Protocol** implements Google's Agent-to-Agent interoperability protocol, enabling cross-platform agent communication. The A2A client can discover and invoke remote agents; the A2A server exposes Oh-Ben-Claw's capabilities via a standard Agent Card so that external A2A-compatible agents can call in.
+
+**Structured Output** adds JSON mode and JSON Schema response formatting to LLM calls. When a schema is provided, the agent constrains model output to valid, parseable JSON — making tool results and downstream integrations more reliable.
+
+**Streaming Tool Calls** accumulates partial tool-call fragments from streaming LLM responses into complete, validated calls. The accumulator and builder pattern ensures no data is lost, even when a single response contains multiple interleaved tool invocations.
+
+**WASM Sandbox** provides a WebAssembly runtime adapter for secure, sandboxed tool execution. In addition to the existing `native` and `docker` runtimes, the `wasm` runtime compiles tool code to WASM and executes it in a memory-safe, capability-restricted environment.
+
+**Persistent Cost Tracking** extends the existing token-cost subsystem with a SQLite-backed store that survives process restarts. Cross-session budget enforcement ensures spending limits are respected even when the agent is restarted mid-billing-period.
+
 ---
 
 ## Supported Hardware
@@ -543,7 +553,10 @@ Oh-Ben-Claw/
 │   ├── peripherals/    # Hardware drivers (ESP32-S3, NanoPi, RPi, STM32, Arduino, …)
 │   ├── providers/      # LLM provider adapters + failover + retry
 │   ├── rag/            # RAG pipeline for hardware datasheet retrieval
-│   ├── runtime/        # Sandboxed tool execution (native + Docker)
+│   ├── runtime/        # Sandboxed tool execution (native + Docker + WASM)
+│   │   └── wasm.rs     # WASM runtime adapter
+│   ├── a2a/            # A2A protocol client and server
+│   ├── agent/streaming.rs # Streaming tool call accumulator + builder
 │   ├── scheduler/      # Scheduled tasks and cron jobs
 │   ├── security/       # Policy engine, node pairing, encrypted secrets vault
 │   ├── skill_forge/    # Skill discovery, integration, and ClawHub registry client
@@ -603,6 +616,11 @@ Oh-Ben-Claw is built on top of the [ZeroClaw](https://github.com/zeroclaw-labs/z
 | Reflexion / Plan-and-Execute | ✗ | ✅ |
 | Edge-native mode | ✗ | ✅ (ESP32-S3, NanoPi) |
 | Hardware datasheet RAG | ✗ | ✅ |
+| A2A protocol | ✗ | ✅ Client + server |
+| Structured output | ✗ | ✅ JSON mode / JSON Schema |
+| Streaming tool calls | ✗ | ✅ Accumulator + builder |
+| WASM sandbox | ✗ | ✅ Runtime adapter |
+| Persistent cost tracking | ✗ | ✅ SQLite-backed |
 
 ---
 
