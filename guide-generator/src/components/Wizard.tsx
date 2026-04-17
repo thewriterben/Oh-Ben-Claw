@@ -4,6 +4,7 @@ import { BOARDS, FEATURE_DESIRES } from '../data/hardware';
 import type { BoardInfo, FeatureDesireInfo } from '../data/hardware';
 import { generateGuide } from '../lib/guide-engine';
 import { GuideView } from './GuideView';
+import { RoleAssignmentStep } from './RoleAssignmentStep';
 import type { LiveData } from '../lib/github-api';
 
 interface Props {
@@ -17,6 +18,7 @@ type WizardStep =
   | 'host-board'
   | 'features'
   | 'peripheral-boards'
+  | 'role-assignment'
   | 'toolchain'
   | 'llm-provider'
   | 'llm-model'
@@ -216,6 +218,23 @@ export function Wizard({ liveData }: Props) {
   const handlePeripheralBoardsNext = () => {
     const boardNames = state.peripheralBoards.map(id => BOARDS.find(b => b.id === id)?.displayName || id).join(', ');
     addMessage({ role: 'user', content: `Peripheral boards: ${boardNames || 'None'}` });
+    setTimeout(() => {
+      addMessage({
+        role: 'assistant',
+        content: "Now let's assign roles to each component — what does each board do in your deployment?",
+      });
+      setCurrentStep('role-assignment');
+    }, 300);
+  };
+
+  const handleRoleAssignmentNext = () => {
+    const totalRoles = state.roleConfigs.reduce((sum, rc) => sum + rc.assignments.length, 0);
+    addMessage({
+      role: 'user',
+      content: totalRoles > 0
+        ? `Roles assigned: ${totalRoles} role${totalRoles !== 1 ? 's' : ''} across ${state.roleConfigs.length} board${state.roleConfigs.length !== 1 ? 's' : ''}`
+        : 'Skipped role assignment',
+    });
 
     const hasESP32 = state.peripheralBoards.some(id => BOARDS.find(b => b.id === id)?.category === 'esp32');
     const hasArduino = state.peripheralBoards.some(id => BOARDS.find(b => b.id === id)?.category === 'arduino');
@@ -598,6 +617,19 @@ export function Wizard({ liveData }: Props) {
               </div>
             )}
 
+            {currentStep === 'role-assignment' && (
+              <div className="flex gap-3">
+                <div className="w-8 h-8 rounded-full bg-[#21262d] border border-[#30363d] flex items-center justify-center shrink-0 mt-1">
+                  <span className="text-[#8b949e] text-xs">You</span>
+                </div>
+                <div className="bg-[#161b22] border border-[#30363d] rounded-2xl rounded-tl-none px-4 py-3 max-w-2xl w-full">
+                  <RoleAssignmentStep
+                    onNext={handleRoleAssignmentNext}
+                    onBack={() => setCurrentStep('peripheral-boards')}
+                  />
+                </div>
+              </div>
+            )}
             {currentStep === 'toolchain' && (
               <div className="flex gap-3">
                 <div className="w-8 h-8 rounded-full bg-[#21262d] border border-[#30363d] flex items-center justify-center shrink-0 mt-1">
@@ -808,6 +840,20 @@ export function Wizard({ liveData }: Props) {
                       <div className="flex justify-between gap-4">
                         <span className="text-[#8b949e] shrink-0">Features</span>
                         <span className="text-[#e6edf3] text-right text-xs">{state.featureDesires.join(', ')}</span>
+                      </div>
+                    )}
+                    {state.roleConfigs.length > 0 && (
+                      <div className="flex flex-col gap-1 pt-1 border-t border-[#30363d]">
+                        <span className="text-[#8b949e] text-xs">Role Assignments</span>
+                        {state.roleConfigs.map(rc => {
+                          const board = BOARDS.find(b => b.id === rc.boardId);
+                          return (
+                            <div key={rc.boardId} className="text-xs text-[#e6edf3]">
+                              <span className="text-[#58a6ff]">{board?.displayName || rc.boardId}:</span>{' '}
+                              {rc.assignments.map(a => a.roleId).join(', ')}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
