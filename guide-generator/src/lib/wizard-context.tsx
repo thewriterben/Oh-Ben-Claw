@@ -7,6 +7,7 @@ const defaultState: WizardState = {
   hostOS: null,
   hostBoard: null,
   peripheralBoards: [],
+  roleConfigs: [],
   toolchain: null,
   featureDesires: [],
   wifiSsid: '',

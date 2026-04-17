@@ -1,4 +1,4 @@
-// ── Hardware Data ─────────────────────────────────────────────────────────────
+// ── Hardware Data ──────────────────────────────────────────────────────────────
 // Derived from OBC-deployment-generator/lib/obc-data.ts and
 // Oh-Ben-Claw/src/peripherals/mod.rs
 // This module is the single source of truth for all hardware scenarios.
@@ -8,6 +8,182 @@ export type Architecture = 'x86_64' | 'aarch64' | 'riscv' | 'arm32';
 export type Toolchain = 'rust-cargo' | 'arduino-ide' | 'vscode-platformio' | 'esp-idf' | 'probe-rs';
 export type BoardCategory = 'host' | 'esp32' | 'rpi' | 'arduino' | 'stm32' | 'other';
 export type TransportType = 'native' | 'serial' | 'mqtt' | 'probe';
+
+// ── Role System ────────────────────────────────────────────────────────────────
+
+export type BusType = 'I2C' | 'SPI' | 'UART' | 'USB' | 'Wi-Fi/MQTT' | 'GPIO' | 'I2S' | 'CSI' | 'Native';
+
+export interface RoleDefinition {
+  id: string;
+  label: string;
+  description: string;
+  icon: string;
+  /** Which board capabilities are needed to fulfil this role */
+  requiredCapabilities: string[];
+  /** Default bus type for this role */
+  defaultBus: BusType;
+  /** Whether a pin / address / channel field is relevant */
+  hasPinField: boolean;
+  pinLabel: string;
+  pinPlaceholder: string;
+  /** Config.toml key that maps to this role */
+  configKey: string;
+}
+
+export const ROLES: RoleDefinition[] = [
+  {
+    id: 'brain',
+    label: 'Brain / Orchestrator',
+    description: 'Runs the core Oh-Ben-Claw agent. Coordinates all other nodes.',
+    icon: '🧠',
+    requiredCapabilities: [],
+    defaultBus: 'Native',
+    hasPinField: false,
+    pinLabel: '',
+    pinPlaceholder: '',
+    configKey: 'role_brain',
+  },
+  {
+    id: 'vision',
+    label: 'Vision (Camera)',
+    description: 'Captures images or video for AI analysis.',
+    icon: '📷',
+    requiredCapabilities: ['camera_capture'],
+    defaultBus: 'CSI',
+    hasPinField: true,
+    pinLabel: 'Camera interface / port',
+    pinPlaceholder: 'e.g. CSI0, /dev/video0, OV2640',
+    configKey: 'role_vision',
+  },
+  {
+    id: 'speech',
+    label: 'Speech Output (Speaker / TTS)',
+    description: 'Plays audio or text-to-speech via a connected speaker.',
+    icon: '🔊',
+    requiredCapabilities: ['audio_sample'],
+    defaultBus: 'I2S',
+    hasPinField: true,
+    pinLabel: 'I2S / I2C address or GPIO pin',
+    pinPlaceholder: 'e.g. I2S0, 0x4B, GPIO26',
+    configKey: 'role_speech',
+  },
+  {
+    id: 'display',
+    label: 'Display Output (Screen)',
+    description: 'Renders UI, text, and images on a screen.',
+    icon: '🖥️',
+    requiredCapabilities: ['display'],
+    defaultBus: 'SPI',
+    hasPinField: true,
+    pinLabel: 'SPI bus / CS pin',
+    pinPlaceholder: 'e.g. SPI0, GPIO5',
+    configKey: 'role_display',
+  },
+  {
+    id: 'touch',
+    label: 'Touch Control',
+    description: 'Receives touch or gesture input from a touchscreen.',
+    icon: '👆',
+    requiredCapabilities: ['touch'],
+    defaultBus: 'I2C',
+    hasPinField: true,
+    pinLabel: 'I2C address',
+    pinPlaceholder: 'e.g. 0x38',
+    configKey: 'role_touch',
+  },
+  {
+    id: 'microphone',
+    label: 'Microphone Array',
+    description: 'Captures far-field audio for voice commands or ambient detection.',
+    icon: '🎤',
+    requiredCapabilities: ['audio_sample'],
+    defaultBus: 'USB',
+    hasPinField: true,
+    pinLabel: 'USB port / I2S channel',
+    pinPlaceholder: 'e.g. USB0, I2S1',
+    configKey: 'role_microphone',
+  },
+  {
+    id: 'motor',
+    label: 'Motor Control',
+    description: 'Drives motors, servos, or actuators.',
+    icon: '⚙️',
+    requiredCapabilities: ['gpio', 'pwm'],
+    defaultBus: 'GPIO',
+    hasPinField: true,
+    pinLabel: 'PWM / GPIO pins',
+    pinPlaceholder: 'e.g. GPIO12, GPIO13',
+    configKey: 'role_motor',
+  },
+  {
+    id: 'gpio-broker',
+    label: 'GPIO Broker',
+    description: 'General-purpose I/O hub for sensors, relays, and digital signals.',
+    icon: '🔌',
+    requiredCapabilities: ['gpio'],
+    defaultBus: 'GPIO',
+    hasPinField: true,
+    pinLabel: 'GPIO pin range',
+    pinPlaceholder: 'e.g. GPIO0–GPIO15',
+    configKey: 'role_gpio_broker',
+  },
+  {
+    id: 'network-gateway',
+    label: 'Network Gateway (MQTT Broker)',
+    description: 'Hosts the MQTT broker that all nodes communicate through.',
+    icon: '📡',
+    requiredCapabilities: ['wifi'],
+    defaultBus: 'Wi-Fi/MQTT',
+    hasPinField: false,
+    pinLabel: '',
+    pinPlaceholder: '',
+    configKey: 'role_network_gateway',
+  },
+  {
+    id: 'ota-manager',
+    label: 'OTA Manager',
+    description: 'Coordinates over-the-air firmware updates for peripheral nodes.',
+    icon: '🔄',
+    requiredCapabilities: [],
+    defaultBus: 'Wi-Fi/MQTT',
+    hasPinField: false,
+    pinLabel: '',
+    pinPlaceholder: '',
+    configKey: 'role_ota_manager',
+  },
+  {
+    id: 'sensor-node',
+    label: 'Sensor Node',
+    description: 'Reads environmental or physical sensors (temperature, IMU, etc.).',
+    icon: '🌡️',
+    requiredCapabilities: ['sensor_read'],
+    defaultBus: 'I2C',
+    hasPinField: true,
+    pinLabel: 'I2C address or GPIO pin',
+    pinPlaceholder: 'e.g. 0x76, GPIO4',
+    configKey: 'role_sensor',
+  },
+];
+
+export const ROLE_BY_ID = Object.fromEntries(ROLES.map(r => [r.id, r]));
+
+/** A single role assignment on a specific board */
+export interface RoleAssignment {
+  roleId: string;
+  bus: BusType;
+  /** Pin number, I2C address, USB port, etc. — optional */
+  pinOrAddress: string;
+  /** Free-text notes */
+  notes: string;
+}
+
+/** All role assignments for one board in the deployment */
+export interface BoardRoleConfig {
+  boardId: string;
+  assignments: RoleAssignment[];
+}
+
+// ── Board Info ─────────────────────────────────────────────────────────────────
 
 export interface BoardInfo {
   id: string;
@@ -24,6 +200,8 @@ export interface BoardInfo {
   otaMethod?: string;
   usbDriverNote?: string;
   purchaseNote?: string;
+  /** Roles that are a natural fit for this board, shown as suggestions */
+  suggestedRoles?: string[];
 }
 
 export const BOARDS: BoardInfo[] = [
@@ -40,6 +218,7 @@ export const BOARDS: BoardInfo[] = [
     recommendedToolchains: ['rust-cargo'],
     firmwareSupported: false,
     otaSupported: false,
+    suggestedRoles: ['brain', 'network-gateway', 'ota-manager'],
   },
   {
     id: 'pc-macos',
@@ -53,6 +232,7 @@ export const BOARDS: BoardInfo[] = [
     recommendedToolchains: ['rust-cargo'],
     firmwareSupported: false,
     otaSupported: false,
+    suggestedRoles: ['brain', 'network-gateway', 'ota-manager'],
   },
   {
     id: 'pc-windows',
@@ -66,6 +246,7 @@ export const BOARDS: BoardInfo[] = [
     recommendedToolchains: ['rust-cargo'],
     firmwareSupported: false,
     otaSupported: false,
+    suggestedRoles: ['brain', 'network-gateway', 'ota-manager'],
   },
   {
     id: 'raspberry-pi',
@@ -81,6 +262,7 @@ export const BOARDS: BoardInfo[] = [
     otaSupported: true,
     otaMethod: 'apt/pip + service restart via SSH',
     purchaseNote: 'Raspberry Pi 4 (4GB) or Pi 5 recommended for running the full brain agent. Pi Zero 2 W is suitable as a lightweight peripheral node only.',
+    suggestedRoles: ['brain', 'vision', 'microphone', 'gpio-broker', 'network-gateway', 'ota-manager'],
   },
   {
     id: 'nanopi-neo3',
@@ -96,6 +278,7 @@ export const BOARDS: BoardInfo[] = [
     otaSupported: true,
     otaMethod: 'apt + service restart',
     purchaseNote: 'Available from FriendlyElec. Requires Armbian OS. A great low-power alternative to Raspberry Pi.',
+    suggestedRoles: ['brain', 'gpio-broker', 'network-gateway', 'microphone', 'ota-manager'],
   },
   {
     id: 'jetson-nano',
@@ -110,6 +293,7 @@ export const BOARDS: BoardInfo[] = [
     firmwareSupported: false,
     otaSupported: true,
     otaMethod: 'apt + service restart',
+    suggestedRoles: ['brain', 'vision', 'gpio-broker', 'network-gateway'],
   },
 
   // ── ESP32 Family ──────────────────────────────────────────────────────────
@@ -128,6 +312,7 @@ export const BOARDS: BoardInfo[] = [
     otaMethod: 'HTTP OTA via esp-idf-svc',
     usbDriverNote: 'Uses a CH343P USB-to-serial chip. Install the CH343 driver on Windows/macOS.',
     purchaseNote: 'Available from Waveshare. Search for "Waveshare ESP32-S3 Touch LCD 2.1".',
+    suggestedRoles: ['display', 'touch', 'speech', 'microphone'],
   },
   {
     id: 'xiao-esp32s3-sense',
@@ -144,6 +329,7 @@ export const BOARDS: BoardInfo[] = [
     otaMethod: 'HTTP OTA via esp-idf-svc',
     usbDriverNote: 'Uses native USB. No driver needed on most systems. On Windows, install the CP210x driver if not detected.',
     purchaseNote: 'Available from Seeed Studio and distributors like Mouser, DigiKey.',
+    suggestedRoles: ['vision', 'speech', 'microphone'],
   },
   {
     id: 'esp32-s3',
@@ -159,6 +345,7 @@ export const BOARDS: BoardInfo[] = [
     otaSupported: true,
     otaMethod: 'HTTP OTA via esp-idf-svc',
     usbDriverNote: 'Most use CP2102 or CH340. Install the appropriate driver for your board.',
+    suggestedRoles: ['vision', 'speech', 'microphone', 'sensor-node', 'gpio-broker'],
   },
   {
     id: 'esp32-c3',
@@ -174,6 +361,7 @@ export const BOARDS: BoardInfo[] = [
     otaSupported: true,
     otaMethod: 'HTTP OTA via esp-idf-svc',
     usbDriverNote: 'Uses native USB or CP2102. Install the CP210x driver on Windows/macOS if needed.',
+    suggestedRoles: ['sensor-node', 'gpio-broker'],
   },
   {
     id: 'esp32',
@@ -189,6 +377,7 @@ export const BOARDS: BoardInfo[] = [
     otaSupported: true,
     otaMethod: 'ArduinoOTA or HTTP OTA',
     usbDriverNote: 'Most boards use CP2102 or CH340. Install the appropriate driver.',
+    suggestedRoles: ['sensor-node', 'gpio-broker', 'motor'],
   },
 
   // ── Raspberry Pi Pico Family ───────────────────────────────────────────────
@@ -205,6 +394,7 @@ export const BOARDS: BoardInfo[] = [
     firmwareSupported: false,
     otaSupported: false,
     usbDriverNote: 'No driver needed. Appears as a USB mass storage device when in bootloader mode.',
+    suggestedRoles: ['sensor-node', 'gpio-broker', 'motor'],
   },
   {
     id: 'raspberry-pi-pico2',
@@ -219,6 +409,7 @@ export const BOARDS: BoardInfo[] = [
     firmwareSupported: false,
     otaSupported: false,
     usbDriverNote: 'No driver needed. Appears as a USB mass storage device when in bootloader mode.',
+    suggestedRoles: ['sensor-node', 'gpio-broker', 'motor'],
   },
 
   // ── Arduino Family ────────────────────────────────────────────────────────
@@ -236,6 +427,7 @@ export const BOARDS: BoardInfo[] = [
     otaSupported: false,
     usbDriverNote: 'Rev3 uses ATmega16U2 USB bridge (no driver needed on most systems). Rev4 uses native USB.',
     purchaseNote: 'The most beginner-friendly board. Rev4 Minima is recommended for new users.',
+    suggestedRoles: ['gpio-broker', 'motor', 'sensor-node'],
   },
   {
     id: 'arduino-mega',
@@ -250,6 +442,7 @@ export const BOARDS: BoardInfo[] = [
     firmwareSupported: false,
     otaSupported: false,
     usbDriverNote: 'Uses ATmega16U2 USB bridge. No driver needed on most systems.',
+    suggestedRoles: ['gpio-broker', 'motor', 'sensor-node'],
   },
   {
     id: 'arduino-nano-33-ble',
@@ -264,6 +457,7 @@ export const BOARDS: BoardInfo[] = [
     firmwareSupported: false,
     otaSupported: false,
     usbDriverNote: 'Uses native USB. No driver needed.',
+    suggestedRoles: ['sensor-node', 'microphone', 'gpio-broker'],
   },
 
   // ── STM32 Family ──────────────────────────────────────────────────────────
@@ -281,6 +475,7 @@ export const BOARDS: BoardInfo[] = [
     otaSupported: true,
     otaMethod: 'probe-rs flash via ST-Link',
     usbDriverNote: 'Requires ST-Link USB drivers. On Windows, install the ST-Link driver from STMicroelectronics. On Linux/macOS, install udev rules.',
+    suggestedRoles: ['motor', 'gpio-broker', 'sensor-node'],
   },
   {
     id: 'nucleo-h743zi',
@@ -296,6 +491,7 @@ export const BOARDS: BoardInfo[] = [
     otaSupported: true,
     otaMethod: 'probe-rs flash via ST-Link',
     usbDriverNote: 'Requires ST-Link USB drivers. See Nucleo-F401RE note above.',
+    suggestedRoles: ['motor', 'gpio-broker', 'sensor-node'],
   },
 
   // ── Other ─────────────────────────────────────────────────────────────────
@@ -313,6 +509,7 @@ export const BOARDS: BoardInfo[] = [
     otaSupported: false,
     usbDriverNote: 'No driver needed. Plug in via USB and it appears as a standard audio input device.',
     purchaseNote: 'Available from Sipeed. A great companion for the NanoPi Neo3 or Raspberry Pi.',
+    suggestedRoles: ['microphone'],
   },
   {
     id: 'teensy-4.1',
@@ -327,6 +524,7 @@ export const BOARDS: BoardInfo[] = [
     firmwareSupported: false,
     otaSupported: false,
     usbDriverNote: 'Requires the Teensy loader application. Install Teensyduino from pjrc.com.',
+    suggestedRoles: ['motor', 'gpio-broker', 'sensor-node'],
   },
 ];
 
@@ -349,7 +547,7 @@ export const ACCESSORIES: AccessoryInfo[] = [
   { id: 'mpu6050', displayName: 'MPU-6050', bus: 'I2C', defaultAddress: '0x68', capabilities: ['sensor_read'], description: '6-axis IMU: 3-axis Accelerometer and 3-axis Gyroscope.' },
   { id: 'ssd1306', displayName: 'SSD1306 OLED', bus: 'I2C', defaultAddress: '0x3C', capabilities: ['display'], description: '128×64 pixel monochrome OLED display. Common small display for sensor readouts.' },
   { id: 'dht22', displayName: 'DHT22', bus: 'GPIO', capabilities: ['sensor_read'], description: 'Temperature and Humidity sensor with single-wire protocol. Slightly more accurate than DHT11.' },
-  { id: 'dht11', displayName: 'DHT11', bus: 'GPIO', capabilities: ['sensor_read'], description: 'Basic Temperature and Humidity sensor. Lower accuracy than DHT22 but very low cost.' },
+  { id: 'dht11', displayName: 'DHT11', bus: 'GPIO', capabilities: ['sensor_read'], description: 'Temperature and Humidity sensor. Very low cost.' },
   { id: 'ds18b20', displayName: 'DS18B20', bus: '1-Wire', capabilities: ['sensor_read'], description: 'Waterproof digital temperature sensor. Great for liquid temperature measurement.' },
   { id: 'ina260', displayName: 'INA260', bus: 'I2C', defaultAddress: '0x40', capabilities: ['sensor_read'], description: 'Voltage, Current, and Power monitor. Useful for battery monitoring.' },
   { id: 'ads1115', displayName: 'ADS1115', bus: 'I2C', defaultAddress: '0x48', capabilities: ['analog_read'], description: '16-bit 4-channel ADC. Adds precise analog inputs to boards that lack them (e.g., Raspberry Pi).' },

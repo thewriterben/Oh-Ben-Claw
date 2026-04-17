@@ -2,14 +2,16 @@
 // Generates step-by-step deployment guides based on user selections.
 // Every command and code block is included for zero-experience users.
 
-import { BOARD_BY_ID } from '../data/hardware';
-import type { HostOS, Toolchain } from '../data/hardware';
+import { BOARD_BY_ID, ROLE_BY_ID } from '../data/hardware';
+import type { HostOS, Toolchain, BoardRoleConfig } from '../data/hardware';
 
 export interface WizardState {
   goal: 'host' | 'peripheral' | 'full' | null;
   hostOS: HostOS | null;
   hostBoard: string | null;
   peripheralBoards: string[];
+  /** Role assignments keyed by boardId */
+  roleConfigs: BoardRoleConfig[];
   toolchain: Toolchain | null;
   featureDesires: string[];
   wifiSsid: string;
@@ -429,6 +431,10 @@ function generateConfigToml(state: WizardState): string {
 
       lines.push(`# ${board.displayName}`);
       lines.push(`[[peripherals.boards]]`);
+      // Role assignments for this board
+      const roleConfig = state.roleConfigs?.find(rc => rc.boardId === boardId);
+      const roleIds = roleConfig?.assignments.map(a => a.roleId) ?? [];
+
       lines.push(`board = "${boardId}"`);
       lines.push(`transport = "${board.transport}"`);
 
@@ -437,6 +443,21 @@ function generateConfigToml(state: WizardState): string {
         lines.push(`baud = 115200`);
       } else if (board.transport === 'mqtt') {
         lines.push(`node_id = "${state.nodeId || boardId + '-node'}"`);
+      }
+
+      // Emit role assignments
+      if (roleIds.length > 0) {
+        lines.push(`roles = [${roleIds.map(r => `"${r}"`).join(', ')}]`);
+        for (const assignment of (roleConfig?.assignments ?? [])) {
+          const roleDef = ROLE_BY_ID[assignment.roleId];
+          if (!roleDef) continue;
+          lines.push(`# ${roleDef.label} — bus: ${assignment.bus}${assignment.pinOrAddress ? ', pin/addr: ' + assignment.pinOrAddress : ''}`);
+          lines.push(`[peripherals.roles.${assignment.roleId}.${boardId.replace(/-/g, '_')}]`);
+          lines.push(`bus = "${assignment.bus}"`);
+          if (assignment.pinOrAddress) lines.push(`pin_or_address = "${assignment.pinOrAddress}"`);
+          if (assignment.notes) lines.push(`notes = "${assignment.notes}"`);
+          lines.push(``);
+        }
       }
       lines.push(``);
     }
@@ -1008,6 +1029,119 @@ function getRaspberryPiSetupStep(): GuideStep {
   };
 }
 
+// ── Wiring / Role Guide Step ─────────────────────────────────────────────────
+
+function getWiringStep(state: WizardState): GuideStep | null {
+  const configs = state.roleConfigs ?? [];
+  if (configs.length === 0) return null;
+
+  const tableRows: string[] = [];
+  tableRows.push('| Board | Role | Bus | Pin / Address | Notes |');
+  tableRows.push('|---|---|---|---|---|');
+
+  for (const rc of configs) {
+    const board = BOARD_BY_ID[rc.boardId];
+    if (!board) continue;
+    for (const a of rc.assignments) {
+      const role = ROLE_BY_ID[a.roleId];
+      if (!role) continue;
+      tableRows.push(
+        `| ${board.displayName} | ${role.icon} ${role.label} | ${a.bus} | ${a.pinOrAddress || '—'} | ${a.notes || '—'} |`
+      );
+    }
+  }
+
+  // Build wiring instructions per role
+  const wiringInstructions: CodeBlock[] = [];
+
+  for (const rc of configs) {
+    const board = BOARD_BY_ID[rc.boardId];
+    if (!board) continue;
+    for (const a of rc.assignments) {
+      const role = ROLE_BY_ID[a.roleId];
+      if (!role) continue;
+
+      let wiringText = '';
+
+      if (a.bus === 'I2C') {
+        wiringText = `# ${board.displayName} → ${role.label} (I2C)\n` +
+          `# Connect SDA → SDA on host board\n` +
+          `# Connect SCL → SCL on host board\n` +
+          `# Connect VCC → 3.3V (or 5V if module requires it)\n` +
+          `# Connect GND → GND\n` +
+          (a.pinOrAddress ? `# I2C address: ${a.pinOrAddress}\n` : '') +
+          `# Verify the device is detected:\n` +
+          `sudo i2cdetect -y 1`;
+      } else if (a.bus === 'SPI') {
+        wiringText = `# ${board.displayName} → ${role.label} (SPI)\n` +
+          `# Connect MOSI → MOSI on host\n` +
+          `# Connect MISO → MISO on host\n` +
+          `# Connect SCLK → SCLK on host\n` +
+          `# Connect CS   → ${a.pinOrAddress || 'GPIO (your choice)'}\n` +
+          `# Connect VCC → 3.3V, GND → GND`;
+      } else if (a.bus === 'UART') {
+        wiringText = `# ${board.displayName} → ${role.label} (UART)\n` +
+          `# Connect TX  → RX on host\n` +
+          `# Connect RX  → TX on host\n` +
+          `# Connect VCC → 3.3V, GND → GND\n` +
+          (a.pinOrAddress ? `# UART port: ${a.pinOrAddress}\n` : '') +
+          `# Verify the device is visible:\n` +
+          `ls /dev/ttyUSB* /dev/ttyACM*`;
+      } else if (a.bus === 'USB') {
+        wiringText = `# ${board.displayName} → ${role.label} (USB)\n` +
+          `# Plug the device into a USB port on your host machine.\n` +
+          `# Verify it appears as an audio/serial device:\n` +
+          `lsusb\n` +
+          `arecord -l   # for USB audio devices`;
+      } else if (a.bus === 'I2S') {
+        wiringText = `# ${board.displayName} → ${role.label} (I2S)\n` +
+          `# Connect BCLK (Bit Clock)  → I2S BCLK pin\n` +
+          `# Connect LRCLK (Word Sel)  → I2S WS pin\n` +
+          `# Connect DATA              → I2S DATA pin\n` +
+          (a.pinOrAddress ? `# I2S channel / address: ${a.pinOrAddress}\n` : '') +
+          `# Connect VCC → 3.3V, GND → GND`;
+      } else if (a.bus === 'CSI') {
+        wiringText = `# ${board.displayName} → ${role.label} (CSI Camera)\n` +
+          `# Connect the flat ribbon cable from the camera module to the CSI port on the board.\n` +
+          `# Ensure the cable is fully seated and the latch is locked.\n` +
+          (a.pinOrAddress ? `# CSI port: ${a.pinOrAddress}\n` : '') +
+          `# Verify the camera is detected:\n` +
+          `libcamera-hello --list-cameras`;
+      } else if (a.bus === 'Wi-Fi/MQTT') {
+        wiringText = `# ${board.displayName} → ${role.label} (Wi-Fi / MQTT)\n` +
+          `# No physical wiring needed — this connection is wireless.\n` +
+          `# Ensure both devices are on the same Wi-Fi network.\n` +
+          `# The MQTT broker address is configured in config.toml under [spine].`;
+      } else {
+        wiringText = `# ${board.displayName} → ${role.label} (${a.bus})\n` +
+          (a.pinOrAddress ? `# Pin / Address: ${a.pinOrAddress}\n` : '') +
+          (a.notes ? `# Notes: ${a.notes}` : '');
+      }
+
+      wiringInstructions.push({
+        label: `${board.displayName} → ${role.icon} ${role.label} (${a.bus})`,
+        language: 'bash',
+        code: wiringText,
+        copyable: true,
+        platform: 'all',
+      });
+    }
+  }
+
+  return {
+    id: 'role-wiring',
+    title: 'Component Role Assignment and Wiring',
+    description:
+      'This section shows how each component in your deployment is connected and what role it plays. ' +
+      'Follow the wiring instructions for each connection carefully before powering on your system. ' +
+      'The table below is a summary; detailed wiring instructions follow.\n\n' +
+      tableRows.join('\n'),
+    commands: wiringInstructions,
+    tip: 'Always connect GND first and disconnect it last. Never connect or disconnect components while the system is powered on.',
+    warning: 'Double-check all voltage levels before connecting. Most ESP32 boards use 3.3V logic. Connecting a 5V signal to a 3.3V GPIO pin can permanently damage the board.',
+  };
+}
+
 // ── Main Guide Generator ──────────────────────────────────────────────────────
 
 export function generateGuide(state: WizardState): GeneratedGuide {
@@ -1057,6 +1191,10 @@ export function generateGuide(state: WizardState): GeneratedGuide {
   if (state.goal === 'host' || state.goal === 'full') {
     steps.push(getConfigStep(state));
   }
+
+  // Step 4b: Wiring / Role Assignment (if roles have been assigned)
+  const wiringStep = getWiringStep(state);
+  if (wiringStep) steps.push(wiringStep);
 
   // Step 5: Peripheral firmware
   for (const boardId of state.peripheralBoards) {
