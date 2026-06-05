@@ -425,3 +425,62 @@ and enhanced reliability.
 - [x] **14 doc-tests** passing
 - [x] All Clippy warnings resolved
 - [x] All code formatted with `rustfmt`
+
+## Phase 15: Production Hardening 🔄 Planned
+
+Executed in lockstep with **ClawCam Phase 13** (see `NEXT_PHASE_PLAN.md` in the
+workspace root). No new product surface area: this phase makes the existing 14
+phases trustworthy — supply-chain security, protocol conformance against the
+specs as they actually shipped, and the evaluation/observability layer the 2026
+agentic-AI ecosystem treats as table stakes. Target window: June 8 – July 31, 2026.
+
+### Skill-Install Security (ClawHub client) — time-sensitive
+
+Driven by the 2026 ClawHub supply-chain compromise (~1 in 12 registry skills
+malicious; `SKILL.md` external-URL payloads defeat static scanning).
+
+- [x] Operator approval required for every skill install/update (no silent installs) — `InstallConsent` gate in `ClawHubClient::install()`
+- [x] Checksum verification of skill packages (SHA-256 vs. catalogue `sha256`; `require_checksum` mode) — full signature verification deferred until the registry publishes signing keys
+- [x] Version pinning in config (`[clawhub.install_policy.pinned_versions]`)
+- [x] Static flagging of external-URL fetch instructions, shell execution, and download language, surfaced in the approval prompt (`InstallInspection`)
+- [x] Optional local vetted mirror (`allowlist`)
+- [x] Install audit log (JSONL, manifest hash + decision + flags) — verified: 17 unit tests, 55/55 module tests passing on Windows
+
+### MCP 2026-07-28 Readiness — deadline July 28, 2026
+
+The MCP release candidate is breaking: stateless protocol core (no init
+handshake / session header), extensions framework, Tasks primitive.
+
+- [ ] Audit MCP client + server against the 2026-07-28 RC
+- [ ] Dual-mode operation (current spec + RC) behind a config flag
+- [ ] Cross-repo integration test with ClawCam (brain ↔ adapter ↔ stdio bridge ↔ gateway) in both modes
+- [ ] Flip default mode when the final spec ships (July 28)
+
+### A2A v1.0 Conformance
+
+Phase 14's A2A implementation predates the stable v1.0 spec (Linux Foundation).
+
+- [x] Diff `src/a2a/` against published v1.0 — finding: the Phase 14 sketch matched neither v0.3.0 nor v1.0 (custom REST `/tasks`, snake_case states, pre-0.3 `agent.json`)
+- [x] Rewrite to v1.0 (JSON-RPC binding subset): `supportedInterfaces`, `agent-card.json`, PascalCase operations, `TASK_STATE_*`/`ROLE_*` enums, kind-less `Part` oneof, A2A error codes with `ErrorInfo`, `A2A-Version` validation — supported subset documented in module docs
+- [x] A2A conformance test suite — 18 unit tests covering card shape, enum wire formats, Part oneof, task lifecycle, error codes, version gate (cargo run pending on Windows)
+
+### Evaluation Harness (CC/CD)
+
+- [x] Golden task set for the agent loop (`tests/evals.rs`): direct answer, single-tool route with exact args, multi-step ordering, tool-failure recovery, unknown-tool degradation — driven by a deterministic `ScriptedProvider` mock
+- [x] Wire-shape goldens: MCP (initialize/discover/tools-list/error) and A2A (task lifecycle, ErrorInfo, agent card) + approval policy matrix golden
+- [x] CI gate: evals run as integration tests under the existing `cargo test --workspace` job — no release while evals regress (cargo run pending on Windows)
+- [ ] LLM-as-judge advisory scoring (deferred until a judge provider is wired; gates stay deterministic)
+
+### Observability / AgentOps
+
+- [x] Audit finding: `src/observability` (spans, ring-buffer sink, counters, `/api/v1/metrics`) already existed and was wired into the gateway — but the agent loop was blind
+- [x] Structured trace per agent run: `Agent::with_obs()` records an `agent.process` span (session_id, tool_calls) and per-call `agent.tool` spans with error status; turn/tool/error counters at source (no double-count with gateway counters) — 2 new evals in `tests/evals.rs`
+- [x] Counters for approval asks (`ApprovalManager::with_obs()` → `approval_asks_total`); `record_retry`/`record_failover` helpers added — retry/failover already emit structured `tracing::warn!` logs; counter threading into the provider wrappers deferred until the gateway owns an ObsContext for them
+- [ ] Cost summary in the gateway metrics view (CostTracker handle not yet in `GatewayState`; carry to Phase 16)
+
+### Approval-Model Upgrade
+
+- [x] Approval scopes: call / session / forever; forever grants persisted (`~/.oh-ben-claw/approval_grants.json`) with audit trail (16 unit tests; cargo run pending on Windows)
+- [x] Plan-mode approval: `ApprovedPlan` + `ArgumentBound`s; plan revoked on first violation (halt on drift)
+- [x] Shared scope vocabulary with ClawCam: adapter `ApprovalGrants` + `call_tool(scope=…)` — verified, 22/22 tests
+- [x] Approval funnel analytics per tool (asked / approved-by-scope / denied / plan violations) in both projects

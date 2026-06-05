@@ -1,6 +1,14 @@
 //! MCP client — connects to external MCP servers via stdio or HTTP+SSE.
+//!
+//! Supports both protocol lifecycles (Phase 15, WS2):
+//! - **Legacy 2024-11-05**: `initialize`/`initialized` handshake on connect.
+//! - **Stateless 2026-07-28**: no handshake; `clientInfo` rides in `_meta` on
+//!   every request, capabilities come from `server/discover`, and HTTP
+//!   requests carry `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` headers.
 
-use super::{JsonRpcRequest, JsonRpcResponse, McpServerConfig, McpToolDef};
+use super::{
+    client_info_meta, JsonRpcRequest, JsonRpcResponse, McpServerConfig, McpToolDef, ProtocolMode,
+};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::process::Stdio;
@@ -12,7 +20,7 @@ use tokio::sync::Mutex;
 // ── Transport ─────────────────────────────────────────────────────────────────
 
 enum Transport {
-    Stdio(StdioTransport),
+    Stdio(Box<StdioTransport>),
     Http(HttpTransport),
 }
 
@@ -34,8 +42,11 @@ struct HttpTransport {
 pub struct McpClient {
     transport: Transport,
     next_id: u64,
+    mode: ProtocolMode,
     server_name: String,
     server_version: String,
+    /// `ttlMs` from the most recent `tools/list` response (2026 spec, SEP-2549).
+    tools_ttl_ms: Option<u64>,
 }
 
 impl McpClient {
@@ -79,18 +90,19 @@ impl McpClient {
             .ok_or_else(|| anyhow::anyhow!("No stdout"))?;
 
         let mut client = Self {
-            transport: Transport::Stdio(StdioTransport {
+            transport: Transport::Stdio(Box::new(StdioTransport {
                 stdin,
                 stdout: Arc::new(Mutex::new(BufReader::new(stdout))),
                 _child: child,
-            }),
+            })),
             next_id: 1,
+            mode: config.protocol_mode,
             server_name: String::new(),
             server_version: String::new(),
+            tools_ttl_ms: None,
         };
 
-        // Perform MCP handshake
-        client.initialize().await?;
+        client.establish().await?;
         Ok(client)
     }
 
@@ -107,25 +119,36 @@ impl McpClient {
                 token: config.token.clone(),
             }),
             next_id: 1,
+            mode: config.protocol_mode,
             server_name: String::new(),
             server_version: String::new(),
+            tools_ttl_ms: None,
         };
 
-        client.initialize().await?;
+        client.establish().await?;
         Ok(client)
     }
 
-    /// Perform the MCP initialize handshake.
+    /// Establish the connection according to the protocol mode.
+    async fn establish(&mut self) -> Result<()> {
+        match self.mode {
+            ProtocolMode::Legacy2024 => self.initialize().await,
+            ProtocolMode::Stateless2026 => self.discover().await,
+        }
+    }
+
+    /// Perform the legacy (2024-11-05) MCP initialize handshake.
+    ///
+    /// Note: `roots` and `sampling` capability declarations were dropped —
+    /// both features are deprecated in 2026-07-28 (SEP-2577) and this client
+    /// never implemented either.
     async fn initialize(&mut self) -> Result<()> {
         let result = self
             .request(
                 "initialize",
                 json!({
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "roots": {"listChanged": false},
-                        "sampling": {}
-                    },
+                    "protocolVersion": super::PROTOCOL_VERSION_LEGACY,
+                    "capabilities": {},
                     "clientInfo": {
                         "name": "oh-ben-claw",
                         "version": env!("CARGO_PKG_VERSION")
@@ -134,14 +157,7 @@ impl McpClient {
             )
             .await?;
 
-        self.server_name = result["serverInfo"]["name"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string();
-        self.server_version = result["serverInfo"]["version"]
-            .as_str()
-            .unwrap_or("0.0.0")
-            .to_string();
+        self.record_server_info(&result);
 
         // Send initialized notification
         self.notify("notifications/initialized", json!({})).await?;
@@ -154,12 +170,55 @@ impl McpClient {
         Ok(())
     }
 
+    /// 2026-07-28 mode: no handshake. Optionally fetch server capabilities
+    /// via `server/discover`; tolerate servers that don't implement it,
+    /// since discovery is on-demand rather than a lifecycle requirement.
+    async fn discover(&mut self) -> Result<()> {
+        match self.request("server/discover", json!({})).await {
+            Ok(result) => {
+                self.record_server_info(&result);
+                tracing::debug!(
+                    "MCP server/discover: {} v{}",
+                    self.server_name,
+                    self.server_version
+                );
+            }
+            Err(e) => {
+                self.server_name = "unknown".to_string();
+                self.server_version = "0.0.0".to_string();
+                tracing::debug!("MCP server/discover unavailable (continuing): {e}");
+            }
+        }
+        Ok(())
+    }
+
+    fn record_server_info(&mut self, result: &Value) {
+        self.server_name = result["serverInfo"]["name"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
+        self.server_version = result["serverInfo"]["version"]
+            .as_str()
+            .unwrap_or("0.0.0")
+            .to_string();
+    }
+
     /// List all tools available on the connected server.
+    ///
+    /// In 2026 mode the response may carry `ttlMs` (SEP-2549); it is recorded
+    /// and exposed via [`Self::tools_ttl_ms`] so callers can cache the list.
     pub async fn list_tools(&mut self) -> Result<Vec<McpToolDef>> {
         let result = self.request("tools/list", json!({})).await?;
+        self.tools_ttl_ms = result["ttlMs"].as_u64();
         let tools: Vec<McpToolDef> =
             serde_json::from_value(result["tools"].clone()).unwrap_or_default();
         Ok(tools)
+    }
+
+    /// `ttlMs` from the most recent `tools/list` response, if the server
+    /// provided one (2026-07-28 spec). `None` means "do not cache".
+    pub fn tools_ttl_ms(&self) -> Option<u64> {
+        self.tools_ttl_ms
     }
 
     /// Call a tool on the connected server.
@@ -195,6 +254,13 @@ impl McpClient {
         let id = self.next_id;
         self.next_id += 1;
 
+        // 2026 mode: clientInfo travels in `_meta` on every request (SEP-2575).
+        let params = if self.mode == ProtocolMode::Stateless2026 {
+            Self::with_client_meta(params)
+        } else {
+            params
+        };
+
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: Some(json!(id)),
@@ -226,6 +292,15 @@ impl McpClient {
                 if let Some(token) = &t.token {
                     builder = builder.bearer_auth(token);
                 }
+                // 2026 Streamable HTTP requires routing headers (SEP-2243).
+                if self.mode == ProtocolMode::Stateless2026 {
+                    builder = builder
+                        .header("MCP-Protocol-Version", self.mode.version())
+                        .header("Mcp-Method", &req.method);
+                    if let Some(name) = req.params.get("name").and_then(|n| n.as_str()) {
+                        builder = builder.header("Mcp-Name", name);
+                    }
+                }
                 let resp: JsonRpcResponse = builder.send().await?.json().await?;
                 if let Some(err) = resp.error {
                     anyhow::bail!("MCP error {}: {}", err.code, err.message);
@@ -233,6 +308,29 @@ impl McpClient {
                 Ok(resp.result.unwrap_or(Value::Null))
             }
         }
+    }
+
+    /// Merge the spec-defined clientInfo `_meta` entry into request params,
+    /// preserving any `_meta` keys the caller already set.
+    fn with_client_meta(mut params: Value) -> Value {
+        if !params.is_object() {
+            return params;
+        }
+        let meta_addition = client_info_meta();
+        let obj = params.as_object_mut().expect("checked is_object above");
+        match obj.get_mut("_meta") {
+            Some(Value::Object(existing)) => {
+                if let Value::Object(add) = meta_addition {
+                    for (k, v) in add {
+                        existing.entry(k).or_insert(v);
+                    }
+                }
+            }
+            _ => {
+                obj.insert("_meta".to_string(), meta_addition);
+            }
+        }
+        params
     }
 
     /// Send a JSON-RPC notification (no response expected).
@@ -264,5 +362,62 @@ impl McpClient {
 
     pub fn server_version(&self) -> &str {
         &self.server_version
+    }
+
+    /// The protocol mode this client speaks.
+    pub fn mode(&self) -> ProtocolMode {
+        self.mode
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_client_meta_adds_meta_to_plain_params() {
+        let params = json!({"name": "search", "arguments": {"q": "otters"}});
+        let out = McpClient::with_client_meta(params);
+        let info = &out["_meta"]["io.modelcontextprotocol/clientInfo"];
+        assert_eq!(info["name"], "oh-ben-claw");
+        assert!(info["version"].is_string());
+        // Original params preserved.
+        assert_eq!(out["name"], "search");
+    }
+
+    #[test]
+    fn with_client_meta_preserves_existing_meta_keys() {
+        let params = json!({
+            "_meta": {"traceparent": "00-abc-def-01", "io.modelcontextprotocol/clientInfo": {"name": "custom"}}
+        });
+        let out = McpClient::with_client_meta(params);
+        // Caller-set keys win; we only fill in what's missing.
+        assert_eq!(out["_meta"]["traceparent"], "00-abc-def-01");
+        assert_eq!(
+            out["_meta"]["io.modelcontextprotocol/clientInfo"]["name"],
+            "custom"
+        );
+    }
+
+    #[test]
+    fn with_client_meta_passes_non_object_params_through() {
+        let params = json!([1, 2, 3]);
+        let out = McpClient::with_client_meta(params.clone());
+        assert_eq!(out, params);
+    }
+
+    #[test]
+    fn protocol_mode_versions() {
+        assert_eq!(ProtocolMode::Legacy2024.version(), "2024-11-05");
+        assert_eq!(ProtocolMode::Stateless2026.version(), "2026-07-28");
+        assert_eq!(ProtocolMode::default(), ProtocolMode::Legacy2024);
+    }
+
+    #[test]
+    fn protocol_mode_serde_kebab_case() {
+        let m: ProtocolMode = serde_json::from_str("\"stateless-2026\"").unwrap();
+        assert_eq!(m, ProtocolMode::Stateless2026);
+        let s = serde_json::to_string(&ProtocolMode::Legacy2024).unwrap();
+        assert_eq!(s, "\"legacy-2024\"");
     }
 }

@@ -30,8 +30,12 @@
 //! # }
 //! ```
 
+use crate::skill_forge::install_policy::{
+    iso8601_now, sha256_hex, InstallAuditEntry, InstallAuditLog, InstallConsent, InstallDecision,
+    InstallInspection, InstallPolicy, InstallPolicyConfig,
+};
 use crate::skill_forge::SkillManifest;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -62,6 +66,10 @@ pub struct ClawHubEntry {
     pub verified: bool,
     /// Direct URL to the `.skill.json` manifest.
     pub manifest_url: String,
+    /// SHA-256 of the manifest bytes, when the registry publishes one
+    /// (mandatory for new ClawHub submissions since the 2026 signing rollout).
+    #[serde(default)]
+    pub sha256: Option<String>,
 }
 
 impl ClawHubEntry {
@@ -147,13 +155,28 @@ pub struct ClawHubClient {
     client: reqwest::Client,
     /// Locally cached index.
     index: std::sync::Arc<tokio::sync::RwLock<SkillRegistryIndex>>,
+    /// Install-security policy (Phase 15, WS1).
+    policy: InstallPolicy,
+    /// Append-only JSONL audit log for install decisions.
+    audit_log: InstallAuditLog,
 }
 
 impl ClawHubClient {
-    /// Create a client pointing at `base_url`.
+    /// Create a client pointing at `base_url` with the default (secure)
+    /// install policy: every install requires explicit operator consent.
     pub fn new(base_url: impl Into<String>) -> Self {
+        Self::with_policy(base_url, InstallPolicyConfig::default())
+    }
+
+    /// Create a client with an explicit install-policy configuration.
+    pub fn with_policy(base_url: impl Into<String>, policy_config: InstallPolicyConfig) -> Self {
         let base_url = base_url.into();
         let index = SkillRegistryIndex::new(&base_url);
+        let audit_path = policy_config
+            .audit_log_path
+            .clone()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(InstallAuditLog::default_path);
         Self {
             base_url,
             client: reqwest::Client::builder()
@@ -161,7 +184,31 @@ impl ClawHubClient {
                 .build()
                 .unwrap_or_default(),
             index: std::sync::Arc::new(tokio::sync::RwLock::new(index)),
+            policy: InstallPolicy::new(policy_config),
+            audit_log: InstallAuditLog::new(audit_path),
         }
+    }
+
+    /// The active install policy.
+    pub fn policy(&self) -> &InstallPolicy {
+        &self.policy
+    }
+
+    /// The install audit log.
+    pub fn audit_log(&self) -> &InstallAuditLog {
+        &self.audit_log
+    }
+
+    /// Host portion of the registry base URL (for external-URL flagging).
+    fn registry_host(&self) -> String {
+        self.base_url
+            .strip_prefix("https://")
+            .or_else(|| self.base_url.strip_prefix("http://"))
+            .unwrap_or(&self.base_url)
+            .split(['/', ':'])
+            .next()
+            .unwrap_or_default()
+            .to_string()
     }
 
     /// Search the remote registry for skills matching `query`.
@@ -223,26 +270,88 @@ impl ClawHubClient {
 
     /// Install a skill by downloading its manifest and writing it to `skills_dir`.
     ///
+    /// **Security (Phase 15, WS1):** the install is gated by the client's
+    /// [`InstallPolicy`] — allowlist, version pins, and checksum verification
+    /// are enforced, the manifest is statically inspected (external URLs,
+    /// shell execution, download-instruction language), and unless the policy
+    /// disables it, explicit operator `consent` is required. Every decision —
+    /// allowed or refused — is appended to the JSONL audit log.
+    ///
+    /// Call with [`InstallConsent::None`] first; if the result is an
+    /// `ApprovalRequired` error, show the flags to the operator and retry with
+    /// [`InstallConsent::Approved`].
+    ///
     /// Returns the path of the written `.skill.json` file.
     pub async fn install(
         &self,
         entry: &ClawHubEntry,
         skills_dir: &Path,
+        consent: InstallConsent,
     ) -> Result<std::path::PathBuf> {
-        // Download the manifest JSON.
-        let manifest_json: serde_json::Value = self
+        // Download the manifest as raw bytes (checksums apply to exact bytes).
+        let manifest_bytes = self
             .client
             .get(&entry.manifest_url)
             .send()
             .await
             .with_context(|| format!("GET {}", entry.manifest_url))?
-            .json()
+            .bytes()
             .await
+            .with_context(|| "Read manifest body")?;
+
+        let manifest_json: serde_json::Value = serde_json::from_slice(&manifest_bytes)
             .with_context(|| "Deserialize manifest JSON")?;
 
         // Validate it can be parsed as a SkillManifest.
         let _: SkillManifest = serde_json::from_value(manifest_json.clone())
             .with_context(|| format!("Invalid SkillManifest for '{}'", entry.name))?;
+
+        // Static inspection + policy evaluation.
+        let inspection =
+            InstallInspection::inspect(&manifest_json, &self.registry_host(), entry.verified);
+        let decision = self.policy.evaluate(
+            &entry.name,
+            &entry.version,
+            &manifest_bytes,
+            entry.sha256.as_deref(),
+            &inspection,
+            consent,
+        );
+
+        // Audit every decision, allowed or not.
+        let audit = InstallAuditEntry {
+            timestamp: iso8601_now(),
+            skill: entry.name.clone(),
+            version: entry.version.clone(),
+            manifest_sha256: sha256_hex(&manifest_bytes),
+            decision: decision.clone(),
+            flags: inspection.flags.clone(),
+            registry_url: self.base_url.clone(),
+        };
+        if let Err(e) = self.audit_log.record(&audit) {
+            tracing::warn!(error = %e, "Failed to write skill install audit entry");
+        }
+
+        match decision {
+            InstallDecision::Deny { reason } => {
+                tracing::warn!(skill = %entry.name, %reason, "Skill install denied by policy");
+                bail!("Install of '{}' denied: {reason}", entry.name);
+            }
+            InstallDecision::ApprovalRequired { flags } => {
+                let flag_list = if flags.is_empty() {
+                    "no flags raised".to_string()
+                } else {
+                    flags.join("; ")
+                };
+                bail!(
+                    "Install of '{}' v{} requires operator approval. Inspection: {flag_list}. \
+                     Retry with InstallConsent::Approved after review.",
+                    entry.name,
+                    entry.version
+                );
+            }
+            InstallDecision::Allow => {}
+        }
 
         // Write to disk.
         std::fs::create_dir_all(skills_dir)
@@ -307,6 +416,7 @@ mod tests {
             tags: tags.iter().map(|&t| t.to_string()).collect(),
             verified,
             manifest_url: format!("https://hub.example.com/skills/{name}/1.0.0/manifest"),
+            sha256: None,
         }
     }
 

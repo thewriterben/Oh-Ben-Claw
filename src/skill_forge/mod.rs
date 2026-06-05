@@ -46,6 +46,7 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub mod install_policy;
 pub mod registry;
 
 // ── Skill Manifest ────────────────────────────────────────────────────────────
@@ -216,14 +217,21 @@ impl Tool for SkillTool {
                 let cmd = Self::substitute(command, &args);
                 let timeout = tokio::time::Duration::from_secs(self.manifest.timeout_secs);
 
-                let output = tokio::time::timeout(
-                    timeout,
-                    tokio::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(&cmd)
-                        .output(),
-                )
-                .await;
+                // Platform-aware shell selection: `sh -c` on Unix, `cmd /C` on Windows.
+                #[cfg(windows)]
+                let mut process = {
+                    let mut p = tokio::process::Command::new("cmd");
+                    p.arg("/C").arg(&cmd);
+                    p
+                };
+                #[cfg(not(windows))]
+                let mut process = {
+                    let mut p = tokio::process::Command::new("sh");
+                    p.arg("-c").arg(&cmd);
+                    p
+                };
+
+                let output = tokio::time::timeout(timeout, process.output()).await;
 
                 match output {
                     Ok(Ok(out)) if out.status.success() => {
