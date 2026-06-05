@@ -68,9 +68,23 @@ impl Tool for ShellTool {
 
         tracing::debug!(command = %command, timeout_secs = timeout_secs, "Executing shell command");
 
+        // Platform-aware shell selection: `/bin/sh -c` on Unix, `cmd /C` on Windows.
+        #[cfg(windows)]
+        let mut process = {
+            let mut p = Command::new("cmd");
+            p.arg("/C").arg(&command);
+            p
+        };
+        #[cfg(not(windows))]
+        let mut process = {
+            let mut p = Command::new("/bin/sh");
+            p.arg("-c").arg(&command);
+            p
+        };
+
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
-            Command::new("/bin/sh").arg("-c").arg(&command).output(),
+            process.output(),
         )
         .await;
 

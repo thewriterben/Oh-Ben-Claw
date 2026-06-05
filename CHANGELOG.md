@@ -5,6 +5,69 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Phase 15 Production Hardening, WS1 (2026-06-05)
+
+### Added
+
+- **Skill-Install Security Policy** — ClawHub installs are now gated (`src/skill_forge/install_policy.rs`): explicit operator consent required by default (`InstallConsent`), allowlist ("vetted mirror") mode, per-skill version pinning, SHA-256 checksum verification against catalogue-provided hashes, and static manifest inspection that flags external URLs, `Shell`-kind execution, and download-instruction language (the ClawHavoc-era `SKILL.md` evasion pattern). Every decision — allow, deny, or approval-required — is appended to a JSONL audit log (`~/.oh-ben-claw/skill_install_audit.jsonl`).
+- **`[clawhub.install_policy]` config section** — `require_approval`, `require_checksum`, `pinned_versions`, `allowlist`, `audit_log_path` (`src/config/mod.rs`)
+- **`ClawHubEntry.sha256`** — optional manifest checksum field, populated by registries that publish signing hashes
+- **`ClawHubClient::with_policy()`**, `policy()`, `audit_log()` accessors; `install()` now takes an `InstallConsent` parameter and refuses ungated installs
+
+### Security
+
+- `ClawHubClient::install()` no longer writes any manifest to the skills directory without passing policy evaluation; previously installs were unconditional.
+
+### Added (WS2 — MCP 2026-07-28 dual-mode)
+
+- **`ProtocolMode`** (`legacy-2024` / `stateless-2026`) with per-mode version constants; `protocol_mode` field on `McpServerConfig` (`src/mcp/mod.rs`)
+- **2026-mode client** (`src/mcp/client.rs`): skips the removed `initialize` handshake, attaches `_meta.io.modelcontextprotocol/clientInfo` to every request (SEP-2575), sends `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Name` HTTP headers (SEP-2243), fetches capabilities via `server/discover` (tolerant of servers without it), records `ttlMs` from `tools/list` (SEP-2549); legacy mode no longer declares the deprecated `roots`/`sampling` capabilities (SEP-2577)
+- **Bilingual server** (`src/mcp/server.rs`): answers both `initialize` (legacy) and `server/discover` (2026); `tools/list` now carries `ttlMs`/`cacheScope`; HTTP transport validates routing headers — mismatches rejected always, headers required in `stateless-2026` mode; `McpServer::with_mode()` constructor
+- 16 new unit tests across client `_meta` merging, mode serde, discover, handshake-less calls, ttl, and header validation
+
+### Changed (WS3 — A2A v1.0 conformance, BREAKING for `src/a2a` consumers)
+
+- **A2A module rewritten against the v1.0 specification** (`src/a2a/mod.rs`). The Phase 14 implementation predated the stable spec and matched neither v0.3.0 nor v1.0 on the wire. Now conformant (JSON-RPC binding subset):
+  - `AgentCard` v1.0 shape: `supportedInterfaces[{url, protocolBinding, protocolVersion}]` replaces top-level `url`; required `version`, `capabilities`, `defaultInput/OutputModes`; skills carry required `id` + `tags`; camelCase throughout
+  - Discovery moved to `/.well-known/agent-card.json` (was `agent.json`)
+  - PascalCase operations: `SendMessage`, `GetTask`, `CancelTask`; everything else returns `UnsupportedOperationError` (-32004)
+  - `TaskState`/`Role` serialize as proto names (`TASK_STATE_*`, `ROLE_*`)
+  - `Part` oneof with **no `kind` discriminator** (text/raw/url/data by member presence); `mediaType` replaces `mimeType`
+  - `Task{id, contextId, status{state,message,timestamp}, artifacts, history}`; `Artifact.artifactId`; `Message{messageId, role, parts}`
+  - A2A error codes -32001…-32009 with `google.rpc.ErrorInfo` in `error.data` (`domain: "a2a-protocol.org"`)
+  - `A2A-Version: 1.0` header sent by client and validated by server (absent ⇒ 0.3 ⇒ `VersionNotSupportedError` per spec)
+  - In-memory task store on the server so GetTask/CancelTask lifecycle is real; 18 conformance unit tests
+- Removed pre-spec types `A2ASkill`, `TaskRequest`, `TaskResponse` (replaced by `AgentSkill`, `Message`, `Task`). No code outside `src/a2a` referenced them.
+
+### Added (WS6 — scoped approvals)
+
+- **Approval scopes** (`src/approval/mod.rs`): `ApprovalScope` (call / session / forever); the prompt gains `[f]orever`; forever grants persist to `~/.oh-ben-claw/approval_grants.json` via `ForeverGrants` (grant/revoke/list); `always_ask` still overrides any grant
+- **Plan-mode approval**: `ApprovedPlan` of `PlanStep`s with `ArgumentBound`s (`Exact`/`OneOf`/`Range`/`Any`, optional `deny_unlisted_args`); approve once via `approve_plan()`, execution checked step-by-step via `check_plan_call()`; **any violation revokes the plan** (halt on drift) and is audited
+- **Approval funnel analytics**: per-tool asked/approved-by-scope/denied/plan-violation counters via `funnel_summary()`
+- `record_external_decision()` so chat/dashboard approvals share the same grants, audit, and funnel
+- 16 new unit tests (scopes, persistence, plan happy-path/drift/bounds, funnel)
+- **ClawCam adapter parity**: `ApprovalGrants` (session in-memory, forever persisted JSON), `call_tool(..., approved, scope)`, approval audit + funnel — verified, 10 new tests, 22/22 with MCP suite
+
+### Added (WS4 — evaluation harness)
+
+- **Eval suite as release gate** (`tests/evals.rs`): agent-loop routing goldens against a deterministic `ScriptedProvider` (direct answer / single-tool with exact args / multi-step ordering / tool-failure recovery / unknown-tool degradation), MCP and A2A wire-shape goldens, approval policy matrix golden. Runs under `cargo test --workspace` in CI — no release while evals regress. LLM-as-judge scoring deferred (advisory-only by design until variance is measured).
+- **ClawCam counterpart** (`tests/evals/`, verified 7/7): full approval-policy partition eval (every catalogued tool in exactly one bucket; all 9 gated tools behaviorally ask; auto-approved never do) and golden detection pipeline (event → MockDetector → alert linkage, determinism contract). `tests/evals` added to pytest testpaths so the existing CI workflow gates on it.
+
+### Added (WS5 — observability wiring)
+
+- **Agent loop instrumented** (`Agent::with_obs()`): `agent.process` span per run (session_id + tool_calls attrs), `agent.tool` span per call with error status, turn/tool/error counters recorded at source. The `src/observability` foundation (spans, sink, counters, gateway `/api/v1/metrics`) already existed — the agent loop was the blind spot.
+- **`ApprovalManager::with_obs()`** — approval asks counted centrally (`approval_asks_total`); `record_retry`/`record_failover` helpers added to `ObsContext`
+- 2 new observability evals in `tests/evals.rs` (spans + exact counter goldens; no-obs path unaffected)
+- **ClawCam counterpart** (verified 38/38 with regression scope): `tool_call_audit` SQLite table written inside `dispatch_tool` (both MCP-stdio and REST callers tagged via `source`; SHA-256 args hash; latency; audit never blocks dispatch); new `GET /api/v1/metrics` (entity counts + per-tool call/error/latency stats) and `GET /api/v1/tool-audit`
+
+### Fixed
+
+- **Windows shell skills** — `SkillKind::Shell` execution now uses `cmd /C` on Windows instead of hardcoded `sh -c` (`src/skill_forge/mod.rs`); fixes the two `shell_skill_*` test failures on Windows hosts.
+- **Windows builtin ShellTool** — same platform-aware fix for `src/tools/builtin/shell.rs` (was hardcoded `/bin/sh -c`); fixes `shell_echo` on Windows. Found by the first full Windows test run (684/685 → expected 685/685).
+- Clippy: `sort_by` → `sort_by_key(Reverse(…))` in `approval` and `rag`; boxed `StdioTransport` in the MCP client transport enum; `McpServer::handle_request` made public as the embedder/eval API.
+
+> **Verification:** `cargo test skill_forge` — 17/17 new install-policy tests pass; 53/55 module tests passed on first Windows run, with the 2 pre-existing `sh`-dependent failures fixed by the platform-aware shell change.
+
 ## Unreleased — Phase 14 Cutting-Edge Capabilities (2026-04-11)
 
 ### Added

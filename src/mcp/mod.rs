@@ -24,6 +24,58 @@ use tokio::sync::Mutex;
 pub mod client;
 pub mod server;
 
+// ── Protocol Mode (Phase 15, WS2) ─────────────────────────────────────────────
+
+/// MCP protocol version string for the legacy (2024-11-05) lifecycle.
+pub const PROTOCOL_VERSION_LEGACY: &str = "2024-11-05";
+/// MCP protocol version string for the stateless 2026-07-28 specification.
+pub const PROTOCOL_VERSION_2026: &str = "2026-07-28";
+
+/// Which MCP protocol lifecycle to speak.
+///
+/// The 2026-07-28 specification removes the `initialize`/`initialized`
+/// handshake and the protocol-level session: `protocolVersion` and
+/// `clientInfo` travel in `_meta` on every request, capabilities are fetched
+/// on demand via `server/discover`, and Streamable HTTP requests must carry
+/// `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` headers.
+///
+/// Servers built from this module are **bilingual** regardless of mode: they
+/// answer `initialize` for legacy clients and `server/discover` for 2026
+/// clients. The mode primarily drives client behaviour and HTTP strictness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProtocolMode {
+    /// Pre-2026 lifecycle: initialize handshake, no required HTTP headers.
+    #[default]
+    #[serde(rename = "legacy-2024")]
+    Legacy2024,
+    /// 2026-07-28 stateless lifecycle.
+    #[serde(rename = "stateless-2026")]
+    Stateless2026,
+}
+
+impl ProtocolMode {
+    /// The protocol version string this mode advertises.
+    pub fn version(&self) -> &'static str {
+        match self {
+            Self::Legacy2024 => PROTOCOL_VERSION_LEGACY,
+            Self::Stateless2026 => PROTOCOL_VERSION_2026,
+        }
+    }
+}
+
+/// Build the `_meta` object that 2026-mode clients attach to every request.
+///
+/// Key name is fixed by the specification: `io.modelcontextprotocol/clientInfo`.
+pub fn client_info_meta() -> Value {
+    json!({
+        "io.modelcontextprotocol/clientInfo": {
+            "name": "oh-ben-claw",
+            "version": env!("CARGO_PKG_VERSION")
+        }
+    })
+}
+
 // ── MCP Data Types ────────────────────────────────────────────────────────────
 
 /// JSON-RPC 2.0 request.
@@ -231,6 +283,11 @@ pub struct McpServerConfig {
     pub token: Option<String>,
     /// Environment variables to set for stdio processes
     pub env: Option<HashMap<String, String>>,
+    /// Protocol lifecycle to speak: `"legacy-2024"` (default) or
+    /// `"stateless-2026"`. Flip the default when the final 2026-07-28 spec
+    /// ships (Phase 15 work item 8).
+    #[serde(default)]
+    pub protocol_mode: ProtocolMode,
 }
 
 #[cfg(test)]

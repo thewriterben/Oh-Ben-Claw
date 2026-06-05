@@ -42,6 +42,10 @@ pub struct Agent {
     tools: Vec<Box<dyn Tool>>,
     /// Optional policy engine for tool execution enforcement.
     policy: Option<PolicyEngine>,
+    /// Optional observability context (Phase 15 WS5): when attached, every
+    /// run records an `agent.process` span, each tool call an `agent.tool`
+    /// span, and the turn/tool/error counters are incremented.
+    obs: Option<Arc<crate::observability::ObsContext>>,
 }
 
 impl Agent {
@@ -58,12 +62,19 @@ impl Agent {
             memory,
             tools,
             policy: None,
+            obs: None,
         }
     }
 
     /// Attach a policy engine to enforce tool execution policies.
     pub fn with_policy(mut self, policy: PolicyEngine) -> Self {
         self.policy = Some(policy);
+        self
+    }
+
+    /// Attach an observability context (spans + counters per run).
+    pub fn with_obs(mut self, obs: Arc<crate::observability::ObsContext>) -> Self {
+        self.obs = Some(obs);
         self
     }
 
@@ -88,6 +99,13 @@ impl Agent {
         user_message: &str,
         provider_config: &crate::config::ProviderConfig,
     ) -> Result<AgentResponse> {
+        // WS5: outer span for the whole run (finished before returning).
+        let mut run_span = self.obs.as_ref().map(|obs| {
+            let mut span = obs.span("agent.process");
+            span.set_attr("session_id", session_id);
+            span
+        });
+
         // 1. Store the user message
         self.memory
             .append_message(session_id, ChatRole::User, user_message)?;
@@ -128,9 +146,40 @@ impl Agent {
                     "Executing tool call"
                 );
 
+                // WS5: per-tool-call span + counters.
+                let mut tool_span = self.obs.as_ref().map(|obs| {
+                    obs.record_tool_call(&call.name);
+                    let mut span = obs.span("agent.tool");
+                    span.set_attr("tool", &call.name);
+                    span.set_attr("session_id", session_id);
+                    span
+                });
+
                 let t0 = std::time::Instant::now();
                 let result = self.execute_tool(&call.name, &call.args).await;
                 let duration_ms = t0.elapsed().as_millis() as u64;
+
+                if let Some(span) = tool_span.take() {
+                    match &result {
+                        Ok(r) if r.success => {
+                            span.finish_ok();
+                        }
+                        Ok(r) => {
+                            if let Some(obs) = &self.obs {
+                                obs.record_tool_error(&call.name);
+                            }
+                            span.finish_err(
+                                r.error.clone().unwrap_or_else(|| "tool error".to_string()),
+                            );
+                        }
+                        Err(e) => {
+                            if let Some(obs) = &self.obs {
+                                obs.record_tool_error(&call.name);
+                            }
+                            span.finish_err(e.to_string());
+                        }
+                    }
+                }
                 let result_str = match &result {
                     Ok(r) => {
                         if r.success {
@@ -203,6 +252,17 @@ impl Agent {
         if !final_response.is_empty() {
             self.memory
                 .append_message(session_id, ChatRole::Assistant, &final_response)?;
+        }
+
+        // WS5: close the run span and record the completed turn.
+        if let Some(mut span) = run_span.take() {
+            span.set_attr("tool_calls", tool_calls_made.len().to_string());
+            span.finish_ok();
+        }
+        if let Some(obs) = &self.obs {
+            // Tool calls were already counted per-call above; only the turn
+            // itself is recorded here (avoids double-counting tool_calls_total).
+            obs.metrics.counter("agent_turns_total").inc();
         }
 
         Ok(AgentResponse {

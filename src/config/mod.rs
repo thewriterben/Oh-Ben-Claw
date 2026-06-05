@@ -1051,6 +1051,20 @@ pub struct ClawHubConfig {
     /// When unset, defaults to `~/.oh-ben-claw/skills/`.
     #[serde(default)]
     pub skills_dir: Option<String>,
+    /// Install-security policy (Phase 15, WS1): operator approval,
+    /// checksum verification, version pinning, allowlist, audit log.
+    ///
+    /// ```toml
+    /// [clawhub.install_policy]
+    /// require_approval = true
+    /// require_checksum = false
+    /// allowlist = []
+    ///
+    /// [clawhub.install_policy.pinned_versions]
+    /// weather = "1.2.0"
+    /// ```
+    #[serde(default)]
+    pub install_policy: crate::skill_forge::install_policy::InstallPolicyConfig,
 }
 
 fn default_clawhub_url() -> String {
@@ -1064,6 +1078,7 @@ impl Default for ClawHubConfig {
             registry_url: default_clawhub_url(),
             auto_update: false,
             skills_dir: None,
+            install_policy: Default::default(),
         }
     }
 }

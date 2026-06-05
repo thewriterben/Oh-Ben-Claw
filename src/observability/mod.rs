@@ -458,6 +458,21 @@ impl ObsContext {
         self.metrics.counter("tool_errors_total").inc();
     }
 
+    /// Record an approval prompt being shown to the operator (WS5/WS6).
+    pub fn record_approval_ask(&self, _tool_name: &str) {
+        self.metrics.counter("approval_asks_total").inc();
+    }
+
+    /// Record a provider retry attempt (WS5).
+    pub fn record_retry(&self) {
+        self.metrics.counter("provider_retries_total").inc();
+    }
+
+    /// Record a provider failover to a fallback (WS5).
+    pub fn record_failover(&self) {
+        self.metrics.counter("provider_failovers_total").inc();
+    }
+
     /// Snapshot the current metrics state.
     pub fn snapshot(&self) -> MetricsSnapshot {
         let get = |name: &str| self.metrics.counter(name).get();
