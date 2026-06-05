@@ -112,17 +112,21 @@ impl Tool for EchoTool {
     }
 }
 
+/// Build an agent with an in-memory store and a freshly created session.
+/// Returns the agent and the session id (append_message has a FK on sessions,
+/// so the session must exist before `process()` is called).
 fn make_agent(
     provider: Arc<dyn Provider>,
     tools: Vec<Box<dyn Tool>>,
-) -> Agent {
+) -> (Agent, String) {
     let config = AgentConfig {
         name: "eval-agent".to_string(),
         system_prompt: "You are an eval agent.".to_string(),
         max_tool_iterations: 4,
     };
     let memory = Arc::new(MemoryStore::open_in_memory().expect("in-memory store"));
-    Agent::new(config, provider, memory, tools)
+    let session_id = memory.create_session("eval").expect("create session");
+    (Agent::new(config, provider, memory, tools), session_id)
 }
 
 fn echo_tool(name: &str, fail: bool) -> (Box<dyn Tool>, Arc<Mutex<Vec<String>>>) {
@@ -145,10 +149,10 @@ async fn eval_routing_direct_answer_uses_no_tools() {
         "The answer is 4.",
     )]));
     let (tool, calls) = echo_tool("camera_capture", false);
-    let agent = make_agent(provider, vec![tool]);
+    let (agent, session) = make_agent(provider, vec![tool]);
 
     let resp = agent
-        .process("eval-s1", "what is 2+2?", &ProviderConfig::default())
+        .process(&session, "what is 2+2?", &ProviderConfig::default())
         .await
         .unwrap();
 
@@ -164,10 +168,10 @@ async fn eval_routing_single_tool_then_answer() {
         ScriptedProvider::text("Captured an image from cam-01."),
     ]));
     let (tool, calls) = echo_tool("camera_capture", false);
-    let agent = make_agent(provider, vec![tool]);
+    let (agent, session) = make_agent(provider, vec![tool]);
 
     let resp = agent
-        .process("eval-s2", "take a photo", &ProviderConfig::default())
+        .process(&session, "take a photo", &ProviderConfig::default())
         .await
         .unwrap();
 
@@ -188,10 +192,10 @@ async fn eval_routing_multi_step_sequence_order() {
     ]));
     let (sensor, sensor_calls) = echo_tool("sensor_read", false);
     let (alert, alert_calls) = echo_tool("send_alert", false);
-    let agent = make_agent(provider, vec![sensor, alert]);
+    let (agent, session) = make_agent(provider, vec![sensor, alert]);
 
     let resp = agent
-        .process("eval-s3", "check temp and alert if hot", &ProviderConfig::default())
+        .process(&session, "check temp and alert if hot", &ProviderConfig::default())
         .await
         .unwrap();
 
@@ -210,10 +214,10 @@ async fn eval_routing_tool_failure_recovers_to_final_answer() {
         ScriptedProvider::text("The tool failed; reporting gracefully."),
     ]));
     let (tool, _) = echo_tool("flaky_tool", true);
-    let agent = make_agent(provider, vec![tool]);
+    let (agent, session) = make_agent(provider, vec![tool]);
 
     let resp = agent
-        .process("eval-s4", "do the flaky thing", &ProviderConfig::default())
+        .process(&session, "do the flaky thing", &ProviderConfig::default())
         .await
         .unwrap();
 
@@ -230,10 +234,10 @@ async fn eval_routing_unknown_tool_degrades_gracefully() {
         ScriptedProvider::text("That tool does not exist."),
     ]));
     let (tool, calls) = echo_tool("real_tool", false);
-    let agent = make_agent(provider, vec![tool]);
+    let (agent, session) = make_agent(provider, vec![tool]);
 
     let resp = agent
-        .process("eval-s5", "use a ghost tool", &ProviderConfig::default())
+        .process(&session, "use a ghost tool", &ProviderConfig::default())
         .await
         .unwrap();
 
@@ -366,10 +370,11 @@ async fn eval_agent_run_records_spans_and_counters() {
     ]));
     let (cam, _) = echo_tool("camera_capture", false);
     let (flaky, _) = echo_tool("flaky_tool", true);
-    let agent = make_agent(provider, vec![cam, flaky]).with_obs(obs.clone());
+    let (agent, session) = make_agent(provider, vec![cam, flaky]);
+    let agent = agent.with_obs(obs.clone());
 
     agent
-        .process("eval-obs", "capture then fail", &ProviderConfig::default())
+        .process(&session, "capture then fail", &ProviderConfig::default())
         .await
         .unwrap();
 
@@ -377,7 +382,10 @@ async fn eval_agent_run_records_spans_and_counters() {
     let run_spans = obs.spans.by_name("agent.process");
     assert_eq!(run_spans.len(), 1);
     assert_eq!(run_spans[0].status, SpanStatus::Ok);
-    assert_eq!(run_spans[0].attrs.get("session_id").map(String::as_str), Some("eval-obs"));
+    assert_eq!(
+        run_spans[0].attrs.get("session_id").map(String::as_str),
+        Some(session.as_str())
+    );
     assert_eq!(run_spans[0].attrs.get("tool_calls").map(String::as_str), Some("2"));
 
     let tool_spans = obs.spans.by_name("agent.tool");
@@ -395,9 +403,9 @@ async fn eval_agent_run_records_spans_and_counters() {
 async fn eval_agent_without_obs_records_nothing_and_still_works() {
     let provider = Arc::new(ScriptedProvider::new(vec![ScriptedProvider::text("hi")]));
     let (tool, _) = echo_tool("x", false);
-    let agent = make_agent(provider, vec![tool]);
+    let (agent, session) = make_agent(provider, vec![tool]);
     let resp = agent
-        .process("eval-noobs", "hello", &ProviderConfig::default())
+        .process(&session, "hello", &ProviderConfig::default())
         .await
         .unwrap();
     assert_eq!(resp.message, "hi");
