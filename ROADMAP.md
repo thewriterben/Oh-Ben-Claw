@@ -553,7 +553,7 @@ environment. The most architecturally novel, most embodied-native phase. Builds 
 
 - [ ] **System 1 (fast reflex loop)** — local, low-latency, near-deterministic responses on edge nodes (sensor threshold → actuator), runs offline; configurable per node
 - [ ] **System 2 (slow reasoner)** — cloud/host LLM invoked for planning and novelty, not every event; System 1 escalates to System 2 on uncertainty
-- [ ] **Bitemporal world memory** — persistent, queryable model of rooms/devices/states over time with validity intervals (event time + ingestion time), so stale facts are invalidated rather than lost (Graphiti-style; supersedes a separate generic graph-memory effort)
+- [x] **Bitemporal world memory** — persistent, queryable model of rooms/devices/states over time with validity intervals (valid time + transaction time), so stale facts are invalidated rather than lost; `src/memory/world.rs` (`observe`/`current`/`at`/`history`/`entities`), non-destructive, 5 tests. (Full as-of-transaction-time queries: follow-up.)
 - [ ] **Perception→memory→action wiring** — vision/sensor-fusion outputs update world memory; planning queries world memory for current and historical state
 - [ ] **Escalation policy + budget** — when System 1 hands off to System 2, with cost/latency guards
 - [ ] Eval: System 1 reflex latency budget met offline; System 2 invoked only on novelty; world-memory queries return temporally-correct device state

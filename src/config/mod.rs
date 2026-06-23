@@ -1242,6 +1242,17 @@ impl Default for A2AConfig {
     }
 }
 
+/// Phase 18 perception configuration (`[perception]`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PerceptionConfig {
+    /// Enable the world-memory tool (a temporal model of real-world state).
+    #[serde(default)]
+    pub world_memory: bool,
+    /// Path to the world-memory database. Defaults to the data dir's `world.db`.
+    #[serde(default)]
+    pub world_db_path: Option<String>,
+}
+
 /// Phase 16 experiential self-improvement configuration (`[self_improvement]`).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SelfImprovementConfig {
@@ -1315,6 +1326,9 @@ pub struct Config {
     /// Phase 16 experiential self-improvement (trajectory capture).
     #[serde(default)]
     pub self_improvement: SelfImprovementConfig,
+    /// Phase 18 perception (world memory).
+    #[serde(default)]
+    pub perception: PerceptionConfig,
 }
 
 impl Config {
