@@ -1,6 +1,6 @@
 //! File read/write tool — read and write files on the local filesystem.
 
-use crate::tools::traits::{Tool, ToolResult};
+use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -51,6 +51,18 @@ impl Tool for FileTool {
             },
             "required": ["action", "path"]
         })
+    }
+
+    fn risk_class(&self) -> RiskClass {
+        // The file tool can write/append/delete, so it is side-effecting and not
+        // safely re-runnable — the self-improvement loop must quarantine learned
+        // skills that use it rather than verify them by replay. Not `physical`
+        // (no actuator), so the Track 0 agent gate is unaffected.
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::Low,
+            physical: false,
+        }
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {

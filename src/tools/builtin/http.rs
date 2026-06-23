@@ -1,6 +1,6 @@
 //! HTTP request tool — make HTTP requests and return responses.
 
-use crate::tools::traits::{Tool, ToolResult};
+use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -72,6 +72,18 @@ impl Tool for HttpTool {
             },
             "required": ["url"]
         })
+    }
+
+    fn risk_class(&self) -> RiskClass {
+        // The HTTP tool supports POST/PUT/DELETE/PATCH, so it can mutate remote
+        // state and isn't safely re-runnable. The self-improvement loop must
+        // quarantine learned skills that use it rather than verify by replay.
+        // Not `physical`, so the Track 0 agent gate is unaffected.
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::Low,
+            physical: false,
+        }
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
