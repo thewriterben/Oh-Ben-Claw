@@ -276,26 +276,202 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         );
     }
 
-    // Build the agent
-    let agent = Arc::new(
-        Agent::new(
-            config.agent.clone(),
-            provider,
-            Arc::clone(&memory),
-            all_tools,
-        )
-        .with_policy(security_ctx.policy),
-    );
+    // ── Track 0: physical-action safety (shared by plain agent + orchestrator) ──
+    // Resolve the audit MAC key with a secure precedence:
+    //   explicit config key > vault (if unlockable via OBC_VAULT_PASSWORD)
+    //   > node pairing secret > a persisted, auto-generated random key.
+    // The old hardcoded dev key is gone — a published constant would let anyone
+    // forge audit entries.
+    fn track0_data_path(name: &str) -> String {
+        directories::ProjectDirs::from("com", "thewriterben", "oh-ben-claw")
+            .map(|d| d.data_dir().join(name).to_string_lossy().into_owned())
+            .unwrap_or_else(|| name.to_string())
+    }
+    fn track0_random_key() -> String {
+        use rand::RngCore;
+        let mut buf = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut buf);
+        hex::encode(buf)
+    }
+    fn resolve_audit_key(
+        explicit: Option<&str>,
+        vault_enabled: bool,
+        vault_path: Option<&str>,
+        pairing_secret: Option<&str>,
+    ) -> Vec<u8> {
+        if let Some(k) = explicit {
+            return k.as_bytes().to_vec();
+        }
+        // Vault: only usable when the operator supplies the master password.
+        if vault_enabled {
+            if let Ok(pw) = std::env::var("OBC_VAULT_PASSWORD") {
+                let vpath = vault_path
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| track0_data_path("vault.db"));
+                if let Ok(vault) = security::SecretsVault::open(&vpath) {
+                    if vault.unlock(&pw).is_ok() {
+                        match vault.get("OBC_TRACK0_AUDIT_KEY") {
+                            Ok(Some(k)) => {
+                                tracing::info!("Track 0: audit key loaded from vault");
+                                return k.into_bytes();
+                            }
+                            Ok(None) => {
+                                let k = track0_random_key();
+                                if vault.set("OBC_TRACK0_AUDIT_KEY", &k).is_ok() {
+                                    tracing::info!("Track 0: generated audit key stored in vault");
+                                    return k.into_bytes();
+                                }
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(k) = pairing_secret {
+            tracing::info!("Track 0: deriving audit key from the node pairing secret");
+            return k.as_bytes().to_vec();
+        }
+        // Persisted random key (secret + stable across restarts).
+        let key_path = track0_data_path("action_audit.key");
+        if let Ok(existing) = std::fs::read_to_string(&key_path) {
+            let trimmed = existing.trim();
+            if !trimmed.is_empty() {
+                return trimmed.as_bytes().to_vec();
+            }
+        }
+        let k = track0_random_key();
+        if let Some(parent) = std::path::Path::new(&key_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&key_path, &k) {
+            Ok(_) => tracing::warn!(
+                path = %key_path,
+                "Track 0: generated a persisted random audit key — set [safety].audit_key or enable the vault for production"
+            ),
+            Err(e) => {
+                tracing::warn!("Track 0: could not persist audit key ({e}); using an ephemeral key")
+            }
+        }
+        k.into_bytes()
+    }
+
+    let mut safety_gate: Option<Arc<security::SafetyGate>> = None;
+    let mut action_auditor: Option<Arc<std::sync::Mutex<security::ActionAuditor>>> = None;
+    if config.safety.enabled {
+        safety_gate = Some(Arc::new(security::SafetyGate::new(
+            config.safety.limits.clone(),
+        )));
+        info!(
+            limits = config.safety.limits.len(),
+            "Track 0 safety gate active"
+        );
+
+        let key = resolve_audit_key(
+            config.safety.audit_key.as_deref(),
+            config.security.vault_enabled,
+            config.security.vault_path.as_deref(),
+            config.security.pairing_secret.as_deref(),
+        );
+        let audit_path = config
+            .safety
+            .audit_log_path
+            .clone()
+            .unwrap_or_else(|| track0_data_path("action_audit.jsonl"));
+        if let Some(parent) = std::path::Path::new(&audit_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match security::ActionAuditor::open(key, audit_path.clone()) {
+            Ok(auditor) => {
+                action_auditor = Some(Arc::new(std::sync::Mutex::new(auditor)));
+                info!(path = %audit_path, "Track 0 action audit log active");
+            }
+            Err(e) => tracing::warn!("Track 0: failed to open action audit log: {e}"),
+        }
+    }
+
+    // Phase 16: trajectory store for experiential self-improvement (shared by
+    // the plain agent and the orchestrator's inner agent).
+    let mut trajectory_store: Option<Arc<oh_ben_claw::memory::trajectory::TrajectoryStore>> = None;
+    if config.self_improvement.enabled {
+        let traj_path = config
+            .self_improvement
+            .db_path
+            .clone()
+            .unwrap_or_else(|| track0_data_path("trajectories.db"));
+        if let Some(parent) = std::path::Path::new(&traj_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match oh_ben_claw::memory::trajectory::TrajectoryStore::open(&traj_path) {
+            Ok(store) => {
+                trajectory_store = Some(Arc::new(store));
+                info!(path = %traj_path, "Phase 16 trajectory capture active");
+            }
+            Err(e) => tracing::warn!("Phase 16: failed to open trajectory store: {e}"),
+        }
+    }
+
+    // Build the plain reasoning agent, attaching Track 0 + Phase 16 when configured.
+    let mut agent = Agent::new(
+        config.agent.clone(),
+        provider,
+        Arc::clone(&memory),
+        all_tools,
+    )
+    .with_policy(security_ctx.policy);
+    if let Some(gate) = &safety_gate {
+        agent = agent.with_safety_gate(Arc::clone(gate));
+    }
+    if let Some(auditor) = &action_auditor {
+        agent = agent.with_action_auditor(Arc::clone(auditor));
+    }
+    if let Some(t) = &trajectory_store {
+        agent = agent.with_trajectory_store(Arc::clone(t));
+    }
+    let agent = Arc::new(agent);
+
+    // Phase 16: spawn the autonomous self-improvement loop when enabled. It
+    // periodically synthesizes + verifies skills from successful trajectories;
+    // physical skills are quarantined for operator promotion (Track 0).
+    if config.self_improvement.enabled {
+        if let Some(traj) = &trajectory_store {
+            let improver = oh_ben_claw::skill_forge::improve::SkillImprover::new(
+                Arc::clone(traj),
+                oh_ben_claw::skill_forge::SkillForge::new(
+                    oh_ben_claw::skill_forge::SkillForge::default_dir(),
+                ),
+                vec![
+                    "gpio_write".to_string(),
+                    "relay".to_string(),
+                    "motor".to_string(),
+                    "servo".to_string(),
+                ],
+                config.self_improvement.max_learned.unwrap_or(500),
+            );
+            let executor: Arc<dyn oh_ben_claw::skill_forge::improve::ReplayExecutor> =
+                Arc::clone(&agent);
+            let interval = std::time::Duration::from_secs(
+                config.self_improvement.interval_secs.unwrap_or(3600),
+            );
+            tokio::spawn(async move {
+                improver.run_periodically(executor, interval).await;
+            });
+            info!("Phase 16 self-improvement loop spawned");
+        }
+    }
 
     // Build orchestrator or plain agent handle
     let (handle, maybe_pool) = if config.orchestrator.enabled {
         info!("Multi-agent orchestration enabled — building OrchestratorAgent");
-        let orch = OrchestratorAgent::new(
+        let orch = OrchestratorAgent::new_with_track0(
             config.agent.clone(),
             config.provider.clone(),
             Arc::clone(&memory),
             config.orchestrator.clone(),
             session_id.clone(),
+            safety_gate.clone(),
+            action_auditor.clone(),
+            trajectory_store.clone(),
         )?;
         let pool = orch.pool.clone();
         let h = orch.handle.clone();

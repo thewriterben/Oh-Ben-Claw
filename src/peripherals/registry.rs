@@ -25,9 +25,113 @@
 //! | `cuda` | NVIDIA CUDA GPU compute |
 //! | `display` | Integrated display output |
 //! | `touch` | Capacitive or resistive touch input |
+//! | `lora` | LoRa / LoRaWAN long-range radio |
+//! | `gps` | GNSS / GPS receiver |
+//! | `nfc` | Near-field communication reader |
+//! | `rfid` | RFID reader (125 kHz / 13.56 MHz) |
+//! | `subghz` | Sub-GHz ISM-band radio |
+//! | `infrared` | Infrared transceiver |
+//! | `imu` | Inertial measurement unit (accel + gyro) |
+//! | `microsd` | microSD card storage |
+//!
+//! Additional capability tokens (AI accelerators, radios, etc.) are tracked in
+//! `docs/V2-HARDWARE-ECOSYSTEM.md` and added as boards that use them land.
+//!
+//! # Connector Ecosystems
+//!
+//! Vendors make hardware composable through standard connectors. The
+//! [`Connector`] enum lets a board advertise which ports it exposes and an
+//! accessory declare how it attaches, so the deployment advisor can match
+//! accessories to boards by physical connector — not just by capability.
+//!
+//! Note that **Qwiic** (SparkFun) and **STEMMA QT** (Adafruit) are the same
+//! 4-pin JST-SH I2C connector and are cross-compatible; [`Connector::mates_with`]
+//! encodes that equivalence.
+//!
+//! # Export
+//!
+//! The whole registry serializes to a stable, language-agnostic JSON document
+//! via [`registry_json`] (canonical generator: the `emit-registry` binary).
+//! That JSON is the single source of truth consumed by sibling projects (the
+//! OBC deployment generator, Accelerapp) so the hardware catalog is never
+//! re-typed in another language. Only `Serialize` is derived — the registry's
+//! `&'static` fields cannot be `Deserialize`d into borrowed data.
+
+use serde::Serialize;
+
+/// A physical connector / expansion ecosystem exposed by a board or used by an
+/// accessory.
+///
+/// Used to match accessories to boards. Most matching is exact, with one
+/// electrical equivalence: `Qwiic` and `StemmaQt` are the same I2C connector
+/// (see [`Connector::mates_with`]). Serializes to a stable lowercase token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub enum Connector {
+    /// Seeed / M5Stack 4-pin Grove connector.
+    #[serde(rename = "grove")]
+    Grove,
+    /// SparkFun Qwiic — 4-pin JST-SH I2C (electrically == STEMMA QT).
+    #[serde(rename = "qwiic")]
+    Qwiic,
+    /// Adafruit STEMMA QT — 4-pin JST-SH I2C (electrically == Qwiic).
+    #[serde(rename = "stemma_qt")]
+    StemmaQt,
+    /// Adafruit STEMMA — 3-pin JST analog/digital/PWM.
+    #[serde(rename = "stemma")]
+    Stemma,
+    /// M5Stack stacking M-Bus.
+    #[serde(rename = "mbus")]
+    MBus,
+    /// Adafruit Feather / FeatherWing header.
+    #[serde(rename = "featherwing")]
+    FeatherWing,
+    /// Digilent Pmod.
+    #[serde(rename = "pmod")]
+    Pmod,
+    /// Raspberry Pi 40-pin HAT header.
+    #[serde(rename = "hat_pi")]
+    HatPi,
+    /// Bare header pins / castellated pads / solder (no standard connector).
+    #[serde(rename = "bare")]
+    Bare,
+}
+
+impl Connector {
+    /// Whether this connector carries an I2C bus on the standard 4-pin pinout.
+    ///
+    /// `Qwiic` and `StemmaQt` are the same connector, so both return `true`.
+    pub const fn is_i2c(self) -> bool {
+        matches!(self, Connector::Qwiic | Connector::StemmaQt)
+    }
+
+    /// Whether an accessory using `self` can physically attach to a board port
+    /// of type `port`.
+    ///
+    /// Exact match, plus the Qwiic ≡ STEMMA QT equivalence.
+    pub const fn mates_with(self, port: Connector) -> bool {
+        // `==` is not const for enums on all toolchains; compare via is_i2c +
+        // discriminant match.
+        (self.is_i2c() && port.is_i2c()) || self.same_kind(port)
+    }
+
+    const fn same_kind(self, other: Connector) -> bool {
+        matches!(
+            (self, other),
+            (Connector::Grove, Connector::Grove)
+                | (Connector::Qwiic, Connector::Qwiic)
+                | (Connector::StemmaQt, Connector::StemmaQt)
+                | (Connector::Stemma, Connector::Stemma)
+                | (Connector::MBus, Connector::MBus)
+                | (Connector::FeatherWing, Connector::FeatherWing)
+                | (Connector::Pmod, Connector::Pmod)
+                | (Connector::HatPi, Connector::HatPi)
+                | (Connector::Bare, Connector::Bare)
+        )
+    }
+}
 
 /// Describes a known hardware board.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BoardInfo {
     /// USB Vendor ID.
     pub vid: u16,
@@ -41,6 +145,12 @@ pub struct BoardInfo {
     pub transport: &'static str,
     /// Capability tokens supported by this board.
     pub capabilities: &'static [&'static str],
+    /// Manufacturer / brand (e.g., `"Espressif"`, `"Seeed Studio"`).
+    pub vendor: &'static str,
+    /// Product family / line within the vendor (e.g., `"XIAO"`, `"Nucleo-64"`).
+    pub ecosystem: &'static str,
+    /// Expansion connectors this board exposes (for accessory matching).
+    pub connectors: &'static [Connector],
 }
 
 /// Complete registry of known boards.
@@ -59,6 +169,8 @@ pub struct BoardInfo {
 /// - `0x0955` = NVIDIA
 /// - `0x1d6b` = Linux Foundation (gadget devices)
 /// - `0x16c0` = PJRC (Teensy)
+/// - `0x2886` = Seeed Studio
+/// - `0x2b04` = Sipeed
 pub static KNOWN_BOARDS: &[BoardInfo] = &[
     // ── STM32 Nucleo ──────────────────────────────────────────────────────────
     BoardInfo {
@@ -77,6 +189,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "rtt",
             "flash",
         ],
+        vendor: "STMicroelectronics",
+        ecosystem: "Nucleo-64",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x0483,
@@ -94,6 +209,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "rtt",
             "flash",
         ],
+        vendor: "STMicroelectronics",
+        ecosystem: "Nucleo-64",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x0483,
@@ -111,6 +229,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "rtt",
             "flash",
         ],
+        vendor: "STMicroelectronics",
+        ecosystem: "Nucleo-64",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x0483,
@@ -128,6 +249,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "rtt",
             "flash",
         ],
+        vendor: "STMicroelectronics",
+        ecosystem: "Nucleo-144",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x0483,
@@ -145,6 +269,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "rtt",
             "flash",
         ],
+        vendor: "STMicroelectronics",
+        ecosystem: "Nucleo-64",
+        connectors: &[Connector::Bare],
     },
     // ── Arduino ───────────────────────────────────────────────────────────────
     BoardInfo {
@@ -154,6 +281,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("AVR ATmega328P @ 16 MHz"),
         transport: "serial",
         capabilities: &["gpio", "analog_read", "analog_write"],
+        vendor: "Arduino",
+        ecosystem: "Uno",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x2341,
@@ -162,6 +292,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("AVR ATmega328P @ 16 MHz (legacy)"),
         transport: "serial",
         capabilities: &["gpio", "analog_read", "analog_write"],
+        vendor: "Arduino",
+        ecosystem: "Uno",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x2341,
@@ -170,6 +303,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("Arduino Uno Q / ATmega328P"),
         transport: "bridge",
         capabilities: &["gpio", "analog_read", "analog_write"],
+        vendor: "Arduino",
+        ecosystem: "Uno",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x2341,
@@ -178,6 +314,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("AVR ATmega2560 @ 16 MHz"),
         transport: "serial",
         capabilities: &["gpio", "analog_read", "analog_write"],
+        vendor: "Arduino",
+        ecosystem: "Mega",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x2341,
@@ -186,6 +325,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("AVR ATmega32U4 @ 16 MHz (native USB)"),
         transport: "serial",
         capabilities: &["gpio", "analog_read", "analog_write"],
+        vendor: "Arduino",
+        ecosystem: "Leonardo",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x2341,
@@ -194,6 +336,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("AVR ATmega4809 @ 20 MHz"),
         transport: "serial",
         capabilities: &["gpio", "analog_read", "analog_write"],
+        vendor: "Arduino",
+        ecosystem: "Nano",
+        connectors: &[Connector::Bare],
     },
     // Arduino Nano clone with CH340 USB-UART (extremely common)
     BoardInfo {
@@ -203,6 +348,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("AVR ATmega328P @ 16 MHz (CH340 USB-UART)"),
         transport: "serial",
         capabilities: &["gpio", "analog_read", "analog_write"],
+        vendor: "Arduino",
+        ecosystem: "Nano",
+        connectors: &[Connector::Bare],
     },
     // ── USB-UART Bridges ──────────────────────────────────────────────────────
     BoardInfo {
@@ -212,6 +360,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("Silicon Labs CP2102 USB-UART bridge"),
         transport: "serial",
         capabilities: &[],
+        vendor: "Silicon Labs",
+        ecosystem: "USB-UART",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x10c4,
@@ -220,6 +371,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("Silicon Labs CP2102N USB-UART bridge"),
         transport: "serial",
         capabilities: &[],
+        vendor: "Silicon Labs",
+        ecosystem: "USB-UART",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x0403,
@@ -228,6 +382,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("FTDI FT232 USB-UART bridge"),
         transport: "serial",
         capabilities: &[],
+        vendor: "FTDI",
+        ecosystem: "USB-UART",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x0403,
@@ -236,6 +393,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("FTDI FT231X USB-UART bridge"),
         transport: "serial",
         capabilities: &[],
+        vendor: "FTDI",
+        ecosystem: "USB-UART",
+        connectors: &[Connector::Bare],
     },
     // ── ESP32 ─────────────────────────────────────────────────────────────────
     BoardInfo {
@@ -245,6 +405,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("ESP32 Xtensa LX6 @ 240 MHz (CH340)"),
         transport: "serial",
         capabilities: &["gpio"],
+        vendor: "Espressif",
+        ecosystem: "ESP32",
+        connectors: &[Connector::Bare],
     },
     // ── ESP32-S3 ──────────────────────────────────────────────────────────────
     BoardInfo {
@@ -254,6 +417,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("ESP32-S3 Xtensa LX7 @ 240 MHz (native USB)"),
         transport: "serial",
         capabilities: &["gpio", "camera_capture", "audio_sample", "sensor_read"],
+        vendor: "Espressif",
+        ecosystem: "ESP32-S3",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x10c4,
@@ -262,6 +428,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("ESP32-S3 (CP2102 USB-UART)"),
         transport: "serial",
         capabilities: &["gpio", "camera_capture", "audio_sample", "sensor_read"],
+        vendor: "Espressif",
+        ecosystem: "ESP32-S3",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x1a86,
@@ -270,6 +439,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("ESP32-S3 (CH343 USB-UART)"),
         transport: "serial",
         capabilities: &["gpio", "camera_capture", "audio_sample", "sensor_read"],
+        vendor: "Espressif",
+        ecosystem: "ESP32-S3",
+        connectors: &[Connector::Bare],
     },
     // ── NanoPi Neo3 ───────────────────────────────────────────────────────────
     BoardInfo {
@@ -279,6 +451,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("Rockchip RK3328 quad-core ARM Cortex-A53 @ 1.5 GHz (AArch64)"),
         transport: "native",
         capabilities: &["gpio", "i2c", "spi", "pwm"],
+        vendor: "FriendlyELEC",
+        ecosystem: "NanoPi",
+        connectors: &[Connector::Bare],
     },
     // ── Raspberry Pi ──────────────────────────────────────────────────────────
     BoardInfo {
@@ -288,6 +463,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("RP2040 dual-core ARM Cortex-M0+ @ 133 MHz"),
         transport: "serial",
         capabilities: &["gpio", "analog_read", "i2c", "spi", "pwm"],
+        vendor: "Raspberry Pi",
+        ecosystem: "Pico",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x2e8a,
@@ -296,6 +474,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("RP2040 dual-core ARM Cortex-M0+ @ 133 MHz (Wi-Fi)"),
         transport: "serial",
         capabilities: &["gpio", "analog_read", "i2c", "spi", "pwm"],
+        vendor: "Raspberry Pi",
+        ecosystem: "Pico",
+        connectors: &[Connector::Bare],
     },
     BoardInfo {
         vid: 0x2e8a,
@@ -304,6 +485,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("RP2350 dual-core ARM Cortex-M33 @ 150 MHz"),
         transport: "serial",
         capabilities: &["gpio", "analog_read", "i2c", "spi", "pwm"],
+        vendor: "Raspberry Pi",
+        ecosystem: "Pico",
+        connectors: &[Connector::Bare],
     },
     // Raspberry Pi 4 / 5 (USB hub VID when used as USB device / OTG)
     BoardInfo {
@@ -313,6 +497,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("BCM2711 quad-core ARM Cortex-A72 @ 1.8 GHz (AArch64)"),
         transport: "native",
         capabilities: &["gpio", "i2c", "spi", "pwm", "camera_capture"],
+        vendor: "Raspberry Pi",
+        ecosystem: "Raspberry Pi",
+        connectors: &[Connector::HatPi],
     },
     BoardInfo {
         vid: 0x2109,
@@ -321,6 +508,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("BCM2712 quad-core ARM Cortex-A76 @ 2.4 GHz (AArch64)"),
         transport: "native",
         capabilities: &["gpio", "i2c", "spi", "pwm", "camera_capture"],
+        vendor: "Raspberry Pi",
+        ecosystem: "Raspberry Pi",
+        connectors: &[Connector::HatPi],
     },
     // ── ESP32-C3 ──────────────────────────────────────────────────────────────
     BoardInfo {
@@ -330,6 +520,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("ESP32-C3 RISC-V single-core @ 160 MHz (native USB)"),
         transport: "serial",
         capabilities: &["gpio", "i2c", "spi", "wifi", "ble"],
+        vendor: "Espressif",
+        ecosystem: "ESP32-C3",
+        connectors: &[Connector::Bare],
     },
     // ── nRF52840 DK ───────────────────────────────────────────────────────────
     BoardInfo {
@@ -339,6 +532,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("Nordic nRF52840 ARM Cortex-M4F @ 64 MHz (BLE 5.0)"),
         transport: "serial",
         capabilities: &["gpio", "i2c", "spi", "ble", "pwm"],
+        vendor: "Nordic Semiconductor",
+        ecosystem: "nRF DK",
+        connectors: &[Connector::Bare],
     },
     // ── Arduino Nano 33 BLE ───────────────────────────────────────────────────
     BoardInfo {
@@ -348,6 +544,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("nRF52840 ARM Cortex-M4F @ 64 MHz (BLE, IMU)"),
         transport: "serial",
         capabilities: &["gpio", "analog_read", "i2c", "spi", "ble", "sensor_read"],
+        vendor: "Arduino",
+        ecosystem: "Nano",
+        connectors: &[Connector::Bare],
     },
     // ── Teensy 4.1 ────────────────────────────────────────────────────────────
     BoardInfo {
@@ -365,6 +564,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "pwm",
             "can",
         ],
+        vendor: "PJRC",
+        ecosystem: "Teensy",
+        connectors: &[Connector::Bare],
     },
     // ── BeagleBone Black ──────────────────────────────────────────────────────
     BoardInfo {
@@ -374,6 +576,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("TI AM3358 ARM Cortex-A8 @ 1 GHz"),
         transport: "native",
         capabilities: &["gpio", "analog_read", "i2c", "spi", "pwm", "can"],
+        vendor: "BeagleBoard",
+        ecosystem: "BeagleBone",
+        connectors: &[Connector::Bare],
     },
     // ── NVIDIA Jetson Nano ────────────────────────────────────────────────────
     BoardInfo {
@@ -385,6 +590,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         ),
         transport: "native",
         capabilities: &["gpio", "i2c", "spi", "pwm", "camera_capture", "cuda"],
+        vendor: "NVIDIA",
+        ecosystem: "Jetson",
+        connectors: &[Connector::Bare],
     },
     // ── STM32 Discovery (H7) ─────────────────────────────────────────────────
     BoardInfo {
@@ -404,6 +612,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "flash",
             "dac",
         ],
+        vendor: "STMicroelectronics",
+        ecosystem: "Discovery",
+        connectors: &[Connector::Bare],
     },
     // ── Waveshare ESP32-S3-Touch-LCD-2.1 ─────────────────────────────────────
     // 2.1-inch round touch display with ESP32-S3, integrated speaker, and
@@ -427,11 +638,16 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "display",
             "touch",
         ],
+        vendor: "Waveshare",
+        ecosystem: "ESP32-S3 Touch LCD",
+        connectors: &[Connector::Bare],
     },
     // ── Seeed XIAO ESP32S3-Sense ──────────────────────────────────────────────
     // Compact ESP32-S3 module with OV2640 camera, PDM microphone, and
     // expandable microSD.  Used as the primary vision node.
     // USB VID=0x2886 (Seeed Studio), PID=0x0058 (XIAO ESP32-S3 Sense).
+    // The bare module uses castellated pads; the XIAO Expansion Board adds
+    // Grove and Qwiic ports (see scout proposals for those as separate entries).
     BoardInfo {
         vid: 0x2886,
         pid: 0x0058,
@@ -451,6 +667,9 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "audio_sample",
             "sensor_read",
         ],
+        vendor: "Seeed Studio",
+        ecosystem: "XIAO",
+        connectors: &[Connector::Bare],
     },
     // ── Sipeed 6+1 Mic Array ──────────────────────────────────────────────────
     // Circular microphone array with 6 peripheral mics and 1 center mic,
@@ -464,6 +683,121 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         architecture: Some("STM32F103 @ 72 MHz, 6+1 MEMS microphone array with USB audio (UAC1)"),
         transport: "serial",
         capabilities: &["audio_sample", "gpio"],
+        vendor: "Sipeed",
+        ecosystem: "MaixSense",
+        connectors: &[Connector::Bare],
+    },
+    // ── Accelerapp-sourced hardware (v2.0 seed) ───────────────────────────────
+    // Boards harvested from the sibling Accelerapp project. NOTE: most ESP32
+    // boards share either a USB-bridge VID/PID (CP210x 0x10c4:0xea60, CH340
+    // 0x1a86:0x7523) or the native-USB ESP32-S3 id (0x303a:0x1001), so USB
+    // auto-identification cannot uniquely distinguish them. These entries are
+    // selected primarily by `name` in deployment config (DeploymentHardwareConfig);
+    // the shared VID/PID is recorded for reference, and `lookup_board` returns the
+    // first VID/PID match. Flipper Zero is the one entry with a unique VID/PID.
+    BoardInfo {
+        vid: 0x0483,
+        pid: 0x5740,
+        name: "flipper-zero",
+        architecture: Some("STM32WB55 ARM Cortex-M4 @ 64 MHz (multi-tool; USB CDC)"),
+        transport: "serial",
+        capabilities: &["gpio", "ble", "nfc", "rfid", "subghz", "infrared"],
+        vendor: "Flipper Devices",
+        ecosystem: "Flipper Zero",
+        connectors: &[Connector::Bare],
+    },
+    BoardInfo {
+        vid: 0x10c4,
+        pid: 0xea60,
+        name: "m5stack-core2",
+        architecture: Some(
+            "ESP32-D0WDQ6 @ 240 MHz, 2.0\" ILI9342C touch LCD, MPU6886 IMU (CP2104; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "i2c", "spi", "wifi", "ble", "display", "touch", "imu", "microsd",
+        ],
+        vendor: "M5Stack",
+        ecosystem: "M5 Core",
+        connectors: &[Connector::Grove, Connector::MBus],
+    },
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "m5stack-atom-s3",
+        architecture: Some("ESP32-S3 @ 240 MHz, 0.85\" LCD, compact (native USB; shared VID/PID)"),
+        transport: "serial",
+        capabilities: &["gpio", "i2c", "spi", "wifi", "ble", "display"],
+        vendor: "M5Stack",
+        ecosystem: "M5 Atom",
+        connectors: &[Connector::Grove],
+    },
+    BoardInfo {
+        vid: 0x1a86,
+        pid: 0x7523,
+        name: "esp32-cam",
+        architecture: Some(
+            "ESP32 + OV2640 camera, microSD (AI-Thinker; flashed via external USB-UART; VID/PID is a common CH340 programmer)",
+        ),
+        transport: "serial",
+        capabilities: &["gpio", "wifi", "camera_capture", "microsd"],
+        vendor: "AI-Thinker",
+        ecosystem: "ESP32-CAM",
+        connectors: &[Connector::Bare],
+    },
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "esp32-s3-cam",
+        architecture: Some(
+            "ESP32-S3 + OV2640/OV5640 camera, microSD, PSRAM (native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &["gpio", "i2c", "wifi", "ble", "camera_capture", "microsd"],
+        vendor: "Espressif",
+        ecosystem: "ESP32-S3",
+        connectors: &[Connector::Bare],
+    },
+    BoardInfo {
+        vid: 0x1a86,
+        pid: 0x7523,
+        name: "cyd-esp32-2432s028r",
+        architecture: Some(
+            "ESP32 'Cheap Yellow Display' (ESP32-2432S028R): ILI9341 320x240 + XPT2046 resistive touch, microSD (CH340; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "i2c", "spi", "wifi", "ble", "display", "touch", "microsd",
+        ],
+        vendor: "Sunton",
+        ecosystem: "Cheap Yellow Display",
+        connectors: &[Connector::Bare],
+    },
+    BoardInfo {
+        vid: 0x10c4,
+        pid: 0xea60,
+        name: "lilygo-t-beam",
+        architecture: Some(
+            "ESP32 + SX1276/SX1262 LoRa + NEO-6M GPS (Meshtastic-compatible; CP210x; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &["gpio", "i2c", "wifi", "ble", "lora", "gps"],
+        vendor: "LILYGO",
+        ecosystem: "T-Beam",
+        connectors: &[Connector::Bare],
+    },
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "heltec-wifi-lora-32-v3",
+        architecture: Some(
+            "ESP32-S3 + SX1262 LoRa + 0.96\" OLED (Meshtastic-compatible; native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &["gpio", "i2c", "spi", "wifi", "ble", "lora", "display"],
+        vendor: "Heltec",
+        ecosystem: "WiFi LoRa 32",
+        connectors: &[Connector::Bare],
     },
 ];
 
@@ -493,13 +827,29 @@ pub fn boards_with_transport(transport: &str) -> Vec<&'static BoardInfo> {
         .collect()
 }
 
+/// Return all boards from a given vendor (case-insensitive).
+pub fn boards_by_vendor(vendor: &str) -> Vec<&'static BoardInfo> {
+    KNOWN_BOARDS
+        .iter()
+        .filter(|b| b.vendor.eq_ignore_ascii_case(vendor))
+        .collect()
+}
+
+/// Return all boards that expose a given connector.
+pub fn boards_with_connector(connector: Connector) -> Vec<&'static BoardInfo> {
+    KNOWN_BOARDS
+        .iter()
+        .filter(|b| b.connectors.contains(&connector))
+        .collect()
+}
+
 // ── Accessory Registry ────────────────────────────────────────────────────────
 
 /// Describes a known I2C/SPI accessory or add-on module.
 ///
 /// Accessories are peripheral devices that attach to a host board via I2C or SPI.
 /// They don't have their own USB VID/PID — they are discovered by scanning the bus.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AccessoryInfo {
     /// Short name used in config and sensor references (e.g., `"bme280"`).
     pub name: &'static str,
@@ -513,6 +863,9 @@ pub struct AccessoryInfo {
     pub capabilities: &'static [&'static str],
     /// Compatible host boards (empty = universal / works with any board that has the bus).
     pub compatible_boards: &'static [&'static str],
+    /// Physical connector the accessory attaches through. `Bare` for raw
+    /// chips/breakouts wired by hand; `Qwiic`/`StemmaQt` for plug-in I2C modules.
+    pub connector: Connector,
 }
 
 /// Registry of known I2C/SPI accessories and sensor modules.
@@ -525,6 +878,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: Some(0x76),
         capabilities: &["sensor_read"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     AccessoryInfo {
         name: "bmp388",
@@ -533,6 +887,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: Some(0x77),
         capabilities: &["sensor_read"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     AccessoryInfo {
         name: "sht31",
@@ -541,6 +896,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: Some(0x44),
         capabilities: &["sensor_read"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     AccessoryInfo {
         name: "aht20",
@@ -549,6 +905,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: Some(0x38),
         capabilities: &["sensor_read"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     // ── Motion / IMU Sensors ──────────────────────────────────────────────────
     AccessoryInfo {
@@ -558,6 +915,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: Some(0x68),
         capabilities: &["sensor_read"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     AccessoryInfo {
         name: "lsm6ds3",
@@ -566,6 +924,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: Some(0x6A),
         capabilities: &["sensor_read"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     // ── ADC / DAC ─────────────────────────────────────────────────────────────
     AccessoryInfo {
@@ -575,6 +934,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: Some(0x48),
         capabilities: &["analog_read"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     AccessoryInfo {
         name: "mcp4725",
@@ -583,6 +943,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: Some(0x60),
         capabilities: &["dac"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     // ── GPIO Expanders ────────────────────────────────────────────────────────
     AccessoryInfo {
@@ -592,6 +953,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: Some(0x20),
         capabilities: &["gpio"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     AccessoryInfo {
         name: "mcp23017",
@@ -600,6 +962,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: Some(0x21),
         capabilities: &["gpio"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     // ── Thermocouple / Temperature ────────────────────────────────────────────
     AccessoryInfo {
@@ -609,6 +972,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: None,
         capabilities: &["sensor_read"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     AccessoryInfo {
         name: "ds18b20",
@@ -617,6 +981,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: None,
         capabilities: &["sensor_read"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     // ── Power Monitoring ──────────────────────────────────────────────────────
     AccessoryInfo {
@@ -626,6 +991,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: Some(0x40),
         capabilities: &["sensor_read"],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     // ── Display ───────────────────────────────────────────────────────────────
     AccessoryInfo {
@@ -635,6 +1001,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: Some(0x3C),
         capabilities: &[],
         compatible_boards: &[],
+        connector: Connector::Bare,
     },
     // ── Single-Wire / GPIO-Protocol Sensors ───────────────────────────────────
     AccessoryInfo {
@@ -651,6 +1018,7 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
             "xiao-esp32s3-sense",
             "waveshare-esp32-s3-touch-lcd-2.1",
         ],
+        connector: Connector::Bare,
     },
     AccessoryInfo {
         name: "dht11",
@@ -659,6 +1027,35 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         default_i2c_addr: None,
         capabilities: &["sensor_read"],
         compatible_boards: &[],
+        connector: Connector::Bare,
+    },
+    // ── Accelerapp-sourced accessories (v2.0 seed) ────────────────────────────
+    AccessoryInfo {
+        name: "ov2640",
+        description: "OmniVision OV2640 — 2 MP camera image sensor (SCCB control bus)",
+        bus: "sccb",
+        default_i2c_addr: None,
+        capabilities: &["camera_capture"],
+        compatible_boards: &["esp32-cam", "esp32-s3-cam", "xiao-esp32s3-sense"],
+        connector: Connector::Bare,
+    },
+    AccessoryInfo {
+        name: "ili9341",
+        description: "ILITEK ILI9341 — 240x320 SPI TFT LCD controller",
+        bus: "spi",
+        default_i2c_addr: None,
+        capabilities: &["display"],
+        compatible_boards: &["cyd-esp32-2432s028r"],
+        connector: Connector::Bare,
+    },
+    AccessoryInfo {
+        name: "xpt2046",
+        description: "XPT2046 — resistive touch-screen controller (SPI)",
+        bus: "spi",
+        default_i2c_addr: None,
+        capabilities: &["touch"],
+        compatible_boards: &["cyd-esp32-2432s028r"],
+        connector: Connector::Bare,
     },
 ];
 
@@ -686,6 +1083,65 @@ pub fn accessories_with_capability(capability: &str) -> Vec<&'static AccessoryIn
         .iter()
         .filter(|a| a.capabilities.contains(&capability))
         .collect()
+}
+
+/// Whether `accessory` can physically attach to `board` via any of the board's
+/// connectors (honoring the Qwiic ≡ STEMMA QT equivalence).
+///
+/// `Bare` accessories are treated as universally wireable to any board that has
+/// the matching bus, so this returns `true` for `Bare`-on-anything.
+pub fn board_accepts_accessory(board: &BoardInfo, accessory: &AccessoryInfo) -> bool {
+    if accessory.connector == Connector::Bare {
+        return true;
+    }
+    board
+        .connectors
+        .iter()
+        .any(|&port| accessory.connector.mates_with(port))
+}
+
+/// Return all accessories that can attach to a board (by connector match).
+pub fn accessories_for_board(board: &BoardInfo) -> Vec<&'static AccessoryInfo> {
+    KNOWN_ACCESSORIES
+        .iter()
+        .filter(|a| board_accepts_accessory(board, a))
+        .collect()
+}
+
+// ── Registry export (single source of truth) ───────────────────────────────────
+
+/// Schema version of the exported `registry.json` document. Bump on any
+/// breaking change to the serialized shape so older consumers fail loudly.
+pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
+
+/// A serializable snapshot of the entire hardware registry.
+///
+/// This is the canonical, language-agnostic representation consumed by sibling
+/// projects (deployment generator, Accelerapp). Generate it with the
+/// `emit-registry` binary: `cargo run --bin emit-registry > registry.json`.
+#[derive(Debug, Clone, Serialize)]
+pub struct RegistrySnapshot {
+    /// Schema version (see [`REGISTRY_SCHEMA_VERSION`]).
+    pub schema_version: u32,
+    /// All known boards.
+    pub boards: &'static [BoardInfo],
+    /// All known accessories.
+    pub accessories: &'static [AccessoryInfo],
+}
+
+/// Build a snapshot of the current registry.
+pub fn registry_snapshot() -> RegistrySnapshot {
+    RegistrySnapshot {
+        schema_version: REGISTRY_SCHEMA_VERSION,
+        boards: KNOWN_BOARDS,
+        accessories: KNOWN_ACCESSORIES,
+    }
+}
+
+/// Serialize the entire registry to a pretty-printed JSON document — the single
+/// source of truth other projects consume instead of re-typing the catalog.
+pub fn registry_json() -> serde_json::Result<String> {
+    serde_json::to_string_pretty(&registry_snapshot())
 }
 
 #[cfg(test)]
@@ -1012,5 +1468,190 @@ mod tests {
         assert!(names.contains(&"waveshare-esp32-s3-touch-lcd-2.1"));
         assert!(names.contains(&"xiao-esp32s3-sense"));
         assert!(names.contains(&"sipeed-6plus1-mic-array"));
+    }
+
+    // ── Connector ecosystem tests ─────────────────────────────────────────────
+
+    #[test]
+    fn connector_exact_match_mates() {
+        assert!(Connector::Grove.mates_with(Connector::Grove));
+        assert!(Connector::MBus.mates_with(Connector::MBus));
+        assert!(Connector::HatPi.mates_with(Connector::HatPi));
+        assert!(Connector::Bare.mates_with(Connector::Bare));
+    }
+
+    #[test]
+    fn qwiic_and_stemma_qt_are_equivalent() {
+        // The whole point: SparkFun Qwiic ≡ Adafruit STEMMA QT (same I2C connector).
+        assert!(Connector::Qwiic.mates_with(Connector::StemmaQt));
+        assert!(Connector::StemmaQt.mates_with(Connector::Qwiic));
+        assert!(Connector::Qwiic.is_i2c());
+        assert!(Connector::StemmaQt.is_i2c());
+    }
+
+    #[test]
+    fn incompatible_connectors_do_not_mate() {
+        assert!(!Connector::Grove.mates_with(Connector::Qwiic));
+        assert!(!Connector::Grove.mates_with(Connector::MBus));
+        assert!(!Connector::HatPi.mates_with(Connector::FeatherWing));
+        assert!(!Connector::Qwiic.mates_with(Connector::Grove));
+    }
+
+    #[test]
+    fn every_board_has_vendor_and_connectors() {
+        for b in known_boards() {
+            assert!(!b.vendor.is_empty(), "board {} missing vendor", b.name);
+            assert!(!b.ecosystem.is_empty(), "board {} missing ecosystem", b.name);
+            assert!(
+                !b.connectors.is_empty(),
+                "board {} must declare at least one connector (use Bare)",
+                b.name
+            );
+        }
+    }
+
+    #[test]
+    fn boards_by_vendor_finds_espressif() {
+        let boards = boards_by_vendor("espressif");
+        assert!(!boards.is_empty());
+        assert!(boards.iter().any(|b| b.name == "esp32-s3"));
+    }
+
+    #[test]
+    fn boards_with_hatpi_connector() {
+        let boards = boards_with_connector(Connector::HatPi);
+        let names: Vec<_> = boards.iter().map(|b| b.name).collect();
+        assert!(names.contains(&"raspberry-pi-4"));
+        assert!(names.contains(&"raspberry-pi-5"));
+    }
+
+    #[test]
+    fn bare_accessory_attaches_to_any_board() {
+        let board = lookup_board(0x2886, 0x0058).unwrap(); // xiao
+        let bme = lookup_accessory("bme280").unwrap();
+        assert_eq!(bme.connector, Connector::Bare);
+        assert!(board_accepts_accessory(board, bme));
+    }
+
+    #[test]
+    fn accessories_for_board_includes_bare_modules() {
+        let board = lookup_board(0x2109, 0x0820).unwrap(); // rpi-5
+        let accs = accessories_for_board(board);
+        // All current accessories are Bare, so all should be wireable.
+        assert_eq!(accs.len(), known_accessories().len());
+    }
+
+    // ── Accelerapp-seeded hardware tests (v2.0) ───────────────────────────────
+
+    #[test]
+    fn lookup_flipper_zero() {
+        let b = lookup_board(0x0483, 0x5740).unwrap();
+        assert_eq!(b.name, "flipper-zero");
+        assert_eq!(b.vendor, "Flipper Devices");
+        assert!(b.capabilities.contains(&"subghz"));
+        assert!(b.capabilities.contains(&"nfc"));
+        assert!(b.capabilities.contains(&"rfid"));
+        assert!(b.capabilities.contains(&"infrared"));
+    }
+
+    #[test]
+    fn seeded_boards_present_by_name() {
+        let names: Vec<_> = KNOWN_BOARDS.iter().map(|b| b.name).collect();
+        for n in [
+            "flipper-zero",
+            "m5stack-core2",
+            "m5stack-atom-s3",
+            "esp32-cam",
+            "esp32-s3-cam",
+            "cyd-esp32-2432s028r",
+            "lilygo-t-beam",
+            "heltec-wifi-lora-32-v3",
+        ] {
+            assert!(names.contains(&n), "missing seeded board {n}");
+        }
+    }
+
+    #[test]
+    fn m5stack_core2_connectors_and_caps() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "m5stack-core2")
+            .unwrap();
+        assert_eq!(b.vendor, "M5Stack");
+        assert!(b.connectors.contains(&Connector::Grove));
+        assert!(b.connectors.contains(&Connector::MBus));
+        assert!(b.capabilities.contains(&"imu"));
+        assert!(b.capabilities.contains(&"display"));
+        assert!(b.capabilities.contains(&"touch"));
+    }
+
+    #[test]
+    fn boards_with_lora_capability() {
+        let boards = boards_with_capability("lora");
+        let names: Vec<_> = boards.iter().map(|b| b.name).collect();
+        assert!(names.contains(&"lilygo-t-beam"));
+        assert!(names.contains(&"heltec-wifi-lora-32-v3"));
+    }
+
+    #[test]
+    fn t_beam_has_gps_and_lora() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "lilygo-t-beam")
+            .unwrap();
+        assert_eq!(b.vendor, "LILYGO");
+        assert!(b.capabilities.contains(&"gps"));
+        assert!(b.capabilities.contains(&"lora"));
+    }
+
+    #[test]
+    fn cyd_has_display_and_touch() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "cyd-esp32-2432s028r")
+            .unwrap();
+        assert!(b.capabilities.contains(&"display"));
+        assert!(b.capabilities.contains(&"touch"));
+        assert!(b.capabilities.contains(&"microsd"));
+    }
+
+    #[test]
+    fn seeded_accessories_present() {
+        assert!(lookup_accessory("ov2640").is_some());
+        let ili = lookup_accessory("ili9341").unwrap();
+        assert!(ili.capabilities.contains(&"display"));
+        let touch = lookup_accessory("xpt2046").unwrap();
+        assert!(touch.capabilities.contains(&"touch"));
+    }
+
+    #[test]
+    fn camera_boards_include_seeded_cams() {
+        let boards = boards_with_capability("camera_capture");
+        let names: Vec<_> = boards.iter().map(|b| b.name).collect();
+        assert!(names.contains(&"esp32-cam"));
+        assert!(names.contains(&"esp32-s3-cam"));
+    }
+
+    // ── Registry export (single source of truth) ──────────────────────────────
+
+    #[test]
+    fn registry_json_serializes_and_includes_key_entries() {
+        let j = registry_json().expect("registry serializes to JSON");
+        assert!(j.contains("\"schema_version\""));
+        assert!(j.contains("\"boards\""));
+        assert!(j.contains("\"accessories\""));
+        // a unique board, a seeded board, and a connector token serialize through
+        assert!(j.contains("\"flipper-zero\""));
+        assert!(j.contains("\"cyd-esp32-2432s028r\""));
+        assert!(j.contains("\"grove\"")); // Connector::Grove serializes to its token
+        assert!(j.contains("\"bare\""));
+    }
+
+    #[test]
+    fn registry_snapshot_counts_match_tables() {
+        let snap = registry_snapshot();
+        assert_eq!(snap.schema_version, REGISTRY_SCHEMA_VERSION);
+        assert_eq!(snap.boards.len(), KNOWN_BOARDS.len());
+        assert_eq!(snap.accessories.len(), KNOWN_ACCESSORIES.len());
     }
 }

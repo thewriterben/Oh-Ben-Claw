@@ -1,6 +1,6 @@
 //! Oh-Ben-Claw Security Subsystem
 //!
-//! The security subsystem has three components:
+//! The security subsystem has five components:
 //!
 //! ## 1. Tool Policy Engine (`policy`)
 //! Controls which tools the agent is allowed to invoke and under what conditions.
@@ -17,11 +17,26 @@
 //! Provides encrypted at-rest storage for API keys and other sensitive credentials.
 //! Secrets are stored in a SQLite database with AES-256-GCM encryption.
 //! The vault is unlocked with a master password derived via Argon2id.
+//!
+//! ## 4. Safety Limits (`limits`) — Track 0
+//! Deterministic, model-independent limits (pin allow-list, value range, rate)
+//! for physical actions, enforced before an actuator tool runs. Mirrors the
+//! on-MCU `SafetyGate` in the ESP32-S3 firmware.
+//!
+//! ## 5. Action Audit (`audit`) — Track 0
+//! Tamper-evident, hash-chained + HMAC'd append-only log of physical-action
+//! decisions; `audit::verify` detects any edit, insertion, deletion, or reorder.
 
+pub mod audit;
+pub mod limits;
 pub mod pairing;
 pub mod policy;
 pub mod vault;
 
+#[allow(unused_imports)]
+pub use audit::{ActionAuditor, ActionRecord, AuditError, Decision};
+#[allow(unused_imports)]
+pub use limits::{SafetyConfig, SafetyGate, SafetyLimit, SafetyViolation};
 #[allow(unused_imports)]
 pub use pairing::{NodePairingManager, PairingStatus};
 #[allow(unused_imports)]

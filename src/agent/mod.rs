@@ -19,12 +19,16 @@ pub use orchestrator::{OrchestratorAgent, OrchestratorConfig, RoutingStrategy};
 pub use pool::{AgentPool, SubAgentInfo, SubAgentSpec, SubAgentStatus};
 
 use crate::config::AgentConfig;
+use crate::memory::trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};
 use crate::memory::MemoryStore;
 use crate::providers::{ChatMessage, ChatRole, Provider};
+use crate::security::audit::{ActionAuditor, Decision};
+use crate::security::limits::SafetyGate;
 use crate::security::PolicyEngine;
-use crate::tools::traits::Tool;
+use crate::tools::traits::{RiskClass, Tool};
 use anyhow::Result;
-use std::sync::Arc;
+use serde_json::Value;
+use std::sync::{Arc, Mutex};
 
 /// Maximum tool-use iterations per user message to prevent runaway loops.
 pub const MAX_TOOL_ITERATIONS: usize = 10;
@@ -46,6 +50,14 @@ pub struct Agent {
     /// run records an `agent.process` span, each tool call an `agent.tool`
     /// span, and the turn/tool/error counters are incremented.
     obs: Option<Arc<crate::observability::ObsContext>>,
+    /// Track 0: deterministic, model-independent safety limits applied to
+    /// physical tool calls before execution.
+    safety: Option<Arc<SafetyGate>>,
+    /// Track 0: tamper-evident audit log of physical-action decisions.
+    auditor: Option<Arc<Mutex<ActionAuditor>>>,
+    /// Phase 16: when attached, each run is captured as an `Episode` for
+    /// experiential self-improvement.
+    trajectory: Option<Arc<TrajectoryStore>>,
 }
 
 impl Agent {
@@ -63,6 +75,9 @@ impl Agent {
             tools,
             policy: None,
             obs: None,
+            safety: None,
+            auditor: None,
+            trajectory: None,
         }
     }
 
@@ -75,6 +90,27 @@ impl Agent {
     /// Attach an observability context (spans + counters per run).
     pub fn with_obs(mut self, obs: Arc<crate::observability::ObsContext>) -> Self {
         self.obs = Some(obs);
+        self
+    }
+
+    /// Attach a Track 0 safety gate enforcing deterministic limits on physical
+    /// tool calls (pin allow-list, value range, rate).
+    pub fn with_safety_gate(mut self, gate: Arc<SafetyGate>) -> Self {
+        self.safety = Some(gate);
+        self
+    }
+
+    /// Attach a Track 0 action auditor that records every physical-action
+    /// decision to a tamper-evident log.
+    pub fn with_action_auditor(mut self, auditor: Arc<Mutex<ActionAuditor>>) -> Self {
+        self.auditor = Some(auditor);
+        self
+    }
+
+    /// Attach a trajectory store so each run is captured as an `Episode`
+    /// (Phase 16 experiential self-improvement).
+    pub fn with_trajectory_store(mut self, store: Arc<TrajectoryStore>) -> Self {
+        self.trajectory = Some(store);
         self
     }
 
@@ -265,6 +301,37 @@ impl Agent {
             obs.metrics.counter("agent_turns_total").inc();
         }
 
+        // Phase 16: capture this run as an episode for experiential self-improvement.
+        if let Some(traj) = &self.trajectory {
+            let steps: Vec<EpisodeStep> = tool_calls_made
+                .iter()
+                .map(|tc| EpisodeStep {
+                    tool: tc.name.clone(),
+                    args: serde_json::from_str(&tc.args)
+                        .unwrap_or_else(|_| serde_json::json!({})),
+                    result: tc.result.clone(),
+                    ok: !tc.result.starts_with("Tool error:")
+                        && !tc.result.starts_with("Tool execution failed:")
+                        && !tc.result.contains("refused by safety gate"),
+                })
+                .collect();
+            let episode = Episode {
+                id: uuid::Uuid::new_v4().to_string(),
+                session_id: session_id.to_string(),
+                objective: user_message.to_string(),
+                steps,
+                outcome: if final_response.is_empty() {
+                    Outcome::Failure
+                } else {
+                    Outcome::Success
+                },
+                ts_ms: now_ms(),
+            };
+            if let Err(e) = traj.record(&episode) {
+                tracing::warn!(error = %e, "Failed to record trajectory episode");
+            }
+        }
+
         Ok(AgentResponse {
             message: final_response,
             tool_calls: tool_calls_made,
@@ -333,6 +400,27 @@ impl Agent {
         let args: serde_json::Value =
             serde_json::from_str(args_str).unwrap_or_else(|_| serde_json::json!({}));
 
+        // Track 0: for physical actions, enforce deterministic safety limits and
+        // record a tamper-evident audit entry BEFORE the tool runs. Refused
+        // actions never reach the hardware.
+        if let Err(reason) = track0_authorize(
+            self.safety.as_deref(),
+            self.auditor.as_deref(),
+            name,
+            tool.risk_class(),
+            &args,
+        ) {
+            tracing::warn!(
+                tool = %name,
+                reason = %reason,
+                "Physical action refused by Track 0 safety gate"
+            );
+            return Ok(crate::tools::traits::ToolResult::err(format!(
+                "Tool '{}' refused by safety gate: {}",
+                name, reason
+            )));
+        }
+
         tool.execute(args).await
     }
 
@@ -364,6 +452,65 @@ impl Agent {
     pub fn clear_session(&self, session_id: &str) -> anyhow::Result<()> {
         self.memory.clear_session(session_id)
     }
+}
+
+// ── Track 0: physical-action authorization ──────────────────────────────────────
+
+/// Authorize a single tool call against the Track 0 safety layer.
+///
+/// Non-physical tools pass through untouched (returns `Ok`). For physical tools,
+/// the deterministic [`SafetyGate`] (when configured) is consulted using the
+/// action's `node_id`/`pin`/`value`, and the resulting decision is appended to
+/// the tamper-evident audit log (when configured). Auditing never blocks the
+/// action path. Returns `Err(reason)` only when the gate refuses the action.
+fn track0_authorize(
+    safety: Option<&SafetyGate>,
+    auditor: Option<&Mutex<ActionAuditor>>,
+    tool: &str,
+    risk: RiskClass,
+    args: &Value,
+) -> std::result::Result<(), String> {
+    if !risk.physical {
+        return Ok(());
+    }
+
+    let node_id = args
+        .get("node_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("local");
+    let pin = args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0);
+    let value = args.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
+    let now = now_ms();
+
+    let decision = match safety {
+        Some(gate) => match gate.check(node_id, tool, pin, value, now) {
+            Ok(()) => Decision::Allowed,
+            Err(violation) => Decision::Denied(violation.to_string()),
+        },
+        // No deterministic gate configured: the approval layer governs; we still
+        // audit the action as allowed-through-here.
+        None => Decision::Allowed,
+    };
+
+    if let Some(auditor) = auditor {
+        let mut a = auditor.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(e) = a.record(now, node_id, tool, args, risk, decision.clone()) {
+            tracing::warn!(error = %e, "Track 0 action audit write failed");
+        }
+    }
+
+    match decision {
+        Decision::Denied(reason) => Err(reason),
+        _ => Ok(()),
+    }
+}
+
+/// Current wall-clock time in milliseconds since the Unix epoch.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 // ── Response Types ────────────────────────────────────────────────────────────
@@ -398,6 +545,63 @@ impl AgentResponse {
 mod tests {
     use super::*;
     use crate::memory::MemoryStore;
+    use crate::security::limits::{SafetyGate, SafetyLimit};
+    use crate::tools::traits::BlastRadius;
+    use serde_json::json;
+
+    #[test]
+    fn track0_passes_nonphysical_tools() {
+        // A normal (non-physical) tool is never gated.
+        let r = track0_authorize(None, None, "shell", RiskClass::safe(), &json!({}));
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn track0_gate_allows_in_policy_and_denies_out_of_policy() {
+        let gate = SafetyGate::new(vec![SafetyLimit {
+            node_id: "local".into(),
+            tool: "gpio_write".into(),
+            allowed_pins: Some(vec![17]),
+            value_min: Some(0),
+            value_max: Some(1),
+            min_interval_ms: None,
+        }]);
+        let risk = RiskClass::physical(false, BlastRadius::High);
+
+        // In-policy pin/value is allowed.
+        assert!(track0_authorize(
+            Some(&gate),
+            None,
+            "gpio_write",
+            risk,
+            &json!({"pin": 17, "value": 1})
+        )
+        .is_ok());
+
+        // Out-of-policy pin is refused (and the reason is surfaced).
+        let denied = track0_authorize(
+            Some(&gate),
+            None,
+            "gpio_write",
+            risk,
+            &json!({"pin": 99, "value": 1}),
+        );
+        assert!(denied.is_err());
+        assert!(denied.unwrap_err().contains("pin"));
+    }
+
+    #[test]
+    fn track0_without_gate_allows_physical() {
+        // No gate configured ⇒ deterministic layer is permissive (approval governs).
+        let r = track0_authorize(
+            None,
+            None,
+            "gpio_write",
+            RiskClass::physical(false, BlastRadius::High),
+            &json!({"pin": 99, "value": 1}),
+        );
+        assert!(r.is_ok());
+    }
 
     #[test]
     fn agent_response_used_tools() {

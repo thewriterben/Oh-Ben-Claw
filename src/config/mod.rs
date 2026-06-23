@@ -1242,6 +1242,24 @@ impl Default for A2AConfig {
     }
 }
 
+/// Phase 16 experiential self-improvement configuration (`[self_improvement]`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SelfImprovementConfig {
+    /// Capture each agent run as a trajectory episode for later skill synthesis.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Path to the trajectory database. Defaults to the data dir's
+    /// `trajectories.db` when unset.
+    #[serde(default)]
+    pub db_path: Option<String>,
+    /// How often (seconds) the background self-improvement loop runs. Default 3600.
+    #[serde(default)]
+    pub interval_secs: Option<u64>,
+    /// Cap on auto-installed learned skills. Default 500.
+    #[serde(default)]
+    pub max_learned: Option<usize>,
+}
+
 /// The root configuration for Oh-Ben-Claw.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -1291,6 +1309,12 @@ pub struct Config {
     /// Agent-to-Agent (A2A) protocol configuration.
     #[serde(default)]
     pub a2a: A2AConfig,
+    /// Track 0 physical-action safety: deterministic limits + tamper-evident audit.
+    #[serde(default)]
+    pub safety: crate::security::SafetyConfig,
+    /// Phase 16 experiential self-improvement (trajectory capture).
+    #[serde(default)]
+    pub self_improvement: SelfImprovementConfig,
 }
 
 impl Config {
