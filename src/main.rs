@@ -411,6 +411,28 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
 
+    // Phase 18: register the world-memory tool when enabled (added to the plain
+    // agent's tool set; perception suites write to the same store).
+    if config.perception.world_memory {
+        let world_path = config
+            .perception
+            .world_db_path
+            .clone()
+            .unwrap_or_else(|| track0_data_path("world.db"));
+        if let Some(parent) = std::path::Path::new(&world_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match oh_ben_claw::memory::world::WorldMemory::open(&world_path) {
+            Ok(wm) => {
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::world::WorldMemoryTool::new(Arc::new(wm)),
+                ));
+                info!(path = %world_path, "Phase 18 world memory tool active");
+            }
+            Err(e) => tracing::warn!("Phase 18: failed to open world memory: {e}"),
+        }
+    }
+
     // Build the plain reasoning agent, attaching Track 0 + Phase 16 when configured.
     let mut agent = Agent::new(
         config.agent.clone(),

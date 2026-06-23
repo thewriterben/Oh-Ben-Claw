@@ -8,3 +8,4 @@ pub mod memory;
 pub mod ota;
 pub mod shell;
 pub mod vision;
+pub mod world;
