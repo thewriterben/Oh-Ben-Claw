@@ -22,12 +22,15 @@ pub mod heartbeat;
 pub mod image;
 pub mod journal;
 pub mod personality;
+pub mod trajectory;
 pub mod vector;
 
 pub use heartbeat::HeartbeatStore;
 pub use image::ImageMemoryStore;
 pub use journal::DailyJournal;
 pub use personality::PersonalityStore;
+#[allow(unused_imports)]
+pub use trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};
 
 use crate::providers::{ChatMessage, ChatRole};
 use anyhow::Result;

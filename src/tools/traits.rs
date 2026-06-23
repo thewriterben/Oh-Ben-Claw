@@ -1,7 +1,71 @@
 //! Core tool trait — the interface all agent tools must implement.
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// How large a real-world effect a tool can have if it goes wrong.
+///
+/// Drives Track 0 approval defaults: higher blast radius ⇒ stricter gating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlastRadius {
+    /// No physical/real-world effect (pure compute, reads).
+    None,
+    /// A small, contained physical effect (e.g. toggle an LED).
+    Low,
+    /// A large or hazardous physical effect (e.g. unlock a door, drive a motor).
+    High,
+}
+
+/// The physical risk profile of a tool, used by the Track 0 safety layer.
+///
+/// Non-physical, reversible tools (the default) are unaffected. Tools that
+/// actuate the real world override [`Tool::risk_class`] to declare their risk;
+/// the approval layer uses this to set default scopes (irreversible/high-blast
+/// actions default to per-call approval and are never auto-grantable to
+/// `forever`), and the safety gate uses it to require deterministic limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RiskClass {
+    /// Whether the action can be cleanly undone.
+    pub reversible: bool,
+    /// The real-world blast radius.
+    pub blast: BlastRadius,
+    /// Whether the tool drives a physical actuator / real-world effect.
+    pub physical: bool,
+}
+
+impl RiskClass {
+    /// A non-physical, reversible action (the default for ordinary tools).
+    pub const fn safe() -> Self {
+        Self {
+            reversible: true,
+            blast: BlastRadius::None,
+            physical: false,
+        }
+    }
+
+    /// A physical actuator action with the given reversibility and blast radius.
+    pub const fn physical(reversible: bool, blast: BlastRadius) -> Self {
+        Self {
+            reversible,
+            blast,
+            physical: true,
+        }
+    }
+
+    /// Whether this action must default to per-call approval (irreversible or
+    /// high-blast physical actions).
+    pub const fn requires_per_call_approval(&self) -> bool {
+        self.physical && (!self.reversible || matches!(self.blast, BlastRadius::High))
+    }
+}
+
+impl Default for RiskClass {
+    fn default() -> Self {
+        Self::safe()
+    }
+}
 
 /// The result of a tool execution.
 #[derive(Debug, Clone)]
@@ -67,6 +131,16 @@ pub trait Tool: Send + Sync {
             "type": "object",
             "properties": {}
         })
+    }
+
+    /// The physical risk profile of this tool (Track 0).
+    ///
+    /// Defaults to a non-physical, reversible action. Tools that actuate the
+    /// real world (GPIO writes, relays, motors, locks, `capture_now`, OTA, …)
+    /// MUST override this so the approval layer and safety gate treat them
+    /// accordingly.
+    fn risk_class(&self) -> RiskClass {
+        RiskClass::default()
     }
 
     /// Execute the tool with the given arguments.

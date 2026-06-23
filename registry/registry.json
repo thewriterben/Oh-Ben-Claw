@@ -1,0 +1,1060 @@
+{
+  "schema_version": 1,
+  "boards": [
+    {
+      "vid": 1155,
+      "pid": 14155,
+      "name": "nucleo-f401re",
+      "architecture": "ARM Cortex-M4 @ 84 MHz (STM32F401RE)",
+      "transport": "probe",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write",
+        "i2c",
+        "spi",
+        "pwm",
+        "rtt",
+        "flash"
+      ],
+      "vendor": "STMicroelectronics",
+      "ecosystem": "Nucleo-64",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 1155,
+      "pid": 14158,
+      "name": "nucleo-f411re",
+      "architecture": "ARM Cortex-M4 @ 100 MHz (STM32F411RE)",
+      "transport": "probe",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write",
+        "i2c",
+        "spi",
+        "pwm",
+        "rtt",
+        "flash"
+      ],
+      "vendor": "STMicroelectronics",
+      "ecosystem": "Nucleo-64",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 1155,
+      "pid": 14159,
+      "name": "nucleo-l476rg",
+      "architecture": "ARM Cortex-M4 @ 80 MHz (STM32L476RG, ultra-low-power)",
+      "transport": "probe",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write",
+        "i2c",
+        "spi",
+        "pwm",
+        "rtt",
+        "flash"
+      ],
+      "vendor": "STMicroelectronics",
+      "ecosystem": "Nucleo-64",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 1155,
+      "pid": 14157,
+      "name": "nucleo-h743zi",
+      "architecture": "ARM Cortex-M7 @ 480 MHz (STM32H743ZI)",
+      "transport": "probe",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write",
+        "i2c",
+        "spi",
+        "pwm",
+        "rtt",
+        "flash"
+      ],
+      "vendor": "STMicroelectronics",
+      "ecosystem": "Nucleo-144",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 1155,
+      "pid": 14156,
+      "name": "nucleo-g474re",
+      "architecture": "ARM Cortex-M4 @ 170 MHz (STM32G474RE, HRTIM)",
+      "transport": "probe",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write",
+        "i2c",
+        "spi",
+        "pwm",
+        "rtt",
+        "flash"
+      ],
+      "vendor": "STMicroelectronics",
+      "ecosystem": "Nucleo-64",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 9025,
+      "pid": 67,
+      "name": "arduino-uno",
+      "architecture": "AVR ATmega328P @ 16 MHz",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write"
+      ],
+      "vendor": "Arduino",
+      "ecosystem": "Uno",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 9025,
+      "pid": 1,
+      "name": "arduino-uno",
+      "architecture": "AVR ATmega328P @ 16 MHz (legacy)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write"
+      ],
+      "vendor": "Arduino",
+      "ecosystem": "Uno",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 9025,
+      "pid": 120,
+      "name": "arduino-uno-q",
+      "architecture": "Arduino Uno Q / ATmega328P",
+      "transport": "bridge",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write"
+      ],
+      "vendor": "Arduino",
+      "ecosystem": "Uno",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 9025,
+      "pid": 66,
+      "name": "arduino-mega",
+      "architecture": "AVR ATmega2560 @ 16 MHz",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write"
+      ],
+      "vendor": "Arduino",
+      "ecosystem": "Mega",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 9025,
+      "pid": 54,
+      "name": "arduino-leonardo",
+      "architecture": "AVR ATmega32U4 @ 16 MHz (native USB)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write"
+      ],
+      "vendor": "Arduino",
+      "ecosystem": "Leonardo",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 9025,
+      "pid": 88,
+      "name": "arduino-nano-every",
+      "architecture": "AVR ATmega4809 @ 20 MHz",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write"
+      ],
+      "vendor": "Arduino",
+      "ecosystem": "Nano",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 6790,
+      "pid": 29987,
+      "name": "arduino-nano",
+      "architecture": "AVR ATmega328P @ 16 MHz (CH340 USB-UART)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write"
+      ],
+      "vendor": "Arduino",
+      "ecosystem": "Nano",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 4292,
+      "pid": 60000,
+      "name": "cp2102",
+      "architecture": "Silicon Labs CP2102 USB-UART bridge",
+      "transport": "serial",
+      "capabilities": [],
+      "vendor": "Silicon Labs",
+      "ecosystem": "USB-UART",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 4292,
+      "pid": 60016,
+      "name": "cp2102n",
+      "architecture": "Silicon Labs CP2102N USB-UART bridge",
+      "transport": "serial",
+      "capabilities": [],
+      "vendor": "Silicon Labs",
+      "ecosystem": "USB-UART",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 1027,
+      "pid": 24577,
+      "name": "ftdi-ft232",
+      "architecture": "FTDI FT232 USB-UART bridge",
+      "transport": "serial",
+      "capabilities": [],
+      "vendor": "FTDI",
+      "ecosystem": "USB-UART",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 1027,
+      "pid": 24597,
+      "name": "ftdi-ft231x",
+      "architecture": "FTDI FT231X USB-UART bridge",
+      "transport": "serial",
+      "capabilities": [],
+      "vendor": "FTDI",
+      "ecosystem": "USB-UART",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 6790,
+      "pid": 21972,
+      "name": "esp32",
+      "architecture": "ESP32 Xtensa LX6 @ 240 MHz (CH340)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio"
+      ],
+      "vendor": "Espressif",
+      "ecosystem": "ESP32",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "esp32-s3",
+      "architecture": "ESP32-S3 Xtensa LX7 @ 240 MHz (native USB)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "camera_capture",
+        "audio_sample",
+        "sensor_read"
+      ],
+      "vendor": "Espressif",
+      "ecosystem": "ESP32-S3",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 4292,
+      "pid": 60000,
+      "name": "esp32-s3",
+      "architecture": "ESP32-S3 (CP2102 USB-UART)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "camera_capture",
+        "audio_sample",
+        "sensor_read"
+      ],
+      "vendor": "Espressif",
+      "ecosystem": "ESP32-S3",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 6790,
+      "pid": 21971,
+      "name": "esp32-s3",
+      "architecture": "ESP32-S3 (CH343 USB-UART)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "camera_capture",
+        "audio_sample",
+        "sensor_read"
+      ],
+      "vendor": "Espressif",
+      "ecosystem": "ESP32-S3",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 8711,
+      "pid": 13068,
+      "name": "nanopi-neo3",
+      "architecture": "Rockchip RK3328 quad-core ARM Cortex-A53 @ 1.5 GHz (AArch64)",
+      "transport": "native",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "pwm"
+      ],
+      "vendor": "FriendlyELEC",
+      "ecosystem": "NanoPi",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 11914,
+      "pid": 3,
+      "name": "raspberry-pi-pico",
+      "architecture": "RP2040 dual-core ARM Cortex-M0+ @ 133 MHz",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "pwm"
+      ],
+      "vendor": "Raspberry Pi",
+      "ecosystem": "Pico",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 11914,
+      "pid": 10,
+      "name": "raspberry-pi-pico-w",
+      "architecture": "RP2040 dual-core ARM Cortex-M0+ @ 133 MHz (Wi-Fi)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "pwm"
+      ],
+      "vendor": "Raspberry Pi",
+      "ecosystem": "Pico",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 11914,
+      "pid": 4,
+      "name": "raspberry-pi-pico2",
+      "architecture": "RP2350 dual-core ARM Cortex-M33 @ 150 MHz",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "pwm"
+      ],
+      "vendor": "Raspberry Pi",
+      "ecosystem": "Pico",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 8457,
+      "pid": 2071,
+      "name": "raspberry-pi-4",
+      "architecture": "BCM2711 quad-core ARM Cortex-A72 @ 1.8 GHz (AArch64)",
+      "transport": "native",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "pwm",
+        "camera_capture"
+      ],
+      "vendor": "Raspberry Pi",
+      "ecosystem": "Raspberry Pi",
+      "connectors": [
+        "hat_pi"
+      ]
+    },
+    {
+      "vid": 8457,
+      "pid": 2080,
+      "name": "raspberry-pi-5",
+      "architecture": "BCM2712 quad-core ARM Cortex-A76 @ 2.4 GHz (AArch64)",
+      "transport": "native",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "pwm",
+        "camera_capture"
+      ],
+      "vendor": "Raspberry Pi",
+      "ecosystem": "Raspberry Pi",
+      "connectors": [
+        "hat_pi"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "esp32-c3",
+      "architecture": "ESP32-C3 RISC-V single-core @ 160 MHz (native USB)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble"
+      ],
+      "vendor": "Espressif",
+      "ecosystem": "ESP32-C3",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 4966,
+      "pid": 4117,
+      "name": "nrf52840-dk",
+      "architecture": "Nordic nRF52840 ARM Cortex-M4F @ 64 MHz (BLE 5.0)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "ble",
+        "pwm"
+      ],
+      "vendor": "Nordic Semiconductor",
+      "ecosystem": "nRF DK",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 9025,
+      "pid": 32858,
+      "name": "arduino-nano-33-ble",
+      "architecture": "nRF52840 ARM Cortex-M4F @ 64 MHz (BLE, IMU)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "ble",
+        "sensor_read"
+      ],
+      "vendor": "Arduino",
+      "ecosystem": "Nano",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 5824,
+      "pid": 1155,
+      "name": "teensy-4.1",
+      "architecture": "NXP i.MX RT1062 ARM Cortex-M7 @ 600 MHz",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write",
+        "i2c",
+        "spi",
+        "pwm",
+        "can"
+      ],
+      "vendor": "PJRC",
+      "ecosystem": "Teensy",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 7531,
+      "pid": 260,
+      "name": "beaglebone-black",
+      "architecture": "TI AM3358 ARM Cortex-A8 @ 1 GHz",
+      "transport": "native",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "pwm",
+        "can"
+      ],
+      "vendor": "BeagleBoard",
+      "ecosystem": "BeagleBone",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 2389,
+      "pid": 28704,
+      "name": "jetson-nano",
+      "architecture": "NVIDIA Tegra X1 quad-core ARM Cortex-A57 @ 1.43 GHz (128-core Maxwell GPU)",
+      "transport": "native",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "pwm",
+        "camera_capture",
+        "cuda"
+      ],
+      "vendor": "NVIDIA",
+      "ecosystem": "Jetson",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 1155,
+      "pid": 14168,
+      "name": "stm32h7-discovery",
+      "architecture": "ARM Cortex-M7 @ 480 MHz (STM32H750, external flash)",
+      "transport": "probe",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "analog_write",
+        "i2c",
+        "spi",
+        "pwm",
+        "rtt",
+        "flash",
+        "dac"
+      ],
+      "vendor": "STMicroelectronics",
+      "ecosystem": "Discovery",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 33077,
+      "name": "waveshare-esp32-s3-touch-lcd-2.1",
+      "architecture": "ESP32-S3 Xtensa LX7 dual-core @ 240 MHz, 2.1\" round touch LCD, I2S speaker",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "audio_sample",
+        "display",
+        "touch"
+      ],
+      "vendor": "Waveshare",
+      "ecosystem": "ESP32-S3 Touch LCD",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 10374,
+      "pid": 88,
+      "name": "xiao-esp32s3-sense",
+      "architecture": "ESP32-S3 Xtensa LX7 dual-core @ 240 MHz, OV2640 camera, PDM microphone",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "camera_capture",
+        "audio_sample",
+        "sensor_read"
+      ],
+      "vendor": "Seeed Studio",
+      "ecosystem": "XIAO",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 11012,
+      "pid": 254,
+      "name": "sipeed-6plus1-mic-array",
+      "architecture": "STM32F103 @ 72 MHz, 6+1 MEMS microphone array with USB audio (UAC1)",
+      "transport": "serial",
+      "capabilities": [
+        "audio_sample",
+        "gpio"
+      ],
+      "vendor": "Sipeed",
+      "ecosystem": "MaixSense",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 1155,
+      "pid": 22336,
+      "name": "flipper-zero",
+      "architecture": "STM32WB55 ARM Cortex-M4 @ 64 MHz (multi-tool; USB CDC)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "ble",
+        "nfc",
+        "rfid",
+        "subghz",
+        "infrared"
+      ],
+      "vendor": "Flipper Devices",
+      "ecosystem": "Flipper Zero",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 4292,
+      "pid": 60000,
+      "name": "m5stack-core2",
+      "architecture": "ESP32-D0WDQ6 @ 240 MHz, 2.0\" ILI9342C touch LCD, MPU6886 IMU (CP2104; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "display",
+        "touch",
+        "imu",
+        "microsd"
+      ],
+      "vendor": "M5Stack",
+      "ecosystem": "M5 Core",
+      "connectors": [
+        "grove",
+        "mbus"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "m5stack-atom-s3",
+      "architecture": "ESP32-S3 @ 240 MHz, 0.85\" LCD, compact (native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "display"
+      ],
+      "vendor": "M5Stack",
+      "ecosystem": "M5 Atom",
+      "connectors": [
+        "grove"
+      ]
+    },
+    {
+      "vid": 6790,
+      "pid": 29987,
+      "name": "esp32-cam",
+      "architecture": "ESP32 + OV2640 camera, microSD (AI-Thinker; flashed via external USB-UART; VID/PID is a common CH340 programmer)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "wifi",
+        "camera_capture",
+        "microsd"
+      ],
+      "vendor": "AI-Thinker",
+      "ecosystem": "ESP32-CAM",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "esp32-s3-cam",
+      "architecture": "ESP32-S3 + OV2640/OV5640 camera, microSD, PSRAM (native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "wifi",
+        "ble",
+        "camera_capture",
+        "microsd"
+      ],
+      "vendor": "Espressif",
+      "ecosystem": "ESP32-S3",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 6790,
+      "pid": 29987,
+      "name": "cyd-esp32-2432s028r",
+      "architecture": "ESP32 'Cheap Yellow Display' (ESP32-2432S028R): ILI9341 320x240 + XPT2046 resistive touch, microSD (CH340; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "display",
+        "touch",
+        "microsd"
+      ],
+      "vendor": "Sunton",
+      "ecosystem": "Cheap Yellow Display",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 4292,
+      "pid": 60000,
+      "name": "lilygo-t-beam",
+      "architecture": "ESP32 + SX1276/SX1262 LoRa + NEO-6M GPS (Meshtastic-compatible; CP210x; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "wifi",
+        "ble",
+        "lora",
+        "gps"
+      ],
+      "vendor": "LILYGO",
+      "ecosystem": "T-Beam",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "heltec-wifi-lora-32-v3",
+      "architecture": "ESP32-S3 + SX1262 LoRa + 0.96\" OLED (Meshtastic-compatible; native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "lora",
+        "display"
+      ],
+      "vendor": "Heltec",
+      "ecosystem": "WiFi LoRa 32",
+      "connectors": [
+        "bare"
+      ]
+    }
+  ],
+  "accessories": [
+    {
+      "name": "bme280",
+      "description": "Bosch BME280 \u0393\u00c7\u00f6 temperature, humidity, and pressure sensor",
+      "bus": "i2c",
+      "default_i2c_addr": 118,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "bmp388",
+      "description": "Bosch BMP388 \u0393\u00c7\u00f6 high-accuracy barometric pressure and temperature",
+      "bus": "i2c",
+      "default_i2c_addr": 119,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "sht31",
+      "description": "Sensirion SHT31 \u0393\u00c7\u00f6 high-accuracy temperature and humidity",
+      "bus": "i2c",
+      "default_i2c_addr": 68,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "aht20",
+      "description": "ASAIR AHT20 \u0393\u00c7\u00f6 temperature and humidity sensor",
+      "bus": "i2c",
+      "default_i2c_addr": 56,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "mpu6050",
+      "description": "InvenSense MPU-6050 \u0393\u00c7\u00f6 6-axis accelerometer + gyroscope",
+      "bus": "i2c",
+      "default_i2c_addr": 104,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "lsm6ds3",
+      "description": "ST LSM6DS3 \u0393\u00c7\u00f6 6-axis IMU (accelerometer + gyroscope)",
+      "bus": "i2c",
+      "default_i2c_addr": 106,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "ads1115",
+      "description": "TI ADS1115 \u0393\u00c7\u00f6 16-bit 4-channel ADC with programmable gain",
+      "bus": "i2c",
+      "default_i2c_addr": 72,
+      "capabilities": [
+        "analog_read"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "mcp4725",
+      "description": "Microchip MCP4725 \u0393\u00c7\u00f6 12-bit single-channel DAC",
+      "bus": "i2c",
+      "default_i2c_addr": 96,
+      "capabilities": [
+        "dac"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "pcf8574",
+      "description": "NXP PCF8574 \u0393\u00c7\u00f6 8-bit I2C GPIO expander",
+      "bus": "i2c",
+      "default_i2c_addr": 32,
+      "capabilities": [
+        "gpio"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "mcp23017",
+      "description": "Microchip MCP23017 \u0393\u00c7\u00f6 16-bit I2C GPIO expander",
+      "bus": "i2c",
+      "default_i2c_addr": 33,
+      "capabilities": [
+        "gpio"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "max31855",
+      "description": "Maxim MAX31855 \u0393\u00c7\u00f6 thermocouple-to-digital converter (K-type)",
+      "bus": "spi",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "ds18b20",
+      "description": "Maxim DS18B20 \u0393\u00c7\u00f6 1-Wire digital temperature sensor",
+      "bus": "onewire",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "ina260",
+      "description": "TI INA260 \u0393\u00c7\u00f6 high/low-side current, voltage, and power monitor",
+      "bus": "i2c",
+      "default_i2c_addr": 64,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "ssd1306",
+      "description": "Solomon SSD1306 \u0393\u00c7\u00f6 128x64 OLED display",
+      "bus": "i2c",
+      "default_i2c_addr": 60,
+      "capabilities": [],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "dht22",
+      "description": "AOSONG DHT22 (AM2302) \u0393\u00c7\u00f6 capacitive humidity and temperature sensor, single-wire protocol",
+      "bus": "gpio",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [
+        "nanopi-neo3",
+        "raspberry-pi-4",
+        "raspberry-pi-5",
+        "esp32-s3",
+        "xiao-esp32s3-sense",
+        "waveshare-esp32-s3-touch-lcd-2.1"
+      ],
+      "connector": "bare"
+    },
+    {
+      "name": "dht11",
+      "description": "AOSONG DHT11 \u0393\u00c7\u00f6 basic humidity and temperature sensor, single-wire protocol",
+      "bus": "gpio",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "ov2640",
+      "description": "OmniVision OV2640 \u0393\u00c7\u00f6 2 MP camera image sensor (SCCB control bus)",
+      "bus": "sccb",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "camera_capture"
+      ],
+      "compatible_boards": [
+        "esp32-cam",
+        "esp32-s3-cam",
+        "xiao-esp32s3-sense"
+      ],
+      "connector": "bare"
+    },
+    {
+      "name": "ili9341",
+      "description": "ILITEK ILI9341 \u0393\u00c7\u00f6 240x320 SPI TFT LCD controller",
+      "bus": "spi",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "display"
+      ],
+      "compatible_boards": [
+        "cyd-esp32-2432s028r"
+      ],
+      "connector": "bare"
+    },
+    {
+      "name": "xpt2046",
+      "description": "XPT2046 \u0393\u00c7\u00f6 resistive touch-screen controller (SPI)",
+      "bus": "spi",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "touch"
+      ],
+      "compatible_boards": [
+        "cyd-esp32-2432s028r"
+      ],
+      "connector": "bare"
+    }
+  ]
+}

@@ -46,8 +46,10 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub mod improve;
 pub mod install_policy;
 pub mod registry;
+pub mod synthesis;
 
 // ── Skill Manifest ────────────────────────────────────────────────────────────
 

@@ -114,6 +114,32 @@ impl OrchestratorAgent {
         orchestrator_config: OrchestratorConfig,
         session_id: String,
     ) -> Result<Self> {
+        Self::new_with_track0(
+            agent_config,
+            provider_config,
+            memory,
+            orchestrator_config,
+            session_id,
+            None,
+            None,
+            None,
+        )
+    }
+
+    /// Like [`OrchestratorAgent::new`], but attaches a Track 0 safety gate
+    /// and/or tamper-evident action auditor to the orchestrator's inner
+    /// reasoning agent (the one that executes tools directly).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_track0(
+        agent_config: AgentConfig,
+        provider_config: ProviderConfig,
+        memory: Arc<MemoryStore>,
+        orchestrator_config: OrchestratorConfig,
+        session_id: String,
+        safety: Option<Arc<crate::security::SafetyGate>>,
+        auditor: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
+        trajectory: Option<Arc<crate::memory::trajectory::TrajectoryStore>>,
+    ) -> Result<Self> {
         let pool = AgentPool::new(provider_config.clone(), Arc::clone(&memory));
         let session_arc = Arc::new(Mutex::new(session_id));
 
@@ -130,7 +156,18 @@ impl OrchestratorAgent {
         // Build the provider
         let provider = providers::from_config(&provider_config)?;
 
-        let agent = Arc::new(Agent::new(config, provider, Arc::clone(&memory), tools));
+        // Track 0: attach safety gate / auditor to the inner agent before sealing it.
+        let mut inner = Agent::new(config, provider, Arc::clone(&memory), tools);
+        if let Some(gate) = safety {
+            inner = inner.with_safety_gate(gate);
+        }
+        if let Some(a) = auditor {
+            inner = inner.with_action_auditor(a);
+        }
+        if let Some(t) = trajectory {
+            inner = inner.with_trajectory_store(t);
+        }
+        let agent = Arc::new(inner);
         let handle = AgentHandle::new(Arc::clone(&agent), provider_config.clone());
 
         // Spawn pre-configured sub-agents

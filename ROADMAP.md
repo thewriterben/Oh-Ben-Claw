@@ -484,3 +484,206 @@ Phase 14's A2A implementation predates the stable v1.0 spec (Linux Foundation).
 - [x] Plan-mode approval: `ApprovedPlan` + `ArgumentBound`s; plan revoked on first violation (halt on drift)
 - [x] Shared scope vocabulary with ClawCam: adapter `ApprovalGrants` + `call_tool(scope=…)` — verified, 22/22 tests
 - [x] Approval funnel analytics per tool (asked / approved-by-scope / denied / plan violations) in both projects
+
+---
+
+# v2.0 — "Embodied Frontier"
+
+The next major version. Strategy and rationale: `docs/V2-STRATEGY.md`. Thesis:
+take the frontier agent capabilities of 2026 — experiential self-improvement,
+long-horizon autonomy, dual-system perception-action, real-time multimodal
+interaction, and physical-action safety — and realize each one **natively for an
+embodied multi-device fleet**, the position no pure-software agent can occupy.
+
+Sequencing: lead with **Phase 16 + Track 0** (highest demand × highest leverage,
+and the safety floor that makes shipping autonomy responsible). Phases 17–18 build
+the autonomy and architectural substrate; 19–20 are the user-facing payoff. Track 0
+runs underneath all of it.
+
+## Track 0: Physical-Action Safety & Trust 📋 Planned *(cross-cutting)*
+
+Physical actions are irreversible and have a real-world blast radius, so the safety
+bar sits far above software-only agents. This track lands incrementally alongside
+every phase below. Aligns Oh-Ben-Claw with the OWASP Top 10 for Agentic Applications
+(Dec 2025) and the NIST AI Agent Standards direction (Feb 2026).
+
+- [ ] **Physical-risk classification** for every tool — `reversible`/`irreversible` × `low`/`high` blast radius; drives approval defaults (e.g., actuator/lock/relay tools default to per-call approval)
+- [ ] **Deterministic, model-independent safety limits** at the actuator boundary — rate limits, value ranges, and interlocks enforced in code the LLM cannot override (`src/security/` + `src/peripherals/`)
+- [ ] **Pre-action authorization** at the tool-call boundary with cryptographically signed audit records for every physical action (extends `src/approval/` + `src/observability/`)
+- [ ] **Staged rollout** for new/synthesized physical skills: `simulate` → `supervised` → `autonomous`, promotion gated on a clean record
+- [ ] **Physical-aware approval prompts** — surface risk class, device, and concrete effect ("open GPIO 17 → unlock front door") in the approval UI
+- [ ] Embodied red-team evals: injected-malicious-skill and injected-prompt tests must not be able to drive an out-of-limit actuator command (extends Phase 15 eval harness)
+
+## Phase 16: Experiential Self-Improvement 📋 Planned *(flagship / near-term)*
+
+The agent learns reusable, verified skills from its own successful task
+trajectories — not just authored or ClawHub-installed skills. Builds directly on
+`skill_forge`, `memory`, and the agent loop. The single highest-demand frontier
+capability (the engine behind Hermes Agent's adoption), grounded so reflection is
+anchored to real verification rather than the model's own say-so.
+
+- [ ] **Trajectory capture** — record agent runs (objective, tool calls, args, results, outcome) as structured episodes (`src/memory/`)
+- [ ] **Reflection + skill synthesis** — distil a successful trajectory into a named, parameterized, reusable skill (`src/skill_forge/`)
+- [ ] **Self-verification gate** — a synthesized skill must pass concrete verification (test execution and/or sensor/camera confirmation) before it is trusted; never trust intrinsic self-report alone
+- [ ] **Learned-skill library + retrieval** — store synthesized skills in the existing local skill library (ClawHub-compatible format); retrieve relevant skills before reasoning from scratch
+- [ ] **Offline trace evolution** — GEPA/DSPy-style reflective optimization of prompts and skill descriptions from accumulated execution traces (batch/scheduled job)
+- [ ] **Safety interlock** — any synthesized skill that invokes a physical/actuator tool is registered through Track 0 (risk class + staged rollout) before it may run unattended
+- [ ] Metrics: learned-skill reuse rate; token/latency reduction on repeated routine tasks; zero unsafe auto-runs of synthesized actuator skills
+
+## Phase 17: Long-Horizon Embodied Autonomy Harness 📋 Planned
+
+Durable, resumable, self-verifying operation across hours/days and across crashes,
+reboots, and context limits — the Anthropic initializer+worker harness pattern,
+adapted so the externalized "progress file" is the **physical world state**. Builds
+on `scheduler`, `heartbeat`, `agent`, `memory`, and `runtime`. Depends on Track 0.
+
+- [ ] **Durable execution** — checkpoint agent/task state to persistent storage; resume cleanly after crash/reboot without re-running completed physical actions (model "non-persistable regions" around side-effecting tool calls)
+- [ ] **Initializer + worker split** — initializer establishes environment and an externalized world-state/objective record; worker advances one objective at a time
+- [ ] **Externalized world-state progress record** — structured (JSON) objective list with per-objective status, resilient to context compaction
+- [ ] **Mandatory self-verification before "done"** — confirm each objective via sensors/cameras/tests, not assertion; re-open objectives that fail verification on resume
+- [ ] **Resume smoke test** — on restart, re-establish context cheaply (current device states, outstanding objectives) before acting
+- [ ] Long-horizon eval: an unattended fleet completes a defined multi-hour routine across an induced crash/reboot with correct resume and no duplicated physical actions
+
+## Phase 18: Dual-System Perception-Action + World Memory 📋 Planned
+
+Adopt the architecture every 2026 robotics stack converged on — slow reasoner +
+fast reflex — backed by a persistent, temporally-aware model of the physical
+environment. The most architecturally novel, most embodied-native phase. Builds on
+`agent/edge`, `vision`, `peripherals/fusion`, and `memory`.
+
+- [ ] **System 1 (fast reflex loop)** — local, low-latency, near-deterministic responses on edge nodes (sensor threshold → actuator), runs offline; configurable per node
+- [ ] **System 2 (slow reasoner)** — cloud/host LLM invoked for planning and novelty, not every event; System 1 escalates to System 2 on uncertainty
+- [ ] **Bitemporal world memory** — persistent, queryable model of rooms/devices/states over time with validity intervals (event time + ingestion time), so stale facts are invalidated rather than lost (Graphiti-style; supersedes a separate generic graph-memory effort)
+- [ ] **Perception→memory→action wiring** — vision/sensor-fusion outputs update world memory; planning queries world memory for current and historical state
+- [ ] **Escalation policy + budget** — when System 1 hands off to System 2, with cost/latency guards
+- [ ] Eval: System 1 reflex latency budget met offline; System 2 invoked only on novelty; world-memory queries return temporally-correct device state
+
+## Phase 19: Real-Time Multimodal Interaction 📋 Planned
+
+A streaming bidirectional voice + vision session that turns existing nodes — the
+ESP32-S3 mic/speaker, the Waveshare ESP32-S3 Touch-LCD already in the board
+registry — into ambient conversational agents. Builds on `channels`, `audio`,
+`multimodal`. Pairs with Phase 20 for offline graceful degradation.
+
+- [ ] **Realtime session channel** — bidirectional streaming voice via OpenAI Realtime API (`gpt-realtime`) and/or Gemini Live API (`src/channels/`)
+- [ ] **Continuous vision input** — stream camera frames into the live session for "see and hear the room" interaction
+- [ ] **Barge-in / interruption handling** — user can interrupt; agent yields and re-plans
+- [ ] **Mid-conversation tool calls** — invoke fleet tools during a live spoken exchange (gated by Track 0 for physical actions)
+- [ ] **Reference node profile** — documented wiring + config for an ESP32-S3 + mic/speaker (and the touch-LCD) ambient device
+- [ ] Eval: end-to-end spoken-interaction latency budget met on the reference node
+
+## Phase 20: Edge-Native Intelligence 📋 Planned
+
+Make on-device inference first-class so the fleet is private, low-latency, and
+resilient offline — deepening the embodied moat. Builds on `agent/edge`,
+`providers`. Enables Phase 18's System 1 and Phase 19's graceful degradation.
+
+- [ ] **Small-model reflex tier** — first-class support for small local models powering System 1 (llama.cpp/Ollama on Pi/Jetson; TinyML on MCUs where viable)
+- [ ] **On-device wake-word + STT/TTS** — local audio front-end so devices respond without round-tripping to the cloud
+- [ ] **Policy-driven cloud fallback** — deterministic rules for escalating local → cloud (capability, confidence, connectivity), honoring cost and privacy config
+- [ ] **Edge model management** — provision/update local models per node role from the deployment planner
+- [ ] Eval: defined reflex tasks complete fully offline; correct, audited fallback to cloud when required
+
+## Hardware Ecosystem Expansion 📋 Planned *(standing track)*
+
+Maximize supported hardware breadth — ESP32 boards & ESP32-based electronics,
+sensors, microcontrollers/SBCs, **AI accelerators**, displays, radios, actuators,
+accessories, and connector ecosystems — and keep it current via an automated
+weekly scout. Design + vendor target list + intake rubric: `docs/V2-HARDWARE-ECOSYSTEM.md`.
+Most additions are host-side registry metadata (`src/peripherals/registry.rs`); only
+new transports/drivers/accelerator-inference touch firmware.
+
+### Registry model upgrades
+
+- [ ] **Connector ecosystem field** — `Connector` enum (Grove, Qwiic, STEMMA QT, STEMMA, M-Bus, FeatherWing, Pmod, Pi HAT, Bare) on `BoardInfo` + `AccessoryInfo`; advisor matches accessories to boards by connector (Qwiic ≡ STEMMA QT equivalence)
+- [ ] **`vendor` + `ecosystem` fields** on `BoardInfo` (e.g. Seeed/XIAO, Adafruit/Feather, M5Stack/M5)
+- [ ] **AI-accelerator capability tokens** — `npu`, `edge_tpu`, `hailo`, `vpu`, `kpu`, `tensor_rt`, `nn_accel` (the highest-value additions)
+- [ ] **Radio/connectivity tokens** — `lora`/`lorawan`, `zigbee`/`thread`/`matter`, `subghz`, `nfc`, `gps`, `ethernet`, `cellular`
+- [ ] **I/O/form tokens** — `epaper`, `rgb_led`/`neopixel`, `microsd`, `rtc`, `battery`/`pmic`, `motor_driver`, `relay`, `imu`, `microphone`, `speaker`; actuator-class tokens (`relay`, `motor_driver`) auto-tag a physical `RiskClass` (Track 0)
+- [ ] Connector-aware `HardwareAdvisor`/`DeploymentPlanner`; new `FeatureDesire`s: `LongRangeRadio`, `Localization`, `Actuation`
+
+### Vendor coverage (≥1 entry each, then expand the long tail)
+
+- [ ] **Espressif** — ESP32 / -S2 / -S3 / -C3 / -C6 / -H2 / -P4 devkits, ESP-EYE, ESP32-S3-BOX
+- [ ] **Seeed Studio** — XIAO (C3/C6/S3/RP2350), Grove sensor family, Grove Vision AI v2, reComputer Jetson + Hailo-8L
+- [ ] **M5Stack** — Core2/CoreS3, StickC PLUS2, AtomS3, M5 Units, LLM Module (AX630C)
+- [ ] **LILYGO** — T-Display-S3, T-Watch-S3, T-Beam (LoRa+GPS), T-Deck, T-Echo
+- [ ] **Adafruit** — Feather ESP32-S3, QT Py, RP2040/RP2350, STEMMA QT sensor catalog
+- [ ] **SparkFun** — Thing Plus, Qwiic sensor catalog, MicroMod
+- [ ] **Raspberry Pi** — Pico 2 / 2 W, RPi 5 + AI HAT+ (Hailo), AI Camera (IMX500), Sense HAT
+- [ ] **Pimoroni / DFRobot** — Pico bases, Enviro, Inky e-paper; FireBeetle ESP32, Gravity line
+- [ ] **Radxa/Rockchip** — ROCK 5 (RK3588, `npu`)
+- [ ] **NVIDIA Jetson** — Orin Nano/NX, AGX Thor (`cuda` + `tensor_rt`)
+- [ ] **Hailo / Google Coral** — Hailo-8/8L/10 (M.2/USB); Coral USB/M.2/Dev Board (`edge_tpu`)
+- [ ] **Sipeed / Kendryte** — Maix (K210), MaixCAM (K230, `kpu`)
+- [ ] **Arduino / Waveshare / Tindie long-tail** — Nano ESP32, Nicla Vision/Voice, Portenta; Waveshare ESP32-S3 displays & LoRa HATs; niche Tindie boards adding new capability
+
+### Continuous intake (recurring)
+
+- [x] **Weekly hardware scout** — scheduled task `obc-hardware-scout` (Mondays 09:00 local) scans the vendor list, proposes ranked additions with ready-to-paste registry entries + a "needs verification" list, writes a dated report to `Knowledge Base/hardware-scout-YYYY-MM-DD.md`; does not edit `registry.rs` directly
+- [ ] Triage + merge rubric applied (new capability / new ecosystem / popularity > clone/out-of-scope); merge requires verified VID/PID (or explicit bridge note) + a passing registry test
+- [ ] Per addition: registry entry with connector/vendor/ecosystem, valid/new capability tokens, a resolve test, and a linked firmware item if a new transport/driver/accelerator is implied
+
+### Firmware (only where an addition needs on-device execution)
+
+- [ ] New transport adapters as needed (CAN/RS-485 nodes, Ethernet SBCs, radio gateways)
+- [ ] New on-device sensor/peripheral drivers (reuse existing `sensor_read` dispatch where the bus exists)
+- [ ] AI-accelerator nodes (Coral/Hailo/Jetson/K230) run as edge-inference nodes via `EdgeAgent`, advertising their accelerator token and exposing local inference as a spine tool
+
+## Ecosystem Integration 📋 Planned *(standing track)*
+
+Unify the three sibling projects — **Oh-Ben-Claw** (Rust runtime/planner/firmware, canonical), the **OBC-deployment-generator** (Expo iOS/Android/web UX front door), and **Accelerapp** (Python multi-platform codegen) — into one pipeline with a single source of truth, ending the three-way drift of registry/planner/firmware. Design + phased plan: `docs/ECOSYSTEM-INTEGRATION.md`.
+
+### I1 — Registry as single source of truth *(highest-value, do first)*
+
+- [ ] Derive `Serialize`/`Deserialize` on `BoardInfo`/`AccessoryInfo`/`Connector`; add a `registry.json` exporter (cargo test / xtask / `--emit-registry`)
+- [ ] Generator imports `registry.json` and drops the hand-written `KNOWN_BOARDS` in `lib/obc-data.ts` (gains VID/PID, connectors, vendor, all 44 boards)
+- [ ] Accelerapp consumes the same `registry.json`; weekly scout → regenerate → all consumers update
+- [ ] CI check fails if `obc-data.ts` contains a hand-written board list; add `schema_version`
+
+### I2 — Deployment planner parity
+
+- [ ] Shared `inventory.json → expected.toml` golden fixtures run in both Rust (`tests/`) and TS (Vitest) suites
+- [ ] Align generator `transport` union to Rust (`serial|native|probe|bridge`; drop `mqtt`) and emit the real `[deployment]`/`[[deployment.hardware]]` schema (paste-ready into the runtime)
+
+### I3/I4 — Live-ops bridge (generator ↔ OBC gateway)
+
+- [ ] Generator backend (`server/`) proxies OBC gateway (`/api/v1/nodes|metrics|status`) — phone/web fleet console, read-only first (no-op fallback when offline)
+- [ ] Operate mode (auth-gated): push generated scheme/config to a running OBC, approve Track 0 physical actions remotely, run tools, manage scheduler
+- [ ] App board catalog refreshes `registry.json` from the live gateway
+- [ ] Security: read-only by default + explicit elevation; remote actions flow through Track 0 signed-action audit
+
+### I5/I6 — Retire remaining duplication
+
+- [ ] Compile `src/deployment` to a `wasm-bindgen` npm package; generator drops its TS planner (guaranteed parity, still offline)
+- [ ] Shared firmware template set consumed by generator + Accelerapp; align `FirmwareConfig` with real `firmware/obc-esp32-s3` + v2.0 firmware (SafetyGate/reflex); route multi-platform targets to Accelerapp codegen
+
+## Embodied Subsystem Suites 📋 Planned *(standing track)*
+
+Generalize ClawCam's "capability suite plugged into the brain" pattern into a reusable **Subsystem Suite** contract, and instantiate it for **Vision (ClawCam)**, **Sensing**, and **Movement** — each a complete system that perceives/acts, **remembers, learns, improves, and accelerates**, sharing one world memory and one safety layer. Design: `docs/SUBSYSTEM-SUITES.md`. Architectural decision: suites stay separate repos bound by the contract (MCP tools + spine + world memory + Track 0), not merged.
+
+### The Subsystem Suite contract
+- [ ] Formalize the 8-point contract (perceive/act · connect · remember · learn · improve · accelerate · stay-safe · observe) as a shared standard in OBC + suite repos
+
+### Vision Suite (ClawCam) — the reference implementation
+- [ ] **S0 Consolidate:** fix ClawCam tool-catalog drift (stale 5-tool JSON, 16-vs-32 HTTP listing, lagging docs); commit cross-repo `NEXT_PHASE_PLAN.md`; finish Phase 13↔15 lockstep (plan-mode approval w/ arg bounds; wire `tests/evals` into CI)
+- [ ] **S1 Remember (→ Phase 18):** implement ClawCam's documented review-state model; add re-identification/embeddings; feed subjects as entities into OBC bitemporal world memory (valid-time intervals, non-destructive corrections)
+- [ ] **S2 Learn (→ Phase 16):** active-learning loop — low-confidence/novel detections → review queue → human/brain correction (ground-truth signal) → improve thresholds/heads + synthesize skills
+- [ ] **S3 Accelerate (→ Phase 20/18):** register real models (MegaDetector/BirdNET weights, SpeciesNet) + accelerator detectors (Hailo/Coral/Jetson; ESP-DL/LiteRT-Micro on ESP32-S3-EYE); dual-system fast-trigger/slow-inference split
+- [ ] **S4 Safe:** assign `RiskClass` to every world-changing vision tool; route through Track 0 signed audit + staged rollout; use ClawCam's cron engine as a Phase 17 autonomy-loop instance
+
+### Sensing Suite
+- [ ] Instantiate the contract: read sensors/fusion → world memory as time-valid facts; on-node reflex rules (Phase 18 System 1); learned thresholds; edge-accelerated fusion
+
+### Movement Suite *(highest-risk — Track 0 must be mature first)*
+- [ ] Instantiate the contract for actuators (GPIO/relay/motor/servo/pan-tilt): deterministic on-MCU safety limits, physical risk class, staged rollout, signed audit
+- [ ] Closed-loop composition: Vision detects → world memory → brain/reflex commands Movement to track (vision-driven actuation); learned movement skills gated by Track 0
+
+---
+
+> **Beyond v2.0 (watch list, not scope):** integrating an on-device VLA (GR00T /
+> Gemini Robotics On-Device / π-class) as a *peripheral capability* once a node has
+> a real manipulator; world-model-generated synthetic scenarios (Cosmos/Genie/Marble
+> style) for offline skill rehearsal. Explicit non-goals: building our own
+> motor-control VLA, and broadening into a general software-agent runtime — both
+> forfeit the embodied moat.

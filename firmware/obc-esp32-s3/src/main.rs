@@ -492,7 +492,33 @@ fn gpio_read(pin: i32) -> anyhow::Result<u32> {
     Ok(level as u32)
 }
 
+/// Maximum permitted GPIO output level (digital high). Track 0 deterministic limit.
+const GPIO_VALUE_MAX: u64 = 1;
+
+/// Deterministic, model-independent safety gate for actuator writes (Track 0).
+///
+/// Enforced on the MCU itself, so a compromised host, a poisoned skill, or a
+/// hallucinated tool call still cannot drive a pin outside policy. Default-deny:
+/// only pins configured as outputs (`OUTPUT_PINS`) may be written, and only to a
+/// valid digital level.
+///
+/// NOTE (v2.0 Track 0): the allow-list and value range will become NVS-backed
+/// and pushed from the host over the retained `obc/nodes/{id}/limits` topic; a
+/// rate limit (min interval) lands with a monotonic-clock source. For now the
+/// limits are compile-time constants mirroring the boot output-pin set.
+fn safety_check_gpio_write(pin: i32, value: u64) -> anyhow::Result<()> {
+    if !OUTPUT_PINS.contains(&pin) {
+        anyhow::bail!("safety: pin {} not in output allow-list", pin);
+    }
+    if value > GPIO_VALUE_MAX {
+        anyhow::bail!("safety: value {} out of range (max {})", value, GPIO_VALUE_MAX);
+    }
+    Ok(())
+}
+
 fn gpio_write(pin: i32, value: u64) -> anyhow::Result<()> {
+    // Track 0: refuse out-of-policy actuator commands BEFORE touching hardware.
+    safety_check_gpio_write(pin, value)?;
     let ret = unsafe { esp_idf_svc::sys::gpio_set_level(pin, value as u32) };
     if ret != esp_idf_svc::sys::ESP_OK {
         anyhow::bail!("gpio_set_level failed for pin {} with error {}", pin, ret);
