@@ -303,9 +303,12 @@ mod tests {
             a.record(1, "n", "gpio_write", &json!({"pin":17,"value":1}), high_risk(), Decision::Allowed).unwrap();
             a.record(2, "n", "gpio_write", &json!({"pin":17,"value":0}), high_risk(), Decision::Allowed).unwrap();
         }
-        // Tamper: flip a denied action to allowed in the first record.
+        // Tamper a field that is actually stored in the record. (The raw args
+        // are NOT stored — only their SHA-256 — so we edit the tool name, which
+        // is part of the MAC's canonical input.)
         let contents = std::fs::read_to_string(&path).unwrap();
-        let tampered = contents.replacen("\"value\":1", "\"value\":1,\"x\":true", 1);
+        let tampered = contents.replacen("gpio_write", "gpio_hack", 1);
+        assert_ne!(tampered, contents, "tamper must actually change the file");
         std::fs::write(&path, tampered).unwrap();
 
         let err = verify(&path, key).unwrap_err();

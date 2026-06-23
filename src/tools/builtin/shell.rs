@@ -1,6 +1,6 @@
 //! Shell execution tool — run shell commands and return their output.
 
-use crate::tools::traits::{Tool, ToolResult};
+use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::process::Command;
@@ -51,6 +51,19 @@ impl Tool for ShellTool {
             },
             "required": ["command"]
         })
+    }
+
+    fn risk_class(&self) -> RiskClass {
+        // Shell commands are side-effecting and not safely re-runnable, so the
+        // self-improvement loop must never auto-verify a learned skill by
+        // replaying them. Not `physical` (no actuator), so the Track 0 gate is
+        // unaffected; the non-`None` blast radius + irreversibility signal the
+        // improver to quarantine rather than replay.
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::Low,
+            physical: false,
+        }
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {

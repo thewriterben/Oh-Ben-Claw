@@ -16,6 +16,7 @@
 use super::synthesis::{approve, synthesize, tag_physical, touches_actuator};
 use super::{SkillForge, SkillKind};
 use crate::memory::trajectory::{Outcome, TrajectoryStore};
+use crate::tools::traits::{BlastRadius, RiskClass};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -25,6 +26,12 @@ use std::sync::Arc;
 pub trait ReplayExecutor: Send + Sync {
     /// Replay a tool call and report whether it succeeded.
     async fn replay(&self, tool: &str, args: &Value) -> Outcome;
+
+    /// The declared physical-risk of a tool by name. Defaults to safe (so an
+    /// executor that doesn't track risk treats tools as replayable).
+    fn risk_of(&self, _tool: &str) -> RiskClass {
+        RiskClass::safe()
+    }
 }
 
 /// The agent itself is a replay executor (runs the tool through its normal
@@ -37,6 +44,16 @@ impl ReplayExecutor for crate::agent::Agent {
             _ => Outcome::Failure,
         }
     }
+
+    fn risk_of(&self, tool: &str) -> RiskClass {
+        self.tool_risk(tool)
+    }
+}
+
+/// Whether a tool is safe to re-run for verification: no physical effect,
+/// reversible, and no real-world blast radius.
+fn safe_to_replay(risk: RiskClass) -> bool {
+    risk.reversible && !risk.physical && matches!(risk.blast, BlastRadius::None)
 }
 
 /// Summary of one improvement pass.
@@ -115,8 +132,20 @@ impl SkillImprover {
                 continue;
             }
 
-            // Track 0 interlock: physical skills are never auto-verified/enabled.
-            if touches_actuator(ep, &physical_refs) {
+            // Quarantine (never auto-verify/enable) if the skill is unsafe to
+            // re-run: any actuator in the episode (Track 0 name list) OR the
+            // delegate tool's declared RiskClass is not safe to replay
+            // (irreversible / has blast radius / physical). Such skills are
+            // installed disabled for staged operator promotion.
+            let delegate_tool: Option<&str> = match &candidate.kind {
+                SkillKind::Delegate { tool, .. } => Some(tool.as_str()),
+                _ => None,
+            };
+            let replay_unsafe = match delegate_tool {
+                Some(t) => physical_refs.contains(&t) || !safe_to_replay(executor.risk_of(t)),
+                None => true,
+            };
+            if touches_actuator(ep, &physical_refs) || replay_unsafe {
                 let supervised = tag_physical(candidate); // stays disabled
                 if self.forge.install_skill(&supervised).is_ok() {
                     report.pending_supervised.push(supervised.name);
@@ -208,6 +237,21 @@ mod tests {
         async fn replay(&self, _tool: &str, _args: &Value) -> Outcome {
             self.0
         }
+        // risk_of uses the trait default (safe) — these tools are replayable.
+    }
+
+    struct MockExecWithRisk {
+        outcome: Outcome,
+        risk: RiskClass,
+    }
+    #[async_trait::async_trait]
+    impl ReplayExecutor for MockExecWithRisk {
+        async fn replay(&self, _tool: &str, _args: &Value) -> Outcome {
+            self.outcome
+        }
+        fn risk_of(&self, _tool: &str) -> RiskClass {
+            self.risk
+        }
     }
 
     fn tmp_dir(tag: &str) -> std::path::PathBuf {
@@ -298,6 +342,31 @@ mod tests {
             .unwrap();
         assert!(!m.enabled, "physical learned skill must stay disabled");
         assert!(m.tags.iter().any(|t| t == "track0:supervised"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn unsafe_risk_tool_quarantined_without_name_list() {
+        let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
+        traj.record(&episode("e1", "clean up files", "shell")).unwrap();
+        let dir = tmp_dir("risk");
+        // Empty actuator name list — gating relies purely on declared RiskClass.
+        let improver = SkillImprover::new(Arc::clone(&traj), SkillForge::new(&dir), vec![], 100);
+        let exec = MockExecWithRisk {
+            outcome: Outcome::Success,
+            // Non-physical but irreversible with a blast radius (e.g. `shell`).
+            risk: RiskClass {
+                reversible: false,
+                blast: BlastRadius::Low,
+                physical: false,
+            },
+        };
+        let report = improver.run_once(&exec, 0).await.unwrap();
+        assert!(report.installed.is_empty(), "side-effecting tool must not auto-install");
+        assert_eq!(
+            report.pending_supervised,
+            vec!["learned_clean_up_files".to_string()]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

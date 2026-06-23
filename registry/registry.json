@@ -836,7 +836,7 @@
   "accessories": [
     {
       "name": "bme280",
-      "description": "Bosch BME280 \u0393\u00c7\u00f6 temperature, humidity, and pressure sensor",
+      "description": "Bosch BME280 — temperature, humidity, and pressure sensor",
       "bus": "i2c",
       "default_i2c_addr": 118,
       "capabilities": [
@@ -847,7 +847,7 @@
     },
     {
       "name": "bmp388",
-      "description": "Bosch BMP388 \u0393\u00c7\u00f6 high-accuracy barometric pressure and temperature",
+      "description": "Bosch BMP388 — high-accuracy barometric pressure and temperature",
       "bus": "i2c",
       "default_i2c_addr": 119,
       "capabilities": [
@@ -858,7 +858,7 @@
     },
     {
       "name": "sht31",
-      "description": "Sensirion SHT31 \u0393\u00c7\u00f6 high-accuracy temperature and humidity",
+      "description": "Sensirion SHT31 — high-accuracy temperature and humidity",
       "bus": "i2c",
       "default_i2c_addr": 68,
       "capabilities": [
@@ -869,7 +869,7 @@
     },
     {
       "name": "aht20",
-      "description": "ASAIR AHT20 \u0393\u00c7\u00f6 temperature and humidity sensor",
+      "description": "ASAIR AHT20 — temperature and humidity sensor",
       "bus": "i2c",
       "default_i2c_addr": 56,
       "capabilities": [
@@ -880,7 +880,7 @@
     },
     {
       "name": "mpu6050",
-      "description": "InvenSense MPU-6050 \u0393\u00c7\u00f6 6-axis accelerometer + gyroscope",
+      "description": "InvenSense MPU-6050 — 6-axis accelerometer + gyroscope",
       "bus": "i2c",
       "default_i2c_addr": 104,
       "capabilities": [
@@ -891,7 +891,7 @@
     },
     {
       "name": "lsm6ds3",
-      "description": "ST LSM6DS3 \u0393\u00c7\u00f6 6-axis IMU (accelerometer + gyroscope)",
+      "description": "ST LSM6DS3 — 6-axis IMU (accelerometer + gyroscope)",
       "bus": "i2c",
       "default_i2c_addr": 106,
       "capabilities": [
@@ -902,7 +902,7 @@
     },
     {
       "name": "ads1115",
-      "description": "TI ADS1115 \u0393\u00c7\u00f6 16-bit 4-channel ADC with programmable gain",
+      "description": "TI ADS1115 — 16-bit 4-channel ADC with programmable gain",
       "bus": "i2c",
       "default_i2c_addr": 72,
       "capabilities": [
@@ -913,7 +913,7 @@
     },
     {
       "name": "mcp4725",
-      "description": "Microchip MCP4725 \u0393\u00c7\u00f6 12-bit single-channel DAC",
+      "description": "Microchip MCP4725 — 12-bit single-channel DAC",
       "bus": "i2c",
       "default_i2c_addr": 96,
       "capabilities": [
@@ -924,7 +924,7 @@
     },
     {
       "name": "pcf8574",
-      "description": "NXP PCF8574 \u0393\u00c7\u00f6 8-bit I2C GPIO expander",
+      "description": "NXP PCF8574 — 8-bit I2C GPIO expander",
       "bus": "i2c",
       "default_i2c_addr": 32,
       "capabilities": [
@@ -935,7 +935,7 @@
     },
     {
       "name": "mcp23017",
-      "description": "Microchip MCP23017 \u0393\u00c7\u00f6 16-bit I2C GPIO expander",
+      "description": "Microchip MCP23017 — 16-bit I2C GPIO expander",
       "bus": "i2c",
       "default_i2c_addr": 33,
       "capabilities": [
@@ -946,7 +946,7 @@
     },
     {
       "name": "max31855",
-      "description": "Maxim MAX31855 \u0393\u00c7\u00f6 thermocouple-to-digital converter (K-type)",
+      "description": "Maxim MAX31855 — thermocouple-to-digital converter (K-type)",
       "bus": "spi",
       "default_i2c_addr": null,
       "capabilities": [
@@ -957,7 +957,7 @@
     },
     {
       "name": "ds18b20",
-      "description": "Maxim DS18B20 \u0393\u00c7\u00f6 1-Wire digital temperature sensor",
+      "description": "Maxim DS18B20 — 1-Wire digital temperature sensor",
       "bus": "onewire",
       "default_i2c_addr": null,
       "capabilities": [
@@ -968,7 +968,7 @@
     },
     {
       "name": "ina260",
-      "description": "TI INA260 \u0393\u00c7\u00f6 high/low-side current, voltage, and power monitor",
+      "description": "TI INA260 — high/low-side current, voltage, and power monitor",
       "bus": "i2c",
       "default_i2c_addr": 64,
       "capabilities": [
@@ -979,7 +979,7 @@
     },
     {
       "name": "ssd1306",
-      "description": "Solomon SSD1306 \u0393\u00c7\u00f6 128x64 OLED display",
+      "description": "Solomon SSD1306 — 128x64 OLED display",
       "bus": "i2c",
       "default_i2c_addr": 60,
       "capabilities": [],
@@ -988,7 +988,7 @@
     },
     {
       "name": "dht22",
-      "description": "AOSONG DHT22 (AM2302) \u0393\u00c7\u00f6 capacitive humidity and temperature sensor, single-wire protocol",
+      "description": "AOSONG DHT22 (AM2302) — capacitive humidity and temperature sensor, single-wire protocol",
       "bus": "gpio",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1006,7 +1006,7 @@
     },
     {
       "name": "dht11",
-      "description": "AOSONG DHT11 \u0393\u00c7\u00f6 basic humidity and temperature sensor, single-wire protocol",
+      "description": "AOSONG DHT11 — basic humidity and temperature sensor, single-wire protocol",
       "bus": "gpio",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1017,7 +1017,7 @@
     },
     {
       "name": "ov2640",
-      "description": "OmniVision OV2640 \u0393\u00c7\u00f6 2 MP camera image sensor (SCCB control bus)",
+      "description": "OmniVision OV2640 — 2 MP camera image sensor (SCCB control bus)",
       "bus": "sccb",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1032,7 +1032,7 @@
     },
     {
       "name": "ili9341",
-      "description": "ILITEK ILI9341 \u0393\u00c7\u00f6 240x320 SPI TFT LCD controller",
+      "description": "ILITEK ILI9341 — 240x320 SPI TFT LCD controller",
       "bus": "spi",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1045,7 +1045,7 @@
     },
     {
       "name": "xpt2046",
-      "description": "XPT2046 \u0393\u00c7\u00f6 resistive touch-screen controller (SPI)",
+      "description": "XPT2046 — resistive touch-screen controller (SPI)",
       "bus": "spi",
       "default_i2c_addr": null,
       "capabilities": [

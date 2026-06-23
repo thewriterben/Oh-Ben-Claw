@@ -449,7 +449,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 config.self_improvement.max_learned.unwrap_or(500),
             );
             let executor: Arc<dyn oh_ben_claw::skill_forge::improve::ReplayExecutor> =
-                Arc::clone(&agent);
+                agent.clone();
             let interval = std::time::Duration::from_secs(
                 config.self_improvement.interval_secs.unwrap_or(3600),
             );

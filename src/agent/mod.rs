@@ -448,6 +448,15 @@ impl Agent {
         self.tools.len()
     }
 
+    /// The declared physical-risk of a registered tool (default-safe if unknown).
+    pub fn tool_risk(&self, name: &str) -> RiskClass {
+        self.tools
+            .iter()
+            .find(|t| t.name() == name)
+            .map(|t| t.risk_class())
+            .unwrap_or_default()
+    }
+
     /// Clear all conversation history for the given session.
     pub fn clear_session(&self, session_id: &str) -> anyhow::Result<()> {
         self.memory.clear_session(session_id)
