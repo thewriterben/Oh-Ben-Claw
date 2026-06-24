@@ -275,6 +275,18 @@ impl SpineClient {
         self.node_registry.read().await.clone()
     }
 
+    /// Publish a JSON payload to an arbitrary spine topic (used by reflex
+    /// actions, escalation events, etc.). Errors if the spine isn't connected.
+    pub async fn publish(&self, topic: &str, payload: &Value) -> Result<()> {
+        let client = self
+            .mqtt_client
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Spine not connected"))?;
+        let bytes = serde_json::to_vec(payload)?;
+        client.publish(topic, QoS::AtLeastOnce, false, bytes).await?;
+        Ok(())
+    }
+
     /// Build a list of `Box<dyn Tool>` from all currently known MQTT nodes.
     pub async fn build_mqtt_tools(self: &Arc<Self>) -> Vec<Box<dyn Tool>> {
         let registry = self.node_registry.read().await;

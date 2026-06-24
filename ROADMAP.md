@@ -555,7 +555,7 @@ environment. The most architecturally novel, most embodied-native phase. Builds 
 - [ ] **System 2 (slow reasoner)** — cloud/host LLM invoked for planning and novelty, not every event; System 1 escalates to System 2 on uncertainty
 - [x] **Bitemporal world memory** — persistent, queryable model of rooms/devices/states over time with validity intervals (valid time + transaction time), so stale facts are invalidated rather than lost; `src/memory/world.rs` (`observe`/`current`/`at`/`history`/`entities`), non-destructive, 5 tests. (Full as-of-transaction-time queries: follow-up.)
 - [x] **Perception→memory→action wiring** — sensor-fusion outputs update world memory (`FusionRegistry::observe_into` → `sensor.{quantity}` facts); planning queries via the `world_memory` tool. (Vision→world-memory lands with the ClawCam vision suite.)
-- [ ] **Escalation policy + budget** — when System 1 hands off to System 2, with cost/latency guards
+- [x] **Escalation policy + budget** — `EscalationBudget` (sliding-window, `[reflex].max_escalations_per_min`) caps System 1 → System 2 hand-offs; reflex actions dispatch via `SpineActionSink` (GPIO over the spine, bounded by node Track 0) or the dry-run logging sink. (On-MCU reflex mirror: firmware follow-up.)
 - [ ] Eval: System 1 reflex latency budget met offline; System 2 invoked only on novelty; world-memory queries return temporally-correct device state
 
 ## Phase 19: Real-Time Multimodal Interaction 📋 Planned

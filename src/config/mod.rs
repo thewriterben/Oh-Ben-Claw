@@ -1265,6 +1265,9 @@ pub struct ReflexConfig {
     /// How often (ms) to evaluate the rules. Default 1000.
     #[serde(default)]
     pub interval_ms: Option<u64>,
+    /// Max escalations to System 2 (the LLM) per minute. `None`/0 = unlimited.
+    #[serde(default)]
+    pub max_escalations_per_min: Option<u32>,
     /// The reflex rules to evaluate.
     #[serde(default)]
     pub rules: Vec<crate::agent::reflex::ReflexRule>,
