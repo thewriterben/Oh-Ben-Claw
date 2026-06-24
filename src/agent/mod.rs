@@ -9,6 +9,7 @@ pub mod edge;
 pub mod handle;
 pub mod orchestrator;
 pub mod pool;
+pub mod reflex;
 pub mod reflexion;
 pub mod streaming;
 pub use edge::{EdgeAgent, EdgeAgentBuilder};

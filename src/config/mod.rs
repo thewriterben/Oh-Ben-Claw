@@ -1253,6 +1253,23 @@ pub struct PerceptionConfig {
     pub world_db_path: Option<String>,
 }
 
+/// Phase 18 dual-system reflex configuration (`[reflex]`). System 1: fast local
+/// rules evaluated against world memory on a cadence. Requires `[perception]
+/// world_memory = true`. Actions run via the safe dry-run logging sink until the
+/// real spine sink is wired.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ReflexConfig {
+    /// Enable the reflex controller loop.
+    #[serde(default)]
+    pub enabled: bool,
+    /// How often (ms) to evaluate the rules. Default 1000.
+    #[serde(default)]
+    pub interval_ms: Option<u64>,
+    /// The reflex rules to evaluate.
+    #[serde(default)]
+    pub rules: Vec<crate::agent::reflex::ReflexRule>,
+}
+
 /// Phase 16 experiential self-improvement configuration (`[self_improvement]`).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SelfImprovementConfig {
@@ -1329,6 +1346,9 @@ pub struct Config {
     /// Phase 18 perception (world memory).
     #[serde(default)]
     pub perception: PerceptionConfig,
+    /// Phase 18 dual-system reflexes (System 1).
+    #[serde(default)]
+    pub reflex: ReflexConfig,
 }
 
 impl Config {

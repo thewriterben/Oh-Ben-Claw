@@ -551,10 +551,10 @@ fast reflex — backed by a persistent, temporally-aware model of the physical
 environment. The most architecturally novel, most embodied-native phase. Builds on
 `agent/edge`, `vision`, `peripherals/fusion`, and `memory`.
 
-- [ ] **System 1 (fast reflex loop)** — local, low-latency, near-deterministic responses on edge nodes (sensor threshold → actuator), runs offline; configurable per node
+- [x] **System 1 (fast reflex loop)** — host-side `ReflexEngine` (`src/agent/reflex.rs`): conditions (sensor/gpio/and/or), actions (gpio_write/publish/escalate), debounce + rate limit, serde wire format for pushing to nodes; 8 tests. (On-MCU mirror of the evaluator: firmware follow-up.)
 - [ ] **System 2 (slow reasoner)** — cloud/host LLM invoked for planning and novelty, not every event; System 1 escalates to System 2 on uncertainty
 - [x] **Bitemporal world memory** — persistent, queryable model of rooms/devices/states over time with validity intervals (valid time + transaction time), so stale facts are invalidated rather than lost; `src/memory/world.rs` (`observe`/`current`/`at`/`history`/`entities`), non-destructive, 5 tests. (Full as-of-transaction-time queries: follow-up.)
-- [ ] **Perception→memory→action wiring** — vision/sensor-fusion outputs update world memory; planning queries world memory for current and historical state
+- [x] **Perception→memory→action wiring** — sensor-fusion outputs update world memory (`FusionRegistry::observe_into` → `sensor.{quantity}` facts); planning queries via the `world_memory` tool. (Vision→world-memory lands with the ClawCam vision suite.)
 - [ ] **Escalation policy + budget** — when System 1 hands off to System 2, with cost/latency guards
 - [ ] Eval: System 1 reflex latency budget met offline; System 2 invoked only on novelty; world-memory queries return temporally-correct device state
 

@@ -1,0 +1,540 @@
+//! Dual-system reflex engine — System 1 (Phase 18).
+//!
+//! The agent's LLM is **System 2**: slow, general, cloud/host-side reasoning.
+//! This module is **System 1**: fast, local, near-deterministic reflexes that
+//! react to world state without waking the LLM. A reflex is a rule — *when this
+//! condition holds, do this action* — subject to debounce and rate limits.
+//!
+//! Rules are authored on the host and serialize to a compact form so they can be
+//! pushed to peripheral nodes (over `obc/nodes/{id}/reflex`) and evaluated there
+//! with no host in the loop. This type *is* the wire format; the same evaluator
+//! runs host-side (e.g. against world memory) and, mirrored, on the node.
+//!
+//! Safety: an [`Action::GpioWrite`] is still bounded by the node's deterministic
+//! `SafetyGate` (Track 0) — a reflex can request an actuator change but cannot
+//! exceed the on-MCU limits. [`Action::Escalate`] hands control up to System 2.
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+
+/// Extract a numeric value from a world-memory fact value: a number, a bool
+/// (1.0/0.0), a numeric string, or a sensor-fusion object `{"value": …}`.
+fn fact_to_f64(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n.as_f64(),
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Value::String(s) => s.parse().ok(),
+        Value::Object(o) => o.get("value").and_then(fact_to_f64),
+        _ => None,
+    }
+}
+
+/// Comparison operator for a sensor condition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Cmp {
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    Eq,
+    Ne,
+}
+
+impl Cmp {
+    fn test(self, a: f64, b: f64) -> bool {
+        const EPS: f64 = 1e-9;
+        match self {
+            Cmp::Gt => a > b,
+            Cmp::Ge => a >= b,
+            Cmp::Lt => a < b,
+            Cmp::Le => a <= b,
+            Cmp::Eq => (a - b).abs() < EPS,
+            Cmp::Ne => (a - b).abs() >= EPS,
+        }
+    }
+}
+
+/// A condition evaluated against a snapshot of current world state
+/// (`entity -> numeric value`). A missing entity makes the leaf condition false.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum Condition {
+    /// Compare a sensor/entity numeric value (e.g. `living_room.temp > 28`).
+    Sensor { entity: String, op: Cmp, value: f64 },
+    /// A GPIO/entity equals an integer value.
+    GpioEq { entity: String, value: i64 },
+    /// All sub-conditions hold.
+    And { all: Vec<Condition> },
+    /// Any sub-condition holds.
+    Or { any: Vec<Condition> },
+}
+
+impl Condition {
+    /// Evaluate against a snapshot of entity → numeric value.
+    pub fn eval(&self, snapshot: &HashMap<String, f64>) -> bool {
+        match self {
+            Condition::Sensor { entity, op, value } => {
+                snapshot.get(entity).is_some_and(|v| op.test(*v, *value))
+            }
+            Condition::GpioEq { entity, value } => snapshot
+                .get(entity)
+                .is_some_and(|v| Cmp::Eq.test(*v, *value as f64)),
+            Condition::And { all } => all.iter().all(|c| c.eval(snapshot)),
+            Condition::Or { any } => any.iter().any(|c| c.eval(snapshot)),
+        }
+    }
+
+    /// Collect all entity names this condition references (for snapshotting).
+    pub fn collect_entities(&self, set: &mut HashSet<String>) {
+        match self {
+            Condition::Sensor { entity, .. } | Condition::GpioEq { entity, .. } => {
+                set.insert(entity.clone());
+            }
+            Condition::And { all } => all.iter().for_each(|c| c.collect_entities(set)),
+            Condition::Or { any } => any.iter().for_each(|c| c.collect_entities(set)),
+        }
+    }
+}
+
+/// The action a fired reflex performs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum Action {
+    /// Drive a node's GPIO pin (still bounded by the node's Track 0 `SafetyGate`).
+    GpioWrite { node_id: String, pin: i64, value: i64 },
+    /// Publish a payload to a spine topic.
+    Publish { topic: String, payload: Value },
+    /// Hand control up to System 2 (wake the LLM agent) with a reason.
+    Escalate { reason: String },
+}
+
+/// A reflex rule: when `when` holds, perform `then`, subject to debounce/rate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReflexRule {
+    /// Unique id.
+    pub id: String,
+    /// The condition that triggers the rule.
+    pub when: Condition,
+    /// The action to perform.
+    pub then: Action,
+    /// Minimum ms between fires of this rule.
+    #[serde(default)]
+    pub debounce_ms: u64,
+    /// Optional max firing rate (Hz); the larger of this interval and
+    /// `debounce_ms` is enforced.
+    #[serde(default)]
+    pub max_rate_hz: Option<f64>,
+}
+
+impl ReflexRule {
+    /// The minimum interval (ms) between fires implied by `debounce_ms` + `max_rate_hz`.
+    fn min_interval_ms(&self) -> u64 {
+        let rate_ms = self
+            .max_rate_hz
+            .filter(|hz| *hz > 0.0)
+            .map(|hz| (1000.0 / hz).ceil() as u64)
+            .unwrap_or(0);
+        self.debounce_ms.max(rate_ms)
+    }
+}
+
+/// A reflex that fired this tick.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FiredReflex {
+    /// The rule that fired.
+    pub rule_id: String,
+    /// The action to perform.
+    pub action: Action,
+}
+
+/// Evaluates a set of [`ReflexRule`]s against world snapshots, with per-rule
+/// debounce/rate state. Cheap to evaluate; runs on the host (against world
+/// memory) and, mirrored, on the node.
+#[derive(Debug, Default)]
+pub struct ReflexEngine {
+    rules: Vec<ReflexRule>,
+    last_fire: Mutex<HashMap<String, u64>>,
+}
+
+impl ReflexEngine {
+    /// Build an engine from a set of rules.
+    pub fn new(rules: Vec<ReflexRule>) -> Self {
+        Self {
+            rules,
+            last_fire: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Number of rules.
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+
+    /// Evaluate all rules against `snapshot` at `now_ms`; returns the actions to
+    /// perform (respecting debounce/rate), and records fire times.
+    pub fn evaluate(&self, snapshot: &HashMap<String, f64>, now_ms: u64) -> Vec<FiredReflex> {
+        let mut guard = self
+            .last_fire
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let mut fired = Vec::new();
+        for rule in &self.rules {
+            if !rule.when.eval(snapshot) {
+                continue;
+            }
+            let min_interval = rule.min_interval_ms();
+            if min_interval > 0 {
+                if let Some(&last) = guard.get(&rule.id) {
+                    if now_ms.saturating_sub(last) < min_interval {
+                        continue;
+                    }
+                }
+            }
+            guard.insert(rule.id.clone(), now_ms);
+            fired.push(FiredReflex {
+                rule_id: rule.id.clone(),
+                action: rule.then.clone(),
+            });
+        }
+        fired
+    }
+
+    /// All entity names referenced by any rule's condition.
+    pub fn referenced_entities(&self) -> HashSet<String> {
+        let mut set = HashSet::new();
+        for rule in &self.rules {
+            rule.when.collect_entities(&mut set);
+        }
+        set
+    }
+
+    /// Build a snapshot from the *current* world-memory facts of the referenced
+    /// entities, then evaluate. This is the host-side System 1 loop: perception
+    /// (world memory) → reflexes → actions. The caller dispatches the returned
+    /// actions (GPIO writes over the spine — bounded by Track 0 — publishes, or
+    /// escalation to the LLM agent).
+    pub fn tick(
+        &self,
+        world: &crate::memory::world::WorldMemory,
+        now_ms: u64,
+    ) -> anyhow::Result<Vec<FiredReflex>> {
+        let mut snapshot = HashMap::new();
+        for entity in self.referenced_entities() {
+            if let Some(fact) = world.current(&entity)? {
+                if let Some(v) = fact_to_f64(&fact.value) {
+                    snapshot.insert(entity, v);
+                }
+            }
+        }
+        Ok(self.evaluate(&snapshot, now_ms))
+    }
+}
+
+// ── Dispatch (System 1 output) ──────────────────────────────────────────────────
+
+/// Performs the actions a reflex fires. Implementations route to the real world:
+/// a GPIO write over the spine (bounded by the node's Track 0 `SafetyGate`), a
+/// publish to a spine topic, or an escalation that wakes the LLM agent (System 2).
+#[async_trait]
+pub trait ActionSink: Send + Sync {
+    /// Drive a node's GPIO pin.
+    async fn gpio_write(&self, node_id: &str, pin: i64, value: i64) -> anyhow::Result<()>;
+    /// Publish a payload to a spine topic.
+    async fn publish(&self, topic: &str, payload: &Value) -> anyhow::Result<()>;
+    /// Hand control to System 2 (the LLM agent) with a reason.
+    async fn escalate(&self, reason: &str) -> anyhow::Result<()>;
+}
+
+/// Dispatch fired reflex actions to a sink, in order.
+pub async fn dispatch(actions: &[FiredReflex], sink: &dyn ActionSink) -> anyhow::Result<()> {
+    for f in actions {
+        match &f.action {
+            Action::GpioWrite { node_id, pin, value } => {
+                sink.gpio_write(node_id, *pin, *value).await?
+            }
+            Action::Publish { topic, payload } => sink.publish(topic, payload).await?,
+            Action::Escalate { reason } => sink.escalate(reason).await?,
+        }
+    }
+    Ok(())
+}
+
+/// A safe default sink that only *logs* intended actions without executing them
+/// — useful for dry-run / supervised rollout before wiring the real spine sink.
+pub struct LoggingActionSink;
+
+#[async_trait]
+impl ActionSink for LoggingActionSink {
+    async fn gpio_write(&self, node_id: &str, pin: i64, value: i64) -> anyhow::Result<()> {
+        tracing::info!(node_id, pin, value, "reflex: gpio_write (dry-run)");
+        Ok(())
+    }
+    async fn publish(&self, topic: &str, payload: &Value) -> anyhow::Result<()> {
+        tracing::info!(topic, %payload, "reflex: publish (dry-run)");
+        Ok(())
+    }
+    async fn escalate(&self, reason: &str) -> anyhow::Result<()> {
+        tracing::info!(reason, "reflex: escalate to System 2 (dry-run)");
+        Ok(())
+    }
+}
+
+/// Ties the reflex engine to world memory and an action sink: one `tick` reads
+/// world state, fires reflexes, and dispatches their actions. This is the
+/// host-side System 1 controller; spawn its `tick_and_dispatch` on a cadence.
+pub struct ReflexController {
+    engine: ReflexEngine,
+    world: Arc<crate::memory::world::WorldMemory>,
+    sink: Arc<dyn ActionSink>,
+}
+
+impl ReflexController {
+    /// Build a controller.
+    pub fn new(
+        engine: ReflexEngine,
+        world: Arc<crate::memory::world::WorldMemory>,
+        sink: Arc<dyn ActionSink>,
+    ) -> Self {
+        Self {
+            engine,
+            world,
+            sink,
+        }
+    }
+
+    /// Read world state, evaluate reflexes, dispatch the fired actions; returns
+    /// what fired.
+    pub async fn tick_and_dispatch(&self, now_ms: u64) -> anyhow::Result<Vec<FiredReflex>> {
+        let fired = self.engine.tick(&self.world, now_ms)?;
+        dispatch(&fired, self.sink.as_ref()).await?;
+        Ok(fired)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::world::WorldMemory;
+    use serde_json::json;
+
+    #[test]
+    fn fact_value_extraction() {
+        assert_eq!(fact_to_f64(&json!(3.5)), Some(3.5));
+        assert_eq!(fact_to_f64(&json!(true)), Some(1.0));
+        assert_eq!(fact_to_f64(&json!(false)), Some(0.0));
+        assert_eq!(fact_to_f64(&json!({"value": 7, "n": 2})), Some(7.0)); // fusion shape
+        assert_eq!(fact_to_f64(&json!("nope")), None);
+    }
+
+    #[test]
+    fn referenced_entities_collects_from_nested_conditions() {
+        let rule = ReflexRule {
+            id: "r".into(),
+            when: Condition::And {
+                all: vec![
+                    Condition::Sensor { entity: "t".into(), op: Cmp::Gt, value: 1.0 },
+                    Condition::Or {
+                        any: vec![Condition::GpioEq { entity: "armed".into(), value: 1 }],
+                    },
+                ],
+            },
+            then: Action::Escalate { reason: "x".into() },
+            debounce_ms: 0,
+            max_rate_hz: None,
+        };
+        let e = ReflexEngine::new(vec![rule]);
+        let ents = e.referenced_entities();
+        assert!(ents.contains("t") && ents.contains("armed"));
+    }
+
+    #[test]
+    fn tick_reads_world_memory_and_fires() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        // sensor-fusion shape: {value, std_dev, n}
+        world
+            .observe("sensor.temperature", json!({"value": 30.0, "n": 2}), 1_000, 1_000, "fusion")
+            .unwrap();
+        let e = ReflexEngine::new(vec![fan_rule()]);
+        let fired = e.tick(&world, 2_000).unwrap();
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].rule_id, "fan-on-hot");
+
+        // when the world cools below threshold, the reflex stops firing
+        world
+            .observe("sensor.temperature", json!({"value": 20.0, "n": 2}), 3_000, 3_000, "fusion")
+            .unwrap();
+        assert!(e.tick(&world, 4_000).unwrap().is_empty());
+    }
+
+    fn snap(pairs: &[(&str, f64)]) -> HashMap<String, f64> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    fn fan_rule() -> ReflexRule {
+        ReflexRule {
+            id: "fan-on-hot".to_string(),
+            when: Condition::Sensor {
+                entity: "sensor.temperature".to_string(),
+                op: Cmp::Gt,
+                value: 28.0,
+            },
+            then: Action::GpioWrite {
+                node_id: "node-1".to_string(),
+                pin: 18,
+                value: 1,
+            },
+            debounce_ms: 500,
+            max_rate_hz: None,
+        }
+    }
+
+    #[test]
+    fn fires_when_condition_holds() {
+        let e = ReflexEngine::new(vec![fan_rule()]);
+        let fired = e.evaluate(&snap(&[("sensor.temperature", 30.0)]), 1_000);
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].rule_id, "fan-on-hot");
+    }
+
+    #[test]
+    fn does_not_fire_when_condition_false_or_entity_missing() {
+        let e = ReflexEngine::new(vec![fan_rule()]);
+        assert!(e.evaluate(&snap(&[("sensor.temperature", 20.0)]), 1_000).is_empty());
+        assert!(e.evaluate(&snap(&[("other", 99.0)]), 2_000).is_empty());
+    }
+
+    #[test]
+    fn debounce_suppresses_rapid_refire() {
+        let e = ReflexEngine::new(vec![fan_rule()]);
+        let s = snap(&[("sensor.temperature", 30.0)]);
+        assert_eq!(e.evaluate(&s, 1_000).len(), 1); // fires
+        assert_eq!(e.evaluate(&s, 1_200).len(), 0); // within 500ms debounce
+        assert_eq!(e.evaluate(&s, 1_600).len(), 1); // after debounce
+    }
+
+    #[test]
+    fn max_rate_hz_enforced() {
+        let mut r = fan_rule();
+        r.debounce_ms = 0;
+        r.max_rate_hz = Some(2.0); // ≤2/sec ⇒ min 500ms
+        let e = ReflexEngine::new(vec![r]);
+        let s = snap(&[("sensor.temperature", 30.0)]);
+        assert_eq!(e.evaluate(&s, 0).len(), 1);
+        assert_eq!(e.evaluate(&s, 400).len(), 0);
+        assert_eq!(e.evaluate(&s, 500).len(), 1);
+    }
+
+    #[test]
+    fn and_or_conditions() {
+        let cond = Condition::And {
+            all: vec![
+                Condition::Sensor { entity: "t".into(), op: Cmp::Gt, value: 28.0 },
+                Condition::Or {
+                    any: vec![
+                        Condition::GpioEq { entity: "armed".into(), value: 1 },
+                        Condition::Sensor { entity: "h".into(), op: Cmp::Ge, value: 80.0 },
+                    ],
+                },
+            ],
+        };
+        assert!(cond.eval(&snap(&[("t", 30.0), ("armed", 1.0)])));
+        assert!(cond.eval(&snap(&[("t", 30.0), ("armed", 0.0), ("h", 85.0)])));
+        assert!(!cond.eval(&snap(&[("t", 30.0), ("armed", 0.0), ("h", 50.0)])));
+        assert!(!cond.eval(&snap(&[("t", 20.0), ("armed", 1.0)]))); // temp gate fails
+    }
+
+    #[test]
+    fn escalate_action_fires() {
+        let rule = ReflexRule {
+            id: "novelty".to_string(),
+            when: Condition::Sensor { entity: "motion".into(), op: Cmp::Eq, value: 1.0 },
+            then: Action::Escalate { reason: "unexpected motion".to_string() },
+            debounce_ms: 0,
+            max_rate_hz: None,
+        };
+        let e = ReflexEngine::new(vec![rule]);
+        let fired = e.evaluate(&snap(&[("motion", 1.0)]), 1);
+        assert_eq!(fired.len(), 1);
+        assert!(matches!(fired[0].action, Action::Escalate { .. }));
+    }
+
+    #[test]
+    fn rule_serde_roundtrip() {
+        let rule = fan_rule();
+        let js = serde_json::to_string(&rule).unwrap();
+        // wire shape is stable + readable (for pushing to nodes)
+        assert!(js.contains("\"type\":\"sensor\""));
+        assert!(js.contains("\"type\":\"gpio_write\""));
+        let back: ReflexRule = serde_json::from_str(&js).unwrap();
+        assert_eq!(back, rule);
+    }
+
+    #[test]
+    fn publish_action_roundtrips() {
+        let a = Action::Publish {
+            topic: "obc/alerts".to_string(),
+            payload: json!({"level": "warn"}),
+        };
+        let back: Action = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+        assert_eq!(back, a);
+    }
+
+    #[derive(Default)]
+    struct MockSink {
+        calls: Mutex<Vec<String>>,
+    }
+    #[async_trait::async_trait]
+    impl ActionSink for MockSink {
+        async fn gpio_write(&self, node_id: &str, pin: i64, value: i64) -> anyhow::Result<()> {
+            self.calls.lock().unwrap().push(format!("gpio:{node_id}:{pin}:{value}"));
+            Ok(())
+        }
+        async fn publish(&self, topic: &str, _payload: &Value) -> anyhow::Result<()> {
+            self.calls.lock().unwrap().push(format!("pub:{topic}"));
+            Ok(())
+        }
+        async fn escalate(&self, reason: &str) -> anyhow::Result<()> {
+            self.calls.lock().unwrap().push(format!("esc:{reason}"));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn controller_ticks_and_dispatches_gpio() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        world
+            .observe("sensor.temperature", json!({"value": 30.0}), 1_000, 1_000, "f")
+            .unwrap();
+        let sink = Arc::new(MockSink::default());
+        let sink_dyn: Arc<dyn ActionSink> = sink.clone();
+        let ctl = ReflexController::new(ReflexEngine::new(vec![fan_rule()]), Arc::clone(&world), sink_dyn);
+
+        let fired = ctl.tick_and_dispatch(2_000).await.unwrap();
+        assert_eq!(fired.len(), 1);
+        assert_eq!(sink.calls.lock().unwrap().as_slice(), &["gpio:node-1:18:1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_each_action_kind() {
+        let sink = MockSink::default();
+        let fired = vec![
+            FiredReflex {
+                rule_id: "a".into(),
+                action: Action::Publish { topic: "t".into(), payload: json!(1) },
+            },
+            FiredReflex {
+                rule_id: "b".into(),
+                action: Action::Escalate { reason: "why".into() },
+            },
+        ];
+        dispatch(&fired, &sink).await.unwrap();
+        assert_eq!(
+            sink.calls.lock().unwrap().as_slice(),
+            &["pub:t".to_string(), "esc:why".to_string()]
+        );
+    }
+}

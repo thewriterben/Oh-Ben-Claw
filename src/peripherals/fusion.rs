@@ -437,6 +437,29 @@ impl FusionRegistry {
             .collect()
     }
 
+    /// Perception → world memory (Phase 18): compute all fused estimates and
+    /// record each as a time-valid observation in world memory under the entity
+    /// `sensor.{quantity}`. This is how the sensing suite fills the world model
+    /// from real sensors. Returns the fused results that were observed.
+    pub fn observe_into(
+        &self,
+        world: &crate::memory::world::WorldMemory,
+        valid_from: u64,
+        source: &str,
+    ) -> anyhow::Result<HashMap<String, FusedResult>> {
+        let results = self.compute_all();
+        for (quantity, fused) in &results {
+            let entity = format!("sensor.{quantity}");
+            let value = serde_json::json!({
+                "value": fused.value,
+                "std_dev": fused.std_dev,
+                "n": fused.reading_count,
+            });
+            world.observe(&entity, value, valid_from, valid_from, source)?;
+        }
+        Ok(results)
+    }
+
     /// Clear all readings across all collectors.
     pub fn clear_all(&mut self) {
         for f in self.collectors.values_mut() {
@@ -450,6 +473,25 @@ impl FusionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::world::WorldMemory;
+
+    #[test]
+    fn observe_into_world_memory_records_fused_value() {
+        let mut reg = FusionRegistry::new();
+        reg.add_reading("temperature", SensorReading::new("bme280", 23.0));
+        reg.add_reading("temperature", SensorReading::new("sht31", 24.0));
+        let world = WorldMemory::open_in_memory().unwrap();
+
+        let results = reg.observe_into(&world, 1_000, "fusion").unwrap();
+        assert!(results.contains_key("temperature"));
+
+        // The fused value (23.5) is now a time-valid fact in world memory.
+        let fact = world.current("sensor.temperature").unwrap().unwrap();
+        assert!((fact.value["value"].as_f64().unwrap() - 23.5).abs() < 1e-9);
+        assert_eq!(fact.value["n"].as_u64().unwrap(), 2);
+        assert_eq!(fact.source, "fusion");
+        assert_eq!(fact.valid_from, 1_000);
+    }
 
     #[test]
     fn average_two_readings() {
