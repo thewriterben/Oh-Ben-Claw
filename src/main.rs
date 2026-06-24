@@ -494,6 +494,61 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
 
+    // Phase 18 / S1b: fold a ClawCam (vision subsystem) MCP server's detections
+    // into world memory on a cadence — the vision subsystem feeding the brain's
+    // bitemporal memory, which the reflex engine then reacts to.
+    if let Some(world) = &world_mem {
+        if let Some(cfg) = config.perception.clawcam_poll.clone() {
+            if cfg.enabled {
+                let world = Arc::clone(world);
+                match oh_ben_claw::mcp::client::McpClient::connect(&cfg.server).await {
+                    Ok(client) => {
+                        let client = Arc::new(tokio::sync::Mutex::new(client));
+                        let interval =
+                            std::time::Duration::from_millis(cfg.interval_ms.max(250));
+                        info!(
+                            tool = %cfg.tool,
+                            interval_ms = cfg.interval_ms,
+                            "Phase 18 ClawCam → world memory poll spawned"
+                        );
+                        tokio::spawn(async move {
+                            let mut ticker = tokio::time::interval(interval);
+                            loop {
+                                ticker.tick().await;
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_millis() as u64)
+                                    .unwrap_or(0);
+                                match oh_ben_claw::vision::clawcam_ingest::poll_clawcam_into_world(
+                                    Arc::clone(&client),
+                                    &world,
+                                    &cfg.tool,
+                                    cfg.args.clone(),
+                                    now,
+                                    &cfg.source,
+                                )
+                                .await
+                                {
+                                    Ok(entities) if !entities.is_empty() => {
+                                        info!(
+                                            count = entities.len(),
+                                            "ClawCam detections folded into world memory"
+                                        );
+                                    }
+                                    Ok(_) => {}
+                                    Err(e) => tracing::warn!("ClawCam poll failed: {e}"),
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => tracing::warn!(
+                        "Could not connect to ClawCam MCP server: {e}; skipping detection poll"
+                    ),
+                }
+            }
+        }
+    }
+
     // Build the plain reasoning agent, attaching Track 0 + Phase 16 when configured.
     let mut agent = Agent::new(
         config.agent.clone(),

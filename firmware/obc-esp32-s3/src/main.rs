@@ -319,9 +319,18 @@ fn main() -> anyhow::Result<()> {
     let mut buf = [0u8; 512];
     let mut line: Vec<u8> = Vec::new();
 
+    // Phase 18: System 1 at the edge — evaluate reflexes against on-board sensors
+    // on a fixed cadence, independent of the host/spine. Rules arrive via the
+    // `set_reflex_rules` command; fired GPIO actions are actuated locally through
+    // the Track 0 safety gate and reported on `obc/nodes/{id}/reflex`.
+    const REFLEX_INTERVAL_MS: u64 = 1000;
+    let mut last_reflex_ms: u64 = 0;
+
     loop {
+        // `Ok(0)` is a read timeout (no host data) — fall through to the reflex
+        // tick rather than `continue`, so System 1 keeps running on its own.
         match uart.read(&mut buf, 100) {
-            Ok(0) => continue,
+            Ok(0) => {}
             Ok(n) => {
                 for &b in &buf[..n] {
                     if b == b'\n' {
@@ -343,6 +352,36 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             Err(_) => {}
+        }
+
+        // ── Autonomous reflex tick (System 1) ─────────────────────────────────
+        let now = now_ms();
+        if now.saturating_sub(last_reflex_ms) >= REFLEX_INTERVAL_MS
+            && agent_state.reflex.rule_count() > 0
+        {
+            last_reflex_ms = now;
+            let snapshot = read_sensor_snapshot();
+            for fired in agent_state.reflex.evaluate(&snapshot, now) {
+                let mut applied = false;
+                let mut error: Option<String> = None;
+                if let reflex::Action::GpioWrite { pin, value, .. } = &fired.action {
+                    // Safety-gated local actuation (Track 0).
+                    match gpio_write(*pin as i32, *value as u64) {
+                        Ok(()) => applied = true,
+                        Err(e) => error = Some(e.to_string()),
+                    }
+                }
+                let report = serde_json::json!({
+                    "type": "reflex",
+                    "node_id": NODE_ID,
+                    "rule_id": fired.rule_id,
+                    "action": serde_json::to_value(&fired.action).unwrap_or(serde_json::Value::Null),
+                    "applied": applied,
+                    "error": error,
+                    "ts_ms": now,
+                });
+                let _ = uart.write(format!("{}\n", report).as_bytes());
+            }
         }
     }
 }
@@ -634,6 +673,36 @@ fn sensor_read(sensor: &str, field: &str) -> anyhow::Result<String> {
         ("sht31", "humidity") => Ok("54.8".to_string()),
         (s, f) => Err(anyhow::anyhow!("Unknown sensor/field: {}/{}", s, f)),
     }
+}
+
+// ── On-MCU reflex support (Phase 18, System 1) ────────────────────────────────
+
+/// Monotonic milliseconds since boot (ESP timer), for reflex valid-time + debounce.
+fn now_ms() -> u64 {
+    (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000) as u64
+}
+
+/// Build a reflex snapshot from the node's local sensors. Entity keys follow the
+/// host world-memory convention (`sensor.{quantity}`) so a rule authored against
+/// world memory (e.g. `sensor.temperature > 60`) evaluates identically on-device.
+fn read_sensor_snapshot() -> std::collections::HashMap<String, f64> {
+    const READS: &[(&str, &str, &str)] = &[
+        ("sensor.temperature", "bme280", "temperature"),
+        ("sensor.humidity", "bme280", "humidity"),
+        ("sensor.pressure", "bme280", "pressure"),
+        ("sensor.accel_x", "mpu6050", "accel_x"),
+        ("sensor.accel_y", "mpu6050", "accel_y"),
+        ("sensor.accel_z", "mpu6050", "accel_z"),
+    ];
+    let mut snapshot = std::collections::HashMap::new();
+    for (entity, sensor, field) in READS {
+        if let Ok(raw) = sensor_read(sensor, field) {
+            if let Ok(value) = raw.parse::<f64>() {
+                snapshot.insert(entity.to_string(), value);
+            }
+        }
+    }
+    snapshot
 }
 
 // ── Edge-Native Agent Loop ────────────────────────────────────────────────────

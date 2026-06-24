@@ -1251,6 +1251,47 @@ pub struct PerceptionConfig {
     /// Path to the world-memory database. Defaults to the data dir's `world.db`.
     #[serde(default)]
     pub world_db_path: Option<String>,
+    /// Optional poll of a ClawCam (vision subsystem) MCP server whose detections
+    /// are folded into world memory on a cadence (Phase 18 / S1b).
+    #[serde(default)]
+    pub clawcam_poll: Option<ClawCamPollConfig>,
+}
+
+/// Poll a ClawCam detection MCP tool into world memory (`[perception.clawcam_poll]`).
+/// Requires `[perception] world_memory = true`. Detections become
+/// `vision.subject.{species}` facts carrying review state and valid-time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClawCamPollConfig {
+    /// Enable the poll loop.
+    #[serde(default)]
+    pub enabled: bool,
+    /// How to reach the ClawCam MCP bridge (stdio command or http url).
+    pub server: crate::mcp::McpServerConfig,
+    /// Detection tool to poll.
+    #[serde(default = "default_clawcam_tool")]
+    pub tool: String,
+    /// Arguments passed to the tool (e.g. `{ "min_confidence": 0.5 }`).
+    #[serde(default = "default_clawcam_args")]
+    pub args: serde_json::Value,
+    /// Poll cadence in milliseconds.
+    #[serde(default = "default_clawcam_interval_ms")]
+    pub interval_ms: u64,
+    /// World-memory `source` label for the ingested facts.
+    #[serde(default = "default_clawcam_source")]
+    pub source: String,
+}
+
+fn default_clawcam_tool() -> String {
+    "list_species_detections".to_string()
+}
+fn default_clawcam_args() -> serde_json::Value {
+    serde_json::json!({})
+}
+fn default_clawcam_interval_ms() -> u64 {
+    5000
+}
+fn default_clawcam_source() -> String {
+    "clawcam".to_string()
 }
 
 /// Phase 18 dual-system reflex configuration (`[reflex]`). System 1: fast local
