@@ -411,25 +411,69 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
 
-    // Phase 18: register the world-memory tool when enabled (added to the plain
-    // agent's tool set; perception suites write to the same store).
-    if config.perception.world_memory {
-        let world_path = config
-            .perception
-            .world_db_path
-            .clone()
-            .unwrap_or_else(|| track0_data_path("world.db"));
-        if let Some(parent) = std::path::Path::new(&world_path).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match oh_ben_claw::memory::world::WorldMemory::open(&world_path) {
-            Ok(wm) => {
-                all_tools.push(Box::new(
-                    oh_ben_claw::tools::builtin::world::WorldMemoryTool::new(Arc::new(wm)),
-                ));
-                info!(path = %world_path, "Phase 18 world memory tool active");
+    // Phase 18: open world memory once, shared by the world_memory tool and the
+    // reflex controller.
+    let world_mem: Option<Arc<oh_ben_claw::memory::world::WorldMemory>> =
+        if config.perception.world_memory {
+            let world_path = config
+                .perception
+                .world_db_path
+                .clone()
+                .unwrap_or_else(|| track0_data_path("world.db"));
+            if let Some(parent) = std::path::Path::new(&world_path).parent() {
+                let _ = std::fs::create_dir_all(parent);
             }
-            Err(e) => tracing::warn!("Phase 18: failed to open world memory: {e}"),
+            match oh_ben_claw::memory::world::WorldMemory::open(&world_path) {
+                Ok(wm) => {
+                    let wm = Arc::new(wm);
+                    all_tools.push(Box::new(
+                        oh_ben_claw::tools::builtin::world::WorldMemoryTool::new(Arc::clone(&wm)),
+                    ));
+                    info!(path = %world_path, "Phase 18 world memory tool active");
+                    Some(wm)
+                }
+                Err(e) => {
+                    tracing::warn!("Phase 18: failed to open world memory: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+    // Phase 18: spawn the dual-system reflex controller (System 1) when enabled.
+    // Uses the safe dry-run logging sink until the real spine sink is wired.
+    if config.reflex.enabled && !config.reflex.rules.is_empty() {
+        if let Some(world) = &world_mem {
+            use oh_ben_claw::agent::reflex::{
+                ActionSink, LoggingActionSink, ReflexController, ReflexEngine,
+            };
+            let engine = ReflexEngine::new(config.reflex.rules.clone());
+            let sink: Arc<dyn ActionSink> = Arc::new(LoggingActionSink);
+            let controller = ReflexController::new(engine, Arc::clone(world), sink);
+            let interval =
+                std::time::Duration::from_millis(config.reflex.interval_ms.unwrap_or(1000));
+            info!(
+                rules = config.reflex.rules.len(),
+                "Phase 18 reflex controller (dry-run) spawned"
+            );
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                loop {
+                    ticker.tick().await;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    if let Err(e) = controller.tick_and_dispatch(now).await {
+                        tracing::warn!("reflex tick failed: {e}");
+                    }
+                }
+            });
+        } else {
+            tracing::warn!(
+                "[reflex] enabled but [perception].world_memory is off; reflexes need world memory"
+            );
         }
     }
 
