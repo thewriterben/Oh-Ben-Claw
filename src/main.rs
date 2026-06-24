@@ -249,6 +249,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         None
     };
 
+    // Keep a spine handle for the Phase 18 reflex sink (peripherals consumes
+    // `spine_client` below).
+    let reflex_spine = spine_client.clone();
+
     // Connect to directly-wired peripheral boards
     if config.peripherals.enabled {
         let peripheral_tools =
@@ -446,16 +450,29 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     if config.reflex.enabled && !config.reflex.rules.is_empty() {
         if let Some(world) = &world_mem {
             use oh_ben_claw::agent::reflex::{
-                ActionSink, LoggingActionSink, ReflexController, ReflexEngine,
+                ActionSink, EscalationBudget, LoggingActionSink, ReflexController, ReflexEngine,
+                SpineActionSink,
             };
             let engine = ReflexEngine::new(config.reflex.rules.clone());
-            let sink: Arc<dyn ActionSink> = Arc::new(LoggingActionSink);
-            let controller = ReflexController::new(engine, Arc::clone(world), sink);
+            let sink: Arc<dyn ActionSink> = match &reflex_spine {
+                Some(spine) => {
+                    info!("Phase 18 reflexes dispatch over the spine");
+                    Arc::new(SpineActionSink::new(Arc::clone(spine)))
+                }
+                None => {
+                    info!("Phase 18 reflexes use the dry-run logging sink (spine not connected)");
+                    Arc::new(LoggingActionSink)
+                }
+            };
+            let mut controller = ReflexController::new(engine, Arc::clone(world), sink);
+            if let Some(max) = config.reflex.max_escalations_per_min {
+                controller = controller.with_escalation_budget(EscalationBudget::per_minute(max));
+            }
             let interval =
                 std::time::Duration::from_millis(config.reflex.interval_ms.unwrap_or(1000));
             info!(
                 rules = config.reflex.rules.len(),
-                "Phase 18 reflex controller (dry-run) spawned"
+                "Phase 18 reflex controller spawned"
             );
             tokio::spawn(async move {
                 let mut ticker = tokio::time::interval(interval);

@@ -17,7 +17,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 /// Extract a numeric value from a world-memory fact value: a number, a bool
@@ -283,6 +283,92 @@ impl ActionSink for LoggingActionSink {
     }
 }
 
+/// Routes reflex actions over the MQTT spine: a GPIO write becomes a `gpio_write`
+/// tool call to the node (bounded there by the firmware Track 0 `SafetyGate`),
+/// publishes go to the topic, and escalations are published to `obc/escalation`
+/// for System 2 (the gateway/agent) to act on. Best-effort: spine errors are
+/// logged, not propagated, so one unreachable node never stalls the reflex loop.
+pub struct SpineActionSink {
+    spine: Arc<crate::spine::SpineClient>,
+}
+
+impl SpineActionSink {
+    /// Build a sink over a (connected) spine client.
+    pub fn new(spine: Arc<crate::spine::SpineClient>) -> Self {
+        Self { spine }
+    }
+}
+
+#[async_trait]
+impl ActionSink for SpineActionSink {
+    async fn gpio_write(&self, node_id: &str, pin: i64, value: i64) -> anyhow::Result<()> {
+        let args = serde_json::json!({ "pin": pin, "value": value });
+        if let Err(e) = self.spine.invoke_tool(node_id, "gpio_write", args).await {
+            tracing::warn!(node_id, pin, value, error = %e, "reflex gpio_write over spine failed");
+        }
+        Ok(())
+    }
+    async fn publish(&self, topic: &str, payload: &Value) -> anyhow::Result<()> {
+        if let Err(e) = self.spine.publish(topic, payload).await {
+            tracing::warn!(topic, error = %e, "reflex publish over spine failed");
+        }
+        Ok(())
+    }
+    async fn escalate(&self, reason: &str) -> anyhow::Result<()> {
+        let topic = format!("{}/escalation", crate::spine::TOPIC_PREFIX);
+        let payload = serde_json::json!({ "reason": reason });
+        if let Err(e) = self.spine.publish(&topic, &payload).await {
+            tracing::warn!(error = %e, "reflex escalation publish failed");
+        }
+        tracing::info!(reason, "reflex: escalated to System 2");
+        Ok(())
+    }
+}
+
+/// Rate-limits escalations from System 1 to System 2 (the LLM), so a noisy
+/// reflex can't flood the expensive reasoner. Sliding window.
+#[derive(Debug)]
+pub struct EscalationBudget {
+    max_per_window: u32,
+    window_ms: u64,
+    times: Mutex<VecDeque<u64>>,
+}
+
+impl EscalationBudget {
+    /// At most `max_per_window` escalations per `window_ms`. `max_per_window = 0`
+    /// means unlimited.
+    pub fn new(max_per_window: u32, window_ms: u64) -> Self {
+        Self {
+            max_per_window,
+            window_ms,
+            times: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// Convenience: at most `max` escalations per minute.
+    pub fn per_minute(max: u32) -> Self {
+        Self::new(max, 60_000)
+    }
+
+    /// Whether an escalation is allowed at `now_ms`; records it when allowed.
+    pub fn allow(&self, now_ms: u64) -> bool {
+        if self.max_per_window == 0 {
+            return true;
+        }
+        let mut times = self.times.lock().unwrap_or_else(|p| p.into_inner());
+        let cutoff = now_ms.saturating_sub(self.window_ms);
+        while times.front().is_some_and(|&t| t < cutoff) {
+            times.pop_front();
+        }
+        if (times.len() as u32) < self.max_per_window {
+            times.push_back(now_ms);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Ties the reflex engine to world memory and an action sink: one `tick` reads
 /// world state, fires reflexes, and dispatches their actions. This is the
 /// host-side System 1 controller; spawn its `tick_and_dispatch` on a cadence.
@@ -290,6 +376,7 @@ pub struct ReflexController {
     engine: ReflexEngine,
     world: Arc<crate::memory::world::WorldMemory>,
     sink: Arc<dyn ActionSink>,
+    escalation_budget: Option<EscalationBudget>,
 }
 
 impl ReflexController {
@@ -303,14 +390,39 @@ impl ReflexController {
             engine,
             world,
             sink,
+            escalation_budget: None,
         }
     }
 
+    /// Cap how often reflexes may escalate to System 2.
+    pub fn with_escalation_budget(mut self, budget: EscalationBudget) -> Self {
+        self.escalation_budget = Some(budget);
+        self
+    }
+
     /// Read world state, evaluate reflexes, dispatch the fired actions; returns
-    /// what fired.
+    /// what fired. Escalations beyond the budget are fired-but-not-dispatched.
     pub async fn tick_and_dispatch(&self, now_ms: u64) -> anyhow::Result<Vec<FiredReflex>> {
         let fired = self.engine.tick(&self.world, now_ms)?;
-        dispatch(&fired, self.sink.as_ref()).await?;
+        for f in &fired {
+            match &f.action {
+                Action::GpioWrite { node_id, pin, value } => {
+                    self.sink.gpio_write(node_id, *pin, *value).await?
+                }
+                Action::Publish { topic, payload } => self.sink.publish(topic, payload).await?,
+                Action::Escalate { reason } => {
+                    let allowed = self
+                        .escalation_budget
+                        .as_ref()
+                        .map_or(true, |b| b.allow(now_ms));
+                    if allowed {
+                        self.sink.escalate(reason).await?;
+                    } else {
+                        tracing::debug!(reason, "reflex: escalation suppressed by budget");
+                    }
+                }
+            }
+        }
         Ok(fired)
     }
 }
@@ -536,5 +648,58 @@ mod tests {
             sink.calls.lock().unwrap().as_slice(),
             &["pub:t".to_string(), "esc:why".to_string()]
         );
+    }
+
+    #[test]
+    fn escalation_budget_sliding_window() {
+        let b = EscalationBudget::new(2, 60_000);
+        assert!(b.allow(0));
+        assert!(b.allow(1_000));
+        assert!(!b.allow(2_000)); // 2 already used within the window
+        assert!(b.allow(61_001)); // the t=0 escalation has expired
+    }
+
+    #[test]
+    fn escalation_budget_zero_is_unlimited() {
+        let b = EscalationBudget::new(0, 60_000);
+        for t in 0..10 {
+            assert!(b.allow(t));
+        }
+    }
+
+    #[tokio::test]
+    async fn controller_budget_suppresses_extra_escalations() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        world.observe("motion", json!(1.0), 0, 0, "pir").unwrap();
+        let rule = ReflexRule {
+            id: "e".into(),
+            when: Condition::Sensor { entity: "motion".into(), op: Cmp::Eq, value: 1.0 },
+            then: Action::Escalate { reason: "motion".into() },
+            debounce_ms: 0,
+            max_rate_hz: None,
+        };
+        let sink = Arc::new(MockSink::default());
+        let sink_dyn: Arc<dyn ActionSink> = sink.clone();
+        let ctl = ReflexController::new(ReflexEngine::new(vec![rule]), Arc::clone(&world), sink_dyn)
+            .with_escalation_budget(EscalationBudget::per_minute(1));
+
+        let f1 = ctl.tick_and_dispatch(1_000).await.unwrap();
+        let f2 = ctl.tick_and_dispatch(2_000).await.unwrap();
+        assert_eq!(f1.len(), 1);
+        assert_eq!(f2.len(), 1); // the reflex still fires both ticks
+        // but only one escalation was actually dispatched (budget = 1/min)
+        assert_eq!(sink.calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn spine_sink_is_best_effort_when_disconnected() {
+        use crate::config::SpineConfig;
+        let spine = Arc::new(crate::spine::SpineClient::new(SpineConfig::default(), "test"));
+        let sink = SpineActionSink::new(spine);
+        // An unconnected spine makes the underlying calls fail, but the sink logs
+        // and returns Ok so a reflex tick is never broken by a transient outage.
+        assert!(sink.gpio_write("node-1", 18, 1).await.is_ok());
+        assert!(sink.publish("obc/x", &json!({"a": 1})).await.is_ok());
+        assert!(sink.escalate("why").await.is_ok());
     }
 }
