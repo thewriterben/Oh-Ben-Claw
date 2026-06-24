@@ -91,10 +91,16 @@
 //! cargo espflash flash --monitor
 //! ```
 
-use esp_idf_svc::hal::prelude::*;
-use esp_idf_svc::hal::uart::*;
+// esp-idf-hal 0.46 removed the `prelude` module — import the specific items used.
+use esp_idf_svc::hal::peripherals::Peripherals;
+use esp_idf_svc::hal::uart::config::Config as UartConfig;
+use esp_idf_svc::hal::uart::UartDriver;
+use esp_idf_svc::hal::units::Hertz;
 use log::info;
 use serde::{Deserialize, Serialize};
+
+/// On-MCU reflex mirror (Phase 18, System 1 at the edge).
+mod reflex;
 
 /// Maximum line length for incoming serial commands (bytes).
 const MAX_LINE_LEN: usize = 512;
@@ -169,6 +175,8 @@ struct AgentState {
     wifi_ssid: String,
     /// WiFi password.
     wifi_password: String,
+    /// On-MCU reflex engine (System 1), populated from host-pushed rules.
+    reflex: reflex::ReflexEngine,
 }
 
 impl AgentState {
@@ -178,6 +186,7 @@ impl AgentState {
             llm: LlmConfig::default(),
             wifi_ssid: String::new(),
             wifi_password: String::new(),
+            reflex: reflex::ReflexEngine::default(),
         }
     }
 
@@ -271,7 +280,7 @@ fn main() -> anyhow::Result<()> {
 
     // UART0: TX=43, RX=44 (USB serial bridge on Waveshare board).
     let config = UartConfig::new().baudrate(Hertz(115_200));
-    let mut uart = UartDriver::new(
+    let uart = UartDriver::new(
         peripherals.uart0,
         pins.gpio43,
         pins.gpio44,
@@ -380,6 +389,53 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
             let value = req.args.get("value").and_then(|v| v.as_u64()).unwrap_or(0);
             gpio_write(pin, value)?;
             Ok("done".into())
+        }
+
+        // Phase 18: host pushes this node's reflex rule set (mirror of the host
+        // engine). Retained on `obc/nodes/{id}/reflex_rules` once the spine lands.
+        "set_reflex_rules" => {
+            let rules: Vec<reflex::ReflexRule> = serde_json::from_value(
+                req.args.get("rules").cloned().unwrap_or(serde_json::json!([])),
+            )?;
+            let n = rules.len();
+            state.reflex.set_rules(rules);
+            Ok(serde_json::json!({ "loaded": n }).to_string())
+        }
+
+        // Phase 18: evaluate reflexes against a sensor snapshot. Fired
+        // `gpio_write` actions are actuated locally through the Track 0 safety
+        // gate; the fired set is the `obc/nodes/{id}/reflex` report payload.
+        "reflex_tick" => {
+            let mut snapshot: std::collections::HashMap<String, f64> =
+                std::collections::HashMap::new();
+            if let Some(obj) = req.args.get("snapshot").and_then(|v| v.as_object()) {
+                for (k, v) in obj {
+                    if let Some(f) = v.as_f64() {
+                        snapshot.insert(k.clone(), f);
+                    }
+                }
+            }
+            let now_ms = req.args.get("now_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+            let fired = state.reflex.evaluate(&snapshot, now_ms);
+
+            let mut reports = Vec::with_capacity(fired.len());
+            for f in &fired {
+                let mut applied = false;
+                let mut error: Option<String> = None;
+                if let reflex::Action::GpioWrite { pin, value, .. } = &f.action {
+                    match gpio_write(*pin as i32, *value as u64) {
+                        Ok(()) => applied = true,
+                        Err(e) => error = Some(e.to_string()),
+                    }
+                }
+                reports.push(serde_json::json!({
+                    "rule_id": f.rule_id,
+                    "action": serde_json::to_value(&f.action).unwrap_or(serde_json::Value::Null),
+                    "applied": applied,
+                    "error": error,
+                }));
+            }
+            Ok(serde_json::json!({ "node_id": NODE_ID, "fired": reports }).to_string())
         }
 
         "camera_capture" => {

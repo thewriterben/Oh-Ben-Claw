@@ -453,7 +453,7 @@ handshake / session header), extensions framework, Tasks primitive.
 
 - [ ] Audit MCP client + server against the 2026-07-28 RC
 - [ ] Dual-mode operation (current spec + RC) behind a config flag
-- [ ] Cross-repo integration test with ClawCam (brain ↔ adapter ↔ stdio bridge ↔ gateway) in both modes
+- [x] Cross-repo integration test with ClawCam (brain ↔ adapter ↔ stdio bridge ↔ gateway) in both modes — `ClawCam/tests/integration/test_phase15_cross_repo_mcp.py` (17/17): both protocol modes + plan-mode authorization + no-session-affinity (stdio + plain HTTP)
 - [ ] Flip default mode when the final spec ships (July 28)
 
 ### A2A v1.0 Conformance
