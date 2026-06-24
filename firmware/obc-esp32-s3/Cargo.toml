@@ -1,3 +1,8 @@
+# This crate is its own workspace root, decoupled from the repo's host CLI
+# workspace, so it resolves the (older) esp-idf crate generation independently on
+# the Espressif Rust toolchain. See the root Cargo.toml `exclude` for why.
+[workspace]
+
 [package]
 name = "obc-esp32-s3"
 version = "0.1.0"
@@ -6,17 +11,22 @@ authors = ["thewriterben"]
 description = "Oh-Ben-Claw firmware for ESP32-S3 — GPIO, camera, microphone, sensors, MQTT, and edge-native LLM agent."
 
 [dependencies]
-# esp-idf-svc 0.49.x uses esp-idf-hal 0.44.x — keep them in sync
-esp-idf-svc = { version = "0.49", features = ["std", "experimental"] }
-esp-idf-hal = "0.44"
+# esp-idf-svc 0.52.x (esp-idf-hal 0.46.x, esp-idf-sys 0.37.x) is the generation
+# that fixed the `c_char` (i8/u8) handling for newer Rust toolchains, so it
+# builds on the current Espressif toolchain. Keep svc/hal in sync.
+esp-idf-svc = { version = "0.52", features = ["std", "experimental"] }
+esp-idf-hal = "0.46"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 log = "0.4"
-embuild = "0.32"
 
+# NOTE: `embuild` is a host build tool (used only in build.rs); it must NOT be a
+# normal dependency, or it — and its host-only deps like `filetime` — get
+# cross-compiled to the chip, which fails (espidf's newlib libc lacks
+# futimes/lutimes/UTIME_OMIT). Keep it in [build-dependencies] only.
 [build-dependencies]
-embuild = "0.32"
+embuild = "0.33"
 
 [[bin]]
 name = "obc-esp32-s3"

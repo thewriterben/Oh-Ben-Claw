@@ -247,6 +247,15 @@ impl McpRegistry {
             .collect()
     }
 
+    /// Return a shared handle to a connected server's client, if present.
+    ///
+    /// Lets callers reuse the live connection for out-of-band polling — e.g. a
+    /// perception loop that pulls ClawCam detections into world memory via
+    /// [`crate::vision::clawcam_ingest::poll_clawcam_into_world`].
+    pub fn client(&self, server_name: &str) -> Option<Arc<Mutex<client::McpClient>>> {
+        self.clients.get(server_name).cloned()
+    }
+
     /// List all registered tools with their server names.
     pub fn list_tools(&self) -> Vec<(String, String, String)> {
         self.tools

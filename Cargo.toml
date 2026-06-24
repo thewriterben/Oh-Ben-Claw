@@ -1,11 +1,16 @@
 [workspace]
 members = [
     ".",
-    "firmware/obc-esp32-s3",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
     "gui/src-tauri",
+    # ESP32-S3 firmware is its own workspace (Espressif Rust toolchain + xtensa
+    # target, older esp-idf crate generation). Keeping it out of the host
+    # workspace gives it an independent Cargo.lock, so host-only deps (the
+    # edition2024 `toml`/`winnow` generation, `filetime`, …) never leak onto the
+    # chip build.
+    "firmware/obc-esp32-s3",
 ]
 resolver = "2"
 

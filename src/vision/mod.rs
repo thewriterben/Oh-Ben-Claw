@@ -25,6 +25,9 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// ClawCam detections → bitemporal world memory (S1 "Remember").
+pub mod clawcam_ingest;
+
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 /// Where the vision pipeline should obtain images from.
