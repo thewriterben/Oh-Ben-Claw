@@ -1456,6 +1456,30 @@ pub struct NavigationConfig {
     /// fuser loop fuses them into the canonical pose entities the localizer reads.
     #[serde(default, rename = "pose_source")]
     pub pose_sources: Vec<PoseSourceConfig>,
+    /// Occupancy grid for obstacle-aware planning (`[navigation.grid]`). When set,
+    /// `navigate` plans paths around obstacles and `nav_map` builds the map.
+    #[serde(default)]
+    pub grid: Option<NavGridConfig>,
+    /// Range-sensor max distance for `nav_map scan` mapping (default 10).
+    #[serde(default)]
+    pub sensor_max_range: Option<f64>,
+}
+
+/// Occupancy-grid bounds for obstacle-aware planning (`[navigation.grid]`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NavGridConfig {
+    /// World coordinate of the grid's lower-left corner (x).
+    #[serde(default)]
+    pub origin_x: f64,
+    /// World coordinate of the grid's lower-left corner (y).
+    #[serde(default)]
+    pub origin_y: f64,
+    /// Cell size in world units.
+    pub resolution: f64,
+    /// Grid width in cells.
+    pub width: usize,
+    /// Grid height in cells.
+    pub height: usize,
 }
 
 /// One pose-fusion source (`[[navigation.pose_source]]`): reads
@@ -1555,6 +1579,22 @@ pub struct SelfImprovementConfig {
     pub max_learned: Option<usize>,
 }
 
+/// Mission sequencer configuration (`[mission]`). Named missions (each
+/// `[[mission.definition]]`) the `mission` tool can start; a runner ticks the
+/// active one over the navigation + audio suites.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MissionConfig {
+    /// Enable the `mission` + `mission_status` tools and the runner loop.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Tick cadence in ms (default 500).
+    #[serde(default)]
+    pub interval_ms: Option<u64>,
+    /// The named mission library (`[[mission.definition]]`).
+    #[serde(default, rename = "definition")]
+    pub missions: Vec<crate::mission::Mission>,
+}
+
 /// The root configuration for Oh-Ben-Claw.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -1634,6 +1674,9 @@ pub struct Config {
     /// Navigation suite — localization + movement fusion (goal-driven driving).
     #[serde(default)]
     pub navigation: NavigationConfig,
+    /// Mission sequencer — deliberative, guarded multi-step missions.
+    #[serde(default)]
+    pub mission: MissionConfig,
 }
 
 impl Config {

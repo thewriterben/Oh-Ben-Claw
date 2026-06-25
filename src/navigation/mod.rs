@@ -12,7 +12,10 @@
 //! cadence while the `navigate` tool (or the agent) sets/clears it. `nav.status`
 //! carries a categorical `state` (`driving`/`arrived`/`no_fix`) reflexes can match.
 
+pub mod mapping;
+pub mod planning;
 pub mod pose_fusion;
+pub mod slam;
 
 use crate::memory::world::WorldMemory;
 use crate::movement::{MovementCommand, MovementController};
@@ -113,7 +116,22 @@ pub struct NavController {
     gains: NavGains,
     pose_entities: (String, String, String),
     waypoints: Mutex<VecDeque<NavGoal>>,
+    grid: Option<Arc<Mutex<planning::OccupancyGrid>>>,
+    sensor_max_range: f64,
     source: String,
+}
+
+/// The result of an obstacle-aware planning attempt.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlanOutcome {
+    /// No occupancy grid configured — caller should fall back to a direct goal.
+    NoGrid,
+    /// No pose fix — cannot plan from an unknown start.
+    NoFix,
+    /// No obstacle-free path to the goal.
+    NoPath,
+    /// Planned a path of `usize` waypoints (now the active path).
+    Planned(usize),
 }
 
 impl NavController {
@@ -132,6 +150,8 @@ impl NavController {
                 "sensor.heading".to_string(),
             ),
             waypoints: Mutex::new(VecDeque::new()),
+            grid: None,
+            sensor_max_range: 10.0,
             source: "navigation".to_string(),
         }
     }
@@ -206,6 +226,82 @@ impl NavController {
     /// Number of waypoints still queued (including the current one).
     pub fn remaining(&self) -> usize {
         self.waypoints_lock().len()
+    }
+
+    /// Attach an occupancy grid for obstacle-aware planning.
+    pub fn with_grid(mut self, grid: Arc<Mutex<planning::OccupancyGrid>>) -> Self {
+        self.grid = Some(grid);
+        self
+    }
+
+    /// Whether obstacle-aware planning is available.
+    pub fn has_grid(&self) -> bool {
+        self.grid.is_some()
+    }
+
+    /// Mark the grid cell at a world point occupied (or free). Returns `false`
+    /// with no grid or out of bounds.
+    pub fn mark_obstacle(&self, x: f64, y: f64, occupied: bool) -> bool {
+        match &self.grid {
+            Some(grid) => {
+                let mut g = grid.lock().unwrap_or_else(|p| p.into_inner());
+                g.set_world(x, y, if occupied { planning::Cell::Occupied } else { planning::Cell::Free })
+            }
+            None => false,
+        }
+    }
+
+    /// Number of occupied cells in the grid (0 with no grid).
+    pub fn obstacle_count(&self) -> usize {
+        match &self.grid {
+            Some(grid) => grid.lock().unwrap_or_else(|p| p.into_inner()).occupied_count(),
+            None => 0,
+        }
+    }
+
+    /// Sensor max range used by [`integrate_scan`](Self::integrate_scan).
+    pub fn with_sensor_range(mut self, max_range: f64) -> Self {
+        self.sensor_max_range = max_range;
+        self
+    }
+
+    /// Integrate a range scan into the occupancy grid from the current pose:
+    /// `beams` are `(bearing_deg, range)` relative to the robot heading. Localizes
+    /// first; returns `false` with no grid or no pose fix. This is online mapping —
+    /// perception building the map the planner uses.
+    pub fn integrate_scan(&self, beams: &[(f64, f64)], now_ms: u64) -> anyhow::Result<bool> {
+        let Some(grid) = &self.grid else {
+            return Ok(false);
+        };
+        let Some(pose) = self.estimate_pose(now_ms)? else {
+            return Ok(false);
+        };
+        let mut g = grid.lock().unwrap_or_else(|p| p.into_inner());
+        mapping::integrate_scan(&mut g, pose.x, pose.y, pose.heading_deg, beams, self.sensor_max_range);
+        Ok(true)
+    }
+
+    /// Plan an obstacle-free path from the current pose to `goal` and set it as
+    /// the active path. Records `nav.pose` (via localization). See [`PlanOutcome`].
+    pub fn plan_to(&self, goal: NavGoal, now_ms: u64) -> anyhow::Result<PlanOutcome> {
+        let Some(grid) = &self.grid else {
+            return Ok(PlanOutcome::NoGrid);
+        };
+        let Some(pose) = self.estimate_pose(now_ms)? else {
+            return Ok(PlanOutcome::NoFix);
+        };
+        let goals = {
+            let g = grid.lock().unwrap_or_else(|p| p.into_inner());
+            planning::plan_goals(&g, (pose.x, pose.y), (goal.x, goal.y), goal.tolerance)
+        };
+        match goals {
+            Some(goals) => {
+                let n = goals.len();
+                self.set_path(goals, now_ms);
+                Ok(PlanOutcome::Planned(n))
+            }
+            None => Ok(PlanOutcome::NoPath),
+        }
     }
 
     /// Estimate the current pose from the configured world-memory entities,
@@ -451,6 +547,46 @@ mod tests {
         let out = n.step_toward_goal(2_000).await.unwrap();
         assert!(matches!(out, NavOutcome::Arrived { .. }));
         assert_eq!(n.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn plan_to_routes_around_obstacle() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let mut grid = planning::OccupancyGrid::new(0.0, 0.0, 1.0, 10, 10);
+        for cy in 0..8 {
+            grid.set(5, cy, planning::Cell::Occupied); // wall with a gap at the top
+        }
+        let n = nav(&world).with_grid(Arc::new(Mutex::new(grid)));
+        set_pose(&world, 0.5, 0.5, 0.0, 1_000);
+        let out = n.plan_to(NavGoal { x: 9.5, y: 0.5, tolerance: 0.3 }, 1_000).unwrap();
+        match out {
+            PlanOutcome::Planned(k) => assert!(k >= 2, "expected a detour, got {k} waypoints"),
+            other => panic!("expected Planned, got {other:?}"),
+        }
+        assert!(n.remaining() >= 2);
+    }
+
+    #[tokio::test]
+    async fn scan_builds_map_used_by_planning() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let n = nav(&world)
+            .with_grid(Arc::new(Mutex::new(planning::OccupancyGrid::new(0.0, 0.0, 1.0, 12, 12))));
+        set_pose(&world, 0.5, 0.5, 0.0, 1_000);
+        // a beam straight ahead hits an obstacle at range 4 → a cell gets marked
+        let used = n.integrate_scan(&[(0.0, 4.0)], 1_000).unwrap();
+        assert!(used);
+        assert!(n.obstacle_count() >= 1, "the scan should mark an obstacle");
+    }
+
+    #[tokio::test]
+    async fn plan_to_without_grid_reports_no_grid() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let n = nav(&world);
+        set_pose(&world, 0.0, 0.0, 0.0, 1_000);
+        assert_eq!(
+            n.plan_to(NavGoal { x: 1.0, y: 0.0, tolerance: 0.3 }, 1_000).unwrap(),
+            PlanOutcome::NoGrid
+        );
     }
 
     #[tokio::test]

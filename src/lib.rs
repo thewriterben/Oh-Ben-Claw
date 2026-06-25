@@ -40,6 +40,7 @@ pub mod gateway;
 pub mod hooks;
 pub mod mcp;
 pub mod memory;
+pub mod mission;
 pub mod movement;
 pub mod multimodal;
 pub mod navigation;
