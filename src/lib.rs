@@ -42,6 +42,7 @@ pub mod mcp;
 pub mod memory;
 pub mod movement;
 pub mod multimodal;
+pub mod navigation;
 pub mod observability;
 pub mod peripherals;
 pub mod power;

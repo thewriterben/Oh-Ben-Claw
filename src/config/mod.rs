@@ -1419,6 +1419,69 @@ pub struct CommsConfig {
     pub source: Option<String>,
 }
 
+/// Navigation suite configuration (`[navigation]`). The fusing suite: localizes
+/// from sensor pose facts and drives toward a goal through the movement
+/// controller. Requires `[perception].world_memory = true` AND `[movement]`
+/// (+ `[safety]`) — it reuses the movement controller and its Track 0 gate.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NavigationConfig {
+    /// Enable the `navigate` + `nav_status` tools and the stepping loop.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Steering servo actuator (default `steer` on channel 0).
+    #[serde(default)]
+    pub steer: Option<NavActuatorConfig>,
+    /// Drive motor actuator (default `drive` on channel 1).
+    #[serde(default)]
+    pub drive: Option<NavActuatorConfig>,
+    /// Cruise drive speed in -1..1 (default 0.5).
+    #[serde(default)]
+    pub forward_speed: Option<f64>,
+    /// Max steering angle magnitude in degrees (default 45).
+    #[serde(default)]
+    pub max_steer_deg: Option<f64>,
+    /// Heading-error → steering proportional gain (default 1.0).
+    #[serde(default)]
+    pub heading_kp: Option<f64>,
+    /// Heading error (deg) within which to drive at full speed (default 15).
+    #[serde(default)]
+    pub align_threshold_deg: Option<f64>,
+    /// Stepping cadence in ms (default 500).
+    #[serde(default)]
+    pub interval_ms: Option<u64>,
+    /// World-memory `source` label for nav facts. Default `"navigation"`.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Pose-fusion sources (`[[navigation.pose_source]]`). When non-empty, a
+    /// fuser loop fuses them into the canonical pose entities the localizer reads.
+    #[serde(default, rename = "pose_source")]
+    pub pose_sources: Vec<PoseSourceConfig>,
+}
+
+/// One pose-fusion source (`[[navigation.pose_source]]`): reads
+/// `sensor.{prefix}_x/_y/_heading` with the given fusion weight.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PoseSourceConfig {
+    /// Entity prefix (e.g. `"odom"`, `"gps"`).
+    pub prefix: String,
+    /// Fusion weight (higher = more trusted). Default 1.0.
+    #[serde(default = "default_pose_weight")]
+    pub weight: f64,
+}
+
+fn default_pose_weight() -> f64 {
+    1.0
+}
+
+/// A navigation actuator binding (`[navigation.steer]` / `[navigation.drive]`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NavActuatorConfig {
+    /// Actuator id (becomes `actuator.{name}`).
+    pub name: String,
+    /// Hardware channel.
+    pub channel: i64,
+}
+
 /// Phase 18 dual-system reflex configuration (`[reflex]`). System 1: fast local
 /// rules evaluated against world memory on a cadence. Requires `[perception]
 /// world_memory = true`. Actions run via the safe dry-run logging sink until the
@@ -1568,6 +1631,9 @@ pub struct Config {
     /// Comms suite — link telemetry + aggregate net mode for offline safing.
     #[serde(default)]
     pub comms: CommsConfig,
+    /// Navigation suite — localization + movement fusion (goal-driven driving).
+    #[serde(default)]
+    pub navigation: NavigationConfig,
 }
 
 impl Config {

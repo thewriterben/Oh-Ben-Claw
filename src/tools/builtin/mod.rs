@@ -8,6 +8,7 @@ pub mod file;
 pub mod http;
 pub mod memory;
 pub mod movement;
+pub mod navigation;
 pub mod ota;
 pub mod power;
 pub mod sensing;

@@ -102,6 +102,9 @@ use serde::{Deserialize, Serialize};
 /// On-MCU reflex mirror (Phase 18, System 1 at the edge).
 mod reflex;
 
+/// On-MCU safing mirror (Phase 18) — built-in battery self-protection.
+mod safing;
+
 /// Maximum line length for incoming serial commands (bytes).
 const MAX_LINE_LEN: usize = 512;
 
@@ -307,6 +310,10 @@ fn main() -> anyhow::Result<()> {
     );
 
     let mut agent_state = AgentState::new();
+    // Load the built-in safing rules so the node self-protects from boot, even
+    // before (or without) any host-pushed rule set or spine connection.
+    agent_state.reflex.set_rules(safing::default_safing_rules());
+    log::info!("on-MCU safing rules loaded ({} built-in)", agent_state.reflex.rule_count());
     // System prompt prepended to every LLM request.
     agent_state.push_message(
         "system",
@@ -325,6 +332,10 @@ fn main() -> anyhow::Result<()> {
     // the Track 0 safety gate and reported on `obc/nodes/{id}/reflex`.
     const REFLEX_INTERVAL_MS: u64 = 1000;
     let mut last_reflex_ms: u64 = 0;
+    // Link watchdog: time of last host contact. If the host goes silent past the
+    // safing timeout, the built-in `safe-link-offline` rule fires (on-MCU offline
+    // safing), independent of battery safing.
+    let mut last_host_contact_ms: u64 = now_ms();
 
     loop {
         // `Ok(0)` is a read timeout (no host data) — fall through to the reflex
@@ -332,6 +343,7 @@ fn main() -> anyhow::Result<()> {
         match uart.read(&mut buf, 100) {
             Ok(0) => {}
             Ok(n) => {
+                last_host_contact_ms = now_ms(); // any host byte ⇒ link is alive
                 for &b in &buf[..n] {
                     if b == b'\n' {
                         if !line.is_empty() {
@@ -360,7 +372,38 @@ fn main() -> anyhow::Result<()> {
             && agent_state.reflex.rule_count() > 0
         {
             last_reflex_ms = now;
-            let snapshot = read_sensor_snapshot();
+            let mut snapshot = read_sensor_snapshot();
+            // Feed the link-silence duration so the built-in `safe-link-offline`
+            // rule can fire, and self-report the link state.
+            let silence_ms = now.saturating_sub(last_host_contact_ms);
+            snapshot.insert(safing::LINK_SILENCE_ENTITY.to_string(), silence_ms as f64);
+            let link_offline = safing::link_offline(silence_ms as f64, safing::DEFAULT_LINK_TIMEOUT_MS as f64);
+            let link_report = serde_json::json!({
+                "type": "link_state",
+                "node_id": NODE_ID,
+                "state": if link_offline { "offline" } else { "online" },
+                "silence_ms": silence_ms,
+                "ts_ms": now,
+            });
+            let _ = uart.write(format!("{}\n", link_report).as_bytes());
+            // Self-report the derived power mode when a battery reading is present,
+            // so the host sees on-MCU safing state even if it pushed no rules.
+            if let Some(&soc) = snapshot.get(safing::BATTERY_SOC_ENTITY) {
+                let mode = safing::derive(
+                    soc,
+                    false,
+                    safing::DEFAULT_LOW_PCT,
+                    safing::DEFAULT_CRITICAL_PCT,
+                );
+                let report = serde_json::json!({
+                    "type": "power_mode",
+                    "node_id": NODE_ID,
+                    "mode": mode.as_str(),
+                    "soc_pct": soc,
+                    "ts_ms": now,
+                });
+                let _ = uart.write(format!("{}\n", report).as_bytes());
+            }
             for fired in agent_state.reflex.evaluate(&snapshot, now) {
                 let mut applied = false;
                 let mut error: Option<String> = None;
@@ -437,8 +480,12 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                 req.args.get("rules").cloned().unwrap_or(serde_json::json!([])),
             )?;
             let n = rules.len();
-            state.reflex.set_rules(rules);
-            Ok(serde_json::json!({ "loaded": n }).to_string())
+            // Keep the built-in safing rules in front of host-pushed rules so a
+            // node never loses self-protection when the host replaces its set.
+            let merged = safing::with_defaults(rules);
+            let total = merged.len();
+            state.reflex.set_rules(merged);
+            Ok(serde_json::json!({ "loaded": n, "total": total, "builtin_safing": total - n }).to_string())
         }
 
         // Phase 18: evaluate reflexes against a sensor snapshot. Fired
@@ -693,6 +740,10 @@ fn read_sensor_snapshot() -> std::collections::HashMap<String, f64> {
         ("sensor.accel_x", "mpu6050", "accel_x"),
         ("sensor.accel_y", "mpu6050", "accel_y"),
         ("sensor.accel_z", "mpu6050", "accel_z"),
+        // Battery state of charge from the fuel gauge — feeds the built-in safing
+        // rules. Absent (read error) when no gauge is fitted, so safing stays
+        // dormant rather than firing on a missing reading.
+        ("sensor.battery_soc", "max17048", "soc"),
     ];
     let mut snapshot = std::collections::HashMap::new();
     for (entity, sensor, field) in READS {
