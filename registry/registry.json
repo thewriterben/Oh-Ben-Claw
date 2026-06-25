@@ -1055,6 +1055,85 @@
         "cyd-esp32-2432s028r"
       ],
       "connector": "bare"
+    },
+    {
+      "name": "sg90",
+      "description": "TowerPro SG90 — micro servo (PWM position control)",
+      "bus": "pwm",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "actuate"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "tb6612fng",
+      "description": "Toshiba TB6612FNG — dual DC motor driver (PWM + direction)",
+      "bus": "gpio",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "actuate"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "pca9685",
+      "description": "NXP PCA9685 — 16-channel 12-bit I2C PWM / servo driver",
+      "bus": "i2c",
+      "default_i2c_addr": 64,
+      "capabilities": [
+        "actuate",
+        "pwm"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "inmp441",
+      "description": "InvenSense INMP441 — I2S MEMS microphone (audio capture)",
+      "bus": "i2s",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "audio_sample"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "max98357a",
+      "description": "Maxim MAX98357A — I2S Class-D amplifier (speaker output)",
+      "bus": "i2s",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "audio_output"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "max17048",
+      "description": "Maxim MAX17048 — LiPo battery fuel gauge (state of charge)",
+      "bus": "i2c",
+      "default_i2c_addr": 54,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
+    },
+    {
+      "name": "sim7600",
+      "description": "SIMCom SIM7600 — LTE Cat-4 cellular modem with GNSS (UART/USB)",
+      "bus": "uart",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "cellular",
+        "gps"
+      ],
+      "compatible_boards": [],
+      "connector": "bare"
     }
   ]
 }

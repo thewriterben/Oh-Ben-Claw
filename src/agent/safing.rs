@@ -181,6 +181,39 @@ pub fn overheat_escalate(quantity: &str, threshold: f64, opts: &SafingOptions) -
     )
 }
 
+/// `power.mode` back to `normal`/`charging` → publish a clear-shed advisory so
+/// in-process load-shedding releases automatically (recovery).
+pub fn power_recovered_clear(opts: &SafingOptions) -> ReflexRule {
+    rule(
+        "safe-power-recovered",
+        Condition::Or {
+            any: vec![
+                state("power.mode", "mode", "normal"),
+                state("power.mode", "mode", "charging"),
+            ],
+        },
+        Action::Publish {
+            topic: SAFING_TOPIC.to_string(),
+            payload: json!({ "subsystem": "power", "action": "clear_shed" }),
+        },
+        debounce(opts),
+    )
+}
+
+/// `net.mode` back to `online` → publish a clear-net advisory so connectivity
+/// safing releases automatically (recovery).
+pub fn net_recovered_clear(opts: &SafingOptions) -> ReflexRule {
+    rule(
+        "safe-net-recovered",
+        state("net.mode", "mode", "online"),
+        Action::Publish {
+            topic: SAFING_TOPIC.to_string(),
+            payload: json!({ "subsystem": "comms", "action": "clear_net" }),
+        },
+        debounce(opts),
+    )
+}
+
 /// The standard safing rule set for the given options. Order is stable.
 pub fn standard_safing_rules(opts: &SafingOptions) -> Vec<ReflexRule> {
     let mut rules = vec![power_critical_escalate(opts)];
@@ -190,6 +223,8 @@ pub fn standard_safing_rules(opts: &SafingOptions) -> Vec<ReflexRule> {
     rules.push(power_low_shed(opts));
     rules.push(net_offline_safe(opts));
     rules.push(net_degraded_safe(opts));
+    rules.push(power_recovered_clear(opts));
+    rules.push(net_recovered_clear(opts));
     for stream in &opts.alarm_streams {
         rules.push(audio_alarm_escalate(stream, opts));
     }
@@ -236,7 +271,8 @@ impl SafingState {
     }
 
     /// Update flags from a safing advisory payload (the JSON published to
-    /// [`SAFING_TOPIC`]). Logs on a 0→1 transition so the shed is visible.
+    /// [`SAFING_TOPIC`]). Engage actions set flags; `clear_*` recovery actions
+    /// release them. Logs on each transition so engage/recover is visible.
     pub fn apply_advisory(&self, payload: &Value) {
         match payload.get("action").and_then(Value::as_str).unwrap_or("") {
             "shed_load" => self.set(&self.shed_load, "shed_load"),
@@ -245,6 +281,12 @@ impl SafingState {
                 self.set(&self.degraded_net, "degraded_net");
             }
             "reduce_bandwidth" => self.set(&self.degraded_net, "degraded_net"),
+            // Recovery: a subsystem returned to normal.
+            "clear_shed" => self.unset(&self.shed_load, "shed_load"),
+            "clear_net" => {
+                self.unset(&self.offline, "offline");
+                self.unset(&self.degraded_net, "degraded_net");
+            }
             _ => {}
         }
     }
@@ -252,6 +294,12 @@ impl SafingState {
     fn set(&self, flag: &AtomicBool, name: &str) {
         if !flag.swap(true, Ordering::Relaxed) {
             tracing::warn!(flag = name, "safing engaged");
+        }
+    }
+
+    fn unset(&self, flag: &AtomicBool, name: &str) {
+        if flag.swap(false, Ordering::Relaxed) {
+            tracing::info!(flag = name, "safing released");
         }
     }
 
@@ -323,8 +371,48 @@ mod tests {
 
     #[test]
     fn standard_set_includes_stop_only_with_actuator() {
-        assert_eq!(standard_safing_rules(&SafingOptions::default()).len(), 4);
-        assert_eq!(standard_safing_rules(&opts_with_actuator()).len(), 5);
+        // base: power-critical-escalate, power-low, net-offline, net-degraded,
+        // power-recovered, net-recovered = 6; +1 stop with an actuator = 7.
+        assert_eq!(standard_safing_rules(&SafingOptions::default()).len(), 6);
+        assert_eq!(standard_safing_rules(&opts_with_actuator()).len(), 7);
+    }
+
+    #[test]
+    fn power_recovery_clears_shed_end_to_end() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let power = PowerController::new(PowerThresholds::default())
+            .with_world_memory(Arc::clone(&world));
+        let opts = SafingOptions { debounce_ms: 1, ..Default::default() };
+        let engine = ReflexEngine::new(standard_safing_rules(&opts));
+        let state = SafingState::new();
+
+        // Drain to low → power-low fires → shed_load engages.
+        power
+            .ingest(
+                &BatteryReading { soc_pct: 15.0, voltage: None, current_a: None, charging: ChargeState::Discharging, source: None },
+                1_000,
+            )
+            .unwrap();
+        for f in engine.tick(&world, 1_000).unwrap() {
+            if let Action::Publish { payload, .. } = f.action {
+                state.apply_advisory(&payload);
+            }
+        }
+        assert!(state.shed_load(), "shed_load should engage at low charge");
+
+        // Recharge to normal → power-recovered fires → shed_load releases.
+        power
+            .ingest(
+                &BatteryReading { soc_pct: 90.0, voltage: None, current_a: None, charging: ChargeState::Discharging, source: None },
+                2_000,
+            )
+            .unwrap();
+        for f in engine.tick(&world, 2_000).unwrap() {
+            if let Action::Publish { payload, .. } = f.action {
+                state.apply_advisory(&payload);
+            }
+        }
+        assert!(!state.shed_load(), "shed_load should release once charge recovers");
     }
 
     #[test]
@@ -372,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn healthy_power_fires_nothing() {
+    fn healthy_power_fires_no_engage_rule() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let power = PowerController::new(PowerThresholds::default())
             .with_world_memory(Arc::clone(&world));
@@ -389,7 +477,17 @@ mod tests {
             )
             .unwrap();
         let engine = ReflexEngine::new(standard_safing_rules(&SafingOptions::default()));
-        assert!(engine.tick(&world, 2_000).unwrap().is_empty());
+        let ids: Vec<String> = engine
+            .tick(&world, 2_000)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.rule_id)
+            .collect();
+        // No engage rule fires at healthy charge — only the recovery rule may
+        // (its clear advisory is a harmless no-op when nothing is shed).
+        assert!(!ids.iter().any(|id| id == "safe-power-critical-escalate"));
+        assert!(!ids.iter().any(|id| id == "safe-power-low"));
+        assert!(ids.iter().all(|id| id == "safe-power-recovered"));
     }
 
     #[test]
