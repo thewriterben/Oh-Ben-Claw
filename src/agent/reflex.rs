@@ -502,6 +502,7 @@ pub struct ReflexController {
     world: Arc<crate::memory::world::WorldMemory>,
     sink: Arc<dyn ActionSink>,
     escalation_budget: Option<EscalationBudget>,
+    metrics: Option<Arc<crate::observability::MetricsRegistry>>,
 }
 
 impl ReflexController {
@@ -516,6 +517,7 @@ impl ReflexController {
             world,
             sink,
             escalation_budget: None,
+            metrics: None,
         }
     }
 
@@ -525,11 +527,34 @@ impl ReflexController {
         self
     }
 
+    /// Record per-rule / per-action fire counts into a metrics registry (surfaced
+    /// on the gateway `/metrics` endpoint). Counters: `reflex.fired_total`,
+    /// `reflex.rule.{id}`, `reflex.action.{kind}`.
+    pub fn with_metrics(mut self, metrics: Arc<crate::observability::MetricsRegistry>) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
+    fn record_fire(&self, f: &FiredReflex) {
+        if let Some(m) = &self.metrics {
+            m.counter("reflex.fired_total").inc();
+            m.counter(format!("reflex.rule.{}", f.rule_id)).inc();
+            let kind = match &f.action {
+                Action::GpioWrite { .. } => "gpio_write",
+                Action::Publish { .. } => "publish",
+                Action::Escalate { .. } => "escalate",
+                Action::Move { .. } => "move",
+            };
+            m.counter(format!("reflex.action.{kind}")).inc();
+        }
+    }
+
     /// Read world state, evaluate reflexes, dispatch the fired actions; returns
     /// what fired. Escalations beyond the budget are fired-but-not-dispatched.
     pub async fn tick_and_dispatch(&self, now_ms: u64) -> anyhow::Result<Vec<FiredReflex>> {
         let fired = self.engine.tick(&self.world, now_ms)?;
         for f in &fired {
+            self.record_fire(f);
             match &f.action {
                 Action::GpioWrite { node_id, pin, value } => {
                     self.sink.gpio_write(node_id, *pin, *value).await?
@@ -868,6 +893,22 @@ mod tests {
         let fired = ctl.tick_and_dispatch(2_000).await.unwrap();
         assert_eq!(fired.len(), 1);
         assert_eq!(sink.calls.lock().unwrap().as_slice(), &["gpio:node-1:18:1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn controller_records_fire_metrics() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        world
+            .observe("sensor.temperature", json!({"value": 30.0}), 1_000, 1_000, "f")
+            .unwrap();
+        let metrics = Arc::new(crate::observability::MetricsRegistry::new());
+        let sink: Arc<dyn ActionSink> = Arc::new(LoggingActionSink);
+        let ctl = ReflexController::new(ReflexEngine::new(vec![fan_rule()]), Arc::clone(&world), sink)
+            .with_metrics(Arc::clone(&metrics));
+        ctl.tick_and_dispatch(2_000).await.unwrap();
+        assert_eq!(metrics.counter("reflex.fired_total").get(), 1);
+        assert_eq!(metrics.counter("reflex.rule.fan-on-hot").get(), 1);
+        assert_eq!(metrics.counter("reflex.action.gpio_write").get(), 1);
     }
 
     #[tokio::test]
