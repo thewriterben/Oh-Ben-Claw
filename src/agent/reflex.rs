@@ -14,6 +14,7 @@
 //! `SafetyGate` (Track 0) — a reflex can request an actuator change but cannot
 //! exceed the on-MCU limits. [`Action::Escalate`] hands control up to System 2.
 
+use crate::movement::{MovementCommand, MovementController};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -110,6 +111,9 @@ pub enum Action {
     Publish { topic: String, payload: Value },
     /// Hand control up to System 2 (wake the LLM agent) with a reason.
     Escalate { reason: String },
+    /// Apply a typed, safety-bounded movement (Movement subsystem). Still bounded
+    /// by the Track 0 gate inside the `MovementController` before it actuates.
+    Move { command: MovementCommand },
 }
 
 /// A reflex rule: when `when` holds, perform `then`, subject to debounce/rate.
@@ -247,6 +251,16 @@ pub trait ActionSink: Send + Sync {
     async fn publish(&self, topic: &str, payload: &Value) -> anyhow::Result<()>;
     /// Hand control to System 2 (the LLM agent) with a reason.
     async fn escalate(&self, reason: &str) -> anyhow::Result<()>;
+    /// Apply a typed movement command. Default: no-op with a warning — sinks that
+    /// support actuation override this (see [`MovementActionSink`], which routes
+    /// the command through the Track 0–bounded [`MovementController`]).
+    async fn move_actuator(&self, command: &MovementCommand) -> anyhow::Result<()> {
+        tracing::warn!(
+            actuator = command.name(),
+            "reflex: move action dispatched to a sink without movement support (no-op)"
+        );
+        Ok(())
+    }
 }
 
 /// Dispatch fired reflex actions to a sink, in order.
@@ -258,6 +272,7 @@ pub async fn dispatch(actions: &[FiredReflex], sink: &dyn ActionSink) -> anyhow:
             }
             Action::Publish { topic, payload } => sink.publish(topic, payload).await?,
             Action::Escalate { reason } => sink.escalate(reason).await?,
+            Action::Move { command } => sink.move_actuator(command).await?,
         }
     }
     Ok(())
@@ -279,6 +294,14 @@ impl ActionSink for LoggingActionSink {
     }
     async fn escalate(&self, reason: &str) -> anyhow::Result<()> {
         tracing::info!(reason, "reflex: escalate to System 2 (dry-run)");
+        Ok(())
+    }
+    async fn move_actuator(&self, command: &MovementCommand) -> anyhow::Result<()> {
+        tracing::info!(
+            actuator = command.name(),
+            tool = command.tool(),
+            "reflex: move (dry-run)"
+        );
         Ok(())
     }
 }
@@ -321,6 +344,57 @@ impl ActionSink for SpineActionSink {
             tracing::warn!(error = %e, "reflex escalation publish failed");
         }
         tracing::info!(reason, "reflex: escalated to System 2");
+        Ok(())
+    }
+    async fn move_actuator(&self, command: &MovementCommand) -> anyhow::Result<()> {
+        // Publish the typed command to the movement topic; the movement node /
+        // controller applies it under its own Track 0 bounds.
+        let topic = format!("{}/movement", crate::spine::TOPIC_PREFIX);
+        let payload = serde_json::to_value(command).unwrap_or(Value::Null);
+        if let Err(e) = self.spine.publish(&topic, &payload).await {
+            tracing::warn!(actuator = command.name(), error = %e, "reflex movement publish failed");
+        }
+        Ok(())
+    }
+}
+
+/// An [`ActionSink`] that applies reflex `Move` actions through the safety-bounded
+/// [`MovementController`] (Track 0 gate + world-memory record), delegating GPIO /
+/// publish / escalate to an inner sink. This is how a reflex actuates *typed*
+/// movement locally rather than emitting a raw GPIO write.
+pub struct MovementActionSink {
+    movement: Arc<MovementController>,
+    inner: Arc<dyn ActionSink>,
+}
+
+impl MovementActionSink {
+    /// Wrap an inner sink, routing `Move` actions through `movement`.
+    pub fn new(movement: Arc<MovementController>, inner: Arc<dyn ActionSink>) -> Self {
+        Self { movement, inner }
+    }
+}
+
+#[async_trait]
+impl ActionSink for MovementActionSink {
+    async fn gpio_write(&self, node_id: &str, pin: i64, value: i64) -> anyhow::Result<()> {
+        self.inner.gpio_write(node_id, pin, value).await
+    }
+    async fn publish(&self, topic: &str, payload: &Value) -> anyhow::Result<()> {
+        self.inner.publish(topic, payload).await
+    }
+    async fn escalate(&self, reason: &str) -> anyhow::Result<()> {
+        self.inner.escalate(reason).await
+    }
+    async fn move_actuator(&self, command: &MovementCommand) -> anyhow::Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        // A refused movement (safety violation) is logged, not propagated — one
+        // bad reflex must never stall the System 1 loop (mirrors the spine sink).
+        if let Err(e) = self.movement.apply(command, now).await {
+            tracing::warn!(actuator = command.name(), error = %e, "reflex move refused/failed");
+        }
         Ok(())
     }
 }
@@ -421,6 +495,7 @@ impl ReflexController {
                         tracing::debug!(reason, "reflex: escalation suppressed by budget");
                     }
                 }
+                Action::Move { command } => self.sink.move_actuator(command).await?,
             }
         }
         Ok(fired)
@@ -593,6 +668,56 @@ mod tests {
         };
         let back: Action = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
         assert_eq!(back, a);
+    }
+
+    #[test]
+    fn move_action_roundtrips() {
+        let a = Action::Move {
+            command: MovementCommand::ServoAngle { name: "arm".into(), channel: 0, degrees: 45.0 },
+        };
+        let js = serde_json::to_string(&a).unwrap();
+        assert!(js.contains("\"type\":\"move\""));
+        assert!(js.contains("\"type\":\"servo_angle\""));
+        assert_eq!(serde_json::from_str::<Action>(&js).unwrap(), a);
+    }
+
+    #[tokio::test]
+    async fn move_action_applies_through_movement_controller() {
+        use crate::movement::LoggingActuatorSink;
+        use crate::security::limits::{SafetyGate, SafetyLimit};
+
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let mut limit = SafetyLimit::new("n1", "servo_angle");
+        limit.allowed_pins = Some(vec![0]);
+        limit.value_min = Some(0);
+        limit.value_max = Some(180);
+        let movement = Arc::new(
+            MovementController::new(
+                "n1",
+                Arc::new(SafetyGate::new(vec![limit])),
+                Arc::new(LoggingActuatorSink),
+            )
+            .with_world_memory(Arc::clone(&world)),
+        );
+        let inner: Arc<dyn ActionSink> = Arc::new(LoggingActionSink);
+        let sink = MovementActionSink::new(movement, inner);
+
+        let fired = vec![FiredReflex {
+            rule_id: "swivel".into(),
+            action: Action::Move {
+                command: MovementCommand::ServoAngle {
+                    name: "arm".into(),
+                    channel: 0,
+                    degrees: 90.0,
+                },
+            },
+        }];
+        dispatch(&fired, &sink).await.unwrap();
+
+        // The reflex Move was applied through the gate and recorded in memory.
+        let fact = world.current("actuator.arm").unwrap().unwrap();
+        assert_eq!(fact.value["tool"], "servo_angle");
+        assert!((fact.value["value"].as_f64().unwrap() - 90.0).abs() < 1e-9);
     }
 
     #[derive(Default)]
