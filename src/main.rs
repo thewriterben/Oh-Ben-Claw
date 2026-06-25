@@ -673,6 +673,119 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
 
+    // Navigation suite: the fusing subsystem — localize from sensor pose facts
+    // and drive toward a goal through the (gated) movement controller. Reuses the
+    // movement controller, so it needs both world memory and movement enabled.
+    if config.navigation.enabled {
+        match (&world_mem, &movement_controller) {
+            (Some(world), Some(mc)) => {
+                let steer = config
+                    .navigation
+                    .steer
+                    .clone()
+                    .map(|a| (a.name, a.channel))
+                    .unwrap_or_else(|| ("steer".to_string(), 0));
+                let drive = config
+                    .navigation
+                    .drive
+                    .clone()
+                    .map(|a| (a.name, a.channel))
+                    .unwrap_or_else(|| ("drive".to_string(), 1));
+                let mut gains = oh_ben_claw::navigation::NavGains::default();
+                if let Some(v) = config.navigation.forward_speed {
+                    gains.forward_speed = v;
+                }
+                if let Some(v) = config.navigation.max_steer_deg {
+                    gains.max_steer_deg = v;
+                }
+                if let Some(v) = config.navigation.heading_kp {
+                    gains.heading_kp = v;
+                }
+                if let Some(v) = config.navigation.align_threshold_deg {
+                    gains.align_threshold_deg = v;
+                }
+                let mut nav = oh_ben_claw::navigation::NavController::new(Arc::clone(mc), steer, drive)
+                    .with_world_memory(Arc::clone(world))
+                    .with_gains(gains);
+                if let Some(s) = &config.navigation.source {
+                    nav = nav.with_source(s.clone());
+                }
+                let nav = Arc::new(nav);
+                all_tools.push(Box::new(oh_ben_claw::tools::builtin::navigation::NavigateTool::new(
+                    Arc::clone(&nav),
+                )));
+                all_tools.push(Box::new(oh_ben_claw::tools::builtin::navigation::NavStatusTool::new(
+                    Arc::clone(&nav),
+                    Arc::clone(world),
+                )));
+                let interval = std::time::Duration::from_millis(
+                    config.navigation.interval_ms.unwrap_or(500).max(100),
+                );
+
+                // Pose fusion (SLAM-lite): when sources are configured, fuse them
+                // into the canonical pose entities the localizer reads, on the same
+                // cadence — so navigation transparently consumes the fused pose.
+                if !config.navigation.pose_sources.is_empty() {
+                    let sources: Vec<oh_ben_claw::navigation::pose_fusion::PoseSource> = config
+                        .navigation
+                        .pose_sources
+                        .iter()
+                        .map(|s| {
+                            oh_ben_claw::navigation::pose_fusion::PoseSource::with_prefix(
+                                &s.prefix, s.weight,
+                            )
+                        })
+                        .collect();
+                    let fuser = oh_ben_claw::navigation::pose_fusion::PoseFuser::new(
+                        sources,
+                        Arc::clone(world),
+                    );
+                    info!(
+                        sources = fuser.source_count(),
+                        "Navigation: pose fusion loop active"
+                    );
+                    tokio::spawn(async move {
+                        let mut ticker = tokio::time::interval(interval);
+                        loop {
+                            ticker.tick().await;
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0);
+                            if let Err(e) = fuser.fuse(now) {
+                                tracing::warn!("pose fusion failed: {e}");
+                            }
+                        }
+                    });
+                }
+
+                let nav_loop = Arc::clone(&nav);
+                info!("Navigation suite: navigate + nav_status tools active");
+                tokio::spawn(async move {
+                    let mut ticker = tokio::time::interval(interval);
+                    loop {
+                        ticker.tick().await;
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        if let Err(e) = nav_loop.step_toward_goal(now).await {
+                            tracing::warn!("nav step failed: {e}");
+                        }
+                    }
+                });
+            }
+            (None, _) => tracing::warn!(
+                "[navigation] enabled but [perception].world_memory is off — navigation needs \
+                 world memory; skipping"
+            ),
+            (_, None) => tracing::warn!(
+                "[navigation] enabled but the movement controller is unavailable (needs \
+                 [movement] enabled + [safety]); skipping"
+            ),
+        }
+    }
+
     // Shared observability context — one metrics registry across the reflex loop
     // (per-rule/action fire counts) and the gateway `/metrics` endpoint.
     let obs = Arc::new(observability::ObsContext::new());
