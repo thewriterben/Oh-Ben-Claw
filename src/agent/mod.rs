@@ -11,6 +11,7 @@ pub mod orchestrator;
 pub mod pool;
 pub mod reflex;
 pub mod reflexion;
+pub mod safing;
 pub mod streaming;
 pub use edge::{EdgeAgent, EdgeAgentBuilder};
 pub use handle::{AgentEvent, AgentHandle};

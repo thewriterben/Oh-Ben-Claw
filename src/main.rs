@@ -445,16 +445,259 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             None
         };
 
+    // Movement subsystem: expose the safety-bounded `move_actuator` tool to the
+    // agent (System 2), and keep the controller so System 1 reflexes can route
+    // `Action::Move` through the *same* gate (below). Physical actuation MUST be
+    // deterministically bounded (Suite §7), so it requires the Track 0 gate;
+    // commanded state is recorded into world memory when available.
+    let movement_controller: Option<Arc<oh_ben_claw::movement::MovementController>> =
+        if config.movement.enabled {
+            match &safety_gate {
+                Some(gate) => {
+                    // Drive real hardware over the spine when connected; fall back
+                    // to the dry-run logging sink otherwise.
+                    let sink: Arc<dyn oh_ben_claw::movement::ActuatorSink> = match &reflex_spine {
+                        Some(spine) => {
+                            info!("Movement actuation dispatches over the spine");
+                            Arc::new(oh_ben_claw::movement::SpineActuatorSink::new(Arc::clone(spine)))
+                        }
+                        None => Arc::new(oh_ben_claw::movement::LoggingActuatorSink),
+                    };
+                    let mut controller = oh_ben_claw::movement::MovementController::new(
+                        config.movement.node_id.clone(),
+                        Arc::clone(gate),
+                        sink,
+                    );
+                    if let Some(world) = &world_mem {
+                        controller = controller.with_world_memory(Arc::clone(world));
+                    }
+                    let controller = Arc::new(controller);
+                    all_tools.push(Box::new(
+                        oh_ben_claw::tools::builtin::movement::MovementTool::new(Arc::clone(
+                            &controller,
+                        )),
+                    ));
+                    info!(node_id = %config.movement.node_id, "Movement subsystem: move_actuator tool active");
+                    Some(controller)
+                }
+                None => {
+                    tracing::warn!(
+                        "[movement] enabled but [safety] is off — movement is physical and \
+                         requires deterministic limits; skipping move_actuator tool"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+    // Sensing subsystem: expose the quality-aware `sense` tool. Non-actuating
+    // (reads + reversible memory appends), so it needs no Track 0 gate; it
+    // records quality-classified readings into world memory as `sensor.{quantity}`
+    // facts, which reflexes already consume. Requires world memory to be on.
+    if config.sensing.enabled {
+        match &world_mem {
+            Some(world) => {
+                let specs: Vec<(String, oh_ben_claw::sensing::QuantitySpec)> = config
+                    .sensing
+                    .quantities
+                    .iter()
+                    .map(|q| {
+                        (
+                            q.name.clone(),
+                            oh_ben_claw::sensing::QuantitySpec {
+                                min: q.min,
+                                max: q.max,
+                                max_staleness_ms: q.max_staleness_ms,
+                                unit: q.unit.clone(),
+                            },
+                        )
+                    })
+                    .collect();
+                let mut controller = oh_ben_claw::sensing::SensingController::new(specs)
+                    .with_world_memory(Arc::clone(world));
+                if let Some(source) = &config.sensing.source {
+                    controller = controller.with_source(source.clone());
+                }
+                let controller = Arc::new(controller);
+                all_tools.push(Box::new(oh_ben_claw::tools::builtin::sensing::SenseTool::new(
+                    Arc::clone(&controller),
+                    Arc::clone(world),
+                )));
+                info!(
+                    quantities = config.sensing.quantities.len(),
+                    "Sensing subsystem: sense tool active"
+                );
+            }
+            None => {
+                tracing::warn!(
+                    "[sensing] enabled but [perception].world_memory is off — the sense \
+                     tool needs world memory to record and query readings; skipping"
+                );
+            }
+        }
+    }
+
+    // Audio suite: expose `hear` (perceive) + `speak` (act). Heard events and
+    // spoken utterances are recorded into world memory (`audio.{stream}`,
+    // `speech.last`); speech is emitted through the dry-run logging sink until a
+    // real engine/speaker is wired. Requires world memory to be on.
+    if config.audio_suite.enabled {
+        match &world_mem {
+            Some(world) => {
+                // Emit speech over the spine when connected; dry-run otherwise.
+                let speech_sink: Arc<dyn oh_ben_claw::audio::suite::SpeechSink> = match &reflex_spine {
+                    Some(spine) => {
+                        info!("Audio: speech emitted over the spine");
+                        Arc::new(oh_ben_claw::audio::suite::SpineSpeechSink::new(Arc::clone(spine)))
+                    }
+                    None => Arc::new(oh_ben_claw::audio::suite::LoggingSpeechSink),
+                };
+                let mut controller = oh_ben_claw::audio::suite::AudioController::new(speech_sink)
+                    .with_world_memory(Arc::clone(world));
+                if let Some(min) = config.audio_suite.min_confidence {
+                    controller = controller.with_min_confidence(min);
+                }
+                if let Some(source) = &config.audio_suite.source {
+                    controller = controller.with_source(source.clone());
+                }
+                let controller = Arc::new(controller);
+                let voice = config
+                    .audio_suite
+                    .voice
+                    .clone()
+                    .unwrap_or_else(|| "nova".to_string());
+                all_tools.push(Box::new(oh_ben_claw::tools::builtin::audio_suite::HearTool::new(
+                    Arc::clone(&controller),
+                    Arc::clone(world),
+                )));
+                all_tools.push(Box::new(oh_ben_claw::tools::builtin::audio_suite::SpeakTool::new(
+                    Arc::clone(&controller),
+                    voice,
+                )));
+                info!("Audio suite: hear + speak tools active");
+            }
+            None => {
+                tracing::warn!(
+                    "[audio_suite] enabled but [perception].world_memory is off — the hear/speak \
+                     tools need world memory to record events; skipping"
+                );
+            }
+        }
+    }
+
+    // Power suite: expose the `power` tool and record battery telemetry + a
+    // derived power mode into world memory (`power.battery`, `power.mode`).
+    // Reflexes can watch `power.mode == critical` for low-power safing. Requires
+    // world memory to be on.
+    if config.power.enabled {
+        match &world_mem {
+            Some(world) => {
+                let defaults = oh_ben_claw::power::PowerThresholds::default();
+                let thresholds = oh_ben_claw::power::PowerThresholds {
+                    low_pct: config.power.low_pct.unwrap_or(defaults.low_pct),
+                    critical_pct: config.power.critical_pct.unwrap_or(defaults.critical_pct),
+                };
+                let mut controller =
+                    oh_ben_claw::power::PowerController::new(thresholds).with_world_memory(Arc::clone(world));
+                if let Some(source) = &config.power.source {
+                    controller = controller.with_source(source.clone());
+                }
+                let controller = Arc::new(controller);
+                all_tools.push(Box::new(oh_ben_claw::tools::builtin::power::PowerTool::new(
+                    Arc::clone(&controller),
+                    Arc::clone(world),
+                )));
+                info!(
+                    low_pct = thresholds.low_pct,
+                    critical_pct = thresholds.critical_pct,
+                    "Power suite: power tool active"
+                );
+            }
+            None => {
+                tracing::warn!(
+                    "[power] enabled but [perception].world_memory is off — the power tool needs \
+                     world memory to record telemetry; skipping"
+                );
+            }
+        }
+    }
+
+    // Comms suite: expose the `comms` tool and record per-link state
+    // (`link.{name}`) + an aggregate `net.mode` into world memory. Reflexes can
+    // watch `net.mode` (offline/degraded) for connectivity safing. Requires
+    // world memory to be on.
+    if config.comms.enabled {
+        match &world_mem {
+            Some(world) => {
+                let defaults = oh_ben_claw::comms::LinkThresholds::default();
+                let thresholds = oh_ben_claw::comms::LinkThresholds {
+                    min_rssi_dbm: config.comms.min_rssi_dbm.unwrap_or(defaults.min_rssi_dbm),
+                    max_latency_ms: config.comms.max_latency_ms.unwrap_or(defaults.max_latency_ms),
+                    max_loss_pct: config.comms.max_loss_pct.unwrap_or(defaults.max_loss_pct),
+                };
+                let mut controller =
+                    oh_ben_claw::comms::CommsController::new(thresholds).with_world_memory(Arc::clone(world));
+                if let Some(source) = &config.comms.source {
+                    controller = controller.with_source(source.clone());
+                }
+                let controller = Arc::new(controller);
+                all_tools.push(Box::new(oh_ben_claw::tools::builtin::comms::CommsTool::new(
+                    Arc::clone(&controller),
+                    Arc::clone(world),
+                )));
+                info!(
+                    max_latency_ms = thresholds.max_latency_ms,
+                    "Comms suite: comms tool active"
+                );
+            }
+            None => {
+                tracing::warn!(
+                    "[comms] enabled but [perception].world_memory is off — the comms tool needs \
+                     world memory to record telemetry; skipping"
+                );
+            }
+        }
+    }
+
     // Phase 18: spawn the dual-system reflex controller (System 1) when enabled.
-    // Uses the safe dry-run logging sink until the real spine sink is wired.
-    if config.reflex.enabled && !config.reflex.rules.is_empty() {
+    // Operator rules are merged with the standard safing rules (when [reflex]
+    // safing = true) so the suite mode hooks (power.mode, net.mode, …) drive
+    // deterministic safing actions. Uses the dry-run logging sink until spine.
+    let reflex_rules: Vec<oh_ben_claw::agent::reflex::ReflexRule> = {
+        let mut rules = config.reflex.rules.clone();
+        if config.reflex.safing {
+            let opts = oh_ben_claw::agent::safing::SafingOptions {
+                stop_actuator: config
+                    .reflex
+                    .safing_stop_actuator
+                    .as_ref()
+                    .map(|a| (a.name.clone(), a.channel)),
+                alarm_streams: config.reflex.safing_alarm_streams.clone(),
+                unreliable_sensors: config.reflex.safing_unreliable_sensors.clone(),
+                overheat: config
+                    .reflex
+                    .safing_overheat
+                    .iter()
+                    .map(|o| (o.quantity.clone(), o.threshold))
+                    .collect(),
+                debounce_ms: 0,
+            };
+            let safing = oh_ben_claw::agent::safing::standard_safing_rules(&opts);
+            info!(count = safing.len(), "Phase 18 safing rules appended");
+            rules.extend(safing);
+        }
+        rules
+    };
+    if config.reflex.enabled && !reflex_rules.is_empty() {
         if let Some(world) = &world_mem {
             use oh_ben_claw::agent::reflex::{
-                ActionSink, EscalationBudget, LoggingActionSink, ReflexController, ReflexEngine,
-                SpineActionSink,
+                ActionSink, EscalationBudget, LoggingActionSink, MovementActionSink,
+                ReflexController, ReflexEngine, SpineActionSink,
             };
-            let engine = ReflexEngine::new(config.reflex.rules.clone());
-            let sink: Arc<dyn ActionSink> = match &reflex_spine {
+            let engine = ReflexEngine::new(reflex_rules.clone());
+            let base_sink: Arc<dyn ActionSink> = match &reflex_spine {
                 Some(spine) => {
                     info!("Phase 18 reflexes dispatch over the spine");
                     Arc::new(SpineActionSink::new(Arc::clone(spine)))
@@ -464,6 +707,16 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     Arc::new(LoggingActionSink)
                 }
             };
+            // Route reflex `Move` actions through the gated movement controller
+            // (other actions delegate to the spine/logging sink). System 1 now
+            // actuates typed, safety-bounded movement, not just raw GPIO.
+            let sink: Arc<dyn ActionSink> = match &movement_controller {
+                Some(mc) => {
+                    info!("Phase 18 reflex Move actions routed through the movement controller");
+                    Arc::new(MovementActionSink::new(Arc::clone(mc), base_sink))
+                }
+                None => base_sink,
+            };
             let mut controller = ReflexController::new(engine, Arc::clone(world), sink);
             if let Some(max) = config.reflex.max_escalations_per_min {
                 controller = controller.with_escalation_budget(EscalationBudget::per_minute(max));
@@ -471,7 +724,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             let interval =
                 std::time::Duration::from_millis(config.reflex.interval_ms.unwrap_or(1000));
             info!(
-                rules = config.reflex.rules.len(),
+                rules = reflex_rules.len(),
                 "Phase 18 reflex controller spawned"
             );
             tokio::spawn(async move {

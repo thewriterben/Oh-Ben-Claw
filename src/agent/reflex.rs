@@ -59,8 +59,34 @@ impl Cmp {
     }
 }
 
-/// A condition evaluated against a snapshot of current world state
-/// (`entity -> numeric value`). A missing entity makes the leaf condition false.
+/// A snapshot of current world state used to evaluate conditions: numeric values
+/// (for `Sensor`/`GpioEq`) and the raw fact values (for `State`). A missing
+/// entity makes the leaf condition false.
+#[derive(Debug, Clone, Default)]
+pub struct Snapshot {
+    /// Entity → numeric value (number, bool, numeric string, or `{value}` object).
+    pub nums: HashMap<String, f64>,
+    /// Entity → raw fact value (for categorical `State` matching).
+    pub vals: HashMap<String, Value>,
+}
+
+impl Snapshot {
+    /// An empty snapshot.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Build from numeric pairs only (convenience; no categorical values).
+    pub fn from_nums(nums: HashMap<String, f64>) -> Self {
+        Self {
+            nums,
+            vals: HashMap::new(),
+        }
+    }
+}
+
+/// A condition evaluated against a [`Snapshot`] of current world state. A missing
+/// entity makes the leaf condition false.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum Condition {
@@ -68,6 +94,18 @@ pub enum Condition {
     Sensor { entity: String, op: Cmp, value: f64 },
     /// A GPIO/entity equals an integer value.
     GpioEq { entity: String, value: i64 },
+    /// A fact's (optionally nested) string value equals `equals`. With `field`,
+    /// the fact value must be an object and `field` its string member (e.g.
+    /// entity `power.mode`, field `mode`, equals `critical`); without `field`,
+    /// the fact value must itself be a JSON string. This is how reflexes match
+    /// the categorical mode hooks the suites emit (`power.mode`, `net.mode`,
+    /// `audio.{stream}` labels, sensor `quality`).
+    State {
+        entity: String,
+        #[serde(default)]
+        field: Option<String>,
+        equals: String,
+    },
     /// All sub-conditions hold.
     And { all: Vec<Condition> },
     /// Any sub-condition holds.
@@ -75,24 +113,36 @@ pub enum Condition {
 }
 
 impl Condition {
-    /// Evaluate against a snapshot of entity → numeric value.
-    pub fn eval(&self, snapshot: &HashMap<String, f64>) -> bool {
+    /// Evaluate against a [`Snapshot`].
+    pub fn eval(&self, snap: &Snapshot) -> bool {
         match self {
             Condition::Sensor { entity, op, value } => {
-                snapshot.get(entity).is_some_and(|v| op.test(*v, *value))
+                snap.nums.get(entity).is_some_and(|v| op.test(*v, *value))
             }
-            Condition::GpioEq { entity, value } => snapshot
+            Condition::GpioEq { entity, value } => snap
+                .nums
                 .get(entity)
                 .is_some_and(|v| Cmp::Eq.test(*v, *value as f64)),
-            Condition::And { all } => all.iter().all(|c| c.eval(snapshot)),
-            Condition::Or { any } => any.iter().any(|c| c.eval(snapshot)),
+            Condition::State { entity, field, equals } => {
+                snap.vals.get(entity).is_some_and(|v| {
+                    let s = match field {
+                        Some(f) => v.get(f).and_then(|x| x.as_str()),
+                        None => v.as_str(),
+                    };
+                    s == Some(equals.as_str())
+                })
+            }
+            Condition::And { all } => all.iter().all(|c| c.eval(snap)),
+            Condition::Or { any } => any.iter().any(|c| c.eval(snap)),
         }
     }
 
     /// Collect all entity names this condition references (for snapshotting).
     pub fn collect_entities(&self, set: &mut HashSet<String>) {
         match self {
-            Condition::Sensor { entity, .. } | Condition::GpioEq { entity, .. } => {
+            Condition::Sensor { entity, .. }
+            | Condition::GpioEq { entity, .. }
+            | Condition::State { entity, .. } => {
                 set.insert(entity.clone());
             }
             Condition::And { all } => all.iter().for_each(|c| c.collect_entities(set)),
@@ -180,7 +230,7 @@ impl ReflexEngine {
 
     /// Evaluate all rules against `snapshot` at `now_ms`; returns the actions to
     /// perform (respecting debounce/rate), and records fire times.
-    pub fn evaluate(&self, snapshot: &HashMap<String, f64>, now_ms: u64) -> Vec<FiredReflex> {
+    pub fn evaluate(&self, snapshot: &Snapshot, now_ms: u64) -> Vec<FiredReflex> {
         let mut guard = self
             .last_fire
             .lock()
@@ -226,12 +276,13 @@ impl ReflexEngine {
         world: &crate::memory::world::WorldMemory,
         now_ms: u64,
     ) -> anyhow::Result<Vec<FiredReflex>> {
-        let mut snapshot = HashMap::new();
+        let mut snapshot = Snapshot::new();
         for entity in self.referenced_entities() {
             if let Some(fact) = world.current(&entity)? {
                 if let Some(v) = fact_to_f64(&fact.value) {
-                    snapshot.insert(entity, v);
+                    snapshot.nums.insert(entity.clone(), v);
                 }
+                snapshot.vals.insert(entity, fact.value);
             }
         }
         Ok(self.evaluate(&snapshot, now_ms))
@@ -557,8 +608,72 @@ mod tests {
         assert!(e.tick(&world, 4_000).unwrap().is_empty());
     }
 
-    fn snap(pairs: &[(&str, f64)]) -> HashMap<String, f64> {
-        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    fn snap(pairs: &[(&str, f64)]) -> Snapshot {
+        Snapshot::from_nums(pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect())
+    }
+
+    fn snap_vals(pairs: &[(&str, Value)]) -> Snapshot {
+        let mut s = Snapshot::new();
+        for (k, v) in pairs {
+            s.vals.insert(k.to_string(), v.clone());
+        }
+        s
+    }
+
+    #[test]
+    fn state_condition_matches_categorical_modes() {
+        // bare-string fact value
+        let bare = Condition::State {
+            entity: "net.mode".into(),
+            field: None,
+            equals: "offline".into(),
+        };
+        assert!(bare.eval(&snap_vals(&[("net.mode", json!("offline"))])));
+        assert!(!bare.eval(&snap_vals(&[("net.mode", json!("online"))])));
+
+        // nested-field fact value (power.mode object)
+        let nested = Condition::State {
+            entity: "power.mode".into(),
+            field: Some("mode".into()),
+            equals: "critical".into(),
+        };
+        assert!(nested.eval(&snap_vals(&[("power.mode", json!({"mode": "critical", "soc_pct": 8.0}))])));
+        assert!(!nested.eval(&snap_vals(&[("power.mode", json!({"mode": "normal"}))])));
+        // missing entity ⇒ false
+        assert!(!nested.eval(&snap_vals(&[])));
+    }
+
+    #[test]
+    fn state_condition_roundtrips() {
+        let c = Condition::State {
+            entity: "power.mode".into(),
+            field: Some("mode".into()),
+            equals: "critical".into(),
+        };
+        let js = serde_json::to_string(&c).unwrap();
+        assert!(js.contains("\"type\":\"state\""));
+        assert_eq!(serde_json::from_str::<Condition>(&js).unwrap(), c);
+    }
+
+    #[test]
+    fn tick_fires_state_rule_from_world_memory() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        world
+            .observe("power.mode", json!({"mode": "critical", "soc_pct": 5.0}), 1_000, 1_000, "power")
+            .unwrap();
+        let rule = ReflexRule {
+            id: "safe-power-critical".into(),
+            when: Condition::State {
+                entity: "power.mode".into(),
+                field: Some("mode".into()),
+                equals: "critical".into(),
+            },
+            then: Action::Escalate { reason: "battery critical".into() },
+            debounce_ms: 0,
+            max_rate_hz: None,
+        };
+        let e = ReflexEngine::new(vec![rule]);
+        assert_eq!(e.tick(&world, 2_000).unwrap().len(), 1);
     }
 
     fn fan_rule() -> ReflexRule {

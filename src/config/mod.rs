@@ -1294,6 +1294,124 @@ fn default_clawcam_source() -> String {
     "clawcam".to_string()
 }
 
+/// Movement subsystem configuration (`[movement]`). Exposes the safety-bounded
+/// `move_actuator` tool to the agent. Requires `[safety] enabled = true` —
+/// movement is physical and MUST be deterministically bounded (Suite §7).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MovementConfig {
+    /// Enable the `move_actuator` tool.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Node id the movement safety limits apply to (matches `[[safety.limit]]`
+    /// `node_id`); used for the `servo_angle`/`motor_speed`/`stop` limits.
+    #[serde(default = "default_movement_node_id")]
+    pub node_id: String,
+}
+
+fn default_movement_node_id() -> String {
+    "movement".to_string()
+}
+
+/// Sensing subsystem configuration (`[sensing]`). Exposes the quality-aware
+/// `sense` tool and (optionally) records ingested readings into world memory as
+/// `sensor.{quantity}` facts. Sensing is non-actuating, so unlike movement it
+/// does not require `[safety]`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SensingConfig {
+    /// Enable the `sense` tool and sensing controller.
+    #[serde(default)]
+    pub enabled: bool,
+    /// World-memory `source` label for ingested readings. Default `"sensing"`.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Per-quantity expectations driving quality classification
+    /// (`[[sensing.quantity]]` array-of-tables).
+    #[serde(default, rename = "quantity")]
+    pub quantities: Vec<SensingQuantityConfig>,
+}
+
+/// Expected bounds + freshness for one sensor stream (`[[sensing.quantity]]`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SensingQuantityConfig {
+    /// Stream name (e.g. `"temperature"`). Becomes `sensor.{name}`.
+    pub name: String,
+    /// Inclusive minimum acceptable value; readings below are `out_of_range`.
+    #[serde(default)]
+    pub min: Option<f64>,
+    /// Inclusive maximum acceptable value; readings above are `out_of_range`.
+    #[serde(default)]
+    pub max: Option<f64>,
+    /// Max ms between readings before the stream is considered `stale`.
+    #[serde(default)]
+    pub max_staleness_ms: Option<u64>,
+    /// Canonical unit; used when a reading omits its own.
+    #[serde(default)]
+    pub unit: Option<String>,
+}
+
+/// Audio suite configuration (`[audio_suite]`). Exposes the `hear` (perceive)
+/// and `speak` (act) tools. Heard events and spoken utterances are recorded into
+/// world memory; speech is emitted through the configured sink (dry-run logging
+/// until a real engine is wired). Requires `[perception].world_memory = true`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AudioSuiteConfig {
+    /// Enable the `hear` + `speak` tools and the audio controller.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Confidence floor below which heard events are flagged unreliable. Default 0.5.
+    #[serde(default)]
+    pub min_confidence: Option<f64>,
+    /// Default voice for `speak` when the call omits one. Default `"nova"`.
+    #[serde(default)]
+    pub voice: Option<String>,
+    /// World-memory `source` label for audio facts. Default `"audio"`.
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// Power suite configuration (`[power]`). Exposes the `power` tool and records
+/// battery telemetry + a derived power mode into world memory (`power.battery`,
+/// `power.mode`). Reflexes can watch `power.mode` for low-power safing. Requires
+/// `[perception].world_memory = true`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PowerConfig {
+    /// Enable the `power` tool and controller.
+    #[serde(default)]
+    pub enabled: bool,
+    /// SoC percent at/below which (and not charging) the mode is `low`. Default 20.
+    #[serde(default)]
+    pub low_pct: Option<f64>,
+    /// SoC percent at/below which (and not charging) the mode is `critical`. Default 10.
+    #[serde(default)]
+    pub critical_pct: Option<f64>,
+    /// World-memory `source` label for power facts. Default `"power"`.
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// Comms suite configuration (`[comms]`). Exposes the `comms` tool and records
+/// per-link state (`link.{name}`) + an aggregate `net.mode` into world memory.
+/// Reflexes can watch `net.mode` for offline / degraded-mode safing. Requires
+/// `[perception].world_memory = true`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CommsConfig {
+    /// Enable the `comms` tool and controller.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Below this RSSI (dBm) a link is `degraded`. Default -80.
+    #[serde(default)]
+    pub min_rssi_dbm: Option<f64>,
+    /// Above this latency (ms) a link is `degraded`. Default 500.
+    #[serde(default)]
+    pub max_latency_ms: Option<f64>,
+    /// Above this loss (%) a link is `degraded`. Default 5.
+    #[serde(default)]
+    pub max_loss_pct: Option<f64>,
+    /// World-memory `source` label for comms facts. Default `"comms"`.
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
 /// Phase 18 dual-system reflex configuration (`[reflex]`). System 1: fast local
 /// rules evaluated against world memory on a cadence. Requires `[perception]
 /// world_memory = true`. Actions run via the safe dry-run logging sink until the
@@ -1312,6 +1430,41 @@ pub struct ReflexConfig {
     /// The reflex rules to evaluate.
     #[serde(default)]
     pub rules: Vec<crate::agent::reflex::ReflexRule>,
+    /// Append the standard safing rules (power/comms mode → safing actions).
+    #[serde(default)]
+    pub safing: bool,
+    /// On `power.mode == critical`, also `Stop` this actuator via the movement
+    /// controller (Track 0–bounded). Only used when `safing = true`.
+    #[serde(default)]
+    pub safing_stop_actuator: Option<SafingActuatorConfig>,
+    /// Audio streams to escalate on an `"alarm"` label (safing). E.g. `["mic0"]`.
+    #[serde(default)]
+    pub safing_alarm_streams: Vec<String>,
+    /// Sensor quantities to escalate when out-of-range (safing). E.g. `["temperature"]`.
+    #[serde(default)]
+    pub safing_unreliable_sensors: Vec<String>,
+    /// Overheat / over-limit guards (`[[reflex.safing_overheat]]`): escalate when
+    /// `sensor.{quantity}` exceeds `threshold`.
+    #[serde(default)]
+    pub safing_overheat: Vec<OverheatConfig>,
+}
+
+/// Actuator to stop on power-critical safing (`[reflex.safing_stop_actuator]`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SafingActuatorConfig {
+    /// Actuator id (matches a movement `actuator.{name}`).
+    pub name: String,
+    /// Hardware channel.
+    pub channel: i64,
+}
+
+/// A numeric over-limit safing guard (`[[reflex.safing_overheat]]`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OverheatConfig {
+    /// Sensor quantity to watch (becomes `sensor.{quantity}`).
+    pub quantity: String,
+    /// Escalate when the reading exceeds this value.
+    pub threshold: f64,
 }
 
 /// Phase 16 experiential self-improvement configuration (`[self_improvement]`).
@@ -1393,6 +1546,21 @@ pub struct Config {
     /// Phase 18 dual-system reflexes (System 1).
     #[serde(default)]
     pub reflex: ReflexConfig,
+    /// Movement subsystem — typed, safety-bounded actuation tool.
+    #[serde(default)]
+    pub movement: MovementConfig,
+    /// Sensing subsystem — quality-aware sensor ingestion + `sense` tool.
+    #[serde(default)]
+    pub sensing: SensingConfig,
+    /// Audio suite — `hear` (perceive) + `speak` (act) tools.
+    #[serde(default)]
+    pub audio_suite: AudioSuiteConfig,
+    /// Power suite — battery telemetry + derived power mode for safing.
+    #[serde(default)]
+    pub power: PowerConfig,
+    /// Comms suite — link telemetry + aggregate net mode for offline safing.
+    #[serde(default)]
+    pub comms: CommsConfig,
 }
 
 impl Config {
