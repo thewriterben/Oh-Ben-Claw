@@ -5,6 +5,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Embodied Subsystem Suites + Safing (2026-06-25)
+
+A breadth-then-depth build-out: four new capability suites on the shared
+perceive → remember → react → act spine, reflexes that react to categorical
+modes, and a self-healing safing layer — all Track 0–bounded, world-memory
+recorded, and verified end to end.
+
+### Added — capability suites
+
+- **Sensing suite** (`src/sensing/mod.rs`) — `SensingController` ingests `Sample`s, classifies each against a `QuantitySpec` (range → `out_of_range`, freshness → `stale`), records `sensor.{quantity}` facts with a `quality` flag, and surfaces `anomalies()`. Exposed via the `sense` MCP tool (`src/tools/builtin/sensing.rs`; ingest/current/history/anomalies; `RiskClass::safe`). `[sensing]` config with `[[sensing.quantity]]` specs.
+- **Audio suite** (`src/audio/suite.rs`) — bidirectional. *Perceive:* `AudioController::observe` classifies a `HeardEvent` for reliability and records `audio.{stream}`. *Act:* `speak` records `speech.last` and emits through a pluggable `SpeechSink`. Tools `hear` (safe) + `speak` (physical, low-blast, recorded but not approval-gated) in `src/tools/builtin/audio_suite.rs`. `[audio_suite]` config.
+- **Power suite** (`src/power/mod.rs`) — `PowerController.ingest(BatteryReading)` derives a `PowerMode` (`normal`/`low`/`critical`/`charging`) from SoC + charge state vs thresholds, recording `power.battery` + a dedicated `power.mode` reflex hook. `power` MCP tool (`src/tools/builtin/power.rs`). `[power]` config.
+- **Comms suite** (`src/comms/mod.rs`) — `CommsController.ingest(LinkReading)` classifies each link (`online`/`degraded`/`offline`/`unknown`), records `link.{name}`, and aggregates the best link into a `net.mode` hook. `comms` MCP tool (`src/tools/builtin/comms.rs`). `[comms]` config.
+
+### Added — reflexes & safing (System 1 depth)
+
+- **`Condition::State`** (`src/agent/reflex.rs`) — categorical match on a fact's string value or a nested field, so reflexes can react to the suites' mode hooks (`power.mode`, `net.mode`, `audio` labels, sensor `quality`). New `Snapshot { nums, vals }`; numeric path unchanged.
+- **Safing rule library** (`src/agent/safing.rs`) — canonical, debounced rules: power critical (escalate + optional Track 0 `Stop`), power low (shed-load advisory), net offline/degraded, audio-alarm, out-of-range sensor, numeric overheat. Merged into the live controller via `[reflex] safing = true` (+ `safing_stop_actuator`, `safing_alarm_streams`, `safing_unreliable_sensors`, `[[reflex.safing_overheat]]`).
+- **Self-healing recovery** — `safe-power-recovered` / `safe-net-recovered` publish `clear_*` advisories when modes return to normal; `SafingState` releases the matching flags automatically.
+- **In-process safing executor** — `SafingState` (atomic flags) + `SafingSink` tap `obc/safing` advisories so the host actually backs off; the ClawCam detection poll sheds (skips) while `shed_load` is engaged and resumes on recovery.
+
+### Added — real sinks & closed-loop control
+
+- **`SpineSpeechSink`** / **`TtsSpeechSink`** — emit speech over the spine (`obc/speech`) or render locally via TTS; `main` selects by config/connection, dry-run otherwise. `SpineActuatorSink` drives movement nodes over the spine.
+- **Closed-loop movement** (`src/movement/feedback.rs`) — bounded `PController` + `ClosedLoopServo` reads a world-memory feedback entity and steps the gated `MovementController` toward a target (Suite §6 Accelerate, L3).
+
+### Added — registry & docs
+
+- **Subsystem-suite hardware** in the registry SSOT (`src/peripherals/registry.rs`): capability tokens `actuate`, `audio_output`, `cellular`; accessories sg90, tb6612fng, pca9685, inmp441, max98357a, max17048, sim7600. Regenerate `registry.json` via `emit-registry`.
+- **`docs/SUBSYSTEM-SUITES-STATUS.md`** — as-built status: suite table, world-memory hooks, MCP tool registry with risk classes, reflex reference, safing table, sink matrix, config block.
+
+### Tests
+
+- Per-suite unit + tool tests; safing end-to-end tests (controller → world memory → reflex fires/recovers); reflex `State` tests; closed-loop convergence test; registry accessory tests; and `tests/embodied_safing_loop.rs` — a 3-scenario integration test (battery drain, network loss, independent recovery) exercising the whole spine as a unit.
+
+---
+
 ## Unreleased — Phase 15 Production Hardening, WS1 (2026-06-05)
 
 ### Added
