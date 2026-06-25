@@ -546,14 +546,26 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     if config.audio_suite.enabled {
         match &world_mem {
             Some(world) => {
-                // Emit speech over the spine when connected; dry-run otherwise.
-                let speech_sink: Arc<dyn oh_ben_claw::audio::suite::SpeechSink> = match &reflex_spine {
-                    Some(spine) => {
-                        info!("Audio: speech emitted over the spine");
-                        Arc::new(oh_ben_claw::audio::suite::SpineSpeechSink::new(Arc::clone(spine)))
-                    }
-                    None => Arc::new(oh_ben_claw::audio::suite::LoggingSpeechSink),
-                };
+                // Render speech locally via TTS, else over the spine when
+                // connected, else dry-run.
+                let speech_sink: Arc<dyn oh_ben_claw::audio::suite::SpeechSink> =
+                    if config.audio_suite.render_tts {
+                        let dir = config
+                            .audio_suite
+                            .tts_out_dir
+                            .clone()
+                            .unwrap_or_else(|| "/tmp".to_string());
+                        info!(dir = %dir, "Audio: speech rendered locally via TTS");
+                        Arc::new(oh_ben_claw::audio::suite::TtsSpeechSink::new(dir))
+                    } else {
+                        match &reflex_spine {
+                            Some(spine) => {
+                                info!("Audio: speech emitted over the spine");
+                                Arc::new(oh_ben_claw::audio::suite::SpineSpeechSink::new(Arc::clone(spine)))
+                            }
+                            None => Arc::new(oh_ben_claw::audio::suite::LoggingSpeechSink),
+                        }
+                    };
                 let mut controller = oh_ben_claw::audio::suite::AudioController::new(speech_sink)
                     .with_world_memory(Arc::clone(world));
                 if let Some(min) = config.audio_suite.min_confidence {
@@ -661,6 +673,11 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
 
+    // Shared host-side safing state: flipped in-process when a safing advisory
+    // fires (via the SafingSink tap below), read by load-shedding consumers
+    // (e.g. the ClawCam poll backs off when shed_load is set).
+    let safing_state = Arc::new(oh_ben_claw::agent::safing::SafingState::new());
+
     // Phase 18: spawn the dual-system reflex controller (System 1) when enabled.
     // Operator rules are merged with the standard safing rules (when [reflex]
     // safing = true) so the suite mode hooks (power.mode, net.mode, …) drive
@@ -710,13 +727,19 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             // Route reflex `Move` actions through the gated movement controller
             // (other actions delegate to the spine/logging sink). System 1 now
             // actuates typed, safety-bounded movement, not just raw GPIO.
-            let sink: Arc<dyn ActionSink> = match &movement_controller {
+            let move_sink: Arc<dyn ActionSink> = match &movement_controller {
                 Some(mc) => {
                     info!("Phase 18 reflex Move actions routed through the movement controller");
                     Arc::new(MovementActionSink::new(Arc::clone(mc), base_sink))
                 }
                 None => base_sink,
             };
+            // Tap safing advisories into the shared SafingState (in-process
+            // load-shedding), still forwarding every action to the sink above.
+            let sink: Arc<dyn ActionSink> = Arc::new(oh_ben_claw::agent::safing::SafingSink::new(
+                Arc::clone(&safing_state),
+                move_sink,
+            ));
             let mut controller = ReflexController::new(engine, Arc::clone(world), sink);
             if let Some(max) = config.reflex.max_escalations_per_min {
                 controller = controller.with_escalation_budget(EscalationBudget::per_minute(max));
@@ -754,6 +777,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         if let Some(cfg) = config.perception.clawcam_poll.clone() {
             if cfg.enabled {
                 let world = Arc::clone(world);
+                let poll_safing = Arc::clone(&safing_state);
                 match oh_ben_claw::mcp::client::McpClient::connect(&cfg.server).await {
                     Ok(client) => {
                         let client = Arc::new(tokio::sync::Mutex::new(client));
@@ -768,6 +792,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             let mut ticker = tokio::time::interval(interval);
                             loop {
                                 ticker.tick().await;
+                                // Load-shedding: when safing has engaged shed_load
+                                // (e.g. battery critical/low), skip the poll to drop
+                                // its network + CPU cost until charge recovers.
+                                if poll_safing.shed_load() {
+                                    continue;
+                                }
                                 let now = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .map(|d| d.as_millis() as u64)
