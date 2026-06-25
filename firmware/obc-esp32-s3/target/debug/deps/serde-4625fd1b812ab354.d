@@ -1,0 +1,14 @@
+C:\Users\Benji\Documents\GitHub\Oh-Ben-Claw\firmware\obc-esp32-s3\target\debug\deps\serde-4625fd1b812ab354.d: C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\Benji\Documents\GitHub\Oh-Ben-Claw\firmware\obc-esp32-s3\target\debug\build\serde-222bde4fe5c8e43f\out/private.rs
+
+C:\Users\Benji\Documents\GitHub\Oh-Ben-Claw\firmware\obc-esp32-s3\target\debug\deps\libserde-4625fd1b812ab354.rlib: C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\Benji\Documents\GitHub\Oh-Ben-Claw\firmware\obc-esp32-s3\target\debug\build\serde-222bde4fe5c8e43f\out/private.rs
+
+C:\Users\Benji\Documents\GitHub\Oh-Ben-Claw\firmware\obc-esp32-s3\target\debug\deps\libserde-4625fd1b812ab354.rmeta: C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\Benji\Documents\GitHub\Oh-Ben-Claw\firmware\obc-esp32-s3\target\debug\build\serde-222bde4fe5c8e43f\out/private.rs
+
+C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\Benji\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+C:\Users\Benji\Documents\GitHub\Oh-Ben-Claw\firmware\obc-esp32-s3\target\debug\build\serde-222bde4fe5c8e43f\out/private.rs:
+
+# env-dep:OUT_DIR=C:\\Users\\Benji\\Documents\\GitHub\\Oh-Ben-Claw\\firmware\\obc-esp32-s3\\target\\debug\\build\\serde-222bde4fe5c8e43f\\out
