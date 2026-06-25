@@ -33,6 +33,9 @@
 //! | `infrared` | Infrared transceiver |
 //! | `imu` | Inertial measurement unit (accel + gyro) |
 //! | `microsd` | microSD card storage |
+//! | `actuate` | Servo / motor actuation (Movement suite) |
+//! | `audio_output` | Speaker / audio output (Audio suite act side) |
+//! | `cellular` | Cellular (LTE/4G) modem link (Comms suite) |
 //!
 //! Additional capability tokens (AI accelerators, radios, etc.) are tracked in
 //! `docs/V2-HARDWARE-ECOSYSTEM.md` and added as boards that use them land.
@@ -1057,6 +1060,73 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         compatible_boards: &["cyd-esp32-2432s028r"],
         connector: Connector::Bare,
     },
+    // ── Subsystem-suite hardware (Movement / Audio / Power / Comms) ────────────
+    // The actuators, transducers, gauges, and modems the v2.x capability suites
+    // drive. Tagged with the suite capability tokens (`actuate`, `audio_output`,
+    // `cellular`) so the deployment advisor can match them to suite-enabled nodes.
+    AccessoryInfo {
+        name: "sg90",
+        description: "TowerPro SG90 — micro servo (PWM position control)",
+        bus: "pwm",
+        default_i2c_addr: None,
+        capabilities: &["actuate"],
+        compatible_boards: &[],
+        connector: Connector::Bare,
+    },
+    AccessoryInfo {
+        name: "tb6612fng",
+        description: "Toshiba TB6612FNG — dual DC motor driver (PWM + direction)",
+        bus: "gpio",
+        default_i2c_addr: None,
+        capabilities: &["actuate"],
+        compatible_boards: &[],
+        connector: Connector::Bare,
+    },
+    AccessoryInfo {
+        name: "pca9685",
+        description: "NXP PCA9685 — 16-channel 12-bit I2C PWM / servo driver",
+        bus: "i2c",
+        default_i2c_addr: Some(0x40),
+        capabilities: &["actuate", "pwm"],
+        compatible_boards: &[],
+        connector: Connector::Bare,
+    },
+    AccessoryInfo {
+        name: "inmp441",
+        description: "InvenSense INMP441 — I2S MEMS microphone (audio capture)",
+        bus: "i2s",
+        default_i2c_addr: None,
+        capabilities: &["audio_sample"],
+        compatible_boards: &[],
+        connector: Connector::Bare,
+    },
+    AccessoryInfo {
+        name: "max98357a",
+        description: "Maxim MAX98357A — I2S Class-D amplifier (speaker output)",
+        bus: "i2s",
+        default_i2c_addr: None,
+        capabilities: &["audio_output"],
+        compatible_boards: &[],
+        connector: Connector::Bare,
+    },
+    AccessoryInfo {
+        name: "max17048",
+        description: "Maxim MAX17048 — LiPo battery fuel gauge (state of charge)",
+        bus: "i2c",
+        default_i2c_addr: Some(0x36),
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+        connector: Connector::Bare,
+    },
+    AccessoryInfo {
+        name: "sim7600",
+        description: "SIMCom SIM7600 — LTE Cat-4 cellular modem with GNSS (UART/USB)",
+        bus: "uart",
+        default_i2c_addr: None,
+        capabilities: &["cellular", "gps"],
+        compatible_boards: &[],
+        connector: Connector::Bare,
+    },
 ];
 
 /// Look up an accessory by name.
@@ -1379,6 +1449,44 @@ mod tests {
         assert!(names.contains(&"bme280"));
         assert!(names.contains(&"mpu6050"));
         assert!(names.contains(&"bmp388"));
+    }
+
+    // ── Subsystem-suite accessory tests ───────────────────────────────────────
+
+    #[test]
+    fn movement_actuators_present() {
+        let actuators = accessories_with_capability("actuate");
+        let names: Vec<_> = actuators.iter().map(|a| a.name).collect();
+        assert!(names.contains(&"sg90"));
+        assert!(names.contains(&"tb6612fng"));
+        assert!(names.contains(&"pca9685"));
+    }
+
+    #[test]
+    fn audio_output_and_cellular_present() {
+        assert!(accessories_with_capability("audio_output")
+            .iter()
+            .any(|a| a.name == "max98357a"));
+        assert!(accessories_with_capability("cellular")
+            .iter()
+            .any(|a| a.name == "sim7600"));
+    }
+
+    #[test]
+    fn max17048_fuel_gauge_is_i2c() {
+        let a = lookup_accessory("max17048").unwrap();
+        assert_eq!(a.bus, "i2c");
+        assert_eq!(a.default_i2c_addr, Some(0x36));
+        assert!(a.capabilities.contains(&"sensor_read"));
+    }
+
+    #[test]
+    fn i2s_audio_accessories_have_no_i2c_addr() {
+        for name in ["inmp441", "max98357a"] {
+            let a = lookup_accessory(name).unwrap();
+            assert_eq!(a.bus, "i2s");
+            assert_eq!(a.default_i2c_addr, None);
+        }
     }
 
     #[test]

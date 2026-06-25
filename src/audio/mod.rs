@@ -20,6 +20,8 @@
 //! The pipeline is exposed as an agent tool (`AudioPipelineTool`) so the LLM
 //! can trigger it, and the raw pipeline struct can be used directly from Rust.
 
+pub mod suite;
+
 use crate::tools::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
