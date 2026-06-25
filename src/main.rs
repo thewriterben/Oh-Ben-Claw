@@ -673,6 +673,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
 
+    // Shared observability context — one metrics registry across the reflex loop
+    // (per-rule/action fire counts) and the gateway `/metrics` endpoint.
+    let obs = Arc::new(observability::ObsContext::new());
+
     // Shared host-side safing state: flipped in-process when a safing advisory
     // fires (via the SafingSink tap below), read by load-shedding consumers
     // (e.g. the ClawCam poll backs off when shed_load is set).
@@ -740,7 +744,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 Arc::clone(&safing_state),
                 move_sink,
             ));
-            let mut controller = ReflexController::new(engine, Arc::clone(world), sink);
+            let mut controller = ReflexController::new(engine, Arc::clone(world), sink)
+                .with_metrics(Arc::clone(&obs.metrics));
             if let Some(max) = config.reflex.max_escalations_per_min {
                 controller = controller.with_escalation_budget(EscalationBudget::per_minute(max));
             }
@@ -919,8 +924,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
 
     // Start the gateway (with live agent attached) if enabled
     let _gateway_state = if config.gateway.enabled {
-        // Build the full gateway state with all subsystems
-        let obs = Arc::new(observability::ObsContext::new());
+        // Build the full gateway state with all subsystems (reusing the shared
+        // observability context so reflex/safing fire counts appear in /metrics).
+        let obs = Arc::clone(&obs);
         let sched = scheduler::Scheduler::new(&config.agent.name)
             .unwrap_or_else(|_| scheduler::Scheduler::new("obc").unwrap());
         let mut gs = gateway::GatewayState::new(config.gateway.clone())

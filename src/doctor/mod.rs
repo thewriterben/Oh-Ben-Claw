@@ -203,7 +203,119 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
         }
     }
 
+    // ── Subsystem suites & safing coherence ──────────────────────────────────
+    check_subsystems(config, &mut results);
+
     results
+}
+
+/// Validate that the capability suites and the safing layer are configured
+/// coherently, and report the active capability surface. These catch the silent
+/// "enabled but skipped" cases `main` only logs at startup.
+fn check_subsystems(config: &Config, results: &mut Vec<DiagResult>) {
+    // Movement is physical — it requires the Track 0 safety gate, or `main`
+    // refuses to expose the tool.
+    if config.movement.enabled && !config.safety.enabled {
+        results.push(DiagResult::error(
+            "subsystems",
+            "[movement] enabled but [safety] is off — movement is physical and requires \
+             deterministic Track 0 limits; the move_actuator tool will be skipped",
+        ));
+    }
+
+    // The suites and the reflex loop record/read world memory; without it they
+    // are skipped at startup.
+    let world = config.perception.world_memory;
+    for (enabled, name) in [
+        (config.sensing.enabled, "sensing"),
+        (config.audio_suite.enabled, "audio_suite"),
+        (config.power.enabled, "power"),
+        (config.comms.enabled, "comms"),
+    ] {
+        if enabled && !world {
+            results.push(DiagResult::error(
+                "subsystems",
+                format!(
+                    "[{name}] enabled but [perception].world_memory is off — the suite needs \
+                     world memory to record/query and will be skipped"
+                ),
+            ));
+        }
+    }
+    if config.reflex.enabled && !world {
+        results.push(DiagResult::error(
+            "subsystems",
+            "[reflex] enabled but [perception].world_memory is off — reflexes read world memory \
+             and will not run",
+        ));
+    }
+
+    // Safing depends on the reflex loop running.
+    if config.reflex.safing && !config.reflex.enabled {
+        results.push(DiagResult::warn(
+            "subsystems",
+            "[reflex] safing = true but the reflex loop is disabled — no safing rules will run",
+        ));
+    }
+    // A power-critical stop actuator needs the movement subsystem to actuate it.
+    if config.reflex.safing
+        && config.reflex.safing_stop_actuator.is_some()
+        && !config.movement.enabled
+    {
+        results.push(DiagResult::warn(
+            "subsystems",
+            "[reflex.safing_stop_actuator] set but [movement] is disabled — the power-critical \
+             Stop will be a no-op",
+        ));
+    }
+
+    // Local TTS rendering needs an API key, else speech is silently skipped.
+    if config.audio_suite.enabled && config.audio_suite.render_tts {
+        let key = std::env::var("OPENAI_API_KEY").map(|v| !v.is_empty()).unwrap_or(false);
+        if !key {
+            results.push(DiagResult::warn(
+                "subsystems",
+                "[audio_suite] render_tts = true but OPENAI_API_KEY is not set — speech renders \
+                 will be skipped (best-effort)",
+            ));
+        }
+    }
+
+    // Report the active capability surface.
+    let mut active: Vec<&str> = Vec::new();
+    if config.sensing.enabled {
+        active.push("sensing");
+    }
+    if config.audio_suite.enabled {
+        active.push("audio");
+    }
+    if config.power.enabled {
+        active.push("power");
+    }
+    if config.comms.enabled {
+        active.push("comms");
+    }
+    if config.movement.enabled {
+        active.push("movement");
+    }
+    if active.is_empty() {
+        results.push(DiagResult::ok(
+            "subsystems",
+            "No capability suites enabled",
+        ));
+    } else {
+        results.push(DiagResult::ok(
+            "subsystems",
+            format!("Active suites: {}", active.join(", ")),
+        ));
+    }
+    if config.reflex.enabled {
+        let safing = if config.reflex.safing { " + safing" } else { "" };
+        results.push(DiagResult::ok(
+            "subsystems",
+            format!("Reflex loop enabled ({} rules{safing})", config.reflex.rules.len()),
+        ));
+    }
 }
 
 /// Run the doctor check and print a human-readable report to stdout.
@@ -295,5 +407,52 @@ mod tests {
     fn run_returns_ok() {
         let config = Config::default();
         assert!(run(&config).is_ok());
+    }
+
+    #[test]
+    fn movement_without_safety_is_error() {
+        let mut config = Config::default();
+        config.movement.enabled = true;
+        config.safety.enabled = false;
+        let results = diagnose(&config);
+        assert!(results.iter().any(|r| r.severity == Severity::Error
+            && r.category == "subsystems"
+            && r.message.contains("[movement]")));
+    }
+
+    #[test]
+    fn suite_without_world_memory_is_error() {
+        let mut config = Config::default();
+        config.power.enabled = true;
+        config.perception.world_memory = false;
+        let results = diagnose(&config);
+        assert!(results.iter().any(|r| r.severity == Severity::Error
+            && r.category == "subsystems"
+            && r.message.contains("[power]")));
+    }
+
+    #[test]
+    fn safing_without_reflex_is_warning() {
+        let mut config = Config::default();
+        config.reflex.safing = true;
+        config.reflex.enabled = false;
+        let results = diagnose(&config);
+        assert!(results.iter().any(|r| r.severity == Severity::Warn
+            && r.category == "subsystems"
+            && r.message.contains("safing")));
+    }
+
+    #[test]
+    fn active_suites_are_reported() {
+        let mut config = Config::default();
+        config.perception.world_memory = true;
+        config.sensing.enabled = true;
+        config.comms.enabled = true;
+        let results = diagnose(&config);
+        assert!(results.iter().any(|r| r.severity == Severity::Ok
+            && r.category == "subsystems"
+            && r.message.contains("Active suites")
+            && r.message.contains("sensing")
+            && r.message.contains("comms")));
     }
 }
