@@ -20,9 +20,12 @@
 //! The set is appended to the operator's configured rules; nothing here fires
 //! unless the corresponding suite is producing the mode fact.
 
-use crate::agent::reflex::{Action, Cmp, Condition, ReflexRule};
+use crate::agent::reflex::{Action, ActionSink, Cmp, Condition, ReflexRule};
 use crate::movement::MovementCommand;
-use serde_json::json;
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Topic safing advisories are published to (System 1 → local subscribers).
 pub const SAFING_TOPIC: &str = "obc/safing";
@@ -197,6 +200,108 @@ pub fn standard_safing_rules(opts: &SafingOptions) -> Vec<ReflexRule> {
         rules.push(overheat_escalate(quantity, *threshold, opts));
     }
     rules
+}
+
+// ── Safing executor (consume advisories in-process) ──────────────────────────
+
+/// Host-side safing state, flipped by `obc/safing` advisories. Shareable across
+/// the running loops (poll tasks, controllers) that should back off under stress.
+/// Atomics so any task can read/observe it cheaply without a lock.
+#[derive(Debug, Default)]
+pub struct SafingState {
+    shed_load: AtomicBool,
+    degraded_net: AtomicBool,
+    offline: AtomicBool,
+}
+
+impl SafingState {
+    /// All-clear state.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Non-essential load should be shed (e.g. pause polling, dim, sleep).
+    pub fn shed_load(&self) -> bool {
+        self.shed_load.load(Ordering::Relaxed)
+    }
+
+    /// The network is degraded — prefer local/low-bandwidth behavior.
+    pub fn degraded_net(&self) -> bool {
+        self.degraded_net.load(Ordering::Relaxed)
+    }
+
+    /// The network is fully offline.
+    pub fn offline(&self) -> bool {
+        self.offline.load(Ordering::Relaxed)
+    }
+
+    /// Update flags from a safing advisory payload (the JSON published to
+    /// [`SAFING_TOPIC`]). Logs on a 0→1 transition so the shed is visible.
+    pub fn apply_advisory(&self, payload: &Value) {
+        match payload.get("action").and_then(Value::as_str).unwrap_or("") {
+            "shed_load" => self.set(&self.shed_load, "shed_load"),
+            "degraded_mode" => {
+                self.set(&self.offline, "offline");
+                self.set(&self.degraded_net, "degraded_net");
+            }
+            "reduce_bandwidth" => self.set(&self.degraded_net, "degraded_net"),
+            _ => {}
+        }
+    }
+
+    fn set(&self, flag: &AtomicBool, name: &str) {
+        if !flag.swap(true, Ordering::Relaxed) {
+            tracing::warn!(flag = name, "safing engaged");
+        }
+    }
+
+    /// Clear all flags (recovery — call when modes return to normal).
+    pub fn clear(&self) {
+        for (flag, name) in [
+            (&self.shed_load, "shed_load"),
+            (&self.degraded_net, "degraded_net"),
+            (&self.offline, "offline"),
+        ] {
+            if flag.swap(false, Ordering::Relaxed) {
+                tracing::info!(flag = name, "safing cleared");
+            }
+        }
+    }
+}
+
+/// An [`ActionSink`] wrapper that consumes safing advisories in-process: a
+/// `Publish` to [`SAFING_TOPIC`] updates a shared [`SafingState`] (so the host
+/// actually backs off), and *also* forwards every action — including that publish
+/// — to an inner sink for distributed consumers. Mirrors `MovementActionSink`.
+pub struct SafingSink {
+    state: Arc<SafingState>,
+    inner: Arc<dyn ActionSink>,
+}
+
+impl SafingSink {
+    /// Wrap an inner sink, tapping `obc/safing` publishes into `state`.
+    pub fn new(state: Arc<SafingState>, inner: Arc<dyn ActionSink>) -> Self {
+        Self { state, inner }
+    }
+}
+
+#[async_trait]
+impl ActionSink for SafingSink {
+    async fn gpio_write(&self, node_id: &str, pin: i64, value: i64) -> anyhow::Result<()> {
+        self.inner.gpio_write(node_id, pin, value).await
+    }
+    async fn publish(&self, topic: &str, payload: &Value) -> anyhow::Result<()> {
+        if topic == SAFING_TOPIC {
+            self.state.apply_advisory(payload);
+        }
+        self.inner.publish(topic, payload).await
+    }
+    async fn escalate(&self, reason: &str) -> anyhow::Result<()> {
+        self.inner.escalate(reason).await
+    }
+    async fn move_actuator(&self, command: &MovementCommand) -> anyhow::Result<()> {
+        self.inner.move_actuator(command).await
+    }
 }
 
 #[cfg(test)]
@@ -402,6 +507,33 @@ mod tests {
         s2.ingest(&Sample { quantity: "cpu_temp".into(), value: 50.0, unit: None, source: None }, 1_000).unwrap();
         let engine2 = ReflexEngine::new(standard_safing_rules(&opts));
         assert!(engine2.tick(&world2, 2_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn safing_state_applies_advisories() {
+        let s = SafingState::new();
+        assert!(!s.shed_load());
+        s.apply_advisory(&json!({ "action": "shed_load" }));
+        assert!(s.shed_load());
+        s.apply_advisory(&json!({ "action": "degraded_mode" }));
+        assert!(s.offline() && s.degraded_net());
+        s.clear();
+        assert!(!s.shed_load() && !s.offline() && !s.degraded_net());
+    }
+
+    #[tokio::test]
+    async fn safing_sink_taps_advisory_and_forwards() {
+        use crate::agent::reflex::LoggingActionSink;
+        let state = Arc::new(SafingState::new());
+        let sink = SafingSink::new(Arc::clone(&state), Arc::new(LoggingActionSink));
+        // a power-low safing publish flips shed_load (and is still forwarded).
+        sink.publish(SAFING_TOPIC, &json!({ "action": "shed_load" })).await.unwrap();
+        assert!(state.shed_load());
+        // an unrelated topic does not touch safing state.
+        let s2 = Arc::new(SafingState::new());
+        let sink2 = SafingSink::new(Arc::clone(&s2), Arc::new(LoggingActionSink));
+        sink2.publish("obc/other", &json!({ "action": "shed_load" })).await.unwrap();
+        assert!(!s2.shed_load());
     }
 
     #[test]

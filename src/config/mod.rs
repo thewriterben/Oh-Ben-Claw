@@ -1367,6 +1367,13 @@ pub struct AudioSuiteConfig {
     /// World-memory `source` label for audio facts. Default `"audio"`.
     #[serde(default)]
     pub source: Option<String>,
+    /// Render speech locally via the OpenAI TTS tool instead of publishing over
+    /// the spine. Best-effort (no key ⇒ logged + skipped).
+    #[serde(default)]
+    pub render_tts: bool,
+    /// Output directory for locally rendered TTS audio. Default `/tmp`.
+    #[serde(default)]
+    pub tts_out_dir: Option<String>,
 }
 
 /// Power suite configuration (`[power]`). Exposes the `power` tool and records

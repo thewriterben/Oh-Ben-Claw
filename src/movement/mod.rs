@@ -18,6 +18,8 @@
 //! movement *acts and records into* memory — closing the perceive→remember→
 //! reflex→act loop on the actuation side.
 
+pub mod feedback;
+
 use crate::memory::world::WorldMemory;
 use crate::security::limits::{SafetyGate, SafetyViolation};
 use async_trait::async_trait;
