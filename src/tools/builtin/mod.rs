@@ -7,6 +7,7 @@ pub mod comms;
 pub mod file;
 pub mod http;
 pub mod memory;
+pub mod mission;
 pub mod movement;
 pub mod navigation;
 pub mod ota;

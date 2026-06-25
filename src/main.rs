@@ -543,6 +543,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // spoken utterances are recorded into world memory (`audio.{stream}`,
     // `speech.last`); speech is emitted through the dry-run logging sink until a
     // real engine/speaker is wired. Requires world memory to be on.
+    // Hoisted so the mission runner can reuse the audio controller.
+    let mut audio_controller: Option<Arc<oh_ben_claw::audio::suite::AudioController>> = None;
     if config.audio_suite.enabled {
         match &world_mem {
             Some(world) => {
@@ -575,6 +577,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     controller = controller.with_source(source.clone());
                 }
                 let controller = Arc::new(controller);
+                audio_controller = Some(Arc::clone(&controller));
                 let voice = config
                     .audio_suite
                     .voice
@@ -676,6 +679,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // Navigation suite: the fusing subsystem — localize from sensor pose facts
     // and drive toward a goal through the (gated) movement controller. Reuses the
     // movement controller, so it needs both world memory and movement enabled.
+    // Hoisted so the mission runner can issue navigation steps.
+    let mut nav_controller: Option<Arc<oh_ben_claw::navigation::NavController>> = None;
     if config.navigation.enabled {
         match (&world_mem, &movement_controller) {
             (Some(world), Some(mc)) => {
@@ -710,7 +715,24 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 if let Some(s) = &config.navigation.source {
                     nav = nav.with_source(s.clone());
                 }
+                if let Some(r) = config.navigation.sensor_max_range {
+                    nav = nav.with_sensor_range(r);
+                }
+                // Obstacle-aware planning: attach an occupancy grid if configured.
+                let has_grid = config.navigation.grid.is_some();
+                if let Some(gc) = &config.navigation.grid {
+                    let grid = oh_ben_claw::navigation::planning::OccupancyGrid::new(
+                        gc.origin_x, gc.origin_y, gc.resolution, gc.width, gc.height,
+                    );
+                    nav = nav.with_grid(Arc::new(std::sync::Mutex::new(grid)));
+                    info!(
+                        width = gc.width,
+                        height = gc.height,
+                        "Navigation: obstacle-aware planning enabled"
+                    );
+                }
                 let nav = Arc::new(nav);
+                nav_controller = Some(Arc::clone(&nav));
                 all_tools.push(Box::new(oh_ben_claw::tools::builtin::navigation::NavigateTool::new(
                     Arc::clone(&nav),
                 )));
@@ -718,6 +740,11 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     Arc::clone(&nav),
                     Arc::clone(world),
                 )));
+                if has_grid {
+                    all_tools.push(Box::new(oh_ben_claw::tools::builtin::navigation::NavMapTool::new(
+                        Arc::clone(&nav),
+                    )));
+                }
                 let interval = std::time::Duration::from_millis(
                     config.navigation.interval_ms.unwrap_or(500).max(100),
                 );
@@ -783,6 +810,60 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 "[navigation] enabled but the movement controller is unavailable (needs \
                  [movement] enabled + [safety]); skipping"
             ),
+        }
+    }
+
+    // Mission sequencer: deliberative, guarded missions composed over the suites
+    // (navigate, speak, wait, record, await). The `mission` tool starts one; a
+    // runner ticks the active mission and aborts on guard trips. Requires world
+    // memory; uses navigation + audio when present.
+    if config.mission.enabled {
+        if let Some(world) = &world_mem {
+            use std::collections::HashMap;
+            let mut runner = oh_ben_claw::mission::MissionRunner::new(Arc::clone(world));
+            if let Some(nav) = &nav_controller {
+                runner = runner.with_nav(Arc::clone(nav));
+            }
+            if let Some(audio) = &audio_controller {
+                runner = runner.with_audio(Arc::clone(audio));
+            }
+            let runner = Arc::new(runner);
+            let mut library: HashMap<String, oh_ben_claw::mission::Mission> = HashMap::new();
+            for m in &config.mission.missions {
+                library.insert(m.id.clone(), m.clone());
+            }
+            let library = Arc::new(library);
+            all_tools.push(Box::new(oh_ben_claw::tools::builtin::mission::MissionStartTool::new(
+                Arc::clone(&runner),
+                Arc::clone(&library),
+            )));
+            all_tools.push(Box::new(oh_ben_claw::tools::builtin::mission::MissionStatusTool::new(
+                Arc::clone(&runner),
+                Arc::clone(&library),
+            )));
+            let interval = std::time::Duration::from_millis(
+                config.mission.interval_ms.unwrap_or(500).max(100),
+            );
+            let runner_loop = Arc::clone(&runner);
+            info!(missions = library.len(), "Mission sequencer active");
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                loop {
+                    ticker.tick().await;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    if let Err(e) = runner_loop.tick(now).await {
+                        tracing::warn!("mission tick failed: {e}");
+                    }
+                }
+            });
+        } else {
+            tracing::warn!(
+                "[mission] enabled but [perception].world_memory is off — missions need world \
+                 memory; skipping"
+            );
         }
     }
 

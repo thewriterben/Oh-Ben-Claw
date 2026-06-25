@@ -5,6 +5,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Navigation, SLAM & Mission Sequencer (2026-06-25)
+
+The embodied stack's upper layers: a full localization → mapping → planning →
+driving navigation column, drift-corrected by pose-graph SLAM, with a
+deliberative mission sequencer on top. Capstone reference: `docs/EMBODIED-ARCHITECTURE.md`.
+
+### Added — navigation suite (the fusing subsystem)
+
+- **`src/navigation`** — `NavController` localizes from sensor pose facts and drives toward a goal via a steer servo + drive motor through the (Track 0–bounded) movement controller; records `nav.pose`/`nav.goal`/`nav.status`. Tools: `navigate` (gated, plans around obstacles) + `nav_status` (safe: status/stop) + `nav_map` (safe: mark/free/scan/status). `[navigation]` config.
+- **Waypoint paths** — a waypoint queue (`set_path`), `WaypointReached` outcomes, advance-on-arrival; the `navigate` tool accepts a `waypoints` array.
+- **Pose fusion** (`navigation/pose_fusion`) — weighted multi-source localization with circular heading mean → canonical `sensor.pos_*` (`[[navigation.pose_source]]`).
+- **Closed-loop movement** (`src/movement/feedback`) — bounded `PController` + `ClosedLoopServo` stepping the gated controller toward a target from a feedback fact.
+
+### Added — SLAM, mapping, planning
+
+- **Pose-graph SLAM** (`navigation/slam`) — SE2 `compose`/`relative_between`, `PoseGraph` with odometry + loop-closure edges, anchored Gauss-Seidel relaxation that distributes drift; `SlamBackend` auto-detects revisits and writes the **corrected** pose to world memory.
+- **Occupancy grid + A\*** (`navigation/planning`) — `OccupancyGrid` + A* planner producing simplified turn-point waypoints; obstacle-aware `navigate` plans over it.
+- **Online mapping** (`navigation/mapping`) — Bresenham ray-cast scans into the grid (clear free, mark hits, sticky obstacles); `nav_map scan` + `NavController::integrate_scan`.
+
+### Added — mission sequencer (deliberation)
+
+- **`src/mission`** — `MissionRunner` executes a guarded `Mission` of `MissionStep`s (`navigate_to`/`wait`/`speak`/`record`/`await_state`), reactive and one-step-per-tick, with reflex-`Condition` guards that **preempt and halt** on a bad mode. Tools: `mission` (gated start) + `mission_status` (safe status/abort/list). `[mission]` config with a named library; `main` runs the tick loop over nav + audio + world memory.
+
+### Tests
+
+- Per-module unit + tool tests across navigation/SLAM/mapping/mission, plus `tests/embodied_full_stack.rs` — a grand scenario exercising mission → obstacle-aware navigate → gated actuation → battery-driven safing engage → guard preemption → recovery, as one composed unit.
+
+---
+
 ## Unreleased — Embodied Subsystem Suites + Safing (2026-06-25)
 
 A breadth-then-depth build-out: four new capability suites on the shared
