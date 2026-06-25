@@ -39,6 +39,7 @@ pub mod gateway;
 pub mod hooks;
 pub mod mcp;
 pub mod memory;
+pub mod movement;
 pub mod multimodal;
 pub mod observability;
 pub mod peripherals;
