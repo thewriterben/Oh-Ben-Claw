@@ -1255,6 +1255,53 @@ pub struct PerceptionConfig {
     /// are folded into world memory on a cadence (Phase 18 / S1b).
     #[serde(default)]
     pub clawcam_poll: Option<ClawCamPollConfig>,
+    /// Vision-driven reflex + foresight rules keyed on ClawCam detections.
+    #[serde(default)]
+    pub vision_rules: VisionRulesConfig,
+}
+
+/// Vision-driven reflex + foresight rules (`[perception.vision_rules]`). Detections
+/// folded into world memory become triggers: a confirmed sighting of an alert
+/// subject escalates (reflex), and a rising sighting *rate* escalates ahead of time
+/// (foresight). Merged into the live reflex/foresight engines, bounded by Track 0.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VisionRulesConfig {
+    /// Enable vision-driven rules.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Subjects that warrant an alert (entity `vision.subject.{subject}`).
+    #[serde(default)]
+    pub alert_subjects: Vec<String>,
+    /// Review state a sighting must carry to count as confirmed. Default `verified`.
+    #[serde(default = "default_vision_require_state")]
+    pub require_state: String,
+    /// Minimum ms between re-fires of a given rule.
+    #[serde(default = "default_vision_debounce_ms")]
+    pub debounce_ms: u64,
+    /// Optional camera node to `capture_now` from on alert (needs the ClawCam
+    /// actuation sink wired; otherwise the capture publish is a no-op).
+    #[serde(default)]
+    pub capture_node: Option<String>,
+    /// Foresight: escalate when a subject's sighting count is predicted within
+    /// `horizon_ms` to reach this many more sightings.
+    #[serde(default = "default_vision_rate_threshold")]
+    pub rate_threshold: f64,
+    /// Foresight look-ahead window (ms).
+    #[serde(default = "default_vision_horizon_ms")]
+    pub horizon_ms: u64,
+}
+
+fn default_vision_require_state() -> String {
+    "verified".to_string()
+}
+fn default_vision_debounce_ms() -> u64 {
+    10_000
+}
+fn default_vision_rate_threshold() -> f64 {
+    5.0
+}
+fn default_vision_horizon_ms() -> u64 {
+    60_000
 }
 
 /// Poll a ClawCam detection MCP tool into world memory (`[perception.clawcam_poll]`).
