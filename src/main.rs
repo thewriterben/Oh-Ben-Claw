@@ -922,6 +922,20 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             info!(count = safing.len(), "Phase 18 safing rules appended");
             rules.extend(safing);
         }
+        if config.perception.vision_rules.enabled {
+            let vc = &config.perception.vision_rules;
+            let opts = oh_ben_claw::vision::clawcam_rules::VisionRuleOptions {
+                alert_subjects: vc.alert_subjects.clone(),
+                require_state: vc.require_state.clone(),
+                debounce_ms: vc.debounce_ms,
+                capture_node: vc.capture_node.clone(),
+                rate_threshold: vc.rate_threshold,
+                horizon_ms: vc.horizon_ms,
+            };
+            let vrules = oh_ben_claw::vision::clawcam_rules::vision_security_rules(&opts);
+            info!(count = vrules.len(), "vision-driven reflex rules appended");
+            rules.extend(vrules);
+        }
         rules
     };
     if config.reflex.enabled && !reflex_rules.is_empty() {
@@ -1002,13 +1016,29 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             all_tools.push(Box::new(oh_ben_claw::tools::builtin::foresight::ForesightTool::new(
                 Arc::clone(world),
             )));
-            if !config.foresight.rules.is_empty() || config.learning.enabled {
+            if !config.foresight.rules.is_empty()
+                || config.learning.enabled
+                || config.perception.vision_rules.enabled
+            {
                 use oh_ben_claw::agent::reflex::{
                     ActionSink, EscalationBudget, LoggingActionSink, SpineActionSink,
                 };
-                let engine =
-                    oh_ben_claw::foresight::ForesightEngine::new(config.foresight.rules.clone())
-                        .with_learned_rules(Arc::clone(&learned_rules));
+                let mut foresight_rules = config.foresight.rules.clone();
+                if config.perception.vision_rules.enabled {
+                    let vc = &config.perception.vision_rules;
+                    let opts = oh_ben_claw::vision::clawcam_rules::VisionRuleOptions {
+                        alert_subjects: vc.alert_subjects.clone(),
+                        require_state: vc.require_state.clone(),
+                        debounce_ms: vc.debounce_ms,
+                        capture_node: vc.capture_node.clone(),
+                        rate_threshold: vc.rate_threshold,
+                        horizon_ms: vc.horizon_ms,
+                    };
+                    foresight_rules
+                        .extend(oh_ben_claw::vision::clawcam_rules::vision_foresight_rules(&opts));
+                }
+                let engine = oh_ben_claw::foresight::ForesightEngine::new(foresight_rules)
+                    .with_learned_rules(Arc::clone(&learned_rules));
                 let sink: Arc<dyn ActionSink> = match &reflex_spine {
                     Some(spine) => Arc::new(SpineActionSink::new(Arc::clone(spine))),
                     None => Arc::new(LoggingActionSink),
@@ -1205,6 +1235,11 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                 .await
                                 {
                                     Ok(entities) if !entities.is_empty() => {
+                                        // Maintain vision.count.{subject} so foresight can
+                                        // trend the detection rate over time.
+                                        let _ = oh_ben_claw::vision::clawcam_ingest::record_subject_counts(
+                                            &world, &entities, now, &cfg.source,
+                                        );
                                         info!(
                                             count = entities.len(),
                                             "ClawCam detections folded into world memory"
