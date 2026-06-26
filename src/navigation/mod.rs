@@ -18,6 +18,7 @@ pub mod mapping;
 pub mod particle;
 pub mod planning;
 pub mod pose_fusion;
+pub mod sensor_model;
 pub mod slam;
 
 use crate::memory::world::WorldMemory;
