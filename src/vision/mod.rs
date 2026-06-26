@@ -25,8 +25,14 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// ClawCam detections → bitemporal world memory (S1 "Remember").
+/// ClawCam detections + health/audio/state → bitemporal world memory (S1 "Remember").
 pub mod clawcam_ingest;
+/// Vision-driven reflex + foresight rules keyed on ClawCam detections.
+pub mod clawcam_rules;
+/// Close the loop — command ClawCam (capture/arm/alert) over MCP from reflexes.
+pub mod clawcam_actuate;
+/// Spatial fusion — a camera detection becomes a hazard region on the nav map.
+pub mod clawcam_spatial;
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
