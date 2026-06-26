@@ -71,21 +71,39 @@ impl Forecast {
 }
 
 /// Fits trends from world-memory history over a recent window.
+///
+/// By default this is ordinary least squares (every point weighted equally). With
+/// a `decay` (forgetting factor) below 1.0 it becomes **exponentially-weighted
+/// least squares** — an online estimator that down-weights older points by
+/// `decay^age`, so the fitted trend tracks the *recent* regime and adapts when the
+/// rate of change shifts (e.g. a battery that just started draining faster). This
+/// is the recursive-least-squares-with-forgetting model used for non-stationary
+/// signals; `decay == 1.0` recovers plain OLS.
 #[derive(Debug, Clone, Copy)]
 pub struct Forecaster {
     /// Max number of most-recent points to fit.
     window: usize,
+    /// Forgetting factor in `(0, 1]`: weight of a point is `decay^age` (age in
+    /// samples back from newest). `1.0` = equal weight (OLS).
+    decay: f64,
 }
 
 impl Default for Forecaster {
     fn default() -> Self {
-        Self { window: 16 }
+        Self { window: 16, decay: 1.0 }
     }
 }
 
 impl Forecaster {
     pub fn new(window: usize) -> Self {
-        Self { window: window.max(1) }
+        Self { window: window.max(1), decay: 1.0 }
+    }
+
+    /// Set the forgetting factor (clamped to `(0, 1]`). Below 1.0 turns the fit
+    /// into exponentially-weighted least squares — more responsive to recent data.
+    pub fn with_decay(mut self, decay: f64) -> Self {
+        self.decay = decay.clamp(1e-6, 1.0);
+        self
     }
 
     /// Fit a [`Forecast`] for `entity` from its recent history. `None` if there is
@@ -108,10 +126,14 @@ impl Forecaster {
         if n == 1 {
             return Ok(Some(Forecast { current, rate_per_ms: 0.0, samples: 1, at_ms: last_t as u64 }));
         }
-        let tm = pts.iter().map(|p| p.0).sum::<f64>() / n as f64;
-        let vm = pts.iter().map(|p| p.1).sum::<f64>() / n as f64;
-        let num: f64 = pts.iter().map(|(t, v)| (t - tm) * (v - vm)).sum();
-        let den: f64 = pts.iter().map(|(t, _)| (t - tm).powi(2)).sum();
+        // Per-point weights: newest weight 1, older decays by `decay^age`.
+        // (decay == 1.0 ⇒ all weights 1 ⇒ ordinary least squares.)
+        let w: Vec<f64> = (0..n).map(|i| self.decay.powi((n - 1 - i) as i32)).collect();
+        let wsum: f64 = w.iter().sum();
+        let tm = pts.iter().zip(&w).map(|((t, _), wi)| wi * t).sum::<f64>() / wsum;
+        let vm = pts.iter().zip(&w).map(|((_, v), wi)| wi * v).sum::<f64>() / wsum;
+        let num: f64 = pts.iter().zip(&w).map(|((t, v), wi)| wi * (t - tm) * (v - vm)).sum();
+        let den: f64 = pts.iter().zip(&w).map(|((t, _), wi)| wi * (t - tm).powi(2)).sum();
         let slope = if den != 0.0 { num / den } else { 0.0 };
         Ok(Some(Forecast { current, rate_per_ms: slope, samples: n, at_ms: last_t as u64 }))
     }
@@ -309,6 +331,43 @@ mod tests {
         assert!((fc.predict_at(1_000) - 40.0).abs() < 1e-6);
         // time to reach 10 from 60 at -20/s ⇒ 2.5s = 2500ms
         assert_eq!(fc.time_to_threshold(10.0), Some(2_500));
+    }
+
+    #[test]
+    fn weighted_forecaster_tracks_an_accelerating_decline() {
+        // Drain is slow early (−1/s) then steepens (−8/s). OLS averages the whole
+        // window and lags; EWLS (decay 0.5) weights the recent steep part and
+        // reports a faster decline — so it predicts the crossing sooner.
+        let series = [
+            (0u64, 100.0),
+            (1_000, 99.0),
+            (2_000, 98.0),
+            (3_000, 90.0),
+            (4_000, 82.0),
+            (5_000, 74.0),
+        ];
+        let world = world_with_series("power.soc", &series);
+        let ols = Forecaster::default().forecast(&world, "power.soc").unwrap().unwrap();
+        let ewls = Forecaster::default().with_decay(0.5).forecast(&world, "power.soc").unwrap().unwrap();
+        assert!(
+            ewls.rate_per_s() < ols.rate_per_s(),
+            "EWLS tracks the recent steeper decline: ewls {} < ols {}",
+            ewls.rate_per_s(),
+            ols.rate_per_s()
+        );
+        // both see the same current value
+        assert!((ewls.current - 74.0).abs() < 1e-9 && (ols.current - 74.0).abs() < 1e-9);
+        // EWLS predicts reaching 10 sooner than OLS does
+        let (e_eta, o_eta) = (ewls.time_to_threshold(10.0), ols.time_to_threshold(10.0));
+        assert!(matches!((e_eta, o_eta), (Some(e), Some(o)) if e < o));
+    }
+
+    #[test]
+    fn decay_one_matches_ordinary_least_squares() {
+        let world = world_with_series("x", &[(0, 100.0), (1_000, 80.0), (2_000, 60.0)]);
+        let ols = Forecaster::default().forecast(&world, "x").unwrap().unwrap();
+        let same = Forecaster::default().with_decay(1.0).forecast(&world, "x").unwrap().unwrap();
+        assert!((ols.rate_per_ms - same.rate_per_ms).abs() < 1e-12);
     }
 
     #[test]

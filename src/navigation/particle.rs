@@ -12,6 +12,7 @@
 //! reuses the SLAM SE2 types. The localizer backend records the belief into world
 //! memory (`sensor.pos_*` + `nav.belief`) so navigation reads the filtered pose.
 
+use super::sensor_model::{BeamModelParams, LikelihoodField};
 use super::slam::{compose, Pose2, RelPose};
 use crate::memory::world::WorldMemory;
 use serde_json::json;
@@ -171,6 +172,42 @@ impl ParticleFilter {
         }
     }
 
+    /// Measurement update from a **range scan** (likelihood-field model): reweight
+    /// each particle by how well its pose explains `beams` against the map `field`.
+    /// This is the real range-sensor update — a misaligned pose makes its beams
+    /// miss the mapped walls and its weight collapses.
+    pub fn update_scan(&mut self, field: &LikelihoodField, beams: &[(f64, f64)], params: &BeamModelParams) {
+        // Per-particle log-likelihoods, stabilized by subtracting the max before
+        // exponentiating (avoids underflow when many beams agree).
+        let logs: Vec<f64> = self
+            .particles
+            .iter()
+            .map(|p| field.scan_log_likelihood(p.pose, beams, params))
+            .collect();
+        let max_log = logs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        if !max_log.is_finite() {
+            return; // no usable beams (all out of range)
+        }
+        let mut total = 0.0;
+        for (p, &lg) in self.particles.iter_mut().zip(&logs) {
+            p.weight *= (lg - max_log).exp();
+            total += p.weight;
+        }
+        if total <= 0.0 {
+            let w = 1.0 / self.particles.len() as f64;
+            for p in &mut self.particles {
+                p.weight = w;
+            }
+            return;
+        }
+        for p in &mut self.particles {
+            p.weight /= total;
+        }
+        if self.effective_sample_size() < self.particles.len() as f64 / 2.0 {
+            self.do_resample();
+        }
+    }
+
     /// Resample: KLD-adaptive when configured, else fixed-size low-variance.
     fn do_resample(&mut self) {
         if self.kld.is_some() {
@@ -298,6 +335,7 @@ pub struct ParticleLocalizer {
     meas_sigma: f64,
     trans_sigma: f64,
     rot_sigma: f64,
+    beam_params: BeamModelParams,
     source: String,
 }
 
@@ -309,8 +347,15 @@ impl ParticleLocalizer {
             meas_sigma: 0.5,
             trans_sigma: 0.1,
             rot_sigma: 0.05,
+            beam_params: BeamModelParams::default(),
             source: "particle".to_string(),
         }
+    }
+
+    /// Set the range-sensor (likelihood-field) model parameters used by [`add_scan`].
+    pub fn with_beam_params(mut self, params: BeamModelParams) -> Self {
+        self.beam_params = params;
+        self
     }
 
     pub fn with_world_memory(mut self, world: Arc<WorldMemory>) -> Self {
@@ -366,6 +411,13 @@ impl ParticleLocalizer {
         self.lock().update_position(x, y, self.meas_sigma);
         self.record(now_ms);
     }
+
+    /// Ingest a **range scan** against the map likelihood `field` and record the
+    /// new belief. `beams` are `(bearing_deg, range)` relative to robot heading.
+    pub fn add_scan(&self, field: &LikelihoodField, beams: &[(f64, f64)], now_ms: u64) {
+        self.lock().update_scan(field, beams, &self.beam_params);
+        self.record(now_ms);
+    }
 }
 
 #[cfg(test)]
@@ -419,6 +471,38 @@ mod tests {
         assert!(belief.value["spread"].as_f64().is_some());
         // a filtered pose is published for navigation to read
         assert!(world.current("sensor.pos_x").unwrap().is_some());
+    }
+
+    #[test]
+    fn scan_update_pulls_cloud_toward_the_pose_that_explains_it() {
+        use crate::navigation::planning::{Cell, OccupancyGrid};
+        use crate::navigation::sensor_model::{BeamModelParams, LikelihoodField};
+
+        // 16×16 @ 0.5 m → covers [0,8). A vertical wall at world x≈6 (cell col 12).
+        let mut g = OccupancyGrid::new(0.0, 0.0, 0.5, 16, 16);
+        for cy in 0..16 {
+            g.set(12, cy, Cell::Occupied);
+        }
+        let field = LikelihoodField::from_grid(&g, 5.0);
+        let params = BeamModelParams { sigma_hit: 0.4, z_hit: 0.9, z_rand: 0.1, max_range: 20.0 };
+
+        // Truth: facing east at x=2, a forward beam of range 4 lands on the wall
+        // (2 + 4 = 6). The likelihood is maximized when a particle's x ≈ 2.
+        let beams = [(0.0, 4.0)];
+        // Start the cloud offset ~1 m in x (centered at x=3).
+        let mut pf = ParticleFilter::new(800, Pose2::new(3.0, 4.0, 0.0), 1.0, 0.03, 5);
+        let (est0, _) = pf.estimate();
+        for _ in 0..8 {
+            pf.update_scan(&field, &beams, &params);
+        }
+        let (est1, _) = pf.estimate();
+        assert!(
+            (est1.x - 2.0).abs() < (est0.x - 2.0).abs(),
+            "scan update moves the estimate toward truth: {} → {}",
+            est0.x,
+            est1.x
+        );
+        assert!((est1.x - 2.0).abs() < 0.6, "converges near truth x=2, got {}", est1.x);
     }
 
     #[test]

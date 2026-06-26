@@ -19,7 +19,7 @@ use crate::navigation::{exploration, NavGoal};
 use crate::spine::{MessageHandler, SpineClient};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -125,6 +125,62 @@ pub fn allocate(registry: &FleetRegistry, task: &Task, now_ms: u64, stale_ms: u6
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, _)| id)
+}
+
+/// A node's **bid** to service a task — its cost (lower wins), or `None` if the
+/// node is ineligible (offline, busy, insufficient battery, or no known position).
+/// Cost is travel distance plus a light battery tie-break (prefer fuller nodes).
+pub fn bid(node: &NodeState, task: &Task, now_ms: u64, stale_ms: u64) -> Option<f64> {
+    if !node.online(now_ms, stale_ms) || node.busy {
+        return None;
+    }
+    if let Some(b) = node.battery {
+        if b < task.min_battery {
+            return None;
+        }
+    }
+    let (x, y) = (node.x?, node.y?);
+    let travel = ((x - task.x).powi(2) + (y - task.y).powi(2)).sqrt();
+    let battery_penalty = node.battery.map_or(0.0, |b| (100.0 - b) * 0.001);
+    Some(travel + battery_penalty)
+}
+
+/// **Market-based batch allocation** — a sequential single-item auction. Every
+/// eligible `(node, task)` pair bids ([`bid`]); awards go to the globally lowest
+/// bid first, each node and task taken at most once. Unlike per-task greedy
+/// (which commits the first task to its nearest node and can strand a
+/// globally-cheaper pairing), the auction is **order-independent** and globally
+/// cheaper. Ties broken deterministically by task then node id. Returns
+/// `(task_id, node_id)` awards.
+pub fn auction_allocate(
+    registry: &FleetRegistry,
+    tasks: &[Task],
+    now_ms: u64,
+    stale_ms: u64,
+) -> Vec<(String, String)> {
+    let mut bids: Vec<(f64, String, String)> = Vec::new(); // (cost, task_id, node_id)
+    for task in tasks {
+        for node in registry.nodes() {
+            if let Some(c) = bid(node, task, now_ms, stale_ms) {
+                bids.push((c, task.id.clone(), node.id.clone()));
+            }
+        }
+    }
+    // Lowest cost first; deterministic tie-break by task id, then node id.
+    bids.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+
+    let mut taken_tasks: HashSet<String> = HashSet::new();
+    let mut taken_nodes: HashSet<String> = HashSet::new();
+    let mut out = Vec::new();
+    for (_, task_id, node_id) in bids {
+        if taken_tasks.contains(&task_id) || taken_nodes.contains(&node_id) {
+            continue;
+        }
+        taken_tasks.insert(task_id.clone());
+        taken_nodes.insert(node_id.clone());
+        out.push((task_id, node_id));
+    }
+    out
 }
 
 /// Coordinates a fleet: ingest heartbeats, queue tasks, allocate them to nodes.
@@ -310,6 +366,45 @@ impl Coordinator {
         made
     }
 
+    /// One coordination tick using a **market auction**: collect *all* queued
+    /// tasks and allocate them together via [`auction_allocate`] (globally cheaper
+    /// and queue-order-independent, vs [`tick`]'s one-at-a-time greedy). Winners are
+    /// marked busy, assignments recorded, unawarded tasks requeued. Returns the
+    /// awards made this tick.
+    pub fn auction_tick(&self, now_ms: u64) -> Vec<(String, String)> {
+        let tasks: Vec<Task> = self.pending().iter().cloned().collect();
+        if tasks.is_empty() {
+            self.record_status(now_ms);
+            return Vec::new();
+        }
+        let awards = {
+            let reg = self.registry();
+            auction_allocate(&reg, &tasks, now_ms, self.stale_ms)
+        };
+        let awarded: HashSet<String> = awards.iter().map(|(t, _)| t.clone()).collect();
+        for (task_id, node) in &awards {
+            self.registry().set_busy(node, true);
+            self.assignments().insert(task_id.clone(), node.clone());
+            if let Some(world) = &self.world {
+                if let Some(t) = tasks.iter().find(|t| &t.id == task_id) {
+                    let _ = world.observe(
+                        &format!("fleet.assignment.{task_id}"),
+                        json!({ "node": node, "x": t.x, "y": t.y, "via": "auction" }),
+                        now_ms,
+                        now_ms,
+                        &self.source,
+                    );
+                }
+            }
+        }
+        // Requeue tasks that found no eligible node this round.
+        let remaining: VecDeque<Task> =
+            tasks.into_iter().filter(|t| !awarded.contains(&t.id)).collect();
+        *self.pending() = remaining;
+        self.record_status(now_ms);
+        awards
+    }
+
     fn record_status(&self, now_ms: u64) {
         let Some(world) = &self.world else { return };
         let reg = self.registry();
@@ -485,6 +580,59 @@ mod tests {
         let b = &assigned.iter().find(|(n, _)| n == "b").unwrap().1;
         let d = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt();
         assert!(d >= 2.0, "targets are separated, d={d}");
+    }
+
+    #[test]
+    fn auction_makes_the_globally_cheap_award_regardless_of_task_order() {
+        // a at origin, b far at x=10. t1 sits in the middle (5,0); t2 is right next
+        // to b (9,0). Per-task greedy on [t1,t2] with a tie at t1 could send b to t1
+        // and strand t2 onto a (cost 1+9=10). The auction awards the cheapest pair
+        // (t2→b, cost 1) first, then t1→a — total 6, and crucially t2→b.
+        let mut reg = FleetRegistry::new();
+        reg.upsert(node("a", 0.0, 0.0, 90.0, 1_000));
+        reg.upsert(node("b", 10.0, 0.0, 90.0, 1_000));
+        let tasks = vec![
+            Task { id: "t1".into(), x: 5.0, y: 0.0, min_battery: 0.0 },
+            Task { id: "t2".into(), x: 9.0, y: 0.0, min_battery: 0.0 },
+        ];
+        let awards: HashMap<String, String> =
+            auction_allocate(&reg, &tasks, 1_000, 30_000).into_iter().collect();
+        assert_eq!(awards.get("t2").map(String::as_str), Some("b"), "near task → near node");
+        assert_eq!(awards.get("t1").map(String::as_str), Some("a"));
+    }
+
+    #[test]
+    fn auction_respects_battery_eligibility() {
+        let mut reg = FleetRegistry::new();
+        reg.upsert(node("a", 0.0, 0.0, 10.0, 1_000)); // closest but low battery
+        reg.upsert(node("b", 5.0, 0.0, 90.0, 1_000));
+        let tasks = vec![Task { id: "hot".into(), x: 0.0, y: 0.0, min_battery: 50.0 }];
+        let awards = auction_allocate(&reg, &tasks, 1_000, 30_000);
+        assert_eq!(awards, vec![("hot".to_string(), "b".to_string())]);
+    }
+
+    #[test]
+    fn auction_tick_awards_marks_busy_and_requeues_the_rest() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let coord = Coordinator::new().with_world_memory(Arc::clone(&world));
+        coord.report(node("a", 0.0, 0.0, 80.0, 1_000));
+        // two tasks, one node → one awarded, one requeued
+        coord.add_task(Task { id: "t1".into(), x: 1.0, y: 0.0, min_battery: 0.0 });
+        coord.add_task(Task { id: "t2".into(), x: 2.0, y: 0.0, min_battery: 0.0 });
+        let awards = coord.auction_tick(1_000);
+        assert_eq!(awards.len(), 1, "one node can take one task");
+        assert_eq!(awards[0].1, "a");
+        // the assignment was recorded via the auction path
+        let won = &awards[0].0;
+        assert_eq!(
+            world.current(&format!("fleet.assignment.{won}")).unwrap().unwrap().value["via"],
+            "auction"
+        );
+        // a second node arrives → the requeued task is placed next tick
+        coord.report(node("b", 2.0, 0.0, 80.0, 1_000));
+        let awards2 = coord.auction_tick(1_000);
+        assert_eq!(awards2.len(), 1);
+        assert_eq!(awards2[0].1, "b");
     }
 
     #[test]
