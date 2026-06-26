@@ -12,6 +12,7 @@
 //! cadence while the `navigate` tool (or the agent) sets/clears it. `nav.status`
 //! carries a categorical `state` (`driving`/`arrived`/`no_fix`) reflexes can match.
 
+pub mod costmap;
 pub mod exploration;
 pub mod mapping;
 pub mod particle;
@@ -120,6 +121,9 @@ pub struct NavController {
     waypoints: Mutex<VecDeque<NavGoal>>,
     grid: Option<Arc<Mutex<planning::OccupancyGrid>>>,
     sensor_max_range: f64,
+    /// Inflation params `(inscribed_radius, inflation_radius, decay)` for
+    /// clearance-aware planning; `None` ⇒ plain A*.
+    inflation: Option<(f64, f64, f64)>,
     source: String,
 }
 
@@ -169,6 +173,7 @@ impl NavController {
             waypoints: Mutex::new(VecDeque::new()),
             grid: None,
             sensor_max_range: 10.0,
+            inflation: None,
             source: "navigation".to_string(),
         }
     }
@@ -248,6 +253,14 @@ impl NavController {
     /// Attach an occupancy grid for obstacle-aware planning.
     pub fn with_grid(mut self, grid: Arc<Mutex<planning::OccupancyGrid>>) -> Self {
         self.grid = Some(grid);
+        self
+    }
+
+    /// Plan with a safety margin: cells within `inscribed_radius` of an obstacle
+    /// are lethal, and proximity out to `inflation_radius` is penalized (decay
+    /// rate `decay`). Without this, planning hugs obstacles.
+    pub fn with_inflation(mut self, inscribed_radius: f64, inflation_radius: f64, decay: f64) -> Self {
+        self.inflation = Some((inscribed_radius, inflation_radius, decay));
         self
     }
 
@@ -337,7 +350,18 @@ impl NavController {
         };
         let goals = {
             let g = grid.lock().unwrap_or_else(|p| p.into_inner());
-            planning::plan_goals(&g, (pose.x, pose.y), (goal.x, goal.y), goal.tolerance)
+            match self.inflation {
+                Some((inscribed, infl, decay)) => {
+                    // Clearance-aware: inflate obstacles, then plan with a margin.
+                    let field = costmap::inflate(&g, inscribed, infl, decay);
+                    costmap::plan_inflated(&g, &field, (pose.x, pose.y), (goal.x, goal.y)).map(|pts| {
+                        pts.into_iter()
+                            .map(|(x, y)| NavGoal { x, y, tolerance: goal.tolerance })
+                            .collect::<Vec<_>>()
+                    })
+                }
+                None => planning::plan_goals(&g, (pose.x, pose.y), (goal.x, goal.y), goal.tolerance),
+            }
         };
         match goals {
             Some(goals) => {
@@ -640,6 +664,24 @@ mod tests {
         assert!(n.current_goal().is_some());
         // still driving there → en route, not a new pick
         assert!(matches!(n.explore_step(1_000).unwrap(), ExploreOutcome::EnRoute { .. }));
+    }
+
+    #[tokio::test]
+    async fn plan_to_with_inflation_refuses_a_too_tight_gap() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let mut grid = planning::OccupancyGrid::new(0.0, 0.0, 1.0, 10, 10);
+        for cy in 1..10 {
+            grid.set(5, cy, planning::Cell::Occupied); // wall, one-cell gap at (5,0)
+        }
+        // a wide robot (inscribed 1.5) can't fit the gap → clearance planner refuses
+        let n = nav(&world)
+            .with_grid(Arc::new(Mutex::new(grid)))
+            .with_inflation(1.5, 3.0, 1.0);
+        set_pose(&world, 0.5, 0.5, 0.0, 1_000);
+        assert_eq!(
+            n.plan_to(NavGoal { x: 9.5, y: 0.5, tolerance: 0.3 }, 1_000).unwrap(),
+            PlanOutcome::NoPath
+        );
     }
 
     #[tokio::test]

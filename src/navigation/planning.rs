@@ -59,6 +59,10 @@ impl OccupancyGrid {
     pub fn height(&self) -> usize {
         self.height
     }
+    /// Cell size in world units.
+    pub fn resolution(&self) -> f64 {
+        self.resolution
+    }
 
     fn in_bounds(&self, cx: i64, cy: i64) -> bool {
         cx >= 0 && cy >= 0 && (cx as usize) < self.width && (cy as usize) < self.height

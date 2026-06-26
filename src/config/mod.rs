@@ -1467,6 +1467,17 @@ pub struct NavigationConfig {
     /// it, until the reachable space is explored. Requires a grid.
     #[serde(default)]
     pub explore: bool,
+    /// Robot inscribed radius (world units) — cells this close to an obstacle are
+    /// lethal. Setting this (with `inflation_radius`) enables clearance-aware
+    /// planning that keeps a safety margin instead of hugging obstacles.
+    #[serde(default)]
+    pub inscribed_radius: Option<f64>,
+    /// Inflation radius (world units) out to which obstacle proximity is penalized.
+    #[serde(default)]
+    pub inflation_radius: Option<f64>,
+    /// Inflation cost decay rate (default 2.0).
+    #[serde(default)]
+    pub inflation_decay: Option<f64>,
 }
 
 /// Occupancy-grid bounds for obstacle-aware planning (`[navigation.grid]`).

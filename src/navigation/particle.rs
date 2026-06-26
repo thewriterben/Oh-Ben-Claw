@@ -54,11 +54,46 @@ struct Particle {
     weight: f64,
 }
 
+/// KLD-sampling parameters (Fox 2003): adapt the particle count to the spread of
+/// the belief — many particles when uncertain, few when confident.
+#[derive(Debug, Clone, Copy)]
+pub struct KldParams {
+    pub min: usize,
+    pub max: usize,
+    /// KL-divergence error bound (smaller ⇒ more particles).
+    pub epsilon: f64,
+    /// Upper standard-normal quantile for the confidence (e.g. 2.326 ≈ 0.99).
+    pub z: f64,
+    /// Spatial bin size for the support estimate.
+    pub bin_size: f64,
+}
+
+impl Default for KldParams {
+    fn default() -> Self {
+        Self { min: 50, max: 2000, epsilon: 0.05, z: 2.326, bin_size: 0.5 }
+    }
+}
+
+/// The KLD sample-size bound for `k` occupied bins (Fox 2003, Wilson-Hilferty
+/// approximation): the number of samples needed to keep the KL divergence between
+/// the sample and true distribution below `epsilon` with confidence from `z`.
+fn kld_bound(k: usize, epsilon: f64, z: f64) -> usize {
+    if k <= 1 {
+        return 0;
+    }
+    let k = k as f64;
+    let a = 1.0 - 2.0 / (9.0 * (k - 1.0));
+    let b = (2.0 / (9.0 * (k - 1.0))).sqrt() * z;
+    let n = (k - 1.0) / (2.0 * epsilon) * (a + b).powi(3);
+    n.ceil().max(0.0) as usize
+}
+
 /// A particle filter over 2D poses.
 #[derive(Debug, Clone)]
 pub struct ParticleFilter {
     particles: Vec<Particle>,
     rng: Rng,
+    kld: Option<KldParams>,
 }
 
 impl ParticleFilter {
@@ -78,7 +113,14 @@ impl ParticleFilter {
                 weight: w,
             })
             .collect();
-        Self { particles, rng }
+        Self { particles, rng, kld: None }
+    }
+
+    /// Enable **adaptive (KLD)** resampling — the particle count grows when the
+    /// belief is spread and shrinks when it concentrates.
+    pub fn with_kld(mut self, params: KldParams) -> Self {
+        self.kld = Some(params);
+        self
     }
 
     pub fn len(&self) -> usize {
@@ -125,6 +167,15 @@ impl ParticleFilter {
             p.weight /= total;
         }
         if self.effective_sample_size() < self.particles.len() as f64 / 2.0 {
+            self.do_resample();
+        }
+    }
+
+    /// Resample: KLD-adaptive when configured, else fixed-size low-variance.
+    fn do_resample(&mut self) {
+        if self.kld.is_some() {
+            self.resample_kld();
+        } else {
             self.resample();
         }
     }
@@ -154,6 +205,58 @@ impl ParticleFilter {
             }
             new.push(Particle { pose: self.particles[i].pose, weight: 1.0 / n as f64 });
             u += step;
+        }
+        self.particles = new;
+    }
+
+    /// KLD-adaptive resampling: draw weighted samples, bin them spatially, and
+    /// stop once the drawn count meets the KL-divergence bound for the number of
+    /// occupied bins (clamped to `[min, max]`). Concentrated beliefs ⇒ few
+    /// particles; spread beliefs ⇒ many.
+    fn resample_kld(&mut self) {
+        let p = self.kld.expect("kld configured");
+        // Cumulative weights for roulette sampling.
+        let n_old = self.particles.len();
+        if n_old == 0 {
+            return;
+        }
+        let mut cum = Vec::with_capacity(n_old);
+        let mut acc = 0.0;
+        for part in &self.particles {
+            acc += part.weight;
+            cum.push(acc);
+        }
+        let total = acc.max(1e-12);
+
+        let mut new: Vec<Particle> = Vec::new();
+        let mut bins: std::collections::HashSet<(i64, i64, i64)> = std::collections::HashSet::new();
+        let mut n_needed = p.min;
+        loop {
+            if new.len() >= p.max {
+                break;
+            }
+            // draw one particle by weight
+            let u = self.rng.unit() * total;
+            let idx = cum.iter().position(|&c| c >= u).unwrap_or(n_old - 1);
+            let pose = self.particles[idx].pose;
+            new.push(Particle { pose, weight: 0.0 });
+
+            let bx = (pose.x / p.bin_size).floor() as i64;
+            let by = (pose.y / p.bin_size).floor() as i64;
+            let bt = (pose.theta / p.bin_size).floor() as i64;
+            if bins.insert((bx, by, bt)) {
+                let k = bins.len();
+                if k > 1 {
+                    n_needed = kld_bound(k, p.epsilon, p.z).clamp(p.min, p.max);
+                }
+            }
+            if new.len() >= n_needed {
+                break;
+            }
+        }
+        let w = 1.0 / new.len() as f64;
+        for part in &mut new {
+            part.weight = w;
         }
         self.particles = new;
     }
@@ -316,5 +419,34 @@ mod tests {
         assert!(belief.value["spread"].as_f64().is_some());
         // a filtered pose is published for navigation to read
         assert!(world.current("sensor.pos_x").unwrap().is_some());
+    }
+
+    #[test]
+    fn kld_bound_grows_with_occupied_bins() {
+        assert_eq!(kld_bound(1, 0.05, 2.326), 0);
+        let few = kld_bound(2, 0.05, 2.326);
+        let many = kld_bound(50, 0.05, 2.326);
+        assert!(many > few, "more bins ⇒ larger sample bound: {few} → {many}");
+    }
+
+    #[test]
+    fn kld_uses_few_particles_when_belief_is_concentrated() {
+        let params = KldParams { min: 20, max: 2000, epsilon: 0.05, z: 2.326, bin_size: 0.5 };
+        // 500 particles in one tiny pocket, centered well inside a single bin (not
+        // straddling a bin seam) → one occupied bin → collapses to the minimum.
+        let mut pf = ParticleFilter::new(500, Pose2::new(0.1, 0.1, 0.1), 0.01, 0.01, 1).with_kld(params);
+        pf.resample_kld();
+        assert!(pf.len() <= 40, "concentrated belief uses few particles, got {}", pf.len());
+        assert!(pf.len() >= params.min);
+    }
+
+    #[test]
+    fn kld_uses_many_particles_when_belief_is_spread() {
+        let params = KldParams { min: 20, max: 2000, epsilon: 0.05, z: 2.326, bin_size: 0.5 };
+        // a broad belief occupies many bins → the count grows toward the max
+        let mut pf = ParticleFilter::new(800, Pose2::new(0.0, 0.0, 0.0), 6.0, 1.0, 2).with_kld(params);
+        pf.resample_kld();
+        assert!(pf.len() > 100, "spread belief uses many particles, got {}", pf.len());
+        assert!(pf.len() <= params.max);
     }
 }
