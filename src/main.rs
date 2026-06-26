@@ -899,6 +899,28 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // Operator rules are merged with the standard safing rules (when [reflex]
     // safing = true) so the suite mode hooks (power.mode, net.mode, …) drive
     // deterministic safing actions. Uses the dry-run logging sink until spine.
+    // Connect the ClawCam MCP bridge once (if configured): shared by the reflex
+    // actuation sink (OBC → ClawCam capture/arm/alert) and the detection/health/
+    // audio poll, so the brain reads *and* commands the cameras over one bridge.
+    let clawcam_client: Option<Arc<tokio::sync::Mutex<oh_ben_claw::mcp::client::McpClient>>> =
+        match config.perception.clawcam_poll.clone() {
+            Some(cfg) if cfg.enabled => {
+                match oh_ben_claw::mcp::client::McpClient::connect(&cfg.server).await {
+                    Ok(c) => {
+                        info!("ClawCam MCP bridge connected (actuation + poll)");
+                        Some(Arc::new(tokio::sync::Mutex::new(c)))
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Could not connect to ClawCam MCP server: {e}; ClawCam features disabled"
+                        );
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
     let reflex_rules: Vec<oh_ben_claw::agent::reflex::ReflexRule> = {
         let mut rules = config.reflex.rules.clone();
         if config.reflex.safing {
@@ -954,6 +976,20 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     info!("Phase 18 reflexes use the dry-run logging sink (spine not connected)");
                     Arc::new(LoggingActionSink)
                 }
+            };
+            // OBC → ClawCam actuation: intercept `clawcam/cmd/*` reflex publishes
+            // and call ClawCam write tools (capture/arm/alert) over the shared MCP
+            // bridge — still passing ClawCam's own approval model. Other publishes
+            // pass through to the sink above.
+            let base_sink: Arc<dyn ActionSink> = match &clawcam_client {
+                Some(client) => {
+                    info!("Phase 18 reflexes can command ClawCam (capture/arm/alert)");
+                    Arc::new(oh_ben_claw::vision::clawcam_actuate::ClawCamActionSink::new(
+                        Arc::clone(client),
+                        base_sink,
+                    ))
+                }
+                None => base_sink,
             };
             // Route reflex `Move` actions through the gated movement controller
             // (other actions delegate to the spine/logging sink). System 1 now
@@ -1192,69 +1228,102 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         });
     }
 
-    // Phase 18 / S1b: fold a ClawCam (vision subsystem) MCP server's detections
-    // into world memory on a cadence — the vision subsystem feeding the brain's
-    // bitemporal memory, which the reflex engine then reacts to.
-    if let Some(world) = &world_mem {
+    // Phase 18 / S1b: fold a ClawCam (vision subsystem) MCP server's detections —
+    // and optionally node health + audio classifications — into the embodied stack
+    // on a cadence, reusing the shared ClawCam MCP bridge.
+    if let (Some(world), Some(client)) = (&world_mem, &clawcam_client) {
         if let Some(cfg) = config.perception.clawcam_poll.clone() {
             if cfg.enabled {
                 let world = Arc::clone(world);
+                let client = Arc::clone(client);
                 let poll_safing = Arc::clone(&safing_state);
-                match oh_ben_claw::mcp::client::McpClient::connect(&cfg.server).await {
-                    Ok(client) => {
-                        let client = Arc::new(tokio::sync::Mutex::new(client));
-                        let interval =
-                            std::time::Duration::from_millis(cfg.interval_ms.max(250));
-                        info!(
-                            tool = %cfg.tool,
-                            interval_ms = cfg.interval_ms,
-                            "Phase 18 ClawCam → world memory poll spawned"
-                        );
-                        tokio::spawn(async move {
-                            let mut ticker = tokio::time::interval(interval);
-                            loop {
-                                ticker.tick().await;
-                                // Load-shedding: when safing has engaged shed_load
-                                // (e.g. battery critical/low), skip the poll to drop
-                                // its network + CPU cost until charge recovers.
-                                if poll_safing.shed_load() {
-                                    continue;
-                                }
-                                let now = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_millis() as u64)
-                                    .unwrap_or(0);
-                                match oh_ben_claw::vision::clawcam_ingest::poll_clawcam_into_world(
-                                    Arc::clone(&client),
-                                    &world,
-                                    &cfg.tool,
-                                    cfg.args.clone(),
-                                    now,
-                                    &cfg.source,
-                                )
-                                .await
-                                {
-                                    Ok(entities) if !entities.is_empty() => {
-                                        // Maintain vision.count.{subject} so foresight can
-                                        // trend the detection rate over time.
-                                        let _ = oh_ben_claw::vision::clawcam_ingest::record_subject_counts(
-                                            &world, &entities, now, &cfg.source,
-                                        );
-                                        info!(
-                                            count = entities.len(),
-                                            "ClawCam detections folded into world memory"
-                                        );
-                                    }
-                                    Ok(_) => {}
-                                    Err(e) => tracing::warn!("ClawCam poll failed: {e}"),
+                let audio_ctrl = audio_controller.clone();
+                let interval = std::time::Duration::from_millis(cfg.interval_ms.max(250));
+                info!(
+                    tool = %cfg.tool,
+                    interval_ms = cfg.interval_ms,
+                    poll_health = cfg.poll_health,
+                    poll_audio = cfg.poll_audio,
+                    "Phase 18 ClawCam → world memory poll spawned"
+                );
+                tokio::spawn(async move {
+                    let mut ticker = tokio::time::interval(interval);
+                    loop {
+                        ticker.tick().await;
+                        // Load-shedding: when safing has engaged shed_load (e.g.
+                        // battery critical/low), skip the poll until charge recovers.
+                        if poll_safing.shed_load() {
+                            continue;
+                        }
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        match oh_ben_claw::vision::clawcam_ingest::poll_clawcam_into_world(
+                            Arc::clone(&client),
+                            &world,
+                            &cfg.tool,
+                            cfg.args.clone(),
+                            now,
+                            &cfg.source,
+                        )
+                        .await
+                        {
+                            Ok(entities) if !entities.is_empty() => {
+                                // Maintain vision.count.{subject} so foresight can
+                                // trend the detection rate over time.
+                                let _ = oh_ben_claw::vision::clawcam_ingest::record_subject_counts(
+                                    &world, &entities, now, &cfg.source,
+                                );
+                                info!(
+                                    count = entities.len(),
+                                    "ClawCam detections folded into world memory"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!("ClawCam poll failed: {e}"),
+                        }
+                        // Camera node health → namespaced `clawcam.node.{id}` facts
+                        // (kept distinct from the robot's own power/comms suites).
+                        if cfg.poll_health {
+                            let raw = {
+                                let mut g = client.lock().await;
+                                g.call_tool("get_node_health", serde_json::json!({})).await
+                            };
+                            if let Ok(raw) = raw {
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                                    let rows =
+                                        oh_ben_claw::vision::clawcam_ingest::extract_node_health(&v);
+                                    let _ = oh_ben_claw::vision::clawcam_ingest::ingest_node_health(
+                                        &world, &rows, now, &cfg.source,
+                                    );
                                 }
                             }
-                        });
+                        }
+                        // Camera audio classifications → the audio suite (distinct
+                        // streams), so a glassbreak is classifiable by safing.
+                        if cfg.poll_audio {
+                            if let Some(ac) = &audio_ctrl {
+                                let raw = {
+                                    let mut g = client.lock().await;
+                                    g.call_tool("list_audio_classifications", serde_json::json!({}))
+                                        .await
+                                };
+                                if let Ok(raw) = raw {
+                                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                                        for a in
+                                            oh_ben_claw::vision::clawcam_ingest::extract_audio_classes(&v)
+                                        {
+                                            let ev =
+                                                oh_ben_claw::vision::clawcam_ingest::audio_class_to_event(&a);
+                                            let _ = ac.observe(&ev, now);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
-                    Err(e) => tracing::warn!(
-                        "Could not connect to ClawCam MCP server: {e}; skipping detection poll"
-                    ),
-                }
+                });
             }
         }
     }
