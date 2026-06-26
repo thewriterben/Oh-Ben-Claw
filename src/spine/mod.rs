@@ -114,6 +114,34 @@ type NodeRegistry = Arc<RwLock<HashMap<String, NodeAnnouncement>>>;
 
 // ── Spine Client ───────────────────────────────────────────────────────────────
 
+/// A handler for messages on a subscribed topic filter: `(topic, payload)`.
+pub type MessageHandler = Arc<dyn Fn(&str, &[u8]) + Send + Sync>;
+
+/// Registered `(topic_filter, handler)` pairs the event loop dispatches to.
+type Handlers = Arc<std::sync::Mutex<Vec<(String, MessageHandler)>>>;
+
+/// MQTT topic-filter match (`+` = one level, `#` = rest).
+pub fn topic_matches(filter: &str, topic: &str) -> bool {
+    let fs: Vec<&str> = filter.split('/').collect();
+    let ts: Vec<&str> = topic.split('/').collect();
+    for (i, f) in fs.iter().enumerate() {
+        match *f {
+            "#" => return true,
+            "+" => {
+                if i >= ts.len() {
+                    return false;
+                }
+            }
+            seg => {
+                if i >= ts.len() || ts[i] != seg {
+                    return false;
+                }
+            }
+        }
+    }
+    fs.len() == ts.len()
+}
+
 /// A client for the Oh-Ben-Claw MQTT communication spine.
 pub struct SpineClient {
     config: SpineConfig,
@@ -121,6 +149,7 @@ pub struct SpineClient {
     mqtt_client: Option<AsyncClient>,
     pending_calls: PendingCalls,
     node_registry: NodeRegistry,
+    handlers: Handlers,
 }
 
 impl SpineClient {
@@ -132,6 +161,7 @@ impl SpineClient {
             mqtt_client: None,
             pending_calls: Arc::new(Mutex::new(HashMap::new())),
             node_registry: Arc::new(RwLock::new(HashMap::new())),
+            handlers: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -160,6 +190,7 @@ impl SpineClient {
 
         let pending_calls = Arc::clone(&self.pending_calls);
         let node_registry = Arc::clone(&self.node_registry);
+        let handlers = Arc::clone(&self.handlers);
 
         // Spawn the event loop handler
         tokio::spawn(async move {
@@ -168,6 +199,18 @@ impl SpineClient {
                     Ok(Event::Incoming(Packet::Publish(publish))) => {
                         let topic = publish.topic.clone();
                         let payload = publish.payload.clone();
+
+                        // Dispatch to any registered generic handlers (fleet
+                        // heartbeats, custom subscriptions). Locked briefly; the
+                        // handler call is synchronous.
+                        {
+                            let hs = handlers.lock().unwrap_or_else(|p| p.into_inner());
+                            for (filter, handler) in hs.iter() {
+                                if topic_matches(filter, &topic) {
+                                    handler(&topic, &payload);
+                                }
+                            }
+                        }
 
                         if topic.contains("/announce") {
                             // Parse node announcement and register it
@@ -287,6 +330,27 @@ impl SpineClient {
         Ok(())
     }
 
+    /// Subscribe a generic handler to a topic filter (e.g. fleet heartbeats).
+    /// The handler is invoked with `(topic, payload)` for every matching message.
+    /// Can be called after [`connect`](Self::connect).
+    pub async fn subscribe_handler(
+        &self,
+        filter: impl Into<String>,
+        handler: MessageHandler,
+    ) -> Result<()> {
+        let filter = filter.into();
+        let client = self
+            .mqtt_client
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Spine not connected"))?;
+        client.subscribe(filter.clone(), QoS::AtLeastOnce).await?;
+        self.handlers
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push((filter, handler));
+        Ok(())
+    }
+
     /// Build a list of `Box<dyn Tool>` from all currently known MQTT nodes.
     pub async fn build_mqtt_tools(self: &Arc<Self>) -> Vec<Box<dyn Tool>> {
         let registry = self.node_registry.read().await;
@@ -346,6 +410,16 @@ impl Tool for MqttNodeTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn topic_matching_handles_wildcards() {
+        assert!(topic_matches("obc/fleet/heartbeat/+", "obc/fleet/heartbeat/node-1"));
+        assert!(!topic_matches("obc/fleet/heartbeat/+", "obc/fleet/heartbeat/node-1/extra"));
+        assert!(!topic_matches("obc/fleet/heartbeat/+", "obc/fleet/assign/node-1"));
+        assert!(topic_matches("obc/#", "obc/anything/at/all"));
+        assert!(topic_matches("obc/fleet/heartbeat/n1", "obc/fleet/heartbeat/n1"));
+        assert!(!topic_matches("obc/fleet/heartbeat/+", "obc/fleet/heartbeat"));
+    }
 
     #[test]
     fn topic_formats_are_correct() {
