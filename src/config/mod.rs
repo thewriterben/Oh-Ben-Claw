@@ -1326,6 +1326,14 @@ pub struct ClawCamPollConfig {
     /// World-memory `source` label for the ingested facts.
     #[serde(default = "default_clawcam_source")]
     pub source: String,
+    /// Also poll `get_node_health` each tick → `clawcam.node.{id}` facts (a
+    /// camera's reachability/battery, kept separate from the robot's own suites).
+    #[serde(default)]
+    pub poll_health: bool,
+    /// Also poll `list_audio_classifications` each tick → audio-suite events
+    /// (`audio.clawcam:{node}`), so a glassbreak is classifiable by safing.
+    #[serde(default)]
+    pub poll_audio: bool,
 }
 
 fn default_clawcam_tool() -> String {
