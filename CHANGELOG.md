@@ -5,6 +5,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Phase 19: Foresight & Autonomy (2026-06-25)
+
+Beyond reactive and deliberative control: a predictive layer, self-improvement,
+autonomous exploration, and uncertainty-aware localization. These exploit the
+bitemporal world memory and the navigation stack to reach toward state of the art.
+
+### Added — Foresight (Track 1, predictive control)
+
+- **`src/foresight`** — a [`Forecaster`] fits a linear trend over an entity's recent world-memory history (`predict_at`, `time_to_threshold`). **`ForesightRule`** fires when an entity *is, or is predicted within a horizon to be*, `op` a threshold — acting *before* the event (e.g. `battery ≤ 10% within 60s → return to base` while still at 20% but draining). `ForesightEngine`/`ForesightController` dispatch through the reflex `ActionSink` + escalation budget; predictions are recorded to `foresight.{entity}`. The `foresight` tool (read-only) queries any entity's forecast.
+
+### Added — self-authored reflexes (experiential rule synthesis)
+
+- **`src/learning`** — `RuleMiner` scans history for antecedents that repeatedly preceded a configured bad outcome, proposing rules with support + confidence (specificity-filtered). `ProposalStore` is the **approval gate**: an approved proposal is pushed as a conservative (escalate-only) rule into the foresight engine's shared learned-rules buffer — **live on the next tick**, but never without approval. The `learn` tool exposes `mine`/`list`/`approve`/`reject`; an optional auto-mine loop proposes continuously.
+
+### Added — autonomous exploration
+
+- **`src/navigation/exploration`** — frontier detection (`Free` adjacent to `Unknown`) + nearest *reachable* frontier selection (A*-checked). `NavController::explore_step` heads to the next frontier when idle; `[navigation] explore = true` makes the robot map an unknown space on its own, composing SLAM + mapping + planning + drive with no human waypoints.
+
+### Added — belief-state localization
+
+- **`src/navigation/particle`** — a particle filter over SE2 poses: noisy motion proposal, Gaussian measurement reweighting, low-variance resampling, and a weighted/circular estimate **with a position spread** (honest uncertainty). Deterministic PRNG (no new dep). `ParticleLocalizer` records the belief (`sensor.pos_*` + `nav.belief`) so navigation reads the filtered pose and the stack can act on uncertainty.
+
+### Tests
+
+- Per-module unit tests throughout (forecast trend + predictive firing; antecedent mining + approval gate; frontier detection + exploration step; particle convergence + spread shrink + resampling invariants).
+
+---
+
 ## Unreleased — Navigation, SLAM & Mission Sequencer (2026-06-25)
 
 The embodied stack's upper layers: a full localization → mapping → planning →

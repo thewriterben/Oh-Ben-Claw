@@ -46,7 +46,8 @@ pub enum Cmp {
 }
 
 impl Cmp {
-    fn test(self, a: f64, b: f64) -> bool {
+    /// Apply the comparison: `a {op} b`.
+    pub fn test(self, a: f64, b: f64) -> bool {
         const EPS: f64 = 1e-9;
         match self {
             Cmp::Gt => a > b,

@@ -12,7 +12,9 @@
 //! cadence while the `navigate` tool (or the agent) sets/clears it. `nav.status`
 //! carries a categorical `state` (`driving`/`arrived`/`no_fix`) reflexes can match.
 
+pub mod exploration;
 pub mod mapping;
+pub mod particle;
 pub mod planning;
 pub mod pose_fusion;
 pub mod slam;
@@ -119,6 +121,21 @@ pub struct NavController {
     grid: Option<Arc<Mutex<planning::OccupancyGrid>>>,
     sensor_max_range: f64,
     source: String,
+}
+
+/// The result of an autonomous exploration step.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExploreOutcome {
+    /// No occupancy grid configured.
+    NoGrid,
+    /// No pose fix — cannot pick a frontier from an unknown start.
+    NoFix,
+    /// Reachable space fully explored — no frontiers remain.
+    Complete,
+    /// Already driving toward a goal (exploration in progress).
+    EnRoute { goal: NavGoal },
+    /// Headed to a newly chosen frontier.
+    Exploring { goal: NavGoal },
 }
 
 /// The result of an obstacle-aware planning attempt.
@@ -279,6 +296,34 @@ impl NavController {
         let mut g = grid.lock().unwrap_or_else(|p| p.into_inner());
         mapping::integrate_scan(&mut g, pose.x, pose.y, pose.heading_deg, beams, self.sensor_max_range);
         Ok(true)
+    }
+
+    /// One autonomous-exploration step: if not already en route to a goal, pick
+    /// the nearest reachable frontier and plan a route to it. When no frontiers
+    /// remain, the reachable space is fully explored ([`ExploreOutcome::Complete`]).
+    pub fn explore_step(&self, now_ms: u64) -> anyhow::Result<ExploreOutcome> {
+        if self.grid.is_none() {
+            return Ok(ExploreOutcome::NoGrid);
+        }
+        // Still driving toward the last frontier — let the drive loop finish it.
+        if let Some(goal) = self.current_goal() {
+            return Ok(ExploreOutcome::EnRoute { goal });
+        }
+        let Some(pose) = self.estimate_pose(now_ms)? else {
+            return Ok(ExploreOutcome::NoFix);
+        };
+        let goal = {
+            let grid = self.grid.as_ref().unwrap();
+            let g = grid.lock().unwrap_or_else(|p| p.into_inner());
+            exploration::nearest_frontier_goal(&g, (pose.x, pose.y), 0.5)
+        };
+        match goal {
+            Some(goal) => {
+                self.set_path(vec![goal], now_ms);
+                Ok(ExploreOutcome::Exploring { goal })
+            }
+            None => Ok(ExploreOutcome::Complete),
+        }
     }
 
     /// Plan an obstacle-free path from the current pose to `goal` and set it as
@@ -576,6 +621,25 @@ mod tests {
         let used = n.integrate_scan(&[(0.0, 4.0)], 1_000).unwrap();
         assert!(used);
         assert!(n.obstacle_count() >= 1, "the scan should mark an obstacle");
+    }
+
+    #[tokio::test]
+    async fn explore_step_picks_a_frontier_then_reports_en_route() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let mut grid = planning::OccupancyGrid::new(0.0, 0.0, 1.0, 10, 10);
+        for cx in 1..4 {
+            for cy in 1..4 {
+                grid.set(cx, cy, planning::Cell::Free); // a known pocket in unknown
+            }
+        }
+        let n = nav(&world).with_grid(Arc::new(Mutex::new(grid)));
+        set_pose(&world, 2.5, 2.5, 0.0, 1_000);
+
+        let out = n.explore_step(1_000).unwrap();
+        assert!(matches!(out, ExploreOutcome::Exploring { .. }), "should head to a frontier, got {out:?}");
+        assert!(n.current_goal().is_some());
+        // still driving there → en route, not a new pick
+        assert!(matches!(n.explore_step(1_000).unwrap(), ExploreOutcome::EnRoute { .. }));
     }
 
     #[tokio::test]
