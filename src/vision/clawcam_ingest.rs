@@ -213,6 +213,183 @@ pub async fn poll_clawcam_into_world(
     ingest_tool_result(world, &parsed, ingested_at_ms, source)
 }
 
+// ── ClawCam as a full perceive subsystem (health / audio / state) ───────────────
+//
+// A ClawCam node is more than a species feed: it reports its own *health*
+// (including battery), classifies *audio* (glassbreak, BirdNET), and tracks
+// *device state*. These fold into OBC's existing suites so a camera's battery is a
+// managed power source, a glassbreak is an audio-suite alarm, and a camera going
+// offline is a comms event — each then visible to reflexes, safing, and foresight.
+
+use crate::audio::suite::HeardEvent;
+use crate::comms::LinkReading;
+use crate::power::{BatteryReading, ChargeState};
+
+/// A ClawCam node-health row (from `get_node_health`). Tolerant: every field but
+/// the id is optional, so partial payloads still parse.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClawCamNodeHealth {
+    #[serde(alias = "device_id")]
+    pub node_id: String,
+    #[serde(default)]
+    pub battery_pct: Option<f64>,
+    #[serde(default)]
+    pub charging: Option<bool>,
+    #[serde(default)]
+    pub online: Option<bool>,
+    #[serde(default)]
+    pub rssi_dbm: Option<f64>,
+    #[serde(default)]
+    pub last_seen_ms: Option<u64>,
+}
+
+/// A ClawCam audio classification (from `list_audio_classifications`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClawCamAudioClass {
+    #[serde(default)]
+    pub device_id: Option<String>,
+    #[serde(default)]
+    pub top_label: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<f64>,
+}
+
+/// Node health → a [`BatteryReading`] for the power suite (so a camera's pack is a
+/// managed source that can drive `power.mode`, safing, and foresight). `None` when
+/// the node reports no battery.
+pub fn node_health_to_battery(h: &ClawCamNodeHealth) -> Option<BatteryReading> {
+    h.battery_pct.map(|soc| BatteryReading {
+        soc_pct: soc,
+        voltage: None,
+        current_a: None,
+        charging: if h.charging == Some(true) {
+            ChargeState::Charging
+        } else {
+            ChargeState::Discharging
+        },
+        source: Some(format!("clawcam:{}", h.node_id)),
+    })
+}
+
+/// Node health → a [`LinkReading`] for the comms suite (a camera's reachability
+/// becomes `link.clawcam:{node}` and feeds `net.mode`).
+pub fn node_health_to_link(h: &ClawCamNodeHealth) -> LinkReading {
+    LinkReading {
+        link: format!("clawcam:{}", h.node_id),
+        rssi_dbm: h.rssi_dbm,
+        latency_ms: None,
+        loss_pct: None,
+        up: h.online,
+        source: Some(h.node_id.clone()),
+    }
+}
+
+/// An audio classification → a [`HeardEvent`] for the audio suite (a glassbreak or
+/// birdsong becomes `audio.clawcam:{node}`, classifiable as an alarm by safing).
+pub fn audio_class_to_event(a: &ClawCamAudioClass) -> HeardEvent {
+    let node = a.device_id.clone().unwrap_or_else(|| "unknown".to_string());
+    HeardEvent {
+        stream: format!("clawcam:{node}"),
+        text: None,
+        label: a.top_label.clone().or_else(|| a.label.clone()),
+        confidence: a.confidence.unwrap_or(0.0),
+        source: a.device_id.clone(),
+    }
+}
+
+/// Pull `ClawCamNodeHealth` rows out of a `get_node_health` tool result, tolerating
+/// the same shapes as detections (`{results:[…]}`, `{result:…}`, bare array/object).
+pub fn extract_node_health(tool_result: &serde_json::Value) -> Vec<ClawCamNodeHealth> {
+    extract_rows(tool_result, "node_id")
+        .into_iter()
+        .filter_map(|v| serde_json::from_value(v).ok())
+        .collect()
+}
+
+/// Pull `ClawCamAudioClass` rows out of a `list_audio_classifications` result.
+pub fn extract_audio_classes(tool_result: &serde_json::Value) -> Vec<ClawCamAudioClass> {
+    extract_rows(tool_result, "device_id")
+        .into_iter()
+        .filter_map(|v| serde_json::from_value(v).ok())
+        .collect()
+}
+
+/// Shared row extraction across the gateway result shapes. `id_key` is a field that
+/// identifies a bare single-object payload.
+fn extract_rows(tool_result: &serde_json::Value, id_key: &str) -> Vec<serde_json::Value> {
+    if let Some(arr) = tool_result.get("results").and_then(|r| r.as_array()) {
+        arr.clone()
+    } else if let Some(res) = tool_result.get("result") {
+        match res.as_array() {
+            Some(arr) => arr.clone(),
+            None => vec![res.clone()],
+        }
+    } else if let Some(arr) = tool_result.as_array() {
+        arr.clone()
+    } else if tool_result.get(id_key).is_some() {
+        vec![tool_result.clone()]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Record ClawCam node health into world memory as `clawcam.node.{id}` facts (for
+/// observability and querying), and return the node ids written. Pair with the
+/// converters above to also drive the power/comms suites.
+pub fn ingest_node_health(
+    world: &WorldMemory,
+    health: &[ClawCamNodeHealth],
+    ingested_at_ms: u64,
+    source: &str,
+) -> anyhow::Result<Vec<String>> {
+    let mut ids = Vec::with_capacity(health.len());
+    for h in health {
+        let valid_from = h.last_seen_ms.unwrap_or(ingested_at_ms);
+        world.observe(
+            &format!("clawcam.node.{}", h.node_id),
+            json!({
+                "battery_pct": h.battery_pct,
+                "charging": h.charging,
+                "online": h.online,
+                "rssi_dbm": h.rssi_dbm,
+            }),
+            valid_from,
+            ingested_at_ms,
+            source,
+        )?;
+        ids.push(h.node_id.clone());
+    }
+    Ok(ids)
+}
+
+/// Bump a per-subject rolling sighting counter (`vision.count.{subject}`) so the
+/// foresight layer can fit a *detection-rate* trend (e.g. intrusions accelerating).
+/// `subjects` are the entity keys returned by [`ingest_clawcam_detections`]; the
+/// `vision.subject.` prefix is stripped to form the count key. Returns each new
+/// count.
+pub fn record_subject_counts(
+    world: &WorldMemory,
+    subjects: &[String],
+    ingested_at_ms: u64,
+    source: &str,
+) -> anyhow::Result<Vec<u64>> {
+    let mut out = Vec::with_capacity(subjects.len());
+    for entity in subjects {
+        let subject = entity.strip_prefix("vision.subject.").unwrap_or(entity);
+        let key = format!("vision.count.{subject}");
+        let prev = world
+            .current(&key)?
+            .and_then(|f| f.value.get("value").and_then(|v| v.as_u64()))
+            .unwrap_or(0);
+        let next = prev + 1;
+        world.observe(&key, json!({ "value": next }), ingested_at_ms, ingested_at_ms, source)?;
+        out.push(next);
+    }
+    Ok(out)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -344,5 +521,87 @@ mod tests {
         assert!(ingest_tool_result(&world, &err, 1, "clawcam").unwrap().is_empty());
         let empty = serde_json::json!({"ok": true, "count": 0, "results": []});
         assert!(ingest_tool_result(&world, &empty, 1, "clawcam").unwrap().is_empty());
+    }
+
+    #[test]
+    fn node_health_converts_to_battery_and_link() {
+        let h = ClawCamNodeHealth {
+            node_id: "cam-3".into(),
+            battery_pct: Some(42.0),
+            charging: Some(false),
+            online: Some(true),
+            rssi_dbm: Some(-61.0),
+            last_seen_ms: Some(9_000),
+        };
+        let batt = node_health_to_battery(&h).expect("battery present");
+        assert!((batt.soc_pct - 42.0).abs() < 1e-9);
+        assert_eq!(batt.charging, ChargeState::Discharging);
+        assert_eq!(batt.source.as_deref(), Some("clawcam:cam-3"));
+
+        let link = node_health_to_link(&h);
+        assert_eq!(link.link, "clawcam:cam-3");
+        assert_eq!(link.up, Some(true));
+        assert_eq!(link.rssi_dbm, Some(-61.0));
+    }
+
+    #[test]
+    fn node_without_battery_yields_no_reading() {
+        let h = ClawCamNodeHealth {
+            node_id: "cam-x".into(),
+            battery_pct: None,
+            charging: None,
+            online: Some(false),
+            rssi_dbm: None,
+            last_seen_ms: None,
+        };
+        assert!(node_health_to_battery(&h).is_none());
+        // an offline node still produces a link reading (down)
+        assert_eq!(node_health_to_link(&h).up, Some(false));
+    }
+
+    #[test]
+    fn audio_classification_converts_to_heard_event() {
+        let a = ClawCamAudioClass {
+            device_id: Some("cam-1".into()),
+            top_label: Some("glassbreak".into()),
+            label: None,
+            confidence: Some(0.88),
+        };
+        let ev = audio_class_to_event(&a);
+        assert_eq!(ev.stream, "clawcam:cam-1");
+        assert_eq!(ev.label.as_deref(), Some("glassbreak"));
+        assert!((ev.confidence - 0.88).abs() < 1e-9);
+    }
+
+    #[test]
+    fn node_health_tool_result_ingests_to_world() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let tr = serde_json::json!({
+            "ok": true,
+            "results": [
+                {"node_id": "cam-1", "battery_pct": 55.0, "online": true, "rssi_dbm": -50.0},
+                {"device_id": "cam-2", "battery_pct": 12.0, "online": false}
+            ]
+        });
+        let rows = extract_node_health(&tr);
+        assert_eq!(rows.len(), 2);
+        let ids = ingest_node_health(&world, &rows, 1_000, "clawcam").unwrap();
+        assert_eq!(ids, vec!["cam-1", "cam-2"]);
+        let cam2 = world.current("clawcam.node.cam-2").unwrap().unwrap();
+        assert_eq!(cam2.value["online"], false);
+        assert!((cam2.value["battery_pct"].as_f64().unwrap() - 12.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn subject_counts_accumulate_for_foresight() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let subjects = vec!["vision.subject.person".to_string()];
+        let c1 = record_subject_counts(&world, &subjects, 1_000, "clawcam").unwrap();
+        let c2 = record_subject_counts(&world, &subjects, 2_000, "clawcam").unwrap();
+        assert_eq!(c1, vec![1]);
+        assert_eq!(c2, vec![2]);
+        // the trendable count fact exists for foresight to fit
+        let fact = world.current("vision.count.person").unwrap().unwrap();
+        assert_eq!(fact.value["value"], 2);
     }
 }
