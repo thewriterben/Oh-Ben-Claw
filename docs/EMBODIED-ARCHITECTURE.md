@@ -76,6 +76,21 @@ The MCU is not a dumb actuator. It runs a mirror of the reflex engine and **buil
 
 A failure at any layer is contained by the one below it.
 
+## Phase 19 — predictive & autonomous layers
+
+Three control *modes* now sit over the suites, each on a different relationship to time:
+
+- **Reactive** (Layer 2 reflexes) — act on the present.
+- **Anticipatory** (`src/foresight`, "Track 1") — act on the *predicted* future. A `Forecaster` fits trends over the bitemporal history and rules fire before a threshold crossing (e.g. battery predicted critical). The same `ActionSink`/escalation-budget machinery as reflexes; predictions recorded to `foresight.{entity}`.
+- **Deliberative** (Layer 4 missions) — execute multi-step plans.
+
+And two capabilities make the system *self-improving* and *self-directed*:
+
+- **Self-authored reflexes** (`src/learning`) — mine the history for conditions that repeatedly preceded a bad outcome, propose predictive rules with support/confidence, and — **only after approval** — activate them live into the foresight engine. The system learns what to anticipate, with a human in the approval seat.
+- **Autonomous exploration** (`src/navigation/exploration`) — frontier-based self-mapping: head to the nearest reachable known/unknown boundary, scan, repeat, until the reachable space is mapped. Composes SLAM + mapping + A* + drive with no human waypoints.
+
+Localization is also now *uncertainty-aware*: a particle filter (`src/navigation/particle`) carries a belief cloud and reports a position **spread**, so the stack can act on how sure it is about where it is, rather than treating pose as exact.
+
 ## End-to-end verification
 
 `tests/embodied_full_stack.rs` exercises the whole stack in one scenario: a mission to cross a room plans around a mapped wall and issues a gated drive command; as the battery drains, safing engages load-shedding; at critical charge the mission guard preempts and halts navigation; on recharge, safing recovers — all through one world memory. Each layer also carries its own unit + integration tests.
