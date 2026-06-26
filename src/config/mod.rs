@@ -1463,6 +1463,10 @@ pub struct NavigationConfig {
     /// Range-sensor max distance for `nav_map scan` mapping (default 10).
     #[serde(default)]
     pub sensor_max_range: Option<f64>,
+    /// Autonomous exploration: when idle, drive to the nearest frontier and map
+    /// it, until the reachable space is explored. Requires a grid.
+    #[serde(default)]
+    pub explore: bool,
 }
 
 /// Occupancy-grid bounds for obstacle-aware planning (`[navigation.grid]`).
@@ -1595,6 +1599,88 @@ pub struct MissionConfig {
     pub missions: Vec<crate::mission::Mission>,
 }
 
+/// Foresight (Track 1) configuration (`[foresight]`). Predictive rules that fire
+/// *before* a forecast threshold crossing (each `[[foresight.rule]]`), plus the
+/// read-only `foresight` query tool. Requires `[perception].world_memory = true`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ForesightConfig {
+    /// Enable the `foresight` tool and (if rules are set) the predictive loop.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Evaluation cadence in ms (default 1000).
+    #[serde(default)]
+    pub interval_ms: Option<u64>,
+    /// Max predictive escalations to System 2 per minute. `None`/0 = unlimited.
+    #[serde(default)]
+    pub max_escalations_per_min: Option<u32>,
+    /// The predictive rules (`[[foresight.rule]]`).
+    #[serde(default, rename = "rule")]
+    pub rules: Vec<crate::foresight::ForesightRule>,
+}
+
+/// Self-authored reflexes configuration (`[learning]`). Mines world-memory
+/// history for antecedents of a configured bad `[learning.outcome]` and proposes
+/// predictive rules; approval (via the `learn` tool) activates them into the
+/// foresight engine. Requires `[perception].world_memory` (and `[foresight]` to
+/// run the approved rules).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LearningConfig {
+    /// Enable the `learn` tool and the mining loop.
+    #[serde(default)]
+    pub enabled: bool,
+    /// If set, auto-mine on this cadence (ms); else mine only on demand.
+    #[serde(default)]
+    pub auto_mine_interval_ms: Option<u64>,
+    /// Lookback before an outcome event for the antecedent value (default 5000).
+    #[serde(default)]
+    pub lookback_ms: Option<u64>,
+    /// Minimum supporting events to propose a rule (default 2).
+    #[serde(default)]
+    pub min_support: Option<usize>,
+    /// Minimum specificity to propose (default 0.6).
+    #[serde(default)]
+    pub min_confidence: Option<f64>,
+    /// Horizon applied to approved learned rules (default 60000).
+    #[serde(default)]
+    pub horizon_ms: Option<u64>,
+    /// Debounce applied to approved learned rules (default 30000).
+    #[serde(default)]
+    pub debounce_ms: Option<u64>,
+    /// Candidate antecedent entities to test.
+    #[serde(default)]
+    pub candidates: Vec<String>,
+    /// The bad outcome to learn antecedents of (`[learning.outcome]`).
+    #[serde(default)]
+    pub outcome: Option<LearningOutcomeConfig>,
+}
+
+/// The bad-outcome spec for learning (`[learning.outcome]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LearningOutcomeConfig {
+    /// Numeric entity whose threshold crossing is the "bad event".
+    pub entity: String,
+    /// Comparison operator.
+    pub op: crate::agent::reflex::Cmp,
+    /// Threshold value.
+    pub threshold: f64,
+}
+
+/// Fleet coordination configuration (`[fleet]`). Runs a coordinator that ingests
+/// node heartbeats, queues tasks, and allocates them to the best node. Records
+/// the fleet view to world memory when available.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FleetConfig {
+    /// Enable the `fleet` + `fleet_status` tools and the coordination loop.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Coordination tick cadence in ms (default 2000).
+    #[serde(default)]
+    pub interval_ms: Option<u64>,
+    /// Heartbeat staleness (ms) past which a node is considered offline (default 30000).
+    #[serde(default)]
+    pub stale_ms: Option<u64>,
+}
+
 /// The root configuration for Oh-Ben-Claw.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -1677,6 +1763,15 @@ pub struct Config {
     /// Mission sequencer — deliberative, guarded multi-step missions.
     #[serde(default)]
     pub mission: MissionConfig,
+    /// Foresight (Track 1) — predictive rules that act before forecast events.
+    #[serde(default)]
+    pub foresight: ForesightConfig,
+    /// Self-authored reflexes — mine antecedents and propose predictive rules.
+    #[serde(default)]
+    pub learning: LearningConfig,
+    /// Fleet coordination — allocate tasks across multiple robot nodes.
+    #[serde(default)]
+    pub fleet: FleetConfig,
 }
 
 impl Config {

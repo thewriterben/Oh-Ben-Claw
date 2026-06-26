@@ -787,6 +787,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 }
 
                 let nav_loop = Arc::clone(&nav);
+                let explore = config.navigation.explore && has_grid;
+                if explore {
+                    info!("Navigation: autonomous frontier exploration enabled");
+                }
                 info!("Navigation suite: navigate + nav_status tools active");
                 tokio::spawn(async move {
                     let mut ticker = tokio::time::interval(interval);
@@ -796,6 +800,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis() as u64)
                             .unwrap_or(0);
+                        // Autonomous exploration: when idle, head to the next
+                        // frontier; the drive step then carries the robot there.
+                        if explore && nav_loop.current_goal().is_none() {
+                            if let Err(e) = nav_loop.explore_step(now) {
+                                tracing::warn!("exploration step failed: {e}");
+                            }
+                        }
                         if let Err(e) = nav_loop.step_toward_goal(now).await {
                             tracing::warn!("nav step failed: {e}");
                         }
@@ -967,6 +978,180 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 "[reflex] enabled but [perception].world_memory is off; reflexes need world memory"
             );
         }
+    }
+
+    // Shared buffer of approved *learned* rules (self-authoring); the foresight
+    // engine evaluates these alongside its static rules, and the learning layer
+    // pushes into it on approval.
+    let learned_rules: Arc<std::sync::Mutex<Vec<oh_ben_claw::foresight::ForesightRule>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    // Foresight (Track 1): the predictive control layer. A `foresight` query tool
+    // and — when rules are configured (or learning is on) — a loop that forecasts
+    // world-memory trends and fires *before* a threshold crossing.
+    if config.foresight.enabled {
+        if let Some(world) = &world_mem {
+            all_tools.push(Box::new(oh_ben_claw::tools::builtin::foresight::ForesightTool::new(
+                Arc::clone(world),
+            )));
+            if !config.foresight.rules.is_empty() || config.learning.enabled {
+                use oh_ben_claw::agent::reflex::{
+                    ActionSink, EscalationBudget, LoggingActionSink, SpineActionSink,
+                };
+                let engine =
+                    oh_ben_claw::foresight::ForesightEngine::new(config.foresight.rules.clone())
+                        .with_learned_rules(Arc::clone(&learned_rules));
+                let sink: Arc<dyn ActionSink> = match &reflex_spine {
+                    Some(spine) => Arc::new(SpineActionSink::new(Arc::clone(spine))),
+                    None => Arc::new(LoggingActionSink),
+                };
+                let mut controller =
+                    oh_ben_claw::foresight::ForesightController::new(engine, Arc::clone(world), sink);
+                if let Some(max) = config.foresight.max_escalations_per_min {
+                    controller = controller.with_escalation_budget(EscalationBudget::per_minute(max));
+                }
+                let interval = std::time::Duration::from_millis(
+                    config.foresight.interval_ms.unwrap_or(1000).max(100),
+                );
+                info!(
+                    rules = config.foresight.rules.len(),
+                    "Foresight (Track 1) predictive controller active"
+                );
+                tokio::spawn(async move {
+                    let mut ticker = tokio::time::interval(interval);
+                    loop {
+                        ticker.tick().await;
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        if let Err(e) = controller.tick_and_dispatch(now).await {
+                            tracing::warn!("foresight tick failed: {e}");
+                        }
+                    }
+                });
+            } else {
+                info!("Foresight: query tool active (no predictive rules configured)");
+            }
+        } else {
+            tracing::warn!(
+                "[foresight] enabled but [perception].world_memory is off — foresight needs world \
+                 memory; skipping"
+            );
+        }
+    }
+
+    // Self-authored reflexes: mine antecedents of a configured bad outcome from
+    // world-memory history and surface them via the `learn` tool. Approval
+    // activates an (escalate-only) rule into the shared learned buffer the
+    // foresight engine evaluates. Requires world memory + a configured outcome.
+    if config.learning.enabled {
+        match (&world_mem, &config.learning.outcome) {
+            (Some(world), Some(oc)) => {
+                let miner = oh_ben_claw::learning::RuleMiner {
+                    lookback_ms: config.learning.lookback_ms.unwrap_or(5_000),
+                    min_support: config.learning.min_support.unwrap_or(2),
+                    min_confidence: config.learning.min_confidence.unwrap_or(0.6),
+                    candidates: config.learning.candidates.clone(),
+                };
+                let outcome = oh_ben_claw::learning::OutcomeSpec {
+                    entity: oc.entity.clone(),
+                    op: oc.op,
+                    threshold: oc.threshold,
+                };
+                let store = Arc::new(
+                    oh_ben_claw::learning::ProposalStore::new(Arc::clone(&learned_rules))
+                        .with_params(
+                            config.learning.horizon_ms.unwrap_or(60_000),
+                            config.learning.debounce_ms.unwrap_or(30_000),
+                        ),
+                );
+                all_tools.push(Box::new(oh_ben_claw::tools::builtin::learn::LearnTool::new(
+                    Arc::clone(world),
+                    Arc::clone(&store),
+                    miner.clone(),
+                    outcome.clone(),
+                )));
+                if let Some(ms) = config.learning.auto_mine_interval_ms {
+                    let world_l = Arc::clone(world);
+                    let store_l = Arc::clone(&store);
+                    let miner_l = miner.clone();
+                    let outcome_l = outcome.clone();
+                    let interval = std::time::Duration::from_millis(ms.max(1_000));
+                    info!("Self-authored reflexes: learn tool + auto-mine loop active");
+                    tokio::spawn(async move {
+                        let mut ticker = tokio::time::interval(interval);
+                        loop {
+                            ticker.tick().await;
+                            if let Ok(props) = miner_l.mine(&world_l, &outcome_l) {
+                                let n = store_l.ingest(props);
+                                if n > 0 {
+                                    info!(proposals = n, "learning: new rule proposals (awaiting approval)");
+                                }
+                            }
+                        }
+                    });
+                } else {
+                    info!("Self-authored reflexes: learn tool active (mine on demand)");
+                }
+            }
+            (None, _) => tracing::warn!(
+                "[learning] enabled but [perception].world_memory is off — learning needs world \
+                 memory; skipping"
+            ),
+            (_, None) => tracing::warn!(
+                "[learning] enabled but no [learning.outcome] is configured; skipping"
+            ),
+        }
+    }
+
+    // Fleet coordination (Phase 20): one brain, many bodies. A coordinator
+    // ingests node heartbeats, queues tasks, and allocates each to the nearest
+    // online idle node with enough battery — assignments are advisory (recorded
+    // to world memory), the node still actuates under its own Track 0 gate.
+    if config.fleet.enabled {
+        let mut coord = oh_ben_claw::fleet::Coordinator::new();
+        if let Some(world) = &world_mem {
+            coord = coord.with_world_memory(Arc::clone(world));
+        }
+        if let Some(s) = config.fleet.stale_ms {
+            coord = coord.with_stale_ms(s);
+        }
+        let coord = Arc::new(coord);
+        all_tools.push(Box::new(oh_ben_claw::tools::builtin::fleet::FleetTool::new(Arc::clone(
+            &coord,
+        ))));
+        all_tools.push(Box::new(oh_ben_claw::tools::builtin::fleet::FleetStatusTool::new(
+            Arc::clone(&coord),
+        )));
+        // Distributed fleet: ingest node heartbeats from the spine when connected.
+        if let Some(spine) = &reflex_spine {
+            match spine
+                .subscribe_handler(
+                    oh_ben_claw::fleet::HEARTBEAT_FILTER,
+                    oh_ben_claw::fleet::spine_heartbeat_handler(Arc::clone(&coord)),
+                )
+                .await
+            {
+                Ok(()) => info!("Fleet: ingesting node heartbeats over the spine"),
+                Err(e) => tracing::warn!("fleet heartbeat subscription failed: {e}"),
+            }
+        }
+        let interval =
+            std::time::Duration::from_millis(config.fleet.interval_ms.unwrap_or(2_000).max(500));
+        let coord_loop = Arc::clone(&coord);
+        info!("Fleet coordinator active");
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                coord_loop.tick(now);
+            }
+        });
     }
 
     // Phase 18 / S1b: fold a ClawCam (vision subsystem) MCP server's detections
