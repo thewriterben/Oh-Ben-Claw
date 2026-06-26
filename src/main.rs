@@ -718,6 +718,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 if let Some(r) = config.navigation.sensor_max_range {
                     nav = nav.with_sensor_range(r);
                 }
+                // Clearance-aware planning: inflate obstacles by the robot footprint.
+                if let (Some(insc), Some(infl)) =
+                    (config.navigation.inscribed_radius, config.navigation.inflation_radius)
+                {
+                    let decay = config.navigation.inflation_decay.unwrap_or(2.0);
+                    nav = nav.with_inflation(insc, infl, decay);
+                    info!(inscribed = insc, inflation = infl, "Navigation: clearance-aware planning (inflation)");
+                }
                 // Obstacle-aware planning: attach an occupancy grid if configured.
                 let has_grid = config.navigation.grid.is_some();
                 if let Some(gc) = &config.navigation.grid {

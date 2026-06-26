@@ -201,10 +201,67 @@ impl PoseGraph {
         p.theta = norm_angle(p.theta + dth);
     }
 
+    /// **Gauss-Newton** least-squares optimization (the SOTA pose-graph approach,
+    /// à la g2o/Ceres/SPA): linearizes each edge with analytic SE2 Jacobians,
+    /// assembles the normal equations `H Δ = −b`, fixes node 0 as the anchor,
+    /// solves densely, and applies the update — repeated for `iters` steps.
+    /// Converges far faster and more accurately than the relaxation below.
+    /// Returns the final total error.
+    pub fn optimize_gn(&mut self, iters: usize) -> f64 {
+        let n = self.nodes.len();
+        if n == 0 {
+            return 0.0;
+        }
+        let dim = 3 * n;
+        for _ in 0..iters {
+            let mut h = vec![vec![0.0f64; dim]; dim];
+            let mut b = vec![0.0f64; dim];
+            for e in &self.edges {
+                let (a, bj, err) = linearize_edge(self.nodes[e.from], self.nodes[e.to], e.meas);
+                let w = e.weight.max(1e-6);
+                let at = transpose3(&a);
+                let bt = transpose3(&bj);
+                // H blocks (scaled by the scalar information weight)
+                accum_block(&mut h, 3 * e.from, 3 * e.from, &matmul3(&at, &a), w);
+                accum_block(&mut h, 3 * e.from, 3 * e.to, &matmul3(&at, &bj), w);
+                accum_block(&mut h, 3 * e.to, 3 * e.from, &matmul3(&bt, &a), w);
+                accum_block(&mut h, 3 * e.to, 3 * e.to, &matmul3(&bt, &bj), w);
+                // b blocks
+                let ate = matvec3(&at, &err);
+                let bte = matvec3(&bt, &err);
+                for k in 0..3 {
+                    b[3 * e.from + k] += w * ate[k];
+                    b[3 * e.to + k] += w * bte[k];
+                }
+            }
+            // Anchor node 0: pin its update to zero (removes the gauge freedom).
+            for r in 0..3 {
+                for c in 0..dim {
+                    h[r][c] = 0.0;
+                    h[c][r] = 0.0;
+                }
+                h[r][r] = 1.0;
+                b[r] = 0.0;
+            }
+            // Solve H Δ = −b.
+            let rhs: Vec<f64> = b.iter().map(|v| -v).collect();
+            let Some(delta) = gauss_solve(h, rhs) else {
+                break; // singular (under-constrained) — stop rather than diverge
+            };
+            for k in 0..n {
+                self.nodes[k].x += delta[3 * k];
+                self.nodes[k].y += delta[3 * k + 1];
+                self.nodes[k].theta = norm_angle(self.nodes[k].theta + delta[3 * k + 2]);
+            }
+        }
+        self.total_error()
+    }
+
     /// Anchored Gauss-Seidel relaxation: for `iters` passes, pull each edge's
     /// endpoints toward satisfying their constraint (learning rate `alpha`,
     /// node 0 fixed). Monotonically reduces [`total_error`](Self::total_error) for
-    /// small `alpha`. Returns the final total error.
+    /// small `alpha`. Returns the final total error. (Simpler/cheaper than
+    /// [`optimize_gn`](Self::optimize_gn); kept for comparison.)
     pub fn optimize(&mut self, iters: usize, alpha: f64) -> f64 {
         for _ in 0..iters {
             for k in 0..self.edges.len() {
@@ -223,6 +280,124 @@ impl PoseGraph {
         }
         self.total_error()
     }
+}
+
+// ── Gauss-Newton linear algebra (SE2) ──────────────────────────────────────────
+
+type Mat3 = [[f64; 3]; 3];
+type Vec3 = [f64; 3];
+type Mat2 = [[f64; 2]; 2];
+
+fn mul2(a: &Mat2, b: &Mat2) -> Mat2 {
+    [
+        [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1]],
+        [a[1][0] * b[0][0] + a[1][1] * b[1][0], a[1][0] * b[0][1] + a[1][1] * b[1][1]],
+    ]
+}
+fn mv2(m: &Mat2, v: &[f64; 2]) -> [f64; 2] {
+    [m[0][0] * v[0] + m[0][1] * v[1], m[1][0] * v[0] + m[1][1] * v[1]]
+}
+fn transpose3(m: &Mat3) -> Mat3 {
+    let mut t = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            t[i][j] = m[j][i];
+        }
+    }
+    t
+}
+fn matmul3(a: &Mat3, b: &Mat3) -> Mat3 {
+    let mut o = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            for k in 0..3 {
+                o[i][j] += a[i][k] * b[k][j];
+            }
+        }
+    }
+    o
+}
+fn matvec3(m: &Mat3, v: &Vec3) -> Vec3 {
+    let mut o = [0.0; 3];
+    for i in 0..3 {
+        for k in 0..3 {
+            o[i] += m[i][k] * v[k];
+        }
+    }
+    o
+}
+fn accum_block(h: &mut [Vec<f64>], r0: usize, c0: usize, block: &Mat3, w: f64) {
+    for i in 0..3 {
+        for j in 0..3 {
+            h[r0 + i][c0 + j] += w * block[i][j];
+        }
+    }
+}
+
+/// Analytic linearization of an edge `i→j` with measurement `z`: returns the
+/// Jacobians `(A = ∂e/∂x_i, B = ∂e/∂x_j)` and the error `e` (Grisetti SE2 form).
+fn linearize_edge(xi: Pose2, xj: Pose2, z: RelPose) -> (Mat3, Mat3, Vec3) {
+    let (si, ci) = xi.theta.sin_cos();
+    let (sz, cz) = z.dtheta.sin_cos();
+    let rit: Mat2 = [[ci, si], [-si, ci]]; // R_i^T
+    let rzt: Mat2 = [[cz, sz], [-sz, cz]]; // R_z^T
+    let drit: Mat2 = [[-si, ci], [-ci, -si]]; // ∂R_i^T/∂θ_i
+    let d = [xj.x - xi.x, xj.y - xi.y];
+    let m = mul2(&rzt, &rit); // R_z^T R_i^T
+
+    let rit_d = mv2(&rit, &d);
+    let e_xy = mv2(&rzt, &[rit_d[0] - z.dx, rit_d[1] - z.dy]);
+    let e_th = norm_angle(xj.theta - xi.theta - z.dtheta);
+
+    let dd = mv2(&drit, &d);
+    let col = mv2(&rzt, &dd);
+    let a: Mat3 = [
+        [-m[0][0], -m[0][1], col[0]],
+        [-m[1][0], -m[1][1], col[1]],
+        [0.0, 0.0, -1.0],
+    ];
+    let b: Mat3 = [[m[0][0], m[0][1], 0.0], [m[1][0], m[1][1], 0.0], [0.0, 0.0, 1.0]];
+    (a, b, [e_xy[0], e_xy[1], e_th])
+}
+
+/// Dense linear solve `A x = b` by Gaussian elimination with partial pivoting.
+/// `None` if singular.
+fn gauss_solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
+    let n = b.len();
+    for col in 0..n {
+        let mut piv = col;
+        let mut best = a[col][col].abs();
+        for r in (col + 1)..n {
+            if a[r][col].abs() > best {
+                best = a[r][col].abs();
+                piv = r;
+            }
+        }
+        if best < 1e-12 {
+            return None;
+        }
+        a.swap(col, piv);
+        b.swap(col, piv);
+        let pivval = a[col][col];
+        for r in (col + 1)..n {
+            let factor = a[r][col] / pivval;
+            if factor != 0.0 {
+                for c in col..n {
+                    a[r][c] -= factor * a[col][c];
+                }
+                b[r] -= factor * b[col];
+            }
+        }
+    }
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut s = b[i];
+        for c in (i + 1)..n {
+            s -= a[i][c] * x[c];
+        }
+        x[i] = s / a[i][i];
+    }
+    Some(x)
 }
 
 /// Online pose-graph SLAM: ingest relative motions, auto-propose loop closures by
@@ -284,7 +459,8 @@ impl SlamBackend {
             let id = g.append_motion(rel, 1.0);
             let closed = if let Some(j) = g.find_revisit(self.loop_radius, self.min_gap) {
                 g.add_loop_closure(id, j, RelPose::identity(), 2.0);
-                g.optimize(self.opt_iters, self.alpha);
+                // Gauss-Newton converges in a handful of iterations.
+                g.optimize_gn(self.opt_iters.min(20));
                 true
             } else {
                 false
@@ -388,6 +564,27 @@ mod tests {
         );
         // The anchor never moves.
         assert_eq!(g.node(0), Pose2::new(0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn gauss_newton_closes_the_loop_accurately() {
+        let mut g = drifting_square();
+        let last = g.len() - 1;
+        let before = g.node(last);
+        let residual_before = before.x.hypot(before.y);
+        assert!(residual_before > 0.5, "expected drift, got {residual_before}");
+
+        g.add_loop_closure(last, 0, RelPose::identity(), 2.0);
+        let err_before = g.total_error();
+        g.optimize_gn(20);
+        let err_after = g.total_error();
+
+        assert!(err_after < err_before, "GN must reduce error: {err_before} → {err_after}");
+        let after = g.node(last);
+        let residual_after = after.x.hypot(after.y);
+        // Gauss-Newton closes the loop tightly (far better than relaxation).
+        assert!(residual_after < 0.2, "loop should close near-perfectly: {residual_before} → {residual_after}");
+        assert_eq!(g.node(0), Pose2::new(0.0, 0.0, 0.0), "anchor never moves");
     }
 
     #[test]

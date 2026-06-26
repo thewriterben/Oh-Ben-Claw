@@ -14,6 +14,8 @@
 //! reactive — call [`MissionRunner::tick`] on a cadence; it advances at most one
 //! step per tick and aborts the moment a guard trips.
 
+pub mod bt;
+
 use crate::agent::reflex::{Condition, Snapshot};
 use crate::audio::suite::AudioController;
 use crate::memory::world::WorldMemory;
