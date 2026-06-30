@@ -1374,6 +1374,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         agent = agent.with_trust(Arc::new(oh_ben_claw::security::trust::TrustScorer::default()));
         info!("Track 0 dynamic trust scoring enabled");
     }
+    // Approval policy in the live dispatch: the autonomy level + auto-approve list +
+    // session/forever grants gate every tool call (composing with Track 0 + trust).
+    // Full autonomy (the default) passes everything; under supervised/manual an
+    // un-granted tool is refused in this autonomous loop.
+    agent = agent.with_approval(Arc::new(oh_ben_claw::approval::ApprovalManager::from_config(
+        &config.autonomy,
+    )));
     let agent = Arc::new(agent);
 
     // Phase 16: spawn the autonomous self-improvement loop when enabled. It
