@@ -679,7 +679,8 @@
         "nfc",
         "rfid",
         "subghz",
-        "infrared"
+        "infrared",
+        "ibutton"
       ],
       "vendor": "Flipper Devices",
       "ecosystem": "Flipper Zero",
@@ -761,7 +762,8 @@
         "wifi",
         "ble",
         "camera_capture",
-        "microsd"
+        "microsd",
+        "psram"
       ],
       "vendor": "Espressif",
       "ecosystem": "ESP32-S3",
@@ -803,6 +805,7 @@
         "wifi",
         "ble",
         "lora",
+        "mesh",
         "gps"
       ],
       "vendor": "LILYGO",
@@ -824,10 +827,32 @@
         "wifi",
         "ble",
         "lora",
+        "mesh",
         "display"
       ],
       "vendor": "Heltec",
       "ecosystem": "WiFi LoRa 32",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 9114,
+      "pid": 41,
+      "name": "rak4631",
+      "architecture": "Nordic nRF52840 + Semtech SX1262 LoRa (RAKwireless WisBlock core; Meshtastic-compatible; Adafruit nRF52 UF2 bootloader VID/PID, shared — selected by name)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "ble",
+        "nfc",
+        "lora",
+        "mesh"
+      ],
+      "vendor": "RAKwireless",
+      "ecosystem": "WisBlock",
       "connectors": [
         "bare"
       ]
