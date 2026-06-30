@@ -36,9 +36,21 @@
 //! | `actuate` | Servo / motor actuation (Movement suite) |
 //! | `audio_output` | Speaker / audio output (Audio suite act side) |
 //! | `cellular` | Cellular (LTE/4G) modem link (Comms suite) |
+//! | `npu` | Generic on-SoC neural processing unit (e.g. RK3588, AXera AX630C) |
+//! | `edge_tpu` | Google Coral Edge TPU accelerator |
+//! | `hailo` | Hailo-8 / 8L / 10 accelerator (PCIe / M.2 / USB) |
+//! | `nn_accel` | MCU-class NN acceleration (Arm Ethos-U / Helium, ESP32 vector ops) |
+//! | `kpu` | Kendryte / Sipeed KPU (K210 / K230) |
+//! | `tensor_rt` | NVIDIA TensorRT-capable accelerator (Orin / Thor); complements `cuda` |
+//! | `ethernet` | Wired networking interface |
+//! | `thread` | 802.15.4 Thread stack |
+//! | `zigbee` | 802.15.4 Zigbee stack |
+//! | `battery` | On-board LiPo / Li-ion charging and power management |
 //!
-//! Additional capability tokens (AI accelerators, radios, etc.) are tracked in
-//! `docs/V2-HARDWARE-ECOSYSTEM.md` and added as boards that use them land.
+//! Every capability string used by a board or accessory must appear in
+//! [`VALID_CAPABILITIES`]; the `all_capabilities_are_valid` test enforces this so
+//! a typo'd token can never ship silently. The AI-accelerator and radio taxonomy
+//! is tracked in `docs/V2-HARDWARE-ECOSYSTEM.md`.
 //!
 //! # Connector Ecosystems
 //!
@@ -154,6 +166,68 @@ pub struct BoardInfo {
     pub ecosystem: &'static str,
     /// Expansion connectors this board exposes (for accessory matching).
     pub connectors: &'static [Connector],
+}
+
+/// Canonical set of valid capability tokens (the taxonomy documented in this
+/// module's header). Every `capabilities` entry on a [`BoardInfo`] or
+/// [`AccessoryInfo`] must be a member; enforced by the `all_capabilities_are_valid`
+/// test so a mistyped token cannot ship. Add a token here (and to the header
+/// table) before using it on an entry.
+///
+/// Tokens may be reserved here ahead of their first board (e.g. accelerator
+/// tokens awaiting their hardware entry); membership is a superset of what is
+/// currently in use.
+pub static VALID_CAPABILITIES: &[&str] = &[
+    // Core I/O
+    "gpio",
+    "analog_read",
+    "analog_write",
+    "i2c",
+    "spi",
+    "pwm",
+    "dac",
+    "can",
+    // Sense / capture
+    "camera_capture",
+    "audio_sample",
+    "sensor_read",
+    "imu",
+    // Debug / flash
+    "rtt",
+    "flash",
+    // Connectivity / radios
+    "ble",
+    "wifi",
+    "ethernet",
+    "lora",
+    "gps",
+    "nfc",
+    "rfid",
+    "subghz",
+    "infrared",
+    "cellular",
+    "thread",
+    "zigbee",
+    // Compute / acceleration
+    "cuda",
+    "npu",
+    "edge_tpu",
+    "hailo",
+    "nn_accel",
+    "kpu",
+    "tensor_rt",
+    // I/O form / actuation / power
+    "display",
+    "touch",
+    "microsd",
+    "actuate",
+    "audio_output",
+    "battery",
+];
+
+/// Whether `capability` is a recognized token in [`VALID_CAPABILITIES`].
+pub fn is_valid_capability(capability: &str) -> bool {
+    VALID_CAPABILITIES.contains(&capability)
 }
 
 /// Complete registry of known boards.
@@ -802,6 +876,145 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         ecosystem: "WiFi LoRa 32",
         connectors: &[Connector::Bare],
     },
+    // ── Hardware-scout 2026-06-29: tier-1 (metadata-only) additions ───────────
+    // New ESP32 SoCs and new vendor ecosystems (Adafruit, SparkFun, DFRobot,
+    // LILYGO). All ride already-supported transports; no firmware change needed.
+    // The native-USB ESP32 parts all enumerate as 0x303a:0x1001 (Espressif
+    // USB-Serial/JTAG) and so are selected by `name`, per existing convention.
+    //
+    // ── Espressif ESP32-C6-DevKitC-1 ──────────────────────────────────────────
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "esp32-c6",
+        architecture: Some(
+            "ESP32-C6 RISC-V single-core @ 160 MHz (Wi-Fi 6, BLE 5, 802.15.4; native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "analog_read", "i2c", "spi", "wifi", "ble", "thread", "zigbee",
+        ],
+        vendor: "Espressif",
+        ecosystem: "ESP32-C6",
+        connectors: &[Connector::Bare],
+    },
+    // ── Espressif ESP32-H2-DevKitM-1 ──────────────────────────────────────────
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "esp32-h2",
+        architecture: Some(
+            "ESP32-H2 RISC-V single-core @ 96 MHz (BLE 5, 802.15.4, no Wi-Fi; native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &["gpio", "analog_read", "i2c", "spi", "ble", "thread", "zigbee"],
+        vendor: "Espressif",
+        ecosystem: "ESP32-H2",
+        connectors: &[Connector::Bare],
+    },
+    // ── Espressif ESP32-P4-Function-EV-Board ──────────────────────────────────
+    // High-performance MCU, no built-in radio; MIPI-CSI camera + MIPI-DSI display
+    // pipeline plus AI vector ops (modeled as `nn_accel`).
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "esp32-p4",
+        architecture: Some(
+            "ESP32-P4 dual-core RISC-V @ 400 MHz (AI vector ext., MIPI-CSI/DSI, no radio; native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "analog_read", "i2c", "spi", "camera_capture", "display", "nn_accel",
+        ],
+        vendor: "Espressif",
+        ecosystem: "ESP32-P4",
+        connectors: &[Connector::Bare],
+    },
+    // ── Adafruit QT Py ESP32-S3 ───────────────────────────────────────────────
+    // CircuitPython enumerates as 0x239a:0x8143 (bootloader 0x239a:0x0143);
+    // Arduino/ESP-IDF builds use native 0x303a:0x1001. First Adafruit board and
+    // first STEMMA QT host port in the registry.
+    BoardInfo {
+        vid: 0x239a,
+        pid: 0x8143,
+        name: "adafruit-qtpy-esp32s3",
+        architecture: Some(
+            "ESP32-S3 Xtensa LX7 dual-core @ 240 MHz (CircuitPython VID/PID; Arduino mode = 0x303a:0x1001)",
+        ),
+        transport: "serial",
+        capabilities: &["gpio", "analog_read", "i2c", "spi", "wifi", "ble"],
+        vendor: "Adafruit",
+        ecosystem: "QT Py",
+        connectors: &[Connector::StemmaQt],
+    },
+    // ── SparkFun Thing Plus ESP32-C6 ──────────────────────────────────────────
+    // USB-C variant uses a CH340 bridge (0x1a86:0x7523, shared). First SparkFun
+    // board and first Qwiic host port; pairs C6 radios with the Qwiic catalog.
+    BoardInfo {
+        vid: 0x1a86,
+        pid: 0x7523,
+        name: "sparkfun-thing-plus-esp32-c6",
+        architecture: Some(
+            "ESP32-C6 RISC-V @ 160 MHz (Wi-Fi 6, BLE 5, 802.15.4; CH340 USB-UART; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "analog_read", "i2c", "spi", "wifi", "ble", "thread", "microsd",
+        ],
+        vendor: "SparkFun",
+        ecosystem: "Thing Plus",
+        connectors: &[Connector::Qwiic, Connector::FeatherWing],
+    },
+    // ── DFRobot FireBeetle 2 ESP32-S3 ─────────────────────────────────────────
+    // First DFRobot board. The Gravity connector is not yet modeled in the
+    // `Connector` enum, so this is recorded as `Bare` for now (see scout report).
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "dfrobot-firebeetle2-esp32s3",
+        architecture: Some(
+            "ESP32-S3 LX7 dual-core @ 240 MHz, LiPo charge, onboard GDI (native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "analog_read", "i2c", "spi", "wifi", "ble", "battery",
+        ],
+        vendor: "DFRobot",
+        ecosystem: "FireBeetle",
+        connectors: &[Connector::Bare],
+    },
+    // ── LILYGO T-Display-S3 ───────────────────────────────────────────────────
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "lilygo-t-display-s3",
+        architecture: Some(
+            "ESP32-S3 LX7 dual-core @ 240 MHz, 1.9\" ST7789 320x170 LCD, 16 MB flash / 8 MB PSRAM (native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &["gpio", "i2c", "spi", "wifi", "ble", "display"],
+        vendor: "LILYGO",
+        ecosystem: "T-Display",
+        connectors: &[Connector::Bare],
+    },
+    // ── LILYGO T-Deck ─────────────────────────────────────────────────────────
+    // ESP32-S3 + SX1262 LoRa, 2.8" touch LCD, keyboard, trackball, mic, speaker.
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "lilygo-t-deck",
+        architecture: Some(
+            "ESP32-S3 LX7 dual-core @ 240 MHz + SX1262 LoRa, 2.8\" IPS touch, keyboard/trackball (native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "i2c", "spi", "wifi", "ble", "lora", "display", "touch", "audio_sample",
+            "audio_output",
+        ],
+        vendor: "LILYGO",
+        ecosystem: "T-Deck",
+        connectors: &[Connector::Bare],
+    },
 ];
 
 /// Look up a board by USB VID and PID.
@@ -1126,6 +1339,45 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         capabilities: &["cellular", "gps"],
         compatible_boards: &[],
         connector: Connector::Bare,
+    },
+    // ── Hardware-scout 2026-06-29: Qwiic / STEMMA QT plug-in sensors ───────────
+    // Plug-in I2C modules that exercise the connector-matching path (Qwiic ≡
+    // STEMMA QT). Pair with the new Adafruit (StemmaQt) and SparkFun (Qwiic) hosts.
+    AccessoryInfo {
+        name: "scd41",
+        description: "Sensirion SCD41 — true CO2 (photoacoustic NDIR), temperature, humidity",
+        bus: "i2c",
+        default_i2c_addr: Some(0x62),
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+        connector: Connector::Qwiic,
+    },
+    AccessoryInfo {
+        name: "vl53l1x",
+        description: "ST VL53L1X — time-of-flight distance sensor (up to 4 m)",
+        bus: "i2c",
+        default_i2c_addr: Some(0x29),
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+        connector: Connector::StemmaQt,
+    },
+    AccessoryInfo {
+        name: "bno055",
+        description: "Bosch BNO055 — 9-DOF IMU with on-chip sensor fusion (absolute orientation)",
+        bus: "i2c",
+        default_i2c_addr: Some(0x28),
+        capabilities: &["imu", "sensor_read"],
+        compatible_boards: &[],
+        connector: Connector::StemmaQt,
+    },
+    AccessoryInfo {
+        name: "sgp40",
+        description: "Sensirion SGP40 — VOC air-quality gas sensor",
+        bus: "i2c",
+        default_i2c_addr: Some(0x59),
+        capabilities: &["sensor_read"],
+        compatible_boards: &[],
+        connector: Connector::Qwiic,
     },
 ];
 
@@ -1643,10 +1895,23 @@ mod tests {
 
     #[test]
     fn accessories_for_board_includes_bare_modules() {
-        let board = lookup_board(0x2109, 0x0820).unwrap(); // rpi-5
+        let board = lookup_board(0x2109, 0x0820).unwrap(); // rpi-5 (HatPi only)
         let accs = accessories_for_board(board);
-        // All current accessories are Bare, so all should be wireable.
-        assert_eq!(accs.len(), known_accessories().len());
+        // Every Bare accessory is universally wireable, so all must be present.
+        let bare_count = known_accessories()
+            .iter()
+            .filter(|a| a.connector == Connector::Bare)
+            .count();
+        assert!(accs.iter().all(|a| {
+            a.connector == Connector::Bare
+                || board
+                    .connectors
+                    .iter()
+                    .any(|&p| a.connector.mates_with(p))
+        }));
+        assert!(accs.len() >= bare_count);
+        // A HatPi-only board does NOT accept Qwiic/STEMMA QT plug-in modules.
+        assert!(!accs.iter().any(|a| a.name == "scd41"));
     }
 
     // ── Accelerapp-seeded hardware tests (v2.0) ───────────────────────────────
@@ -1761,5 +2026,141 @@ mod tests {
         assert_eq!(snap.schema_version, REGISTRY_SCHEMA_VERSION);
         assert_eq!(snap.boards.len(), KNOWN_BOARDS.len());
         assert_eq!(snap.accessories.len(), KNOWN_ACCESSORIES.len());
+    }
+
+    // ── Capability-token validity (typo guard) ────────────────────────────────
+
+    #[test]
+    fn all_capabilities_are_valid() {
+        for b in KNOWN_BOARDS {
+            for cap in b.capabilities {
+                assert!(
+                    is_valid_capability(cap),
+                    "board {} has unknown capability token {:?} (add it to VALID_CAPABILITIES)",
+                    b.name,
+                    cap
+                );
+            }
+        }
+        for a in KNOWN_ACCESSORIES {
+            for cap in a.capabilities {
+                assert!(
+                    is_valid_capability(cap),
+                    "accessory {} has unknown capability token {:?} (add it to VALID_CAPABILITIES)",
+                    a.name,
+                    cap
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn valid_capabilities_has_no_duplicates() {
+        let mut seen = std::collections::HashSet::new();
+        for cap in VALID_CAPABILITIES {
+            assert!(seen.insert(*cap), "duplicate capability token {:?}", cap);
+        }
+    }
+
+    // ── Hardware-scout 2026-06-29 tier-1 additions ────────────────────────────
+
+    #[test]
+    fn scout_new_esp32_socs_present() {
+        let names: Vec<_> = KNOWN_BOARDS.iter().map(|b| b.name).collect();
+        for n in ["esp32-c6", "esp32-h2", "esp32-p4"] {
+            assert!(names.contains(&n), "missing new SoC board {n}");
+        }
+    }
+
+    #[test]
+    fn esp32_c6_has_thread_and_zigbee() {
+        let b = KNOWN_BOARDS.iter().find(|b| b.name == "esp32-c6").unwrap();
+        assert_eq!(b.vendor, "Espressif");
+        assert!(b.capabilities.contains(&"thread"));
+        assert!(b.capabilities.contains(&"zigbee"));
+        assert!(b.capabilities.contains(&"wifi"));
+    }
+
+    #[test]
+    fn esp32_h2_is_radio_only_no_wifi() {
+        let b = KNOWN_BOARDS.iter().find(|b| b.name == "esp32-h2").unwrap();
+        assert!(b.capabilities.contains(&"thread"));
+        assert!(b.capabilities.contains(&"ble"));
+        assert!(!b.capabilities.contains(&"wifi"));
+    }
+
+    #[test]
+    fn esp32_p4_has_nn_accel() {
+        let b = KNOWN_BOARDS.iter().find(|b| b.name == "esp32-p4").unwrap();
+        assert!(b.capabilities.contains(&"nn_accel"));
+        assert!(b.capabilities.contains(&"camera_capture"));
+    }
+
+    #[test]
+    fn lookup_adafruit_qtpy_esp32s3() {
+        let b = lookup_board(0x239a, 0x8143).unwrap();
+        assert_eq!(b.name, "adafruit-qtpy-esp32s3");
+        assert_eq!(b.vendor, "Adafruit");
+        assert!(b.connectors.contains(&Connector::StemmaQt));
+    }
+
+    #[test]
+    fn sparkfun_thing_plus_c6_exposes_qwiic() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "sparkfun-thing-plus-esp32-c6")
+            .unwrap();
+        assert_eq!(b.vendor, "SparkFun");
+        assert!(b.connectors.contains(&Connector::Qwiic));
+        assert!(b.capabilities.contains(&"thread"));
+    }
+
+    #[test]
+    fn scout_new_vendors_present() {
+        for v in ["Adafruit", "SparkFun", "DFRobot", "LILYGO"] {
+            assert!(
+                !boards_by_vendor(v).is_empty(),
+                "expected at least one board from vendor {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn firebeetle_has_battery_capability() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "dfrobot-firebeetle2-esp32s3")
+            .unwrap();
+        assert!(b.capabilities.contains(&"battery"));
+    }
+
+    #[test]
+    fn t_deck_has_lora_display_and_touch() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "lilygo-t-deck")
+            .unwrap();
+        assert!(b.capabilities.contains(&"lora"));
+        assert!(b.capabilities.contains(&"display"));
+        assert!(b.capabilities.contains(&"touch"));
+    }
+
+    #[test]
+    fn scout_qwiic_stemma_accessories_present() {
+        let scd = lookup_accessory("scd41").unwrap();
+        assert_eq!(scd.connector, Connector::Qwiic);
+        assert_eq!(scd.default_i2c_addr, Some(0x62));
+        let bno = lookup_accessory("bno055").unwrap();
+        assert_eq!(bno.connector, Connector::StemmaQt);
+        assert!(bno.capabilities.contains(&"imu"));
+    }
+
+    #[test]
+    fn qwiic_accessory_attaches_to_stemma_qt_host() {
+        // The Qwiic ≡ STEMMA QT equivalence: a Qwiic sensor plugs into a
+        // STEMMA QT board (Adafruit QT Py) and vice versa.
+        let qtpy = lookup_board(0x239a, 0x8143).unwrap(); // StemmaQt host
+        let scd = lookup_accessory("scd41").unwrap(); // Qwiic module
+        assert!(board_accepts_accessory(qtpy, scd));
     }
 }

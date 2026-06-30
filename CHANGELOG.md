@@ -5,6 +5,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Hardware registry: scout 2026-06-29 tier-1 additions
+
+From the weekly hardware-scout report (`Knowledge Base/hardware-scout-2026-06-29.md`).
+Metadata-only additions on already-supported transports — no firmware change.
+Accelerator boards (Hailo / Coral / Jetson Orin / ROCK 5B / M5 LLM) and
+blocked-PID entries (Adafruit Feather ESP32-S3, Sipeed MaixCAM) remain follow-ups.
+
+### Added — capability taxonomy
+
+- **`VALID_CAPABILITIES`** in `peripherals::registry` — canonical token set with
+  `is_valid_capability()` and an `all_capabilities_are_valid` test that fails the
+  build if any board/accessory uses an undocumented token (typo guard). New
+  tokens documented in the module header and reserved for upcoming hardware:
+  `npu`, `edge_tpu`, `hailo`, `nn_accel`, `kpu`, `tensor_rt`, `ethernet`,
+  `thread`, `zigbee`, `battery`.
+
+### Added — boards
+
+- **ESP32-C6**, **ESP32-H2** (BLE + 802.15.4 `thread`/`zigbee`; H2 has no Wi-Fi)
+  and **ESP32-P4** (`nn_accel`, MIPI camera/display) Espressif SoCs.
+- First **Adafruit** (QT Py ESP32-S3, STEMMA QT), **SparkFun** (Thing Plus
+  ESP32-C6, Qwiic) and **DFRobot** (FireBeetle 2 ESP32-S3, `battery`) boards.
+- **LILYGO T-Display-S3** and **T-Deck** (ESP32-S3; T-Deck adds LoRa + touch).
+
+### Added — accessories
+
+- Qwiic / STEMMA QT plug-in sensors that exercise connector matching:
+  **SCD41** (CO2), **VL53L1X** (ToF), **BNO055** (9-DOF fusion IMU), **SGP40** (VOC).
+
+### Notes
+
+- Native-USB ESP32 parts share `0x303a:0x1001`; selected by `name` per existing
+  convention. `registry.json` must be regenerated
+  (`cargo run --bin emit-registry -- registry/registry.json`) — it is a build
+  artifact, not hand-edited.
+
+---
+
 ## Unreleased — Phase 19: Foresight & Autonomy (2026-06-25)
 
 Beyond reactive and deliberative control: a predictive layer, self-improvement,
