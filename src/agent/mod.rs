@@ -27,6 +27,7 @@ use crate::providers::{ChatMessage, ChatRole, Provider};
 use crate::security::audit::{ActionAuditor, Decision};
 use crate::security::limits::SafetyGate;
 use crate::security::PolicyEngine;
+use crate::approval::ApprovalManager;
 use crate::security::trust::{self, TrustGate, TrustScorer};
 use crate::tools::traits::{RiskClass, Tool};
 use anyhow::Result;
@@ -65,6 +66,9 @@ pub struct Agent {
     /// untrusted node are refused, and every tool round-trip (latency + success)
     /// feeds the per-node behavioral score.
     trust: Option<Arc<TrustScorer>>,
+    /// Approval policy: when attached, every tool call is gated by the autonomy
+    /// level, auto-approve list, and session/forever grants (composing with trust).
+    approval: Option<Arc<ApprovalManager>>,
 }
 
 impl Agent {
@@ -86,6 +90,7 @@ impl Agent {
             auditor: None,
             trajectory: None,
             trust: None,
+            approval: None,
         }
     }
 
@@ -126,6 +131,15 @@ impl Agent {
     /// untrusted node are then refused, and every tool round-trip feeds the score.
     pub fn with_trust(mut self, trust: Arc<TrustScorer>) -> Self {
         self.trust = Some(trust);
+        self
+    }
+
+    /// Attach an approval manager. Every tool call is then gated by the autonomy
+    /// level, auto-approve list, and grants; in this autonomous loop a tool that
+    /// needs operator approval is refused (no blocking prompt), and a tool denied
+    /// by dynamic trust is refused outright.
+    pub fn with_approval(mut self, approval: Arc<ApprovalManager>) -> Self {
+        self.approval = Some(approval);
         self
     }
 
@@ -460,6 +474,18 @@ impl Agent {
             }
         }
 
+        // Approval policy: gate the call by the autonomy level + auto-approve list +
+        // session/forever grants (and dynamic trust, via decide()). In this
+        // autonomous loop a tool that needs operator approval is refused rather than
+        // blocking on a prompt; Full autonomy and granted/auto-approved tools pass.
+        if let Err(reason) = approval_authorize(self.approval.as_deref(), name, &node_id, risk) {
+            tracing::warn!(tool = %name, node = %node_id, reason = %reason, "tool call refused by approval policy");
+            return Ok(crate::tools::traits::ToolResult::err(format!(
+                "Tool '{}' refused: {}",
+                name, reason
+            )));
+        }
+
         let started = std::time::Instant::now();
         let result = tool.execute(args).await;
         if let Some(scorer) = &self.trust {
@@ -506,6 +532,29 @@ impl Agent {
     /// Clear all conversation history for the given session.
     pub fn clear_session(&self, session_id: &str) -> anyhow::Result<()> {
         self.memory.clear_session(session_id)
+    }
+}
+
+/// Consult the approval policy for a tool call. `Ok(())` to proceed; `Err(reason)`
+/// to refuse — either denied outright by dynamic trust, or (in this autonomous
+/// loop) needing operator approval that hasn't been granted. With no manager
+/// attached, or under Full autonomy, everything is permitted.
+fn approval_authorize(
+    approval: Option<&ApprovalManager>,
+    tool: &str,
+    node_id: &str,
+    risk: RiskClass,
+) -> std::result::Result<(), String> {
+    let Some(approval) = approval else {
+        return Ok(());
+    };
+    match approval.decide(tool, Some(node_id), risk) {
+        crate::approval::Decision::Allow => Ok(()),
+        crate::approval::Decision::Deny => Err("denied by approval policy".to_string()),
+        crate::approval::Decision::NeedsApproval => Err(
+            "requires operator approval (autonomy is supervised/manual and it is not auto-approved or granted)"
+                .to_string(),
+        ),
     }
 }
 
@@ -609,6 +658,44 @@ mod tests {
         // A normal (non-physical) tool is never gated.
         let r = track0_authorize(None, None, "shell", RiskClass::safe(), &json!({}));
         assert!(r.is_ok());
+    }
+
+    fn autonomy(level: crate::config::AutonomyLevel, auto_approve: Vec<String>) -> crate::config::AutonomyConfig {
+        crate::config::AutonomyConfig { level, auto_approve, always_ask: vec![] }
+    }
+    fn approval_mgr(cfg: &crate::config::AutonomyConfig) -> ApprovalManager {
+        let path = std::env::temp_dir()
+            .join(format!("obc_agent_grants_{}.json", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        ApprovalManager::with_grants(cfg, crate::approval::ForeverGrants::load(path), false)
+    }
+
+    #[test]
+    fn approval_no_manager_permits_everything() {
+        assert!(approval_authorize(None, "shell", "local", RiskClass::safe()).is_ok());
+    }
+
+    #[test]
+    fn approval_full_autonomy_permits() {
+        let mgr = approval_mgr(&autonomy(crate::config::AutonomyLevel::Full, vec![]));
+        assert!(approval_authorize(Some(&mgr), "shell", "local", RiskClass::safe()).is_ok());
+    }
+
+    #[test]
+    fn approval_supervised_refuses_ungranted_tool() {
+        let mgr = approval_mgr(&autonomy(crate::config::AutonomyLevel::Supervised, vec![]));
+        let err = approval_authorize(Some(&mgr), "shell", "local", RiskClass::safe());
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("approval"));
+    }
+
+    #[test]
+    fn approval_supervised_permits_auto_approved_tool() {
+        let mgr = approval_mgr(&autonomy(
+            crate::config::AutonomyLevel::Supervised,
+            vec!["sensor_read".to_string()],
+        ));
+        assert!(approval_authorize(Some(&mgr), "sensor_read", "local", RiskClass::safe()).is_ok());
     }
 
     #[test]
