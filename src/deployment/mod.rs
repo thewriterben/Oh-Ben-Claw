@@ -36,6 +36,7 @@
 //! | DHT22 (GPIO accessory) | Sensing | sensor_read |
 
 pub mod advisor;
+pub mod firmware_scaffold;
 pub mod inventory;
 pub mod planner;
 pub mod saga;
