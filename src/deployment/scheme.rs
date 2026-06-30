@@ -114,6 +114,34 @@ impl DeploymentScheme {
             .count()
     }
 
+    /// Generate a starter firmware sketch for every node in this scheme that maps to
+    /// a **flashable** registry board (serial/probe MCUs; native SBC hosts are
+    /// skipped). Closes the scout → registry → firmware → orchestrate loop: the
+    /// planner already emits TOML, and now emits the matching starter firmware too.
+    pub fn firmware_sketches(&self) -> Vec<crate::deployment::firmware_scaffold::FirmwareSketch> {
+        use crate::deployment::firmware_scaffold::{scaffold_firmware, ScaffoldOptions};
+        use crate::peripherals::registry::{known_boards, BoardInfo};
+
+        let flashable = |name: &str| -> Option<&'static BoardInfo> {
+            known_boards()
+                .iter()
+                .find(|b| b.name == name && matches!(b.transport, "serial" | "probe"))
+        };
+
+        let mut sketches = Vec::new();
+        if let Some(b) = flashable(&self.host_board) {
+            let opts = ScaffoldOptions { node_id: "host".into(), ..Default::default() };
+            sketches.push(scaffold_firmware(b, &opts));
+        }
+        for a in &self.assignments {
+            if let Some(b) = flashable(&a.hardware_item) {
+                let opts = ScaffoldOptions { node_id: a.name.clone(), ..Default::default() };
+                sketches.push(scaffold_firmware(b, &opts));
+            }
+        }
+        sketches
+    }
+
     /// Pretty-print the scheme as a human-readable report.
     pub fn report(&self) -> String {
         let mut out = String::new();
@@ -234,5 +262,24 @@ mod tests {
         let report = scheme.report();
         assert!(report.contains("test"));
         assert!(report.contains("nanopi-neo3"));
+    }
+
+    #[test]
+    fn firmware_sketches_target_only_flashable_boards() {
+        let assignments = vec![AgentAssignment {
+            name: "vision-agent".to_string(),
+            role: NodeRole::VisionAgent,
+            hardware_item: "esp32-s3-cam".to_string(), // serial MCU → flashable
+            role_description: "vision".to_string(),
+            tools: vec![],
+            config_snippet: String::new(),
+        }];
+        // host is nanopi-neo3 (native SBC) → skipped; only the MCU gets firmware.
+        let scheme = make_scheme(assignments, vec![]);
+        let sketches = scheme.firmware_sketches();
+        assert_eq!(sketches.len(), 1, "only the flashable MCU node gets a sketch");
+        assert_eq!(sketches[0].board, "esp32-s3-cam");
+        assert!(sketches[0].source.contains("void setup()"));
+        assert!(sketches[0].source.contains("vision-agent"), "node id baked in");
     }
 }

@@ -890,6 +890,29 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // (per-rule/action fire counts) and the gateway `/metrics` endpoint.
     let obs = Arc::new(observability::ObsContext::new());
 
+    // No-op-fallback metric export: when OBC_METRICS_EXPORT_SECS is set, push the
+    // metrics registry to a collector on that cadence. The exporter buffers offline
+    // and reconciles on reconnect; the default sink logs (swap in a real collector).
+    if let Some(secs) = std::env::var("OBC_METRICS_EXPORT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+    {
+        let exporter = Arc::new(observability::ReconcilingExporter::new(
+            Arc::clone(&obs.metrics),
+            Arc::new(observability::LoggingMetricSink),
+        ));
+        let interval = std::time::Duration::from_secs(secs);
+        info!(interval_secs = secs, "metrics export loop spawned");
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                let _ = exporter.export_now().await;
+            }
+        });
+    }
+
     // Shared host-side safing state: flipped in-process when a safing advisory
     // fires (via the SafingSink tap below), read by load-shedding consumers
     // (e.g. the ClawCam poll backs off when shed_load is set).
