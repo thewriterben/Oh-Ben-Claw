@@ -511,11 +511,193 @@ impl Default for ObsContext {
     }
 }
 
+// ── No-op-fallback metric export (edge resilience) ──────────────────────────────
+//
+// OBC's metrics are always local and never depend on a collector. But an embodied
+// or air-gapped node may *also* push them to a remote collector that comes and
+// goes. This layer degrades gracefully: when the collector is unreachable it keeps
+// the node running and **buffers** undelivered snapshots locally (a bounded queue);
+// when connectivity returns it **flushes the backlog** (reconciles). The node never
+// blocks on, nor loses state to, an offline collector.
+
+use std::collections::VecDeque;
+use std::sync::atomic::AtomicBool;
+
+/// A remote metrics collector (OTLP / Prometheus push, etc.). The exporter only
+/// hands it a batch to deliver; a real impl does the network I/O, tests fake it.
+#[async_trait::async_trait]
+pub trait MetricSink: Send + Sync {
+    async fn send(&self, batch: &[MetricSnapshot]) -> anyhow::Result<()>;
+}
+
+/// The outcome of one export attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportOutcome {
+    /// All pending batches were delivered.
+    Flushed { delivered: usize },
+    /// The collector was unreachable; `buffered` batches are held locally.
+    Buffered { delivered: usize, buffered: usize },
+}
+
+/// Buffers metric snapshots locally when the collector is unreachable and flushes
+/// the backlog on reconnect. The buffer is bounded, so an indefinitely-offline node
+/// cannot grow memory without limit (oldest batches are evicted and counted).
+pub struct ReconcilingExporter {
+    registry: Arc<MetricsRegistry>,
+    sink: Arc<dyn MetricSink>,
+    pending: Mutex<VecDeque<Vec<MetricSnapshot>>>,
+    max_buffered: usize,
+    online: AtomicBool,
+    dropped: AtomicU64,
+}
+
+impl ReconcilingExporter {
+    pub fn new(registry: Arc<MetricsRegistry>, sink: Arc<dyn MetricSink>) -> Self {
+        Self {
+            registry,
+            sink,
+            pending: Mutex::new(VecDeque::new()),
+            max_buffered: 256,
+            online: AtomicBool::new(true),
+            dropped: AtomicU64::new(0),
+        }
+    }
+
+    /// Set the local buffer cap (number of snapshot batches kept while offline).
+    pub fn with_buffer(mut self, max_buffered: usize) -> Self {
+        self.max_buffered = max_buffered.max(1);
+        self
+    }
+
+    /// Whether the collector was reachable at the last export.
+    pub fn is_online(&self) -> bool {
+        self.online.load(Ordering::Relaxed)
+    }
+    /// Batches currently buffered (awaiting delivery).
+    pub fn buffered(&self) -> usize {
+        self.pending.lock().unwrap().len()
+    }
+    /// Batches dropped because the buffer was full while offline.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    /// Snapshot the registry, enqueue it, and try to flush the whole backlog to the
+    /// collector in order. **Never returns an error** — an outage just leaves the
+    /// backlog buffered (the no-op fallback) and the node keeps running.
+    pub async fn export_now(&self) -> ExportOutcome {
+        // Enqueue the current snapshot, evicting the oldest if over the cap.
+        {
+            let mut q = self.pending.lock().unwrap();
+            q.push_back(self.registry.snapshot());
+            while q.len() > self.max_buffered {
+                q.pop_front();
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        // Flush front-to-back; stop at the first failure (collector offline). The
+        // lock is never held across the await — clone the front, release, send.
+        let mut delivered = 0;
+        loop {
+            let front = {
+                let q = self.pending.lock().unwrap();
+                match q.front() {
+                    Some(b) => b.clone(),
+                    None => break,
+                }
+            };
+            match self.sink.send(&front).await {
+                Ok(()) => {
+                    self.pending.lock().unwrap().pop_front();
+                    delivered += 1;
+                }
+                Err(_) => {
+                    self.online.store(false, Ordering::Relaxed);
+                    return ExportOutcome::Buffered { delivered, buffered: self.buffered() };
+                }
+            }
+        }
+        self.online.store(true, Ordering::Relaxed);
+        ExportOutcome::Flushed { delivered }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::thread;
     use std::time::Duration;
+
+    /// A collector whose reachability can be toggled, recording delivered batches.
+    struct ToggleSink {
+        online: AtomicBool,
+        received: Mutex<Vec<Vec<MetricSnapshot>>>,
+    }
+    impl ToggleSink {
+        fn new(online: bool) -> Self {
+            Self { online: AtomicBool::new(online), received: Mutex::new(Vec::new()) }
+        }
+        fn set_online(&self, on: bool) {
+            self.online.store(on, Ordering::Relaxed);
+        }
+        fn batches(&self) -> usize {
+            self.received.lock().unwrap().len()
+        }
+    }
+    #[async_trait::async_trait]
+    impl MetricSink for ToggleSink {
+        async fn send(&self, batch: &[MetricSnapshot]) -> anyhow::Result<()> {
+            if self.online.load(Ordering::Relaxed) {
+                self.received.lock().unwrap().push(batch.to_vec());
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("collector unreachable"))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_collector_buffers_without_failing() {
+        let reg = MetricsRegistry::new();
+        reg.counter("x").inc();
+        let sink = Arc::new(ToggleSink::new(false));
+        let exp = ReconcilingExporter::new(Arc::clone(&reg), Arc::clone(&sink) as Arc<dyn MetricSink>);
+        let out = exp.export_now().await;
+        assert!(matches!(out, ExportOutcome::Buffered { .. }), "offline ⇒ buffered, not error");
+        assert!(!exp.is_online());
+        assert_eq!(exp.buffered(), 1);
+        assert_eq!(sink.batches(), 0, "nothing reached the offline collector");
+    }
+
+    #[tokio::test]
+    async fn reconnect_flushes_the_backlog() {
+        let reg = MetricsRegistry::new();
+        let sink = Arc::new(ToggleSink::new(false));
+        let exp = ReconcilingExporter::new(Arc::clone(&reg), Arc::clone(&sink) as Arc<dyn MetricSink>);
+        reg.counter("x").inc();
+        exp.export_now().await; // buffered (offline)
+        exp.export_now().await; // buffered again
+        assert_eq!(exp.buffered(), 2);
+        sink.set_online(true);
+        let out = exp.export_now().await; // enqueues a 3rd, then flushes all three
+        assert_eq!(out, ExportOutcome::Flushed { delivered: 3 });
+        assert!(exp.is_online());
+        assert_eq!(exp.buffered(), 0, "backlog reconciled on reconnect");
+        assert_eq!(sink.batches(), 3);
+    }
+
+    #[tokio::test]
+    async fn buffer_is_bounded_and_counts_drops() {
+        let reg = MetricsRegistry::new();
+        let sink = Arc::new(ToggleSink::new(false));
+        let exp = ReconcilingExporter::new(Arc::clone(&reg), Arc::clone(&sink) as Arc<dyn MetricSink>)
+            .with_buffer(2);
+        for _ in 0..5 {
+            exp.export_now().await;
+        }
+        assert_eq!(exp.buffered(), 2, "buffer capped at 2");
+        assert!(exp.dropped() >= 1, "evicted batches are counted");
+    }
 
     #[test]
     fn span_recorder_finish_ok() {

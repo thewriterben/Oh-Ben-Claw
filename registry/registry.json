@@ -679,7 +679,8 @@
         "nfc",
         "rfid",
         "subghz",
-        "infrared"
+        "infrared",
+        "ibutton"
       ],
       "vendor": "Flipper Devices",
       "ecosystem": "Flipper Zero",
@@ -761,7 +762,8 @@
         "wifi",
         "ble",
         "camera_capture",
-        "microsd"
+        "microsd",
+        "psram"
       ],
       "vendor": "Espressif",
       "ecosystem": "ESP32-S3",
@@ -803,6 +805,7 @@
         "wifi",
         "ble",
         "lora",
+        "mesh",
         "gps"
       ],
       "vendor": "LILYGO",
@@ -824,12 +827,301 @@
         "wifi",
         "ble",
         "lora",
+        "mesh",
         "display"
       ],
       "vendor": "Heltec",
       "ecosystem": "WiFi LoRa 32",
       "connectors": [
         "bare"
+      ]
+    },
+    {
+      "vid": 9114,
+      "pid": 41,
+      "name": "rak4631",
+      "architecture": "Nordic nRF52840 + Semtech SX1262 LoRa (RAKwireless WisBlock core; Meshtastic-compatible; Adafruit nRF52 UF2 bootloader VID/PID, shared — selected by name)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "ble",
+        "nfc",
+        "lora",
+        "mesh"
+      ],
+      "vendor": "RAKwireless",
+      "ecosystem": "WisBlock",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "esp32-c6",
+      "architecture": "ESP32-C6 RISC-V single-core @ 160 MHz (Wi-Fi 6, BLE 5, 802.15.4; native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "thread",
+        "zigbee"
+      ],
+      "vendor": "Espressif",
+      "ecosystem": "ESP32-C6",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "esp32-h2",
+      "architecture": "ESP32-H2 RISC-V single-core @ 96 MHz (BLE 5, 802.15.4, no Wi-Fi; native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "ble",
+        "thread",
+        "zigbee"
+      ],
+      "vendor": "Espressif",
+      "ecosystem": "ESP32-H2",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "esp32-p4",
+      "architecture": "ESP32-P4 dual-core RISC-V @ 400 MHz (AI vector ext., MIPI-CSI/DSI, no radio; native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "camera_capture",
+        "display",
+        "nn_accel"
+      ],
+      "vendor": "Espressif",
+      "ecosystem": "ESP32-P4",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 9114,
+      "pid": 33091,
+      "name": "adafruit-qtpy-esp32s3",
+      "architecture": "ESP32-S3 Xtensa LX7 dual-core @ 240 MHz (CircuitPython VID/PID; Arduino mode = 0x303a:0x1001)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble"
+      ],
+      "vendor": "Adafruit",
+      "ecosystem": "QT Py",
+      "connectors": [
+        "stemma_qt"
+      ]
+    },
+    {
+      "vid": 6790,
+      "pid": 29987,
+      "name": "sparkfun-thing-plus-esp32-c6",
+      "architecture": "ESP32-C6 RISC-V @ 160 MHz (Wi-Fi 6, BLE 5, 802.15.4; CH340 USB-UART; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "thread",
+        "microsd"
+      ],
+      "vendor": "SparkFun",
+      "ecosystem": "Thing Plus",
+      "connectors": [
+        "qwiic",
+        "featherwing"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "dfrobot-firebeetle2-esp32s3",
+      "architecture": "ESP32-S3 LX7 dual-core @ 240 MHz, LiPo charge, onboard GDI (native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "battery"
+      ],
+      "vendor": "DFRobot",
+      "ecosystem": "FireBeetle",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "lilygo-t-display-s3",
+      "architecture": "ESP32-S3 LX7 dual-core @ 240 MHz, 1.9\" ST7789 320x170 LCD, 16 MB flash / 8 MB PSRAM (native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "display"
+      ],
+      "vendor": "LILYGO",
+      "ecosystem": "T-Display",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "lilygo-t-deck",
+      "architecture": "ESP32-S3 LX7 dual-core @ 240 MHz + SX1262 LoRa, 2.8\" IPS touch, keyboard/trackball (native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "lora",
+        "display",
+        "touch",
+        "audio_sample",
+        "audio_output"
+      ],
+      "vendor": "LILYGO",
+      "ecosystem": "T-Deck",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 6353,
+      "pid": 37634,
+      "name": "coral-usb-accelerator",
+      "architecture": "Google Edge TPU ASIC, 4 TOPS @ 2 W (USB 3.0 coprocessor)",
+      "transport": "serial",
+      "capabilities": [
+        "edge_tpu"
+      ],
+      "vendor": "Google",
+      "ecosystem": "Coral",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 8711,
+      "pid": 13578,
+      "name": "radxa-rock-5b",
+      "architecture": "Rockchip RK3588 octa-core (4x Cortex-A76 + 4x Cortex-A55), Mali-G610, 6 TOPS NPU (AArch64)",
+      "transport": "native",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "pwm",
+        "npu",
+        "ethernet"
+      ],
+      "vendor": "Radxa",
+      "ecosystem": "ROCK",
+      "connectors": [
+        "hat_pi"
+      ]
+    },
+    {
+      "vid": 2389,
+      "pid": 28704,
+      "name": "jetson-orin-nano",
+      "architecture": "NVIDIA Jetson Orin Nano: 6-core Arm Cortex-A78AE + 1024-core Ampere GPU w/ tensor cores, 67 TOPS (AArch64)",
+      "transport": "native",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "pwm",
+        "camera_capture",
+        "cuda",
+        "tensor_rt"
+      ],
+      "vendor": "NVIDIA",
+      "ecosystem": "Jetson",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 6790,
+      "pid": 29987,
+      "name": "m5stack-module-llm",
+      "architecture": "AXera AX630C dual Cortex-A53 @ 1.2 GHz + 3.2 TOPS NPU, 4 GB LPDDR4, 32 GB eMMC (CH340N; shared VID/PID)",
+      "transport": "bridge",
+      "capabilities": [
+        "npu",
+        "ethernet",
+        "audio_sample",
+        "audio_output"
+      ],
+      "vendor": "M5Stack",
+      "ecosystem": "Module",
+      "connectors": [
+        "mbus"
+      ]
+    },
+    {
+      "vid": 1317,
+      "pid": 42151,
+      "name": "coral-dev-board-mini",
+      "architecture": "MediaTek MT8167S quad Cortex-A35 + Google Edge TPU, 4 TOPS, 2 GB LPDDR3 (AArch64)",
+      "transport": "native",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "edge_tpu",
+        "camera_capture"
+      ],
+      "vendor": "Google",
+      "ecosystem": "Coral",
+      "connectors": [
+        "hat_pi"
       ]
     }
   ],
@@ -1134,6 +1426,76 @@
       ],
       "compatible_boards": [],
       "connector": "bare"
+    },
+    {
+      "name": "scd41",
+      "description": "Sensirion SCD41 — true CO2 (photoacoustic NDIR), temperature, humidity",
+      "bus": "i2c",
+      "default_i2c_addr": 98,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "qwiic"
+    },
+    {
+      "name": "vl53l1x",
+      "description": "ST VL53L1X — time-of-flight distance sensor (up to 4 m)",
+      "bus": "i2c",
+      "default_i2c_addr": 41,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "stemma_qt"
+    },
+    {
+      "name": "bno055",
+      "description": "Bosch BNO055 — 9-DOF IMU with on-chip sensor fusion (absolute orientation)",
+      "bus": "i2c",
+      "default_i2c_addr": 40,
+      "capabilities": [
+        "imu",
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "stemma_qt"
+    },
+    {
+      "name": "sgp40",
+      "description": "Sensirion SGP40 — VOC air-quality gas sensor",
+      "bus": "i2c",
+      "default_i2c_addr": 89,
+      "capabilities": [
+        "sensor_read"
+      ],
+      "compatible_boards": [],
+      "connector": "qwiic"
+    },
+    {
+      "name": "rpi-ai-hat-plus-13t",
+      "description": "Raspberry Pi AI HAT+ (13 TOPS) — Hailo-8L NPU over PCIe Gen3 (RPi 5)",
+      "bus": "pcie",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "hailo"
+      ],
+      "compatible_boards": [
+        "raspberry-pi-5"
+      ],
+      "connector": "hat_pi"
+    },
+    {
+      "name": "grove-vision-ai-v2",
+      "description": "Seeed Grove Vision AI Module V2 — Himax WiseEye2 (Cortex-M55 + Ethos-U55 microNPU) smart camera",
+      "bus": "i2c",
+      "default_i2c_addr": 98,
+      "capabilities": [
+        "nn_accel",
+        "camera_capture"
+      ],
+      "compatible_boards": [],
+      "connector": "grove"
     }
   ]
 }
