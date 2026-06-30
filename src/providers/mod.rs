@@ -20,6 +20,7 @@ use std::sync::Arc;
 pub mod anthropic;
 pub mod compatible;
 pub mod failover;
+pub mod model_registry;
 pub mod ollama;
 pub mod openai;
 pub mod openrouter;
