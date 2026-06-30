@@ -24,7 +24,9 @@ Five opportunities from this analysis have shipped into OBC. Marked **✅ Delive
 - **C** — the live `main` export loop + a real HTTP `MetricSink` (core + trait are in place).
 - **H** — the `[spine] kind = "lora_mesh"` config branch + a real Meshtastic-over-serial `MeshRadio` + a mesh RX loop into the `Coordinator`.
 
-Still scoped (not started): **D** (per-node model selection), **F** (signed Ed25519 audit), **G** (saga/EventBus rollback), **I** (YAML device config + vendor allowlist), **J** (firmware-scaffolding codegen).
+Also delivered since first banking: **D** (`src/providers/model_registry.rs` — local-first model selection with health re-check), **G** (`src/deployment/saga.rs` — saga rollback), **I** (`src/peripherals/onboarding.rs` — vendor allowlist).
+
+Still open: **F** (🔶 integrity already shipped via the HMAC-chained audit; Ed25519 asymmetric signing **blocked** — no signing crate in the offline cache, operator decision to add `ed25519-dalek`), **J** (firmware-scaffolding codegen — the pipeline play, not started).
 
 ---
 
@@ -95,7 +97,7 @@ Accelerapp's `observability/` (OTel spans + Prometheus exporter) is its one genu
 **E. HIL self-test contract + a simulated node for CI.** *(→ `tests/`, `src/peripherals/`, Phases 17/Track 0)* — ✅ **Delivered.** `src/peripherals/selftest.rs`: `NodeSelfTest` bring-up contract (`gpio_loopback`/`sensor_read`/`link_up`) + `SimulatedNode` (scriptable, announces on the spine). Wired end-to-end in `tests/offgrid_fleet_loop.rs` (bring-up gate → LoRa heartbeat → fleet auction).
 Accelerapp's `hil/hardware.py` defines a `DeviceAdapter.test_*` self-test contract (LED blink, button read, analog read) and a `SimulatedHardware`. This validates the **`MockNode`** idea already proposed in `V2-IMPLEMENTATION.md`: a host-side simulated node speaking the spine protocol for CI, plus a **standard board-bringup smoke test** run on node onboarding and on Phase 17 resume. Build the real serial/MQTT-backed version Accelerapp left as a stub.
 
-**F. Hash-chained audit → real signed audit.** *(→ `src/security/authz.rs`, Track 0)*
+**F. Hash-chained audit → real signed audit.** *(→ `src/security/audit.rs`, Track 0)* — 🔶 **Integrity delivered; Ed25519 blocked offline.** The symmetric half is already shipped: `src/security/audit.rs` persists an append-only, hash-chained, **HMAC-SHA256-MAC'd** log with a `verify()` that catches any insert/delete/reorder/edit (`records_and_verifies_a_chain`, `resumes_chain_across_reopen`, `detects_tampering`). The remaining piece — Ed25519 **detached signatures** for third-party (asymmetric) verification — needs a vetted signing crate (`ed25519-dalek`) that is **not in the offline cache**; adding it is an operator decision given the offline-first philosophy. The record shape + chain logic already accommodate it (only `compute_mac`/`verify` change), so it's a drop-in upgrade when the dep is approved. *Faking it with symmetric crypto labelled "signature" is explicitly avoided (the Accelerapp stub-crypto anti-pattern).*
 `digital_twin/blockchain_log.py` is a SHA-256 hash-chained append-only log with a working `verify_chain()`. It's the skeleton of Track 0's signed audit — but OBC should do what Accelerapp didn't: **persist it and actually sign each record** (Ed25519, per the Track 0 design), not merely hash-chain in RAM.
 
 **G. Saga / EventBus for multi-node deployment rollback.** *(→ `src/deployment/`, `src/agent/orchestrator.rs`)*
