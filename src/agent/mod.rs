@@ -27,6 +27,7 @@ use crate::providers::{ChatMessage, ChatRole, Provider};
 use crate::security::audit::{ActionAuditor, Decision};
 use crate::security::limits::SafetyGate;
 use crate::security::PolicyEngine;
+use crate::security::trust::{self, TrustGate, TrustScorer};
 use crate::tools::traits::{RiskClass, Tool};
 use anyhow::Result;
 use serde_json::Value;
@@ -60,6 +61,10 @@ pub struct Agent {
     /// Phase 16: when attached, each run is captured as an `Episode` for
     /// experiential self-improvement.
     trajectory: Option<Arc<TrajectoryStore>>,
+    /// Track 0 dynamic trust: when attached, physical tool calls from an
+    /// untrusted node are refused, and every tool round-trip (latency + success)
+    /// feeds the per-node behavioral score.
+    trust: Option<Arc<TrustScorer>>,
 }
 
 impl Agent {
@@ -80,6 +85,7 @@ impl Agent {
             safety: None,
             auditor: None,
             trajectory: None,
+            trust: None,
         }
     }
 
@@ -113,6 +119,13 @@ impl Agent {
     /// (Phase 16 experiential self-improvement).
     pub fn with_trajectory_store(mut self, store: Arc<TrajectoryStore>) -> Self {
         self.trajectory = Some(store);
+        self
+    }
+
+    /// Attach a Track 0 dynamic trust scorer. Physical tool calls from an
+    /// untrusted node are then refused, and every tool round-trip feeds the score.
+    pub fn with_trust(mut self, trust: Arc<TrustScorer>) -> Self {
+        self.trust = Some(trust);
         self
     }
 
@@ -423,7 +436,38 @@ impl Agent {
             )));
         }
 
-        tool.execute(args).await
+        // Track 0 dynamic trust: quarantine physical actions from an untrusted
+        // node, then feed the per-node behavioral score from this round-trip.
+        let risk = tool.risk_class();
+        let node_id = args
+            .get("node_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("local")
+            .to_string();
+        if risk.physical {
+            if let Some(scorer) = &self.trust {
+                if matches!(trust::gate(scorer.level(&node_id), risk), TrustGate::Deny) {
+                    tracing::warn!(
+                        tool = %name,
+                        node = %node_id,
+                        "Physical action denied: node is untrusted (Track 0 dynamic trust)"
+                    );
+                    return Ok(crate::tools::traits::ToolResult::err(format!(
+                        "Tool '{}' denied: node '{}' is untrusted",
+                        name, node_id
+                    )));
+                }
+            }
+        }
+
+        let started = std::time::Instant::now();
+        let result = tool.execute(args).await;
+        if let Some(scorer) = &self.trust {
+            let latency_ms = started.elapsed().as_millis() as f64;
+            let success = result.as_ref().map(|r| r.success).unwrap_or(false);
+            scorer.record(&node_id, latency_ms, success);
+        }
+        result
     }
 
     /// Execute a tool directly by name with a JSON `Value` argument.
