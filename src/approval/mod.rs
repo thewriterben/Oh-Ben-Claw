@@ -20,6 +20,8 @@
 //! [`ApprovalFunnel`], so policy can be tuned (which tools ask too often?).
 
 use crate::config::{AutonomyConfig, AutonomyLevel};
+use crate::security::trust::{self, TrustGate, TrustScorer};
+use crate::tools::traits::RiskClass;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -348,6 +350,17 @@ impl ApprovalFunnel {
 // ── Approval Manager ──────────────────────────────────────────────────────────
 
 /// Manages the human-in-the-loop approval flow for tool execution.
+/// The outcome of a trust-aware approval check ([`ApprovalManager::decide`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// Proceed without prompting.
+    Allow,
+    /// Prompt the operator before executing.
+    NeedsApproval,
+    /// Refuse outright — the node is too untrusted for this physical action.
+    Deny,
+}
+
 pub struct ApprovalManager {
     config: AutonomyConfig,
     /// Tools approved with `Always` during this session.
@@ -364,6 +377,9 @@ pub struct ApprovalManager {
     obs: Option<Arc<crate::observability::ObsContext>>,
     /// When true, all approval requests are auto-denied (non-interactive mode).
     non_interactive: bool,
+    /// Optional behavioral trust scorer: when set, an anomalous node loses its
+    /// auto/forever shortcut for physical actions (or is denied them entirely).
+    trust: Option<Arc<TrustScorer>>,
 }
 
 impl ApprovalManager {
@@ -395,12 +411,22 @@ impl ApprovalManager {
             funnel: Arc::new(ApprovalFunnel::default()),
             obs: None,
             non_interactive,
+            trust: None,
         }
     }
 
     /// Attach an observability context so approval asks count centrally (WS5).
     pub fn with_obs(mut self, obs: Arc<crate::observability::ObsContext>) -> Self {
         self.obs = Some(obs);
+        self
+    }
+
+    /// Attach a behavioral [`TrustScorer`] (Track 0 dynamic trust). Once set,
+    /// [`decide`](Self::decide) consults the acting node's trust level: a node on
+    /// probation is forced back through approval for physical actions it could
+    /// otherwise auto-run, and an untrusted node is denied them.
+    pub fn with_trust(mut self, trust: Arc<TrustScorer>) -> Self {
+        self.trust = Some(trust);
         self
     }
 
@@ -426,6 +452,29 @@ impl ApprovalManager {
             AutonomyLevel::Full => false,
             AutonomyLevel::Supervised => true,
             AutonomyLevel::Manual => true,
+        }
+    }
+
+    /// Trust-aware approval check for a tool call by `node_id` with risk profile
+    /// `risk`. Behavioral trust can only **tighten** the normal decision, never
+    /// relax it: for a physical action, an untrusted node is `Deny`ed and a node on
+    /// probation `NeedsApproval` even if the tool is auto-approved or forever-
+    /// granted. Non-physical actions, a trusted node, or no scorer attached fall
+    /// through to the ordinary [`needs_approval`](Self::needs_approval) rules.
+    pub fn decide(&self, tool_name: &str, node_id: Option<&str>, risk: RiskClass) -> Decision {
+        if risk.physical {
+            if let (Some(scorer), Some(node)) = (&self.trust, node_id) {
+                match trust::gate(scorer.level(node), risk) {
+                    TrustGate::Deny => return Decision::Deny,
+                    TrustGate::RequireApproval => return Decision::NeedsApproval,
+                    TrustGate::Allow => {}
+                }
+            }
+        }
+        if self.needs_approval(tool_name) {
+            Decision::NeedsApproval
+        } else {
+            Decision::Allow
         }
     }
 
@@ -631,6 +680,64 @@ mod tests {
 
     fn manager(config: &AutonomyConfig, non_interactive: bool) -> ApprovalManager {
         ApprovalManager::with_grants(config, temp_grants(), non_interactive)
+    }
+
+    fn scorer_at(failures: usize) -> Arc<TrustScorer> {
+        let s = TrustScorer::default();
+        for _ in 0..failures {
+            s.record("rover", 50.0, false);
+        }
+        Arc::new(s)
+    }
+    fn phys_low() -> RiskClass {
+        RiskClass::physical(true, crate::tools::traits::BlastRadius::Low)
+    }
+
+    #[test]
+    fn decide_without_trust_falls_through_to_needs_approval() {
+        // No scorer attached ⇒ trust never tightens; decide mirrors needs_approval.
+        assert_eq!(
+            manager(&config_full(), false).decide("move", Some("rover"), phys_low()),
+            Decision::Allow
+        );
+        assert_eq!(
+            manager(&config_supervised(), false).decide("move", Some("rover"), phys_low()),
+            Decision::NeedsApproval
+        );
+    }
+
+    #[test]
+    fn trusted_node_keeps_auto_approval_for_physical() {
+        let cfg = AutonomyConfig {
+            level: AutonomyLevel::Supervised,
+            auto_approve: vec!["move".into()],
+            always_ask: vec![],
+        };
+        let mgr = manager(&cfg, false).with_trust(scorer_at(0)); // trusted
+        assert_eq!(mgr.decide("move", Some("rover"), phys_low()), Decision::Allow);
+    }
+
+    #[test]
+    fn probation_node_loses_auto_approval_for_physical() {
+        let cfg = AutonomyConfig {
+            level: AutonomyLevel::Supervised,
+            auto_approve: vec!["move".into()],
+            always_ask: vec![],
+        };
+        // Two failures → probation; the auto-approve shortcut is overridden.
+        let mgr = manager(&cfg, false).with_trust(scorer_at(2));
+        assert_eq!(mgr.decide("move", Some("rover"), phys_low()), Decision::NeedsApproval);
+    }
+
+    #[test]
+    fn untrusted_node_denied_physical_but_not_reads() {
+        let mgr = manager(&config_full(), false).with_trust(scorer_at(3)); // untrusted
+        assert_eq!(mgr.decide("move", Some("rover"), phys_low()), Decision::Deny);
+        // non-physical reads are never blocked by trust
+        assert_eq!(
+            mgr.decide("read_file", Some("rover"), RiskClass::safe()),
+            Decision::Allow
+        );
     }
 
     #[test]
