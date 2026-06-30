@@ -205,6 +205,8 @@ pub static VALID_CAPABILITIES: &[&str] = &[
     "rfid",
     "subghz",
     "infrared",
+    "ibutton",
+    "mesh",
     "cellular",
     "thread",
     "zigbee",
@@ -220,6 +222,7 @@ pub static VALID_CAPABILITIES: &[&str] = &[
     "display",
     "touch",
     "microsd",
+    "psram",
     "actuate",
     "audio_output",
     "battery",
@@ -248,6 +251,7 @@ pub fn is_valid_capability(capability: &str) -> bool {
 /// - `0x16c0` = PJRC (Teensy)
 /// - `0x2886` = Seeed Studio
 /// - `0x2b04` = Sipeed
+/// - `0x239a` = Adafruit (nRF52840 UF2 bootloader; shared by RAK/Nordic boards)
 pub static KNOWN_BOARDS: &[BoardInfo] = &[
     // ── STM32 Nucleo ──────────────────────────────────────────────────────────
     BoardInfo {
@@ -778,7 +782,7 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         name: "flipper-zero",
         architecture: Some("STM32WB55 ARM Cortex-M4 @ 64 MHz (multi-tool; USB CDC)"),
         transport: "serial",
-        capabilities: &["gpio", "ble", "nfc", "rfid", "subghz", "infrared"],
+        capabilities: &["gpio", "ble", "nfc", "rfid", "subghz", "infrared", "ibutton"],
         vendor: "Flipper Devices",
         ecosystem: "Flipper Zero",
         connectors: &[Connector::Bare],
@@ -830,7 +834,7 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "ESP32-S3 + OV2640/OV5640 camera, microSD, PSRAM (native USB; shared VID/PID)",
         ),
         transport: "serial",
-        capabilities: &["gpio", "i2c", "wifi", "ble", "camera_capture", "microsd"],
+        capabilities: &["gpio", "i2c", "wifi", "ble", "camera_capture", "microsd", "psram"],
         vendor: "Espressif",
         ecosystem: "ESP32-S3",
         connectors: &[Connector::Bare],
@@ -858,7 +862,7 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "ESP32 + SX1276/SX1262 LoRa + NEO-6M GPS (Meshtastic-compatible; CP210x; shared VID/PID)",
         ),
         transport: "serial",
-        capabilities: &["gpio", "i2c", "wifi", "ble", "lora", "gps"],
+        capabilities: &["gpio", "i2c", "wifi", "ble", "lora", "mesh", "gps"],
         vendor: "LILYGO",
         ecosystem: "T-Beam",
         connectors: &[Connector::Bare],
@@ -871,9 +875,26 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
             "ESP32-S3 + SX1262 LoRa + 0.96\" OLED (Meshtastic-compatible; native USB; shared VID/PID)",
         ),
         transport: "serial",
-        capabilities: &["gpio", "i2c", "spi", "wifi", "ble", "lora", "display"],
+        capabilities: &["gpio", "i2c", "spi", "wifi", "ble", "lora", "mesh", "display"],
         vendor: "Heltec",
         ecosystem: "WiFi LoRa 32",
+        connectors: &[Connector::Bare],
+    },
+    // ── RAKwireless RAK4631 (Meshtastic / WisBlock; nRF52840 + SX1262) ─────────
+    // The Meshtastic node family the registry lacked: an nRF52840 mesh radio (not
+    // ESP32). Enumerates via the Adafruit nRF52 UF2 bootloader VID/PID, shared
+    // across nRF52840 boards and selected by name (per existing convention).
+    BoardInfo {
+        vid: 0x239a,
+        pid: 0x0029,
+        name: "rak4631",
+        architecture: Some(
+            "Nordic nRF52840 + Semtech SX1262 LoRa (RAKwireless WisBlock core; Meshtastic-compatible; Adafruit nRF52 UF2 bootloader VID/PID, shared — selected by name)",
+        ),
+        transport: "serial",
+        capabilities: &["gpio", "i2c", "spi", "ble", "nfc", "lora", "mesh"],
+        vendor: "RAKwireless",
+        ecosystem: "WisBlock",
         connectors: &[Connector::Bare],
     },
     // ── Hardware-scout 2026-06-29: tier-1 (metadata-only) additions ───────────
@@ -1975,6 +1996,32 @@ mod tests {
         assert_eq!(b.vendor, "LILYGO");
         assert!(b.capabilities.contains(&"gps"));
         assert!(b.capabilities.contains(&"lora"));
+    }
+
+    #[test]
+    fn rak4631_is_a_meshtastic_lora_mesh_node() {
+        let b = lookup_board(0x239a, 0x0029).unwrap();
+        assert_eq!(b.name, "rak4631");
+        assert_eq!(b.vendor, "RAKwireless");
+        // an nRF52840 mesh radio — distinct from the ESP32 LoRa boards
+        assert!(b.capabilities.contains(&"lora"));
+        assert!(b.capabilities.contains(&"mesh"));
+        assert!(b.capabilities.contains(&"nfc"));
+    }
+
+    #[test]
+    fn meshtastic_boards_are_mesh_capable() {
+        let names: Vec<_> = boards_with_capability("mesh").iter().map(|b| b.name).collect();
+        assert!(names.contains(&"lilygo-t-beam"));
+        assert!(names.contains(&"heltec-wifi-lora-32-v3"));
+        assert!(names.contains(&"rak4631"));
+    }
+
+    #[test]
+    fn new_capability_tokens_are_valid() {
+        for tok in ["mesh", "ibutton", "psram"] {
+            assert!(is_valid_capability(tok), "{tok} should be a valid token");
+        }
     }
 
     #[test]
