@@ -28,6 +28,7 @@
 pub mod bus_tools;
 pub mod fusion;
 pub mod registry;
+pub mod selftest;
 pub mod sensors;
 pub mod traits;
 
