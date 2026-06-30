@@ -284,6 +284,35 @@ mod tests {
     }
 
     #[test]
+    fn accelerated_inference_satisfied_by_accelerator_board() {
+        let mut inv = HardwareInventory::new("edge-accel");
+        inv.add_item(HardwareItem::new("host", "nanopi-neo3", "native").with_role(ItemRole::Host));
+        inv.add_item(
+            HardwareItem::new("tpu", "coral-usb-accelerator", "serial").with_role(ItemRole::Host),
+        );
+        inv.add_desire(FeatureDesire::AcceleratedInference);
+
+        let r = HardwareAdvisor::check_desire(&inv, &FeatureDesire::AcceleratedInference);
+        assert!(r.satisfied, "expected an accelerator board to satisfy the desire");
+        assert_eq!(r.satisfied_by.as_deref(), Some("tpu"));
+        assert_eq!(r.required_capability.as_deref(), Some("edge_tpu"));
+    }
+
+    #[test]
+    fn accelerated_inference_unsatisfied_on_cpu_only_host() {
+        let mut inv = HardwareInventory::new("cpu-only");
+        inv.add_item(HardwareItem::new("host", "nanopi-neo3", "native").with_role(ItemRole::Host));
+        inv.add_desire(FeatureDesire::AcceleratedInference);
+
+        let suggestions = HardwareAdvisor::suggest_missing(&inv);
+        let desc = FeatureDesire::AcceleratedInference.description();
+        assert!(
+            suggestions.iter().any(|s| s.for_feature == desc),
+            "expected a hardware suggestion for accelerated inference"
+        );
+    }
+
+    #[test]
     fn no_suggestions_when_all_desires_met() {
         let inv = HardwareInventory::nanopi_scenario();
         let suggestions = HardwareAdvisor::suggest_missing(&inv);

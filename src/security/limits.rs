@@ -72,6 +72,11 @@ pub struct SafetyConfig {
     /// Deterministic per-`(node, tool)` limits.
     #[serde(default)]
     pub limits: Vec<SafetyLimit>,
+    /// Enable **dynamic trust scoring**: a node that behaves anomalously (latency
+    /// spikes, failures) is demoted and its physical actions refused. Composes with
+    /// (does not replace) the deterministic `limits` above.
+    #[serde(default)]
+    pub dynamic_trust: bool,
 }
 
 /// Why a physical action was refused by the gate.
