@@ -38,6 +38,7 @@
 pub mod advisor;
 pub mod inventory;
 pub mod planner;
+pub mod saga;
 pub mod scheme;
 pub mod swarm;
 
