@@ -1036,6 +1036,93 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         ecosystem: "T-Deck",
         connectors: &[Connector::Bare],
     },
+    // ── Hardware-scout 2026-06-29: AI-accelerator boards ──────────────────────
+    // Edge-inference nodes (System 1 tier). These run local inference on a
+    // dedicated accelerator and expose it as a tool over the spine via EdgeAgent;
+    // see docs/V2-HARDWARE-ECOSYSTEM.md §5. SBC accelerators report a maskrom/
+    // recovery USB id used for flashing only (native runtime otherwise).
+    //
+    // ── Google Coral USB Accelerator (Edge TPU) ───────────────────────────────
+    // VID/PID VERIFIED: enumerates 0x1a6e:0x089a (Global Unichip, pre-firmware)
+    // then re-enumerates 0x18d1:0x9302 (Google) once the Edge TPU runtime loads.
+    // Keyed on the post-init Google id.
+    BoardInfo {
+        vid: 0x18d1,
+        pid: 0x9302,
+        name: "coral-usb-accelerator",
+        architecture: Some("Google Edge TPU ASIC, 4 TOPS @ 2 W (USB 3.0 coprocessor)"),
+        transport: "serial",
+        capabilities: &["edge_tpu"],
+        vendor: "Google",
+        ecosystem: "Coral",
+        connectors: &[Connector::Bare],
+    },
+    // ── Radxa ROCK 5B (Rockchip RK3588, 6 TOPS NPU) ───────────────────────────
+    // Native Linux SBC. No runtime USB-device id; maskrom/flash mode enumerates
+    // under Rockchip VID 0x2207 (PID 0x350a) — recorded for flashing only.
+    BoardInfo {
+        vid: 0x2207,
+        pid: 0x350a,
+        name: "radxa-rock-5b",
+        architecture: Some(
+            "Rockchip RK3588 octa-core (4x Cortex-A76 + 4x Cortex-A55), Mali-G610, 6 TOPS NPU (AArch64)",
+        ),
+        transport: "native",
+        capabilities: &["gpio", "i2c", "spi", "pwm", "npu", "ethernet"],
+        vendor: "Radxa",
+        ecosystem: "ROCK",
+        connectors: &[Connector::HatPi],
+    },
+    // ── NVIDIA Jetson Orin Nano Super Developer Kit ───────────────────────────
+    // 67 TOPS (Super software boost). USB recovery/serial enumerates as
+    // 0x0955:0x7020 — the SAME id as the existing `jetson-nano` entry, so VID/PID
+    // cannot uniquely distinguish them; selected by `name` (lookup_board returns
+    // the first match, jetson-nano).
+    BoardInfo {
+        vid: 0x0955,
+        pid: 0x7020,
+        name: "jetson-orin-nano",
+        architecture: Some(
+            "NVIDIA Jetson Orin Nano: 6-core Arm Cortex-A78AE + 1024-core Ampere GPU w/ tensor cores, 67 TOPS (AArch64)",
+        ),
+        transport: "native",
+        capabilities: &["gpio", "i2c", "spi", "pwm", "camera_capture", "cuda", "tensor_rt"],
+        vendor: "NVIDIA",
+        ecosystem: "Jetson",
+        connectors: &[Connector::Bare],
+    },
+    // ── M5Stack Module LLM (AXera AX630C, 3.2 TOPS NPU) ───────────────────────
+    // Stacks via M-Bus; AX630C runs Linux and does on-device KWS/ASR/LLM/TTS.
+    // Built-in CH340N USB-serial for debug (0x1a86:0x7523, shared) + RJ45 100M.
+    BoardInfo {
+        vid: 0x1a86,
+        pid: 0x7523,
+        name: "m5stack-module-llm",
+        architecture: Some(
+            "AXera AX630C dual Cortex-A53 @ 1.2 GHz + 3.2 TOPS NPU, 4 GB LPDDR4, 32 GB eMMC (CH340N; shared VID/PID)",
+        ),
+        transport: "bridge",
+        capabilities: &["npu", "ethernet", "audio_sample", "audio_output"],
+        vendor: "M5Stack",
+        ecosystem: "Module",
+        connectors: &[Connector::MBus],
+    },
+    // ── Google Coral Dev Board Mini (Edge TPU SBC) ────────────────────────────
+    // Standalone SBC form of the USB accelerator. Native Linux (Mendel). Recovery
+    // (fastboot) enumerates under 0x0525:0xa4a7 — recorded for flashing only.
+    BoardInfo {
+        vid: 0x0525,
+        pid: 0xa4a7,
+        name: "coral-dev-board-mini",
+        architecture: Some(
+            "MediaTek MT8167S quad Cortex-A35 + Google Edge TPU, 4 TOPS, 2 GB LPDDR3 (AArch64)",
+        ),
+        transport: "native",
+        capabilities: &["gpio", "i2c", "spi", "wifi", "ble", "edge_tpu", "camera_capture"],
+        vendor: "Google",
+        ecosystem: "Coral",
+        connectors: &[Connector::HatPi],
+    },
 ];
 
 /// Look up a board by USB VID and PID.
@@ -1399,6 +1486,26 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         capabilities: &["sensor_read"],
         compatible_boards: &[],
         connector: Connector::Qwiic,
+    },
+    // ── Hardware-scout 2026-06-29: AI-accelerator add-ons ─────────────────────
+    AccessoryInfo {
+        name: "rpi-ai-hat-plus-13t",
+        description: "Raspberry Pi AI HAT+ (13 TOPS) — Hailo-8L NPU over PCIe Gen3 (RPi 5)",
+        bus: "pcie",
+        default_i2c_addr: None,
+        capabilities: &["hailo"],
+        compatible_boards: &["raspberry-pi-5"],
+        connector: Connector::HatPi,
+    },
+    AccessoryInfo {
+        name: "grove-vision-ai-v2",
+        description:
+            "Seeed Grove Vision AI Module V2 — Himax WiseEye2 (Cortex-M55 + Ethos-U55 microNPU) smart camera",
+        bus: "i2c",
+        default_i2c_addr: Some(0x62),
+        capabilities: &["nn_accel", "camera_capture"],
+        compatible_boards: &[],
+        connector: Connector::Grove,
     },
 ];
 
@@ -2209,5 +2316,71 @@ mod tests {
         let qtpy = lookup_board(0x239a, 0x8143).unwrap(); // StemmaQt host
         let scd = lookup_accessory("scd41").unwrap(); // Qwiic module
         assert!(board_accepts_accessory(qtpy, scd));
+    }
+
+    // ── Hardware-scout 2026-06-29 accelerator additions ───────────────────────
+
+    #[test]
+    fn lookup_coral_usb_accelerator() {
+        let b = lookup_board(0x18d1, 0x9302).unwrap();
+        assert_eq!(b.name, "coral-usb-accelerator");
+        assert_eq!(b.vendor, "Google");
+        assert!(b.capabilities.contains(&"edge_tpu"));
+    }
+
+    #[test]
+    fn jetson_orin_nano_present_by_name() {
+        // VID/PID 0x0955:0x7020 collides with jetson-nano, so resolve by name.
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "jetson-orin-nano")
+            .unwrap();
+        assert!(b.capabilities.contains(&"tensor_rt"));
+        assert!(b.capabilities.contains(&"cuda"));
+        // The shared VID/PID still resolves to the first match (jetson-nano).
+        assert_eq!(lookup_board(0x0955, 0x7020).unwrap().name, "jetson-nano");
+    }
+
+    #[test]
+    fn rock5b_has_npu_and_ethernet() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "radxa-rock-5b")
+            .unwrap();
+        assert_eq!(b.vendor, "Radxa");
+        assert!(b.capabilities.contains(&"npu"));
+        assert!(b.capabilities.contains(&"ethernet"));
+        assert_eq!(b.transport, "native");
+    }
+
+    #[test]
+    fn m5_module_llm_has_npu() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "m5stack-module-llm")
+            .unwrap();
+        assert!(b.capabilities.contains(&"npu"));
+        assert!(b.connectors.contains(&Connector::MBus));
+    }
+
+    #[test]
+    fn accelerator_capability_coverage() {
+        // Each AI-accelerator token now has at least one board or accessory.
+        for cap in ["edge_tpu", "npu", "hailo", "nn_accel", "tensor_rt", "cuda"] {
+            let boards = boards_with_capability(cap).len();
+            let accs = accessories_with_capability(cap).len();
+            assert!(boards + accs > 0, "no hardware provides accelerator token {cap}");
+        }
+    }
+
+    #[test]
+    fn accelerator_accessories_present() {
+        let hat = lookup_accessory("rpi-ai-hat-plus-13t").unwrap();
+        assert_eq!(hat.bus, "pcie");
+        assert!(hat.capabilities.contains(&"hailo"));
+        assert!(hat.compatible_boards.contains(&"raspberry-pi-5"));
+        let grove = lookup_accessory("grove-vision-ai-v2").unwrap();
+        assert!(grove.capabilities.contains(&"nn_accel"));
+        assert_eq!(grove.connector, Connector::Grove);
     }
 }

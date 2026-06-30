@@ -5,6 +5,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Hardware registry: scout 2026-06-29 AI accelerators
+
+Stacks on the tier-1 additions below. Adds the AI-accelerator hardware from the
+scout report and wires it into deployment matching so the accelerator tokens
+resolve to a feature desire (previously inert).
+
+### Added — accelerator hardware
+
+- **Boards:** Google **Coral USB Accelerator** (`edge_tpu`, VID/PID verified),
+  **Coral Dev Board Mini** (`edge_tpu`), **Radxa ROCK 5B** (RK3588, `npu`,
+  `ethernet`), **NVIDIA Jetson Orin Nano** (`cuda` + `tensor_rt`; shares the
+  Jetson USB id, selected by `name`), **M5Stack Module LLM** (AX630C, `npu`).
+- **Accessories:** **Raspberry Pi AI HAT+ 13 TOPS** (Hailo-8L, `hailo`, PCIe,
+  RPi 5) and **Seeed Grove Vision AI Module V2** (`nn_accel`, Grove).
+
+### Added — deployment matching (`deployment::inventory`)
+
+- New **`FeatureDesire::AcceleratedInference`** — satisfied by any accelerator
+  token (`cuda`/`tensor_rt`/`npu`/`edge_tpu`/`hailo`/`kpu`/`nn_accel`), distinct
+  from host-level `EdgeInference` (which stays CPU-satisfiable). Plus
+  **`LongRangeRadio`** (`lora`), **`Localization`** (`gps`), **`Actuation`**
+  (`actuate`) — the last also makes existing LoRa boards matchable.
+- Advisor tests confirm `AcceleratedInference` resolves to an accelerator board
+  and produces a suggestion on a CPU-only host.
+
+### Notes
+
+- Regenerate `registry.json` (`cargo run --bin emit-registry -- registry/registry.json`).
+- Follow-up: blocked-PID entries (Adafruit Feather ESP32-S3, Sipeed MaixCAM
+  `kpu`) once USB IDs are confirmed; optional `Connector::Gravity`.
+
+---
+
 ## Unreleased — Hardware registry: scout 2026-06-29 tier-1 additions
 
 From the weekly hardware-scout report (`Knowledge Base/hardware-scout-2026-06-29.md`).

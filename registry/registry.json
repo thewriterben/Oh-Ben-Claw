@@ -1028,6 +1028,101 @@
       "connectors": [
         "bare"
       ]
+    },
+    {
+      "vid": 6353,
+      "pid": 37634,
+      "name": "coral-usb-accelerator",
+      "architecture": "Google Edge TPU ASIC, 4 TOPS @ 2 W (USB 3.0 coprocessor)",
+      "transport": "serial",
+      "capabilities": [
+        "edge_tpu"
+      ],
+      "vendor": "Google",
+      "ecosystem": "Coral",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 8711,
+      "pid": 13578,
+      "name": "radxa-rock-5b",
+      "architecture": "Rockchip RK3588 octa-core (4x Cortex-A76 + 4x Cortex-A55), Mali-G610, 6 TOPS NPU (AArch64)",
+      "transport": "native",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "pwm",
+        "npu",
+        "ethernet"
+      ],
+      "vendor": "Radxa",
+      "ecosystem": "ROCK",
+      "connectors": [
+        "hat_pi"
+      ]
+    },
+    {
+      "vid": 2389,
+      "pid": 28704,
+      "name": "jetson-orin-nano",
+      "architecture": "NVIDIA Jetson Orin Nano: 6-core Arm Cortex-A78AE + 1024-core Ampere GPU w/ tensor cores, 67 TOPS (AArch64)",
+      "transport": "native",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "pwm",
+        "camera_capture",
+        "cuda",
+        "tensor_rt"
+      ],
+      "vendor": "NVIDIA",
+      "ecosystem": "Jetson",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 6790,
+      "pid": 29987,
+      "name": "m5stack-module-llm",
+      "architecture": "AXera AX630C dual Cortex-A53 @ 1.2 GHz + 3.2 TOPS NPU, 4 GB LPDDR4, 32 GB eMMC (CH340N; shared VID/PID)",
+      "transport": "bridge",
+      "capabilities": [
+        "npu",
+        "ethernet",
+        "audio_sample",
+        "audio_output"
+      ],
+      "vendor": "M5Stack",
+      "ecosystem": "Module",
+      "connectors": [
+        "mbus"
+      ]
+    },
+    {
+      "vid": 1317,
+      "pid": 42151,
+      "name": "coral-dev-board-mini",
+      "architecture": "MediaTek MT8167S quad Cortex-A35 + Google Edge TPU, 4 TOPS, 2 GB LPDDR3 (AArch64)",
+      "transport": "native",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "edge_tpu",
+        "camera_capture"
+      ],
+      "vendor": "Google",
+      "ecosystem": "Coral",
+      "connectors": [
+        "hat_pi"
+      ]
     }
   ],
   "accessories": [
@@ -1376,6 +1471,31 @@
       ],
       "compatible_boards": [],
       "connector": "qwiic"
+    },
+    {
+      "name": "rpi-ai-hat-plus-13t",
+      "description": "Raspberry Pi AI HAT+ (13 TOPS) — Hailo-8L NPU over PCIe Gen3 (RPi 5)",
+      "bus": "pcie",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "hailo"
+      ],
+      "compatible_boards": [
+        "raspberry-pi-5"
+      ],
+      "connector": "hat_pi"
+    },
+    {
+      "name": "grove-vision-ai-v2",
+      "description": "Seeed Grove Vision AI Module V2 — Himax WiseEye2 (Cortex-M55 + Ethos-U55 microNPU) smart camera",
+      "bus": "i2c",
+      "default_i2c_addr": 98,
+      "capabilities": [
+        "nn_accel",
+        "camera_capture"
+      ],
+      "compatible_boards": [],
+      "connector": "grove"
     }
   ]
 }

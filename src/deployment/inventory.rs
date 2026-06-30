@@ -35,6 +35,19 @@ pub enum FeatureDesire {
     WirelessMesh,
     /// Agent persists context across sessions — requires a host with storage.
     PersistentMemory,
+    /// Agent runs inference on a dedicated AI accelerator — satisfied by any
+    /// accelerator token (`cuda`, `tensor_rt`, `npu`, `edge_tpu`, `hailo`,
+    /// `kpu`, `nn_accel`). Distinct from [`EdgeInference`], which is host-level
+    /// and can run on a CPU-only board.
+    ///
+    /// [`EdgeInference`]: FeatureDesire::EdgeInference
+    AcceleratedInference,
+    /// Agent communicates over long-range radio — requires `lora` hardware.
+    LongRangeRadio,
+    /// Agent knows its position — requires `gps` hardware.
+    Localization,
+    /// Agent drives physical actuators (servos/motors) — requires `actuate`.
+    Actuation,
     /// A custom feature desire described by a free-form string.
     Custom(String),
 }
@@ -52,6 +65,19 @@ impl FeatureDesire {
             Self::EdgeInference => &[],
             Self::WirelessMesh => &["wifi"],
             Self::PersistentMemory => &[],
+            // OR-semantics: any one accelerator token satisfies the desire.
+            Self::AcceleratedInference => &[
+                "cuda",
+                "tensor_rt",
+                "npu",
+                "edge_tpu",
+                "hailo",
+                "kpu",
+                "nn_accel",
+            ],
+            Self::LongRangeRadio => &["lora"],
+            Self::Localization => &["gps"],
+            Self::Actuation => &["actuate"],
             Self::Custom(_) => &[],
         }
     }
@@ -70,6 +96,12 @@ impl FeatureDesire {
             Self::EdgeInference => "on-device LLM inference without cloud dependency".to_string(),
             Self::WirelessMesh => "wireless P2P node mesh networking".to_string(),
             Self::PersistentMemory => "persistent conversation memory across sessions".to_string(),
+            Self::AcceleratedInference => {
+                "hardware-accelerated on-device inference (NPU/TPU/VPU/GPU)".to_string()
+            }
+            Self::LongRangeRadio => "long-range radio link (LoRa/LoRaWAN)".to_string(),
+            Self::Localization => "geospatial localization via GNSS/GPS".to_string(),
+            Self::Actuation => "physical actuation (servos, motors)".to_string(),
             Self::Custom(s) => s.clone(),
         }
     }
@@ -435,5 +467,36 @@ mod tests {
             FeatureDesire::DisplayOutput.required_capabilities(),
             &["display"]
         );
+    }
+
+    #[test]
+    fn accelerated_inference_requires_any_accelerator_token() {
+        let caps = FeatureDesire::AcceleratedInference.required_capabilities();
+        for t in ["cuda", "tensor_rt", "npu", "edge_tpu", "hailo", "kpu", "nn_accel"] {
+            assert!(caps.contains(&t), "AcceleratedInference missing token {t}");
+        }
+        // EdgeInference stays host-level (satisfiable on a CPU-only host).
+        assert!(FeatureDesire::EdgeInference
+            .required_capabilities()
+            .is_empty());
+    }
+
+    #[test]
+    fn new_radio_sense_act_desires_map_to_tokens() {
+        assert_eq!(
+            FeatureDesire::LongRangeRadio.required_capabilities(),
+            &["lora"]
+        );
+        assert_eq!(FeatureDesire::Localization.required_capabilities(), &["gps"]);
+        assert_eq!(FeatureDesire::Actuation.required_capabilities(), &["actuate"]);
+        // Every new variant has a non-empty human description.
+        for d in [
+            FeatureDesire::AcceleratedInference,
+            FeatureDesire::LongRangeRadio,
+            FeatureDesire::Localization,
+            FeatureDesire::Actuation,
+        ] {
+            assert!(!d.description().is_empty());
+        }
     }
 }
