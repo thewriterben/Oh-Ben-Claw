@@ -109,10 +109,17 @@ mod safing;
 mod safety;
 
 /// Real I2C sensor drivers (MAX17048 fuel gauge, MPU6050 IMU).
+// Under `--features camera` the I2C bus is disabled (shared SCCB pins), so the
+// sensor constructor/probe paths are intentionally unused in that build.
+#[cfg_attr(feature = "camera", allow(dead_code))]
 mod sensors;
 
 /// I2S microphone driver (loudness/RMS).
 mod audio;
+
+/// OV2640 camera driver — opt-in via `--features camera` (see CAMERA.md).
+#[cfg(feature = "camera")]
+mod camera;
 
 /// Maximum line length for incoming serial commands (bytes).
 const MAX_LINE_LEN: usize = 512;
@@ -333,6 +340,11 @@ fn main() -> anyhow::Result<()> {
     // Real I2C sensor bus (SDA=GPIO4, SCL=GPIO5). If init fails (or no sensors are
     // fitted), reads fall back to the stub so the node still boots and the reflex
     // loop still runs.
+    //
+    // Disabled when the `camera` feature is on: the OV2640's SCCB uses these same
+    // GPIO4/5 pins on this board, so the two can't share the bus. Wire the sensors
+    // to other pins if you need both.
+    #[cfg(not(feature = "camera"))]
     {
         use esp_idf_svc::hal::i2c::config::Config as I2cConfig;
         use esp_idf_svc::hal::i2c::I2cDriver;
@@ -347,6 +359,12 @@ fn main() -> anyhow::Result<()> {
                 log::warn!("I2C sensor bus init failed ({e}); sensor reads fall back to stubs")
             }
         }
+    }
+    // OV2640 camera (opt-in). Owns the SCCB on GPIO4/5 and the parallel data bus.
+    #[cfg(feature = "camera")]
+    match camera::init() {
+        Ok(()) => info!("OV2640 camera initialised"),
+        Err(e) => log::warn!("camera init failed ({e}); camera_capture falls back to stub"),
     }
     // I2S microphone (SCK=GPIO0, WS=GPIO1, SD=GPIO2). Falls back to the stub RMS if
     // init fails or no mic is fitted.
@@ -742,17 +760,21 @@ fn gpio_write(
 // ── Camera ────────────────────────────────────────────────────────────────────
 
 fn camera_capture(quality: u8, format: &str) -> anyhow::Result<String> {
-    // NOTE: Full camera capture requires the ESP-IDF camera component.
-    // Enable in sdkconfig.defaults:
-    //   CONFIG_ESP32_CAMERA=y
-    //   CONFIG_SPIRAM=y
-    //
-    // This stub returns a placeholder base64 string.
-    // Replace with actual esp_camera_fb_get() / esp_camera_fb_return() calls.
-    log::info!("camera_capture: quality={}, format={}", quality, format);
-    Ok(format!(
-        "STUB:camera_capture:quality={quality}:format={format}:base64_jpeg_data_here"
-    ))
+    #[cfg(feature = "camera")]
+    {
+        // Format/quality are baked into the driver config at init; capture returns
+        // a base64 JPEG frame from the OV2640.
+        let _ = (quality, format);
+        camera::capture_base64()
+    }
+    #[cfg(not(feature = "camera"))]
+    {
+        // Built without the `camera` feature — return the placeholder (see CAMERA.md).
+        log::info!("camera_capture stub: quality={}, format={}", quality, format);
+        Ok(format!(
+            "STUB:camera_capture:quality={quality}:format={format}:base64_jpeg_data_here"
+        ))
+    }
 }
 
 // ── Audio ─────────────────────────────────────────────────────────────────────
