@@ -25,9 +25,30 @@ log = "0.4"
 # normal dependency, or it — and its host-only deps like `filetime` — get
 # cross-compiled to the chip, which fails (espidf's newlib libc lacks
 # futimes/lutimes/UTIME_OMIT). Keep it in [build-dependencies] only.
+[features]
+# Off by default: the default build needs no PSRAM and no esp32-camera IDF
+# component. Enable with `--features camera` AFTER adding `idf_component.yml` and
+# the PSRAM sdkconfig (see CAMERA.md). On the Waveshare board the camera SCCB
+# shares pins 4/5 with the I2C sensor bus, so this feature disables that bus.
+camera = []
+
 [build-dependencies]
 embuild = "0.33"
 
 [[bin]]
 name = "obc-esp32-s3"
 path = "src/main.rs"
+
+# ── Camera component (only meaningful with `--features camera`) ──────────────────
+# esp-idf-sys pulls the esp32-camera managed component and generates Rust bindings
+# from `bindings_header` — `esp_camera.h` is NOT in esp-idf-sys's default bindings,
+# which is why the `camera_*` symbols were missing. This is a BUILD-LEVEL include
+# (not gated by the cargo feature): it pulls the component into every build. Comment
+# this block out — and the PSRAM lines in `sdkconfig.defaults` — for lean non-camera
+# builds. After changing this block, run `cargo clean` so esp-idf-sys regenerates.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp32-camera", version = "2.0.7" }
+bindings_header = "src/camera_bindings.h"
+# Bindings land in their own `esp_idf_sys::camera` module (the documented pattern
+# for this component — avoids duplicate-binding clashes with the base esp-idf set).
+bindings_module = "camera"

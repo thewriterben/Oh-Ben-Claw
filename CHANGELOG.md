@@ -5,6 +5,180 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — On-MCU Track 0 gate: host-pushable limits + rate limit (2026-06-30)
+
+The ESP32-S3 firmware's Track 0 actuator gate went from three compile-time
+constants to a real, evolvable policy — the last item its own doc comment flagged
+as pending v2.0 work.
+
+### Added — on-MCU `SafetyGate` (`firmware/obc-esp32-s3/src/safety.rs`)
+
+- A pure (`std`+`serde`) node-side mirror of the host `security::limits::SafetyGate`:
+  pin allow-list (default-deny), inclusive value range, and a **new per-pin rate
+  limit** (min interval between writes, against the `esp_timer` monotonic clock).
+- Wire-compatible `SafetyLimit` — a limit authored host-side validates identically
+  on the MCU. `apply_pushed()` adopts the `gpio_write` limit addressed to this node,
+  replacing the active policy but never silently dropping the gate.
+- 6 unit tests (default == the old constants, host tightening, rate-limit
+  block/allow, no-`gpio_write` push is a no-op, empty allow-list denies all, host
+  JSON round-trip). Gate logic independently cross-checked.
+
+### Changed — firmware integration (`firmware/obc-esp32-s3/src/main.rs`)
+
+- The gate lives in `AgentState`; **all four actuation paths** (host `gpio_write`
+  command, `reflex_tick`, the autonomous reflex loop, and the LLM edge-tool path)
+  route through the one gate — no path can bypass Track 0.
+- Boot policy reproduces the old `OUTPUT_PINS`/`0..=1` constants, so behaviour is
+  unchanged until a host pushes something stricter.
+- New **`set_limits`** command (mirrors `set_reflex_rules`): the host pushes
+  `[[safety.limit]]` over `obc/nodes/{id}/limits` to tighten the allow-list / range /
+  rate in the field with no reflash; acks the resulting active policy. Added to
+  `capabilities`. Removed the old `safety_check_gpio_write` free fn + `GPIO_VALUE_MAX`.
+- `.gitignore` added for the crate's `/target` build output.
+
+---
+
+## Unreleased — LoRa-mesh off-grid fleet + Ed25519 signed audit (2026-06-30)
+
+Built the LoRa-mesh transport out from a codec into a complete off-grid coordination
+path — real serial radio, node firmware, multi-hop flooding, and a transport-agnostic
+assignment egress — and shipped the Ed25519 asymmetric audit that was previously
+deferred. The fleet coordinator now coordinates a fleet with no WiFi and no broker,
+and stays entirely blind to which transport (MQTT or LoRa) carries its messages.
+
+### Added — Ed25519 signed audit (Accelerapp transfer F)
+
+- **`src/security/audit_sign.rs`** — `AuditSigner` (Ed25519 keypair via
+  `ed25519-dalek` v2) produces detached signatures over arbitrary bytes; `verify_hex`
+  checks them against the **public** key, so any third party can verify audit
+  integrity without holding the secret (non-repudiation). A real, audited crate —
+  deliberately not the stub-crypto the cross-pollination analysis flagged.
+- **Audit integration** (`src/security/audit.rs`) — `ActionRecord` gains an optional
+  `sig` field (`#[serde(default)]`, back-compatible); `ActionAuditor::with_signer`
+  signs each record's canonical form; `verify_signatures(path, public_hex)` audits a
+  whole log. Additive — the HMAC hash-chain is untouched.
+- `Cargo.toml`: `ed25519-dalek = { version = "2", features = ["rand_core"] }`.
+
+### Added — LoRa-mesh: off-grid fleet coordination
+
+- **RX bridge** (`src/spine/lora_mesh.rs`) — `ingest_line`/`bridge_frame` decode a
+  received `MeshFrame` heartbeat into a `fleet::NodeState` and `report` it, so the
+  auction/exploration logic runs over the mesh unchanged.
+- **TX egress** — the coordinator gains a transport-agnostic **assignment outbox**
+  (`with_assignment_outbox`/`drain_outbox`, bounded, opt-in); `tick`/`auction_tick`/
+  `assign_exploration` enqueue `(node, x, y)` intents. `broadcast_outbox` /
+  `send_assignment_frame` emit them as `MeshFrame::Assign`.
+- **Multi-hop relay** (`lora_mesh::relay`) — optional `i` (id) + `h` (hops) envelope;
+  `MeshRelay::on_receive` processes a new id once and rebroadcasts with `h-1`, drops
+  repeats (bounded dedup). Backward-compatible with bare single-hop frames; needs no
+  firmware change since the node relays opaque bytes.
+- **Serial radio** (`#[cfg(feature = "hardware")]`) — `SerialMeshRadio` (a `MeshRadio`
+  over `tokio-serial`) + `run_serial_rx`/`run_serial_rx_relay` RX loops, mirroring the
+  existing Arduino driver.
+- **Node firmware** (`firmware/lora-node/`) — a transparent USB-serial⇄LoRa byte
+  bridge on RadioLib (T-Beam / Heltec / RAK4631), plus a `SELFTEST_HEARTBEAT` mode for
+  hostless two-board bring-up.
+- **Host wiring** (`src/main.rs`, `[fleet.lora_serial]`) — opens the serial node,
+  spawns the relay RX loop, and runs a **unified assignment egress** that drains the
+  outbox once and fans each intent to every connected transport (MQTT spine *and/or*
+  LoRa mesh). Outbox auto-enables when any transport is present.
+
+### Tests
+
+- Ed25519 sign/verify round-trip, tamper + wrong-key rejection, hex round-trip.
+- LoRa: RX heartbeat→coordinator bridge; outbox→`MeshFrame::Assign` broadcast +
+  drain; relay flood/dedup/ttl-0; relayed ingest bridges + returns rebroadcast.
+
+---
+
+## Unreleased — SOTA depth, ClawCam bidirectional, Accelerapp cross-pollination (2026-06-30)
+
+A long build-out across four threads: closing the last SOTA-comparison gaps with
+production-grade implementations, making ClawCam a fully bidirectional embodied
+subsystem, importing nine patterns from the sibling Accelerapp project, and
+activating three tested-but-dormant subsystems by building real consumers.
+
+### Added — embodied depth (SOTA parity)
+
+- **Likelihood-field sensor model** (`src/navigation/sensor_model.rs`) — a chamfer
+  Euclidean distance field + Thrun §6.4 mixture; `ParticleFilter::update_scan` is
+  the real range-sensor measurement update (≈ AMCL), replacing the toy position
+  Gaussian.
+- **KLD-adaptive particle filter** (`src/navigation/particle.rs`) — Fox-2003
+  sample-size bound; the cloud grows when uncertain, shrinks when confident.
+- **Fleet task auctions** (`src/fleet`) — market-based sequential-auction
+  allocation (`auction_allocate`/`auction_tick`), globally cheaper and
+  order-independent vs per-task greedy; bids include battery eligibility.
+- **EWLS online forecaster** (`src/foresight`) — `Forecaster::with_decay` turns
+  equal-weight OLS into exponentially-weighted least squares so trends track regime
+  changes (`decay == 1.0` preserves prior behavior).
+- **HIL loop test** (`tests/embodied_hil_loop.rs`) — a ClawCam detection flows
+  through the real ingest → world memory → hazard policy → occupancy → A* detour →
+  Track 0–bounded drive, nothing mocked.
+
+### Added — ClawCam as a bidirectional embodied subsystem (`src/vision/`)
+
+- **Full perceive ingest** — converters folding ClawCam node health → `clawcam.node.*`
+  facts, audio classifications → the audio suite (`audio.clawcam:{node}`), and a
+  rolling `vision.count.{subject}` for foresight rate-trending; opt-in via
+  `[perception.clawcam_poll] poll_health/poll_audio`.
+- **Vision-driven rules** (`clawcam_rules`) — reflex (verified subject → escalate,
+  optional capture) + foresight (rising sighting rate → escalate) rule libraries,
+  live via `[perception.vision_rules]`.
+- **Close the loop** (`clawcam_actuate`) — `ClawCamActionSink` translates
+  `clawcam/cmd/*` reflex publishes into ClawCam's gated write tools (capture / arm /
+  alert) over the shared MCP bridge; wired into the reflex sink chain.
+- **Spatial fusion** (`clawcam_spatial`) — `CameraMap` + `mark_detection_hazard`
+  stamp a camera detection into the nav costmap (core; wired on demand).
+
+### Added — Accelerapp cross-pollination (nine transfers)
+
+Grounded in Accelerapp's *real* patterns, avoiding its stubs (see
+`docs/ACCELERAPP-CROSS-POLLINATION.md` for the delivered/deferred status table):
+
+- **Dynamic trust scoring** (`src/security/trust.rs`) — per-node behavioral score
+  (rolling-mean + 3σ anomaly, failure decay, recovery) → `TrustLevel`; `gate()`
+  tightens physical-action approval as trust falls. Wired into `ApprovalManager::decide`
+  and the agent dispatch (`[safety] dynamic_trust`).
+- **Hardware harvest** (`src/peripherals/registry.rs`) — `mesh`/`ibutton`/`psram`
+  tokens, RAK4631 Meshtastic node, board enrichment.
+- **LoRa-mesh transport** (`src/spine/lora_mesh.rs`) — compact fleet-frame codec +
+  pluggable `MeshRadio`, bridging to the fleet coordinator (off-grid, no broker).
+- **No-op-fallback exporter** (`src/observability`) — `ReconcilingExporter` buffers
+  metrics offline, reconciles on reconnect; env-gated loop in `main`.
+- **Node self-test + MockNode** (`src/peripherals/selftest.rs`) — bring-up contract
+  + host-side simulator; composed end-to-end in `tests/offgrid_fleet_loop.rs`.
+- **Saga rollback** (`src/deployment/saga.rs`) — compensating-action unwind for
+  multi-node deployment.
+- **Vendor allowlist** (`src/peripherals/onboarding.rs`), **model registry**
+  (`src/providers/model_registry.rs`), **firmware scaffold**
+  (`src/deployment/firmware_scaffold.rs`).
+- **F** Ed25519 asymmetric audit — now shipped (see the LoRa-mesh + signed-audit
+  section above); the earlier offline-cache block was lifted by adding
+  `ed25519-dalek`.
+
+### Added — consumers for dormant subsystems
+
+- **`ApprovalManager` activated in the live dispatch** (`src/agent/mod.rs`) — every
+  tool call now gated by autonomy level + auto-approve + grants (+ trust) via
+  `approval_authorize`/`decide`; `main` attaches it. Default `Full` = behavior-
+  neutral; supervised/manual now actually enforce.
+- **`VendorAllowlist` → doctor** — `check_hardware_onboarding` flags configured
+  boards from unrecognized vendors.
+- **`ModelRegistry` → edge** — `EdgeAgentBuilder::prefer_local()` selects the
+  on-device model first over the fallback chain.
+- **Firmware scaffold → deployment planner** — `DeploymentScheme::firmware_sketches()`
+  emits a starter sketch per flashable MCU node.
+
+### Docs
+
+- README rewritten around the embodied control stack; `docs/EMBODIED-ARCHITECTURE.md`
+  gained a ClawCam bidirectional section; `docs/ACCELERAPP-CROSS-POLLINATION.md`
+  banked with delivered-vs-deferred status; ClawCam `NEXT_PHASE_PLAN.md` records the
+  OBC-side integration in lockstep.
+
+---
+
 ## Unreleased — Hardware registry: scout 2026-06-29 AI accelerators
 
 Stacks on the tier-1 additions below. Adds the AI-accelerator hardware from the
