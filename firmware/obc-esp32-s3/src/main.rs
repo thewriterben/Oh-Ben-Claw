@@ -111,6 +111,9 @@ mod safety;
 /// Real I2C sensor drivers (MAX17048 fuel gauge, MPU6050 IMU).
 mod sensors;
 
+/// I2S microphone driver (loudness/RMS).
+mod audio;
+
 /// Maximum line length for incoming serial commands (bytes).
 const MAX_LINE_LEN: usize = 512;
 
@@ -191,6 +194,9 @@ struct AgentState {
     /// Real I2C sensor bus, if one initialised at boot. `None` ⇒ sensor reads fall
     /// back to the stub, so the node still boots and reacts without sensors wired.
     sensors: Option<sensors::SensorBus>,
+    /// I2S microphone, if one initialised at boot. `None` ⇒ `audio_sample` falls
+    /// back to the stub RMS.
+    audio: Option<audio::AudioMic>,
 }
 
 impl AgentState {
@@ -203,6 +209,7 @@ impl AgentState {
             reflex: reflex::ReflexEngine::default(),
             safety: safety::SafetyGate::with_output_pins(OUTPUT_PINS),
             sensors: None,
+            audio: None,
         }
     }
 
@@ -339,6 +346,29 @@ fn main() -> anyhow::Result<()> {
             Err(e) => {
                 log::warn!("I2C sensor bus init failed ({e}); sensor reads fall back to stubs")
             }
+        }
+    }
+    // I2S microphone (SCK=GPIO0, WS=GPIO1, SD=GPIO2). Falls back to the stub RMS if
+    // init fails or no mic is fitted.
+    {
+        use esp_idf_svc::hal::i2s::{config, I2sDriver};
+        let i2s_cfg = config::StdConfig::philips(
+            audio::SAMPLE_RATE_HZ,
+            config::DataBitWidth::Bits32,
+        );
+        match I2sDriver::new_std_rx(
+            peripherals.i2s0,
+            &i2s_cfg,
+            pins.gpio0,                                            // BCLK / SCK
+            pins.gpio2,                                            // DIN / SD
+            Option::<esp_idf_svc::hal::gpio::AnyIOPin>::None,      // no MCLK
+            pins.gpio1,                                            // WS / LRCLK
+        ) {
+            Ok(drv) => {
+                agent_state.audio = Some(audio::AudioMic::new(drv));
+                info!("I2S mic ready (SCK=0, WS=1, SD=2)");
+            }
+            Err(e) => log::warn!("I2S mic init failed ({e}); audio_sample falls back to stub"),
         }
     }
     // Load the built-in safing rules so the node self-protects from boot, even
@@ -604,7 +634,7 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                 .get("raw")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            audio_sample(duration_ms, raw)
+            audio_sample(&mut state.audio, duration_ms, raw)
         }
 
         "sensor_read" => {
@@ -727,21 +757,22 @@ fn camera_capture(quality: u8, format: &str) -> anyhow::Result<String> {
 
 // ── Audio ─────────────────────────────────────────────────────────────────────
 
-fn audio_sample(duration_ms: u64, raw: bool) -> anyhow::Result<String> {
-    // NOTE: Full audio sampling requires the ESP-IDF I2S driver.
-    // Enable in sdkconfig.defaults:
-    //   CONFIG_I2S_ENABLE=y
-    //
-    // This stub returns a placeholder RMS value.
-    // Replace with actual i2s_read() calls.
-    log::info!("audio_sample: duration_ms={}, raw={}", duration_ms, raw);
+fn audio_sample(
+    mic: &mut Option<audio::AudioMic>,
+    duration_ms: u64,
+    raw: bool,
+) -> anyhow::Result<String> {
     if raw {
-        Ok(format!(
+        // Streaming raw PCM over the serial link is impractical; keep the stub.
+        return Ok(format!(
             "STUB:audio_sample:duration_ms={duration_ms}:raw_pcm_data_here"
-        ))
-    } else {
-        Ok("0.05".to_string()) // Placeholder RMS level
+        ));
     }
+    if let Some(m) = mic.as_mut() {
+        let level = m.rms(duration_ms)?;
+        return Ok(format!("{level:.4}"));
+    }
+    Ok("0.05".to_string()) // stub RMS when no mic is fitted
 }
 
 // ── Sensors ───────────────────────────────────────────────────────────────────
@@ -861,6 +892,7 @@ fn agent_chat(message: &str, state: &mut AgentState) -> anyhow::Result<String> {
             let tool_result = execute_local_tool(
                 &mut state.safety,
                 &mut state.sensors,
+                &mut state.audio,
                 now_ms(),
                 &tool_call.function.name,
                 &args,
@@ -901,6 +933,7 @@ fn agent_chat(message: &str, state: &mut AgentState) -> anyhow::Result<String> {
 fn execute_local_tool(
     gate: &mut safety::SafetyGate,
     sensors: &mut Option<sensors::SensorBus>,
+    audio: &mut Option<audio::AudioMic>,
     now_ms: u64,
     name: &str,
     args: &serde_json::Value,
@@ -934,7 +967,7 @@ fn execute_local_tool(
                 .unwrap_or(AUDIO_DURATION_DEFAULT_MS)
                 .clamp(AUDIO_DURATION_MIN_MS, AUDIO_DURATION_MAX_MS);
             let raw = args.get("raw").and_then(|v| v.as_bool()).unwrap_or(false);
-            audio_sample(dur, raw)
+            audio_sample(audio, dur, raw)
         }
         "sensor_read" => {
             let sensor = args
