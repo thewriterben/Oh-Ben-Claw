@@ -72,6 +72,8 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 argon2 = { version = "0.5", features = ["std"] }
+# Ed25519 detached signatures for the Track 0 audit (asymmetric, third-party verifiable)
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 
 # Concurrency
 parking_lot = "0.12"
