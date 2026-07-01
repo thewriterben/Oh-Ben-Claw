@@ -69,13 +69,24 @@ Quick sanity check **without** the host: open the port in any serial monitor at
 print that exact line. That round-trip proves the radio link and the framing before
 you involve the fleet coordinator.
 
+Even simpler two-board bring-up: set `#define SELFTEST_HEARTBEAT 1` in the sketch
+and flash both boards. Each transmits a heartbeat every 5 s on its own; each should
+see the other's `{"t":"hb","n":"selftest",...}` line appear on its serial monitor.
+No typing, no host — if the lines cross, your radio params and wiring are good. Set
+it back to `0` for normal operation.
+
 ## What this is / isn't
 
 * **Is:** a minimal, portable byte-relay matching OBC's serial framing; a real
   RadioLib radio driver for three common boards.
 * **Isn't:** a Meshtastic-protobuf client. It speaks OBC's own compact `MeshFrame`
-  codec, not the Meshtastic packet format. It also does no mesh **routing** — it's a
-  single-hop broadcast bridge. Multi-hop relaying, if needed, is a host-side concern
-  (rebroadcast with a TTL) layered on top of this transport.
+  codec, not the Meshtastic packet format. The node itself does no routing — it's a
+  single-hop broadcast bridge and stays a dumb byte relay.
+* **Multi-hop is host-side.** OBC floods frames across multiple hops by wrapping them
+  with two optional envelope keys — `i` (message id) and `h` (remaining hops). A host
+  that hears a new id ingests it and rebroadcasts with `h-1`; a repeat id is dropped
+  (`spine::lora_mesh::relay::MeshRelay`). Because the node relays opaque bytes, this
+  works with **no firmware change** — the envelope just rides inside the frame. Set
+  the hop count host-side via `[fleet.lora_serial] relay_hops` (default 3; 0 disables).
 * **Untested by its author.** Mirrors RadioLib 6.x's documented API and OBC's
   framing; pin maps and radio params are starting points to verify on your bench.
