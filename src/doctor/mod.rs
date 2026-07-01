@@ -205,8 +205,46 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
 
     // ── Subsystem suites & safing coherence ──────────────────────────────────
     check_subsystems(config, &mut results);
+    check_hardware_onboarding(config, &mut results);
 
     results
+}
+
+/// Track 0 onboarding hygiene: every configured peripheral board should be a known,
+/// trusted vendor. A board the registry doesn't recognize has no capability data and
+/// an unverified vendor — flagged so an unknown/typo'd board isn't silently trusted.
+fn check_hardware_onboarding(config: &Config, results: &mut Vec<DiagResult>) {
+    use crate::peripherals::onboarding::{OnboardDecision, VendorAllowlist};
+    use crate::peripherals::registry::known_boards;
+
+    if !config.peripherals.enabled || config.peripherals.boards.is_empty() {
+        return;
+    }
+    let allow = VendorAllowlist::from_known_boards();
+    for b in &config.peripherals.boards {
+        match known_boards().iter().find(|kb| kb.name == b.board.as_str()) {
+            Some(kb) => match allow.decide(kb.vid) {
+                OnboardDecision::AutoTrust => results.push(DiagResult::ok(
+                    "hardware",
+                    &format!("Board '{}' vendor '{}' is trusted", b.board, kb.vendor),
+                )),
+                OnboardDecision::Quarantine => results.push(DiagResult::warn(
+                    "hardware",
+                    &format!(
+                        "Board '{}' vendor {:#06x} is not allowlisted — quarantine",
+                        b.board, kb.vid
+                    ),
+                )),
+            },
+            None => results.push(DiagResult::warn(
+                "hardware",
+                &format!(
+                    "Board '{}' is not in the hardware registry — vendor unverified, no capability data",
+                    b.board
+                ),
+            )),
+        }
+    }
 }
 
 /// Validate that the capability suites and the safing layer are configured
@@ -407,6 +445,30 @@ mod tests {
     fn run_returns_ok() {
         let config = Config::default();
         assert!(run(&config).is_ok());
+    }
+
+    #[test]
+    fn hardware_onboarding_flags_unknown_boards() {
+        use crate::config::PeripheralBoardConfig;
+        let board = |name: &str| PeripheralBoardConfig {
+            board: name.to_string(),
+            transport: "serial".to_string(),
+            path: None,
+            baud: 115_200,
+            node_id: None,
+        };
+        let mut config = Config::default();
+        config.peripherals.enabled = true;
+        config.peripherals.boards = vec![board("esp32-c3"), board("frobnicator-9000")];
+        let results = diagnose(&config);
+        // a registry board is a trusted vendor
+        assert!(results.iter().any(|r| r.severity == Severity::Ok
+            && r.message.contains("esp32-c3")
+            && r.message.contains("trusted")));
+        // an unrecognized board is flagged
+        assert!(results.iter().any(|r| r.severity == Severity::Warn
+            && r.message.contains("frobnicator-9000")
+            && r.message.contains("not in the hardware registry")));
     }
 
     #[test]
