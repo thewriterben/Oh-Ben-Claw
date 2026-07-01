@@ -1763,10 +1763,18 @@ pub struct LoraSerialConfig {
     /// Baud rate; must match the node firmware (`SERIAL_BAUD`, default 115200).
     #[serde(default = "default_lora_baud")]
     pub baud: u32,
+    /// Multi-hop flooding: max hops an originated assignment may travel. `0` sends
+    /// bare single-hop frames; `3` (default) lets messages relay across the mesh.
+    #[serde(default = "default_relay_hops")]
+    pub relay_hops: u8,
 }
 
 fn default_lora_baud() -> u32 {
     115_200
+}
+
+fn default_relay_hops() -> u8 {
+    3
 }
 
 /// The root configuration for Oh-Ben-Claw.

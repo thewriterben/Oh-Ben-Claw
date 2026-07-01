@@ -57,6 +57,13 @@ static const size_t MAX_FRAME = 230;
 
 static const unsigned long SERIAL_BAUD = 115200;  // must match SerialMeshRadio baud
 
+// Bench bring-up: set to 1 to periodically self-transmit a heartbeat frame over
+// LoRa — no host needed. Flash two boards with this on and each should print the
+// other's heartbeat line on its serial monitor, proving the radio link + framing.
+// Leave at 0 for normal operation.
+#define SELFTEST_HEARTBEAT 0
+static const unsigned long SELFTEST_PERIOD_MS = 5000;
+
 // ─── Board pin maps + radio instance ────────────────────────────────────────────
 #if defined(BOARD_TBEAM_SX1276)
   // T-Beam v1.x: SX1276 on the SPI bus.  NSS=18 DIO0=26 RST=23 DIO1=33
@@ -109,6 +116,22 @@ void setup() {
 void loop() {
   pumpSerialToRadio();
   pumpRadioToSerial();
+  maybeSelfTest();
+}
+
+// Bench self-test: periodically originate a heartbeat over LoRa so two boards can
+// be validated end-to-end without the OBC host. Compiled out unless enabled.
+void maybeSelfTest() {
+#if SELFTEST_HEARTBEAT
+  static unsigned long last = 0;
+  unsigned long nowMs = millis();
+  if (nowMs - last >= SELFTEST_PERIOD_MS) {
+    last = nowMs;
+    static const char hb[] = "{\"t\":\"hb\",\"n\":\"selftest\",\"m\":\"idle\"}";
+    transmitFrame((const uint8_t*)hb, sizeof(hb) - 1);
+    Serial.println(F("[selftest] heartbeat transmitted"));
+  }
+#endif
 }
 
 // Drain USB serial; on each complete line, transmit its bytes over LoRa.
