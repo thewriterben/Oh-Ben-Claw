@@ -5,6 +5,59 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — LoRa-mesh off-grid fleet + Ed25519 signed audit (2026-06-30)
+
+Built the LoRa-mesh transport out from a codec into a complete off-grid coordination
+path — real serial radio, node firmware, multi-hop flooding, and a transport-agnostic
+assignment egress — and shipped the Ed25519 asymmetric audit that was previously
+deferred. The fleet coordinator now coordinates a fleet with no WiFi and no broker,
+and stays entirely blind to which transport (MQTT or LoRa) carries its messages.
+
+### Added — Ed25519 signed audit (Accelerapp transfer F)
+
+- **`src/security/audit_sign.rs`** — `AuditSigner` (Ed25519 keypair via
+  `ed25519-dalek` v2) produces detached signatures over arbitrary bytes; `verify_hex`
+  checks them against the **public** key, so any third party can verify audit
+  integrity without holding the secret (non-repudiation). A real, audited crate —
+  deliberately not the stub-crypto the cross-pollination analysis flagged.
+- **Audit integration** (`src/security/audit.rs`) — `ActionRecord` gains an optional
+  `sig` field (`#[serde(default)]`, back-compatible); `ActionAuditor::with_signer`
+  signs each record's canonical form; `verify_signatures(path, public_hex)` audits a
+  whole log. Additive — the HMAC hash-chain is untouched.
+- `Cargo.toml`: `ed25519-dalek = { version = "2", features = ["rand_core"] }`.
+
+### Added — LoRa-mesh: off-grid fleet coordination
+
+- **RX bridge** (`src/spine/lora_mesh.rs`) — `ingest_line`/`bridge_frame` decode a
+  received `MeshFrame` heartbeat into a `fleet::NodeState` and `report` it, so the
+  auction/exploration logic runs over the mesh unchanged.
+- **TX egress** — the coordinator gains a transport-agnostic **assignment outbox**
+  (`with_assignment_outbox`/`drain_outbox`, bounded, opt-in); `tick`/`auction_tick`/
+  `assign_exploration` enqueue `(node, x, y)` intents. `broadcast_outbox` /
+  `send_assignment_frame` emit them as `MeshFrame::Assign`.
+- **Multi-hop relay** (`lora_mesh::relay`) — optional `i` (id) + `h` (hops) envelope;
+  `MeshRelay::on_receive` processes a new id once and rebroadcasts with `h-1`, drops
+  repeats (bounded dedup). Backward-compatible with bare single-hop frames; needs no
+  firmware change since the node relays opaque bytes.
+- **Serial radio** (`#[cfg(feature = "hardware")]`) — `SerialMeshRadio` (a `MeshRadio`
+  over `tokio-serial`) + `run_serial_rx`/`run_serial_rx_relay` RX loops, mirroring the
+  existing Arduino driver.
+- **Node firmware** (`firmware/lora-node/`) — a transparent USB-serial⇄LoRa byte
+  bridge on RadioLib (T-Beam / Heltec / RAK4631), plus a `SELFTEST_HEARTBEAT` mode for
+  hostless two-board bring-up.
+- **Host wiring** (`src/main.rs`, `[fleet.lora_serial]`) — opens the serial node,
+  spawns the relay RX loop, and runs a **unified assignment egress** that drains the
+  outbox once and fans each intent to every connected transport (MQTT spine *and/or*
+  LoRa mesh). Outbox auto-enables when any transport is present.
+
+### Tests
+
+- Ed25519 sign/verify round-trip, tamper + wrong-key rejection, hex round-trip.
+- LoRa: RX heartbeat→coordinator bridge; outbox→`MeshFrame::Assign` broadcast +
+  drain; relay flood/dedup/ttl-0; relayed ingest bridges + returns rebroadcast.
+
+---
+
 ## Unreleased — SOTA depth, ClawCam bidirectional, Accelerapp cross-pollination (2026-06-30)
 
 A long build-out across four threads: closing the last SOTA-comparison gaps with
@@ -67,9 +120,9 @@ Grounded in Accelerapp's *real* patterns, avoiding its stubs (see
 - **Vendor allowlist** (`src/peripherals/onboarding.rs`), **model registry**
   (`src/providers/model_registry.rs`), **firmware scaffold**
   (`src/deployment/firmware_scaffold.rs`).
-- Deferred honestly: **F** Ed25519 asymmetric audit — integrity half already shipped
-  (HMAC-chained audit); asymmetric signing blocked (no signing crate in the offline
-  cache).
+- **F** Ed25519 asymmetric audit — now shipped (see the LoRa-mesh + signed-audit
+  section above); the earlier offline-cache block was lifted by adding
+  `ed25519-dalek`.
 
 ### Added — consumers for dormant subsystems
 
