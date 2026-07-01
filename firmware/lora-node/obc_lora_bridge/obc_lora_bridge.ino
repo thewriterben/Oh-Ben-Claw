@@ -1,0 +1,163 @@
+// obc_lora_bridge — OBC LoRa-mesh node firmware
+// ================================================
+// A transparent USB-serial <-> LoRa-radio bridge. This node is a *dumb modem*:
+// it relays opaque bytes in both directions and knows nothing about their meaning.
+// All mesh semantics (heartbeats, assignments, the fleet auction) live on the OBC
+// host, which talks to this node through `src/spine/lora_mesh.rs::SerialMeshRadio`.
+//
+// Wire protocol (must match the host codec in src/spine/lora_mesh.rs):
+//   * Host -> node : one newline-terminated line per frame on USB serial.
+//                    Each line is a compact JSON MeshFrame, e.g.
+//                    {"t":"hb","n":"rover-a","x":1.0,"y":2.0,"b":0.9,"m":"explore"}
+//                    The node transmits the line's bytes (minus the '\n') over LoRa.
+//   * Node -> host : for each LoRa packet received, the node writes the payload
+//                    bytes followed by '\n' to USB serial. The host's RX loop
+//                    (`run_serial_rx`) decodes each line and bridges it into the
+//                    fleet Coordinator.
+//
+// The node never parses the JSON — it only moves bytes. That keeps the firmware
+// tiny and lets the frame format evolve host-side without reflashing radios.
+//
+// Radio library: RadioLib 6.x (https://github.com/jgromes/RadioLib). Install via
+// the Arduino Library Manager ("RadioLib" by Jan Gromes). RadioLib abstracts the
+// SX127x (T-Beam / Heltec V2) and SX126x (RAK4631 / newer T-Beam Supreme) chips
+// behind one API, so this single sketch covers all three target boards — pick your
+// board with the #define below.
+//
+// STATUS: reference firmware. This has NOT been compiled or flashed by its author;
+// it mirrors RadioLib's documented 6.x API and OBC's serial framing. Treat pin maps
+// and radio params as a starting point — verify against your board's schematic and
+// your regulatory region before transmitting.
+
+#include <RadioLib.h>
+
+// ─── Board selection ────────────────────────────────────────────────────────────
+// Uncomment exactly one. Pin maps below are the common community values; confirm
+// against your specific board revision.
+#define BOARD_TBEAM_SX1276      // LilyGO T-Beam v1.x (SX1276, 433/868/915)
+// #define BOARD_HELTEC_V2_SX1276  // Heltec WiFi LoRa 32 v2 (SX1276)
+// #define BOARD_RAK4631_SX1262    // RAK4631 / WisBlock (SX1262)
+
+// ─── Radio parameters ───────────────────────────────────────────────────────────
+// FREQUENCY MUST MATCH your host LoraMeshConfig.freq_mhz AND your region's rules.
+// US ISM = 915.0 MHz; EU868 = 868.0 MHz. Bandwidth/SF/CR are a long-range default
+// (matches typical Meshtastic "LongFast"-ish reach); they must be identical on
+// every node in the mesh or they will not hear each other.
+static const float   RADIO_FREQ_MHZ = 915.0;   // <-- set to your region
+static const float   RADIO_BW_KHZ   = 125.0;   // bandwidth
+static const uint8_t RADIO_SF        = 10;      // spreading factor (7..12)
+static const uint8_t RADIO_CR        = 5;       // coding rate 4/5..4/8 -> 5..8
+static const uint8_t RADIO_SYNCWORD  = 0x2B;    // private mesh sync word
+static const int8_t  RADIO_POWER_DBM = 17;      // TX power (respect regional EIRP)
+static const uint16_t RADIO_PREAMBLE = 8;
+
+// Hard cap on a single frame's payload. Must be <= host LoraMeshConfig.max_payload
+// (230). Lines longer than this are dropped rather than truncated on-air.
+static const size_t MAX_FRAME = 230;
+
+static const unsigned long SERIAL_BAUD = 115200;  // must match SerialMeshRadio baud
+
+// ─── Board pin maps + radio instance ────────────────────────────────────────────
+#if defined(BOARD_TBEAM_SX1276)
+  // T-Beam v1.x: SX1276 on the SPI bus.  NSS=18 DIO0=26 RST=23 DIO1=33
+  SX1276 radio = new Module(18, 26, 23, 33);
+#elif defined(BOARD_HELTEC_V2_SX1276)
+  // Heltec WiFi LoRa 32 v2: NSS=18 DIO0=26 RST=14 DIO1=35
+  SX1276 radio = new Module(18, 26, 14, 35);
+#elif defined(BOARD_RAK4631_SX1262)
+  // RAK4631 WisBlock: NSS=42 DIO1=47 RST=38 BUSY=46
+  SX1262 radio = new Module(42, 47, 38, 46);
+#else
+  #error "Select a board: define one of BOARD_TBEAM_SX1276 / BOARD_HELTEC_V2_SX1276 / BOARD_RAK4631_SX1262"
+#endif
+
+// ─── RX interrupt plumbing ──────────────────────────────────────────────────────
+// RadioLib fires this ISR when a packet lands. We only set a flag; the actual read
+// happens in loop() at task level (reading SPI inside an ISR is unsafe).
+volatile bool packetReady = false;
+
+#if defined(ESP32) || defined(ESP8266)
+  ICACHE_RAM_ATTR
+#endif
+void onPacketReceived() {
+  packetReady = true;
+}
+
+// ─── Host -> node line assembly ─────────────────────────────────────────────────
+static char   lineBuf[MAX_FRAME + 1];
+static size_t lineLen = 0;
+static bool   lineOverflow = false;
+
+void setup() {
+  Serial.begin(SERIAL_BAUD);
+  while (!Serial && millis() < 3000) { /* wait for USB CDC on native-USB boards */ }
+
+  int state = radio.begin(RADIO_FREQ_MHZ, RADIO_BW_KHZ, RADIO_SF, RADIO_CR,
+                          RADIO_SYNCWORD, RADIO_POWER_DBM, RADIO_PREAMBLE);
+  if (state != RADIOLIB_ERR_NONE) {
+    // Report the failure on serial and halt — a mis-inited radio is worse than none.
+    Serial.print(F("{\"t\":\"err\",\"n\":\"lora-node\",\"m\":\"radio_init "));
+    Serial.print(state);
+    Serial.println(F("\"}"));
+    while (true) { delay(1000); }
+  }
+
+  radio.setPacketReceivedAction(onPacketReceived);  // RadioLib 6.x API
+  radio.startReceive();
+}
+
+void loop() {
+  pumpSerialToRadio();
+  pumpRadioToSerial();
+}
+
+// Drain USB serial; on each complete line, transmit its bytes over LoRa.
+void pumpSerialToRadio() {
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (lineLen > 0 && !lineOverflow) {
+        transmitFrame((const uint8_t*)lineBuf, lineLen);
+      }
+      lineLen = 0;
+      lineOverflow = false;
+    } else if (lineLen < MAX_FRAME) {
+      lineBuf[lineLen++] = c;
+    } else {
+      // Line exceeds a single LoRa frame — drop it rather than fragment on-air.
+      lineOverflow = true;
+    }
+  }
+}
+
+// Half-duplex TX: stop RX, send, resume RX. transmit() is blocking, which is fine
+// for the low frame rate a fleet heartbeat/assignment stream produces.
+void transmitFrame(const uint8_t* data, size_t len) {
+  int state = radio.transmit((uint8_t*)data, len);
+  if (state != RADIOLIB_ERR_NONE) {
+    Serial.print(F("{\"t\":\"err\",\"n\":\"lora-node\",\"m\":\"tx "));
+    Serial.print(state);
+    Serial.println(F("\"}"));
+  }
+  radio.startReceive();  // return to listening after any TX
+}
+
+// On the ISR flag, read the packet and emit it to the host as one newline-framed
+// line. readData null-terminates the buffer, so we can write it as a C string.
+void pumpRadioToSerial() {
+  if (!packetReady) return;
+  packetReady = false;
+
+  uint8_t buf[MAX_FRAME + 1];
+  int len = radio.getPacketLength();
+  if (len <= 0 || (size_t)len > MAX_FRAME) {
+    radio.startReceive();
+    return;
+  }
+  int state = radio.readData(buf, len);
+  if (state == RADIOLIB_ERR_NONE) {
+    Serial.write(buf, len);
+    Serial.write('\n');
+  }
+  radio.startReceive();  // re-arm for the next packet
+}
