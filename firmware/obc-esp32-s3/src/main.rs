@@ -105,6 +105,9 @@ mod reflex;
 /// On-MCU safing mirror (Phase 18) — built-in battery self-protection.
 mod safing;
 
+/// On-MCU Track 0 safety gate — deterministic, host-pushable actuator limits.
+mod safety;
+
 /// Maximum line length for incoming serial commands (bytes).
 const MAX_LINE_LEN: usize = 512;
 
@@ -180,6 +183,8 @@ struct AgentState {
     wifi_password: String,
     /// On-MCU reflex engine (System 1), populated from host-pushed rules.
     reflex: reflex::ReflexEngine,
+    /// On-MCU Track 0 gate for actuator writes (default-deny; host-pushable).
+    safety: safety::SafetyGate,
 }
 
 impl AgentState {
@@ -190,6 +195,7 @@ impl AgentState {
             wifi_ssid: String::new(),
             wifi_password: String::new(),
             reflex: reflex::ReflexEngine::default(),
+            safety: safety::SafetyGate::with_output_pins(OUTPUT_PINS),
         }
     }
 
@@ -409,7 +415,7 @@ fn main() -> anyhow::Result<()> {
                 let mut error: Option<String> = None;
                 if let reflex::Action::GpioWrite { pin, value, .. } = &fired.action {
                     // Safety-gated local actuation (Track 0).
-                    match gpio_write(*pin as i32, *value as u64) {
+                    match gpio_write(&mut agent_state.safety, *pin as i32, *value as u64, now) {
                         Ok(()) => applied = true,
                         Err(e) => error = Some(e.to_string()),
                     }
@@ -446,6 +452,8 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                     {"name": "camera_capture", "description": "Capture a JPEG image from the OV2640 camera."},
                     {"name": "audio_sample", "description": "Sample audio from the I2S microphone."},
                     {"name": "sensor_read", "description": "Read a value from an I2C/SPI sensor."},
+                    {"name": "set_reflex_rules", "description": "Push the on-MCU reflex (System 1) rule set."},
+                    {"name": "set_limits", "description": "Push the Track 0 actuator safety limits (allow-list, range, rate)."},
                     {"name": "agent_chat", "description": "Chat with the on-device LLM agent."},
                     {"name": "agent_config", "description": "Configure WiFi and LLM settings."},
                     {"name": "agent_clear", "description": "Clear the agent conversation history."}
@@ -469,8 +477,27 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
         "gpio_write" => {
             let pin = req.args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let value = req.args.get("value").and_then(|v| v.as_u64()).unwrap_or(0);
-            gpio_write(pin, value)?;
+            gpio_write(&mut state.safety, pin, value, now_ms())?;
             Ok("done".into())
+        }
+
+        // Track 0: host pushes this node's deterministic actuator limits (mirror of
+        // the host `[[safety.limit]]` set). Retained on `obc/nodes/{id}/limits`.
+        // Tightens the boot default-deny policy in the field with no reflash.
+        "set_limits" => {
+            let limits: Vec<safety::SafetyLimit> = serde_json::from_value(
+                req.args.get("limits").cloned().unwrap_or(serde_json::json!([])),
+            )?;
+            let applied = state.safety.apply_pushed(limits, NODE_ID);
+            let policy = state.safety.policy();
+            Ok(serde_json::json!({
+                "applied": applied,
+                "allowed_pins": policy.allowed_pins,
+                "value_min": policy.value_min,
+                "value_max": policy.value_max,
+                "min_interval_ms": policy.min_interval_ms,
+            })
+            .to_string())
         }
 
         // Phase 18: host pushes this node's reflex rule set (mirror of the host
@@ -509,7 +536,7 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                 let mut applied = false;
                 let mut error: Option<String> = None;
                 if let reflex::Action::GpioWrite { pin, value, .. } = &f.action {
-                    match gpio_write(*pin as i32, *value as u64) {
+                    match gpio_write(&mut state.safety, *pin as i32, *value as u64, now_ms) {
                         Ok(()) => applied = true,
                         Err(e) => error = Some(e.to_string()),
                     }
@@ -634,33 +661,22 @@ fn gpio_read(pin: i32) -> anyhow::Result<u32> {
     Ok(level as u32)
 }
 
-/// Maximum permitted GPIO output level (digital high). Track 0 deterministic limit.
-const GPIO_VALUE_MAX: u64 = 1;
-
-/// Deterministic, model-independent safety gate for actuator writes (Track 0).
+/// Drive a GPIO pin, gated by the Track 0 [`safety::SafetyGate`].
 ///
 /// Enforced on the MCU itself, so a compromised host, a poisoned skill, or a
-/// hallucinated tool call still cannot drive a pin outside policy. Default-deny:
-/// only pins configured as outputs (`OUTPUT_PINS`) may be written, and only to a
-/// valid digital level.
-///
-/// NOTE (v2.0 Track 0): the allow-list and value range will become NVS-backed
-/// and pushed from the host over the retained `obc/nodes/{id}/limits` topic; a
-/// rate limit (min interval) lands with a monotonic-clock source. For now the
-/// limits are compile-time constants mirroring the boot output-pin set.
-fn safety_check_gpio_write(pin: i32, value: u64) -> anyhow::Result<()> {
-    if !OUTPUT_PINS.contains(&pin) {
-        anyhow::bail!("safety: pin {} not in output allow-list", pin);
-    }
-    if value > GPIO_VALUE_MAX {
-        anyhow::bail!("safety: value {} out of range (max {})", value, GPIO_VALUE_MAX);
-    }
-    Ok(())
-}
-
-fn gpio_write(pin: i32, value: u64) -> anyhow::Result<()> {
+/// hallucinated tool call still cannot drive a pin outside policy. The gate is
+/// default-deny (boot policy = the `OUTPUT_PINS` allow-list, digital range 0..=1)
+/// and can be tightened in the field by a host-pushed limit set (`set_limits`),
+/// including a per-pin rate limit. `now_ms` is the monotonic clock the rate limit
+/// measures against.
+fn gpio_write(
+    gate: &mut safety::SafetyGate,
+    pin: i32,
+    value: u64,
+    now_ms: u64,
+) -> anyhow::Result<()> {
     // Track 0: refuse out-of-policy actuator commands BEFORE touching hardware.
-    safety_check_gpio_write(pin, value)?;
+    gate.check(pin as i64, value as i64, now_ms)?;
     let ret = unsafe { esp_idf_svc::sys::gpio_set_level(pin, value as u32) };
     if ret != esp_idf_svc::sys::ESP_OK {
         anyhow::bail!("gpio_set_level failed for pin {} with error {}", pin, ret);
@@ -800,7 +816,8 @@ fn agent_chat(message: &str, state: &mut AgentState) -> anyhow::Result<String> {
             let args: serde_json::Value =
                 serde_json::from_str(&tool_call.function.arguments).unwrap_or_default();
 
-            let tool_result = execute_local_tool(&tool_call.function.name, &args);
+            let tool_result =
+                execute_local_tool(&mut state.safety, now_ms(), &tool_call.function.name, &args);
 
             // Add tool result to history so the LLM can continue.
             let result_text = match tool_result {
@@ -831,8 +848,15 @@ fn agent_chat(message: &str, state: &mut AgentState) -> anyhow::Result<String> {
     Ok(text)
 }
 
-/// Execute a single tool call locally on the ESP32-S3.
-fn execute_local_tool(name: &str, args: &serde_json::Value) -> anyhow::Result<String> {
+/// Execute a single tool call locally on the ESP32-S3. `gpio_write` is gated by
+/// the same Track 0 [`safety::SafetyGate`] as the host-command and reflex paths,
+/// so an LLM-driven write cannot bypass the policy either.
+fn execute_local_tool(
+    gate: &mut safety::SafetyGate,
+    now_ms: u64,
+    name: &str,
+    args: &serde_json::Value,
+) -> anyhow::Result<String> {
     match name {
         "gpio_read" => {
             let pin = args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
@@ -841,7 +865,7 @@ fn execute_local_tool(name: &str, args: &serde_json::Value) -> anyhow::Result<St
         "gpio_write" => {
             let pin = args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let value = args.get("value").and_then(|v| v.as_u64()).unwrap_or(0);
-            gpio_write(pin, value).map(|_| "done".to_string())
+            gpio_write(gate, pin, value, now_ms).map(|_| "done".to_string())
         }
         "camera_capture" => {
             let quality = args
