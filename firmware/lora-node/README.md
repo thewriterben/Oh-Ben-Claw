@@ -38,7 +38,10 @@ the auction/exploration logic — unchanged.
 2. Library Manager → install **RadioLib** by Jan Gromes (6.x).
 3. Open `obc_lora_bridge/obc_lora_bridge.ino`.
 4. At the top of the sketch, **uncomment your board** (`BOARD_TBEAM_SX1276`,
-   `BOARD_HELTEC_V2_SX1276`, or `BOARD_RAK4631_SX1262`) and comment the others.
+   `BOARD_HELTEC_V2_SX1276`, `BOARD_HELTEC_V3_SX1262`, or `BOARD_RAK4631_SX1262`)
+   and comment the others. The **Heltec V3** (ESP32-S3 + SX1262) is the budget
+   two-node pick; note it uses the SX1262 on a dedicated SPI bus (handled by the
+   preset), *not* the SX1276 of the older V2.
 5. Set `RADIO_FREQ_MHZ` for your **region** (US ISM `915.0`, EU868 `868.0`). Every
    node in the mesh must share frequency **and** `RADIO_BW_KHZ` / `RADIO_SF` /
    `RADIO_CR` / `RADIO_SYNCWORD`, or they won't hear each other.
@@ -78,7 +81,7 @@ it back to `0` for normal operation.
 ## What this is / isn't
 
 * **Is:** a minimal, portable byte-relay matching OBC's serial framing; a real
-  RadioLib radio driver for three common boards.
+  RadioLib radio driver for four common boards.
 * **Isn't:** a Meshtastic-protobuf client. It speaks OBC's own compact `MeshFrame`
   codec, not the Meshtastic packet format. The node itself does no routing — it's a
   single-hop broadcast bridge and stays a dumb byte relay.
