@@ -108,6 +108,9 @@ mod safing;
 /// On-MCU Track 0 safety gate — deterministic, host-pushable actuator limits.
 mod safety;
 
+/// Real I2C sensor drivers (MAX17048 fuel gauge, MPU6050 IMU).
+mod sensors;
+
 /// Maximum line length for incoming serial commands (bytes).
 const MAX_LINE_LEN: usize = 512;
 
@@ -185,6 +188,9 @@ struct AgentState {
     reflex: reflex::ReflexEngine,
     /// On-MCU Track 0 gate for actuator writes (default-deny; host-pushable).
     safety: safety::SafetyGate,
+    /// Real I2C sensor bus, if one initialised at boot. `None` ⇒ sensor reads fall
+    /// back to the stub, so the node still boots and reacts without sensors wired.
+    sensors: Option<sensors::SensorBus>,
 }
 
 impl AgentState {
@@ -196,6 +202,7 @@ impl AgentState {
             wifi_password: String::new(),
             reflex: reflex::ReflexEngine::default(),
             safety: safety::SafetyGate::with_output_pins(OUTPUT_PINS),
+            sensors: None,
         }
     }
 
@@ -316,6 +323,24 @@ fn main() -> anyhow::Result<()> {
     );
 
     let mut agent_state = AgentState::new();
+    // Real I2C sensor bus (SDA=GPIO4, SCL=GPIO5). If init fails (or no sensors are
+    // fitted), reads fall back to the stub so the node still boots and the reflex
+    // loop still runs.
+    {
+        use esp_idf_svc::hal::i2c::config::Config as I2cConfig;
+        use esp_idf_svc::hal::i2c::I2cDriver;
+        use esp_idf_svc::hal::units::FromValueType;
+        let i2c_cfg = I2cConfig::new().baudrate(100_u32.kHz().into());
+        match I2cDriver::new(peripherals.i2c0, pins.gpio4, pins.gpio5, &i2c_cfg) {
+            Ok(drv) => {
+                agent_state.sensors = Some(sensors::SensorBus::new(drv));
+                info!("I2C sensor bus ready (SDA=4, SCL=5)");
+            }
+            Err(e) => {
+                log::warn!("I2C sensor bus init failed ({e}); sensor reads fall back to stubs")
+            }
+        }
+    }
     // Load the built-in safing rules so the node self-protects from boot, even
     // before (or without) any host-pushed rule set or spine connection.
     agent_state.reflex.set_rules(safing::default_safing_rules());
@@ -378,7 +403,7 @@ fn main() -> anyhow::Result<()> {
             && agent_state.reflex.rule_count() > 0
         {
             last_reflex_ms = now;
-            let mut snapshot = read_sensor_snapshot();
+            let mut snapshot = read_sensor_snapshot(&mut agent_state.sensors);
             // Feed the link-silence duration so the built-in `safe-link-offline`
             // rule can fire, and self-report the link state.
             let silence_ms = now.saturating_sub(last_host_contact_ms);
@@ -595,7 +620,7 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                 .and_then(|v| v.as_str())
                 .unwrap_or("temperature")
                 .to_string();
-            sensor_read(&sensor, &field)
+            read_sensor(&mut state.sensors, &sensor, &field).map(|v| v.to_string())
         }
 
         // ── Edge-Native Agent Commands ─────────────────────────────────────
@@ -721,19 +746,36 @@ fn audio_sample(duration_ms: u64, raw: bool) -> anyhow::Result<String> {
 
 // ── Sensors ───────────────────────────────────────────────────────────────────
 
-fn sensor_read(sensor: &str, field: &str) -> anyhow::Result<String> {
-    // NOTE: Full sensor reading requires I2C driver initialization and
-    // sensor-specific register reads. This stub returns placeholder values.
-    log::info!("sensor_read: sensor={}, field={}", sensor, field);
+/// Read a sensor value, preferring the real I2C bus and falling back to the stub
+/// for sensors the driver does not (yet) handle or when no bus is present. Returns
+/// a numeric value (host world-memory convention).
+fn read_sensor(
+    bus: &mut Option<sensors::SensorBus>,
+    sensor: &str,
+    field: &str,
+) -> anyhow::Result<f64> {
+    if let Some(b) = bus.as_mut() {
+        if let Some(result) = b.read(sensor, field) {
+            return result; // real reading (or an honest I2C error)
+        }
+    }
+    sensor_read_stub(sensor, field)
+}
+
+/// Placeholder sensor values for parts the real driver does not cover yet (BME280
+/// environment, SHT31) or when no I2C bus initialised. `max17048` is intentionally
+/// absent so `sensor.battery_soc` stays out of the snapshot (safing dormant) unless
+/// a real fuel gauge is present.
+fn sensor_read_stub(sensor: &str, field: &str) -> anyhow::Result<f64> {
     match (sensor, field) {
-        ("bme280", "temperature") => Ok("22.5".to_string()),
-        ("bme280", "humidity") => Ok("55.0".to_string()),
-        ("bme280", "pressure") => Ok("1013.25".to_string()),
-        ("mpu6050", "accel_x") => Ok("0.01".to_string()),
-        ("mpu6050", "accel_y") => Ok("0.00".to_string()),
-        ("mpu6050", "accel_z") => Ok("9.81".to_string()),
-        ("sht31", "temperature") => Ok("22.3".to_string()),
-        ("sht31", "humidity") => Ok("54.8".to_string()),
+        ("bme280", "temperature") => Ok(22.5),
+        ("bme280", "humidity") => Ok(55.0),
+        ("bme280", "pressure") => Ok(1013.25),
+        ("mpu6050", "accel_x") => Ok(0.01),
+        ("mpu6050", "accel_y") => Ok(0.00),
+        ("mpu6050", "accel_z") => Ok(9.81),
+        ("sht31", "temperature") => Ok(22.3),
+        ("sht31", "humidity") => Ok(54.8),
         (s, f) => Err(anyhow::anyhow!("Unknown sensor/field: {}/{}", s, f)),
     }
 }
@@ -748,7 +790,9 @@ fn now_ms() -> u64 {
 /// Build a reflex snapshot from the node's local sensors. Entity keys follow the
 /// host world-memory convention (`sensor.{quantity}`) so a rule authored against
 /// world memory (e.g. `sensor.temperature > 60`) evaluates identically on-device.
-fn read_sensor_snapshot() -> std::collections::HashMap<String, f64> {
+fn read_sensor_snapshot(
+    bus: &mut Option<sensors::SensorBus>,
+) -> std::collections::HashMap<String, f64> {
     const READS: &[(&str, &str, &str)] = &[
         ("sensor.temperature", "bme280", "temperature"),
         ("sensor.humidity", "bme280", "humidity"),
@@ -757,16 +801,14 @@ fn read_sensor_snapshot() -> std::collections::HashMap<String, f64> {
         ("sensor.accel_y", "mpu6050", "accel_y"),
         ("sensor.accel_z", "mpu6050", "accel_z"),
         // Battery state of charge from the fuel gauge — feeds the built-in safing
-        // rules. Absent (read error) when no gauge is fitted, so safing stays
-        // dormant rather than firing on a missing reading.
+        // rules. Absent (read error / no gauge fitted) so safing stays dormant
+        // rather than firing on a missing reading.
         ("sensor.battery_soc", "max17048", "soc"),
     ];
     let mut snapshot = std::collections::HashMap::new();
     for (entity, sensor, field) in READS {
-        if let Ok(raw) = sensor_read(sensor, field) {
-            if let Ok(value) = raw.parse::<f64>() {
-                snapshot.insert(entity.to_string(), value);
-            }
+        if let Ok(value) = read_sensor(bus, sensor, field) {
+            snapshot.insert(entity.to_string(), value);
         }
     }
     snapshot
@@ -816,8 +858,13 @@ fn agent_chat(message: &str, state: &mut AgentState) -> anyhow::Result<String> {
             let args: serde_json::Value =
                 serde_json::from_str(&tool_call.function.arguments).unwrap_or_default();
 
-            let tool_result =
-                execute_local_tool(&mut state.safety, now_ms(), &tool_call.function.name, &args);
+            let tool_result = execute_local_tool(
+                &mut state.safety,
+                &mut state.sensors,
+                now_ms(),
+                &tool_call.function.name,
+                &args,
+            );
 
             // Add tool result to history so the LLM can continue.
             let result_text = match tool_result {
@@ -853,6 +900,7 @@ fn agent_chat(message: &str, state: &mut AgentState) -> anyhow::Result<String> {
 /// so an LLM-driven write cannot bypass the policy either.
 fn execute_local_tool(
     gate: &mut safety::SafetyGate,
+    sensors: &mut Option<sensors::SensorBus>,
     now_ms: u64,
     name: &str,
     args: &serde_json::Value,
@@ -897,7 +945,7 @@ fn execute_local_tool(
                 .get("field")
                 .and_then(|v| v.as_str())
                 .unwrap_or("temperature");
-            sensor_read(sensor, field)
+            read_sensor(sensors, sensor, field).map(|v| v.to_string())
         }
         unknown => Err(anyhow::anyhow!("Unknown local tool: {}", unknown)),
     }
