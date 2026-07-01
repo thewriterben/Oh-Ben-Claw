@@ -214,6 +214,24 @@ impl LoraMeshSpine {
     }
 }
 
+// ── TX bridge: coordinator assignments → mesh ───────────────────────────────────
+
+/// Broadcast a coordinator's queued assignment intents onto the mesh: each drained
+/// `(node, x, y)` becomes a [`MeshFrame::Assign`] transmitted through `radio`. This
+/// is the outbound half of the fleet↔mesh bridge (the inbound half is
+/// [`ingest_line`]); together they let the fleet coordinate off-grid — heartbeats
+/// in, "go here" assignments out. Returns the number of frames sent.
+pub async fn broadcast_outbox<R: MeshRadio + ?Sized>(radio: &R, coord: &Coordinator) -> usize {
+    let mut sent = 0;
+    for (node, x, y) in coord.drain_outbox() {
+        let frame = MeshFrame::Assign { node, x, y };
+        if radio.transmit(&frame.encode()).await.is_ok() {
+            sent += 1;
+        }
+    }
+    sent
+}
+
 // ── Serial radio + RX loop (real hardware; `--features hardware`) ────────────────
 //
 // The pluggable-radio counterpart to the codec above: a `MeshRadio` over a serial
@@ -331,6 +349,49 @@ mod tests {
     fn assignment_frame_round_trips() {
         let f = MeshFrame::Assign { node: "rover-2".into(), x: 9.5, y: 0.5 };
         assert_eq!(MeshFrame::decode(&f.encode()).unwrap(), f);
+    }
+
+    fn idle_node(id: &str, t: u64) -> NodeState {
+        NodeState {
+            id: id.into(),
+            x: Some(0.0),
+            y: Some(0.0),
+            battery: Some(90.0),
+            mode: "normal".into(),
+            busy: false,
+            last_seen_ms: t,
+        }
+    }
+
+    #[tokio::test]
+    async fn coordinator_assignments_are_broadcast_over_the_mesh() {
+        // Coordinator with the off-grid outbox enabled; one idle node reports in.
+        let coord = Coordinator::new().with_assignment_outbox();
+        coord.report(idle_node("rover-a", 1_000));
+        coord.add_task(crate::fleet::Task { id: "t".into(), x: 5.0, y: 6.0, min_battery: 0.0 });
+        // A tick allocates the task -> the intent lands in the outbox.
+        assert_eq!(coord.tick(2_000), vec![("t".to_string(), "rover-a".to_string())]);
+
+        // Broadcasting drains the outbox into MeshFrame::Assign frames on the radio.
+        let radio = LoopbackRadio::new();
+        assert_eq!(broadcast_outbox(&radio, &coord).await, 1);
+        assert_eq!(
+            MeshFrame::decode(&radio.last().unwrap()).unwrap(),
+            MeshFrame::Assign { node: "rover-a".into(), x: 5.0, y: 6.0 }
+        );
+        // Drained: a second broadcast sends nothing.
+        assert_eq!(broadcast_outbox(&radio, &coord).await, 0);
+    }
+
+    #[tokio::test]
+    async fn assignments_are_not_collected_without_the_outbox() {
+        // Default coordinator (no outbox) collects nothing — single-brain pays zero.
+        let coord = Coordinator::new();
+        coord.report(idle_node("rover-a", 1_000));
+        coord.add_task(crate::fleet::Task { id: "t".into(), x: 5.0, y: 6.0, min_battery: 0.0 });
+        coord.tick(2_000);
+        let radio = LoopbackRadio::new();
+        assert_eq!(broadcast_outbox(&radio, &coord).await, 0);
     }
 
     #[test]

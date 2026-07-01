@@ -1214,6 +1214,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         if let Some(s) = config.fleet.stale_ms {
             coord = coord.with_stale_ms(s);
         }
+        // Off-grid: collect assignment intents so the LoRa-mesh bridge can broadcast
+        // them (only when a serial LoRa node is configured on a hardware build).
+        #[cfg(feature = "hardware")]
+        if config.fleet.lora_serial.is_some() {
+            coord = coord.with_assignment_outbox();
+        }
         let coord = Arc::new(coord);
         all_tools.push(Box::new(oh_ben_claw::tools::builtin::fleet::FleetTool::new(Arc::clone(
             &coord,
@@ -1234,18 +1240,20 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 Err(e) => tracing::warn!("fleet heartbeat subscription failed: {e}"),
             }
         }
-        // Off-grid: attach a serial LoRa-mesh node (firmware/lora-node) so heartbeats
-        // heard over the air feed the same coordinator — no WiFi, no broker. The RX
-        // loop bridges each received MeshFrame into `coord`; holding `radio` keeps the
-        // full-duplex handle open (assignment-TX over the radio is a further hook).
+        // Off-grid: attach a serial LoRa-mesh node (firmware/lora-node) so the fleet
+        // coordinates over the air — no WiFi, no broker. Two loops share the radio:
+        //   RX — received heartbeats bridge into `coord` (auction runs over the mesh);
+        //   TX — the coordinator's assignment outbox is drained and broadcast as
+        //        MeshFrame::Assign ("go here"). Full fleet↔mesh bidirectionality.
         #[cfg(feature = "hardware")]
         if let Some(lora) = &config.fleet.lora_serial {
             match oh_ben_claw::spine::lora_mesh::SerialMeshRadio::open(&lora.port, lora.baud) {
                 Ok((radio, rd)) => {
-                    let coord_rx = Arc::clone(&coord);
+                    let radio = Arc::new(radio);
                     info!(port = %lora.port, baud = lora.baud, "Fleet: LoRa-mesh serial bridge attached");
+                    // RX: heartbeats heard over the air → coordinator.
+                    let coord_rx = Arc::clone(&coord);
                     tokio::spawn(async move {
-                        let _radio = radio; // keep the write half alive for the RX loop's lifetime
                         oh_ben_claw::spine::lora_mesh::run_serial_rx(rd, coord_rx, || {
                             std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
@@ -1254,6 +1262,25 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                         })
                         .await;
                         tracing::warn!("Fleet: LoRa-mesh serial link closed");
+                    });
+                    // TX: drain the assignment outbox onto the mesh. Holding this Arc
+                    // keeps the write half (and thus the serial handle) open.
+                    let coord_tx = Arc::clone(&coord);
+                    let radio_tx = Arc::clone(&radio);
+                    tokio::spawn(async move {
+                        let mut ticker =
+                            tokio::time::interval(std::time::Duration::from_millis(500));
+                        loop {
+                            ticker.tick().await;
+                            let n = oh_ben_claw::spine::lora_mesh::broadcast_outbox(
+                                radio_tx.as_ref(),
+                                &coord_tx,
+                            )
+                            .await;
+                            if n > 0 {
+                                info!(frames = n, "Fleet: broadcast assignments over LoRa mesh");
+                            }
+                        }
                     });
                 }
                 Err(e) => tracing::warn!("LoRa-mesh serial bridge failed to open: {e}"),
