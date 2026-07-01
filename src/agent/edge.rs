@@ -197,6 +197,23 @@ impl EdgeAgentBuilder {
         self
     }
 
+    /// Prefer the on-device model: among the primary provider and its fallback
+    /// chain, select **local-first** (via the model registry) as the provider this
+    /// edge agent uses. An edge node with a local Ollama fallback then runs
+    /// on-device instead of reaching for the cloud. Leaves the config unchanged if
+    /// no candidate is selectable.
+    pub fn prefer_local(mut self) -> Self {
+        use crate::providers::model_registry::{
+            flatten_candidates, registry_from_providers, select_provider,
+        };
+        let candidates = flatten_candidates(&self.provider_config);
+        let registry = registry_from_providers(&candidates, 60_000);
+        if let Some(chosen) = select_provider(&candidates, &registry, 0) {
+            self.provider_config = chosen.clone();
+        }
+        self
+    }
+
     /// Set the memory store.
     pub fn memory(mut self, memory: Arc<MemoryStore>) -> Self {
         self.memory = Some(memory);
