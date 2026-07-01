@@ -1745,6 +1745,28 @@ pub struct FleetConfig {
     /// Heartbeat staleness (ms) past which a node is considered offline (default 30000).
     #[serde(default)]
     pub stale_ms: Option<u64>,
+    /// Off-grid LoRa-mesh bridge: attach a serial LoRa node (see
+    /// `firmware/lora-node`) so heartbeats heard over the air feed the coordinator.
+    /// Only active when built with the `hardware` feature; ignored otherwise.
+    #[serde(default)]
+    pub lora_serial: Option<LoraSerialConfig>,
+}
+
+/// Serial-attached LoRa-mesh node (transparent serial⇄LoRa bridge). The node runs
+/// `firmware/lora-node`; this host opens its port, spawns the RX loop that bridges
+/// received `MeshFrame` heartbeats into the fleet `Coordinator`, and exposes the
+/// radio as a `MeshRadio` transmit path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoraSerialConfig {
+    /// Serial device path, e.g. `/dev/ttyUSB0` or `COM5`.
+    pub port: String,
+    /// Baud rate; must match the node firmware (`SERIAL_BAUD`, default 115200).
+    #[serde(default = "default_lora_baud")]
+    pub baud: u32,
+}
+
+fn default_lora_baud() -> u32 {
+    115_200
 }
 
 /// The root configuration for Oh-Ben-Claw.
