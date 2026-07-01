@@ -470,6 +470,7 @@ Phase 14's A2A implementation predates the stable v1.0 spec (Linux Foundation).
 - [x] Wire-shape goldens: MCP (initialize/discover/tools-list/error) and A2A (task lifecycle, ErrorInfo, agent card) + approval policy matrix golden
 - [x] CI gate: evals run as integration tests under the existing `cargo test --workspace` job — no release while evals regress (cargo run pending on Windows)
 - [ ] LLM-as-judge advisory scoring (deferred until a judge provider is wired; gates stay deterministic)
+- [ ] **Text-grounded task evals** *(P1; research borrow)* — an ALFWorld-style synthetic task suite (decompose "put a clean mug in the coffee machine") runs the planning/reflection loop in CI with zero hardware; add situated-reasoning checks for spatial tools/world-memory queries. ALFWorld (*[ICLR 2021](https://alfworld.github.io/)*), SQA3D (*[ICLR 2023](https://arxiv.org/pdf/2210.07474.pdf)*), NavSpace (*[ICRA 2026](https://arxiv.org/abs/2510.08173)*). See `docs/EMBODIED-RESEARCH-INTEGRATION.md` §10.
 
 ### Observability / AgentOps
 
@@ -495,6 +496,12 @@ long-horizon autonomy, dual-system perception-action, real-time multimodal
 interaction, and physical-action safety — and realize each one **natively for an
 embodied multi-device fleet**, the position no pure-software agent can occupy.
 
+> **Research grounding.** The VLM/LLM-agent literature behind these phases is
+> catalogued and mapped module-by-module in `docs/EMBODIED-RESEARCH-INTEGRATION.md`
+> (companion to `docs/SOTA-COMPARISON.md`, which covers the classical-robotics
+> layers). Phase bullets below cite the specific papers each borrow comes from;
+> the doc's §12 has the full prioritized backlog (P1–P3).
+
 Sequencing: lead with **Phase 16 + Track 0** (highest demand × highest leverage,
 and the safety floor that makes shipping autonomy responsible). Phases 17–18 build
 the autonomy and architectural substrate; 19–20 are the user-facing payoff. Track 0
@@ -512,6 +519,7 @@ every phase below. Aligns Oh-Ben-Claw with the OWASP Top 10 for Agentic Applicat
 - [ ] **Pre-action authorization** at the tool-call boundary with cryptographically signed audit records for every physical action (extends `src/approval/` + `src/observability/`)
 - [ ] **Staged rollout** for new/synthesized physical skills: `simulate` → `supervised` → `autonomous`, promotion gated on a clean record
 - [ ] **Physical-aware approval prompts** — surface risk class, device, and concrete effect ("open GPIO 17 → unlock front door") in the approval UI
+- [ ] **Affordance mask for the planner** *(P1; research borrow)* — expose the SafetyGate's feasibility verdict to the LLM as an explicit affordance score/mask so infeasible actions are never proposed, not just refused late. Reframes Track 0 as the *"can"* half of *"say + can"* — SayCan (*[Do As I Can, Not As I Say](https://arxiv.org/pdf/2204.01691.pdf)*, arXiv 2022). See `docs/EMBODIED-RESEARCH-INTEGRATION.md` §5.
 - [ ] Embodied red-team evals: injected-malicious-skill and injected-prompt tests must not be able to drive an out-of-limit actuator command (extends Phase 15 eval harness)
 
 ## Phase 16: Experiential Self-Improvement 📋 Planned *(flagship / near-term)*
@@ -524,9 +532,9 @@ anchored to real verification rather than the model's own say-so.
 
 - [ ] **Trajectory capture** — record agent runs (objective, tool calls, args, results, outcome) as structured episodes (`src/memory/`)
 - [ ] **Reflection + skill synthesis** — distil a successful trajectory into a named, parameterized, reusable skill (`src/skill_forge/`)
-- [ ] **Self-verification gate** — a synthesized skill must pass concrete verification (test execution and/or sensor/camera confirmation) before it is trusted; never trust intrinsic self-report alone
-- [ ] **Learned-skill library + retrieval** — store synthesized skills in the existing local skill library (ClawHub-compatible format); retrieve relevant skills before reasoning from scratch
-- [ ] **Offline trace evolution** — GEPA/DSPy-style reflective optimization of prompts and skill descriptions from accumulated execution traces (batch/scheduled job)
+- [ ] **Self-verification gate** — a synthesized skill must pass concrete verification (test execution and/or sensor/camera confirmation) before it is trusted; never trust intrinsic self-report alone. *(P1 borrow: compile the skill's success criterion into a checkable monitor — Code-as-Monitor, [arXiv 2412.04455](https://arxiv.org/abs/2412.04455), CVPR 2025.)*
+- [ ] **Learned-skill library + retrieval** — store synthesized skills in the existing local skill library (ClawHub-compatible format); retrieve relevant skills before reasoning from scratch. *(Model: Voyager's growing skill library + environment-feedback self-correction, [NeurIPS 2023 WS](https://openreview.net/attachment?id=pAMNKGwja6&name=pdf); keep skills environment-tagged per AgentGym, [arXiv 2406.04151](https://arxiv.org/pdf/2406.04151).)*
+- [ ] **Offline trace evolution** — GEPA/DSPy-style reflective optimization of prompts and skill descriptions from accumulated execution traces (batch/scheduled job). *(Interpretable symbolic gradients: Symbolic Learning, [arXiv 2406.18532](https://arxiv.org/pdf/2406.18532); ENVISIONS, [arXiv 2406.11736](https://arxiv.org/pdf/2406.11736); policy-level reflection from Agent-Pro, [ACL 2024](https://arxiv.org/abs/2402.17574).)*
 - [ ] **Safety interlock** — any synthesized skill that invokes a physical/actuator tool is registered through Track 0 (risk class + staged rollout) before it may run unattended
 - [ ] Metrics: learned-skill reuse rate; token/latency reduction on repeated routine tasks; zero unsafe auto-runs of synthesized actuator skills
 
@@ -539,9 +547,9 @@ on `scheduler`, `heartbeat`, `agent`, `memory`, and `runtime`. Depends on Track 
 
 - [ ] **Durable execution** — checkpoint agent/task state to persistent storage; resume cleanly after crash/reboot without re-running completed physical actions (model "non-persistable regions" around side-effecting tool calls)
 - [ ] **Initializer + worker split** — initializer establishes environment and an externalized world-state/objective record; worker advances one objective at a time
-- [ ] **Externalized world-state progress record** — structured (JSON) objective list with per-objective status, resilient to context compaction
+- [ ] **Externalized world-state progress record** — structured (JSON) objective list with per-objective status, resilient to context compaction. *(P2 borrow: make it retrieval-backed — query memory for how a similar objective resumed before, per JARVIS-1 memory-augmented agents, [NeurIPS 2023](https://arxiv.org/abs/2311.05997).)*
 - [ ] **Mandatory self-verification before "done"** — confirm each objective via sensors/cameras/tests, not assertion; re-open objectives that fail verification on resume
-- [ ] **Resume smoke test** — on restart, re-establish context cheaply (current device states, outstanding objectives) before acting
+- [ ] **Resume smoke test** — on restart, re-establish context cheaply (current device states, outstanding objectives) before acting. *(On resume, generate a describe-explain-failure pass and select the cheapest outstanding objective — DEPS, [NeurIPS 2023](https://arxiv.org/abs/2302.01560); prefer local action revision over full replan — FLARE, [AAAI 2025](https://arxiv.org/pdf/2412.17288).)*
 - [ ] Long-horizon eval: an unattended fleet completes a defined multi-hour routine across an induced crash/reboot with correct resume and no duplicated physical actions
 
 ## Phase 18: Dual-System Perception-Action + World Memory 📋 Planned
@@ -553,6 +561,8 @@ environment. The most architecturally novel, most embodied-native phase. Builds 
 
 - [x] **System 1 (fast reflex loop)** — host-side `ReflexEngine` (`src/agent/reflex.rs`): conditions (sensor/gpio/and/or), actions (gpio_write/publish/escalate), debounce + rate limit, serde wire format for pushing to nodes; 8 tests. (On-MCU mirror of the evaluator: firmware follow-up.)
 - [ ] **System 2 (slow reasoner)** — cloud/host LLM invoked for planning and novelty, not every event; System 1 escalates to System 2 on uncertainty
+- [ ] **Symbolic transition model for missions** *(P1; research borrow)* — System 2 emits a small checkable (PDDL-style) precondition/effect model over world-memory facts; the mission BT executes against it and predicted-vs-observed mismatches become Phase 16 verification failures. LLM-DM (*[Construct and Utilize World Models for Planning](https://openreview.net/forum?id=zDbsSscmuj)*, NeurIPS 2023); bounded look-ahead per RAP (*[Reasoning is Planning with a World Model](https://arxiv.org/pdf/2305.14992.pdf)*). See research doc §3.
+- [ ] **Scene-graph view over world memory** *(P2)* — an optional entity–relation overlay (`device in room`, `subject near door`) on the flat `namespace.key` facts, so navigation and ClawCam subjects compose spatially. Scene Graph Memory (*[ICML 2023](https://openreview.net/attachment?id=NiUxS1cAI4&name=pdf)*); HLSM persistent spatial-semantic map (*[CoRL 2021](https://openreview.net/pdf?id=NeGDZeyjcKa)*).
 - [x] **Bitemporal world memory** — persistent, queryable model of rooms/devices/states over time with validity intervals (valid time + transaction time), so stale facts are invalidated rather than lost; `src/memory/world.rs` (`observe`/`current`/`at`/`history`/`entities`), non-destructive, 5 tests. (Full as-of-transaction-time queries: follow-up.)
 - [x] **Perception→memory→action wiring** — sensor-fusion outputs update world memory (`FusionRegistry::observe_into` → `sensor.{quantity}` facts); planning queries via the `world_memory` tool. (Vision→world-memory lands with the ClawCam vision suite.)
 - [x] **Escalation policy + budget** — `EscalationBudget` (sliding-window, `[reflex].max_escalations_per_min`) caps System 1 → System 2 hand-offs; reflex actions dispatch via `SpineActionSink` (GPIO over the spine, bounded by node Track 0) or the dry-run logging sink. (On-MCU reflex mirror: firmware follow-up.)

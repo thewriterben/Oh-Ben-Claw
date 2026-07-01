@@ -5,6 +5,59 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Real-hardware firmware drivers: every ESP32-S3 capability made real (2026-07-01)
+
+The ESP32-S3 firmware's placeholder peripherals became real ESP-IDF drivers, so
+every capability the node advertises now runs on physical silicon (verified
+compiling on the Espressif toolchain). Each driver degrades gracefully to the old
+stub when its hardware is absent, so a bare board still boots and reacts.
+
+### Added — real sensor drivers (`firmware/obc-esp32-s3/src/sensors.rs`)
+
+- **I2C bus** (`SensorBus`, esp-idf-hal `I2cDriver`, SDA=4/SCL=5) owning:
+  - **MAX17048** fuel gauge → `sensor.battery_soc` — makes the built-in battery
+    safing rules fire on *real* charge (critical-battery load shed).
+  - **MPU6050** IMU → `sensor.accel_{x,y,z}` (m/s²).
+- **BME280** environment → temperature/humidity/pressure via the Bosch fixed-point
+  compensation (int32/int64 reference algorithm), probing 0x76/0x77; pure
+  `compensate_*` functions cross-checked for correctness.
+- Threaded through the reflex snapshot, the `sensor_read` command, and the LLM
+  edge-tool path (same pattern as the safety gate); `None` bus ⇒ stub fallback.
+
+### Added — I2S microphone (`firmware/obc-esp32-s3/src/audio.rs`)
+
+- `AudioMic` over esp-idf-hal I2S RX (SCK=0/WS=1/SD=2): reads 24-bit-in-32-bit
+  slots and returns a normalised RMS loudness (`audio_sample`), feeding the ClawCam
+  audio-ingest path and loudness reflexes.
+
+### Added — OV2640 camera, opt-in (`firmware/obc-esp32-s3/src/camera.rs`, `--features camera`)
+
+- Real capture via the `espressif/esp32-camera` IDF component: `camera_config_t`
+  (Waveshare pin map), `esp_camera_init`, and a base64-JPEG `camera_capture`.
+- Wired the esp-idf-sys component mechanism correctly: `Cargo.toml`
+  `[[package.metadata.esp-idf-sys.extra_components]]` (remote component +
+  `bindings_header` + `bindings_module = "camera"`), a cfg-guarded `camera_bindings.h`,
+  and the anonymous-union `pin_sccb_*` fields. Default-off so lean builds are
+  unaffected; disables the I2C bus (shared SCCB pins 4/5) when on.
+
+### Fixed — Windows / ESP-IDF build configuration (`.cargo/config.toml`)
+
+- `CARGO_WORKSPACE_DIR` (so embuild finds the crate root under a redirected
+  `CARGO_TARGET_DIR` — otherwise `Cargo.toml` metadata *and* `sdkconfig.defaults`
+  are silently ignored) and `ESP_IDF_TOOLS_INSTALL_DIR = custom:C:/esp` (short path
+  to dodge the Windows 260-char clone failure). Added `sdkconfig.defaults` (PSRAM).
+
+### Added — LoRa + docs
+
+- **Heltec WiFi LoRa 32 V3 (SX1262)** board preset for `firmware/lora-node`
+  (custom SPI bus) — the budget two-node pick.
+- **`firmware/obc-esp32-s3/BRINGUP.md`**, **`CAMERA.md`**, and a consolidated
+  **`docs/HARDWARE-TEST-WALKTHROUGH.md`** (single-node → LoRa mesh → fleet-over-mesh,
+  with per-capability commands, expected replies, a sign-off checklist, and a
+  Windows/ESP-IDF troubleshooting table). Firmware crate `.gitignore` for `/target`.
+
+---
+
 ## Unreleased — On-MCU Track 0 gate: host-pushable limits + rate limit (2026-06-30)
 
 The ESP32-S3 firmware's Track 0 actuator gate went from three compile-time
