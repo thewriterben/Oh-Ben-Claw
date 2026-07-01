@@ -513,14 +513,21 @@ pub fn spine_heartbeat_handler(coord: Arc<Coordinator>) -> MessageHandler {
     })
 }
 
+/// The spine topic an assignment for `node` is published on (`obc/fleet/assign/{node}`).
+/// Pure — the wire contract, testable without a broker.
+pub fn assignment_topic(node: &str) -> String {
+    format!("{}/fleet/assign/{node}", crate::spine::TOPIC_PREFIX)
+}
+
+/// The assignment payload for `goal`. Pure — the wire contract, testable without
+/// a broker (mirrors the LoRa side's `MeshFrame::Assign`).
+pub fn assignment_payload(goal: &NavGoal) -> Value {
+    json!({ "x": goal.x, "y": goal.y, "tolerance": goal.tolerance })
+}
+
 /// Publish an assignment back to a node over the spine (`obc/fleet/assign/{node}`).
 pub async fn publish_assignment(spine: &SpineClient, node: &str, goal: &NavGoal) -> anyhow::Result<()> {
-    spine
-        .publish(
-            &format!("{}/fleet/assign/{node}", crate::spine::TOPIC_PREFIX),
-            &json!({ "x": goal.x, "y": goal.y, "tolerance": goal.tolerance }),
-        )
-        .await
+    spine.publish(&assignment_topic(node), &assignment_payload(goal)).await
 }
 
 #[cfg(test)]
