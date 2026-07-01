@@ -5,6 +5,94 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — SOTA depth, ClawCam bidirectional, Accelerapp cross-pollination (2026-06-30)
+
+A long build-out across four threads: closing the last SOTA-comparison gaps with
+production-grade implementations, making ClawCam a fully bidirectional embodied
+subsystem, importing nine patterns from the sibling Accelerapp project, and
+activating three tested-but-dormant subsystems by building real consumers.
+
+### Added — embodied depth (SOTA parity)
+
+- **Likelihood-field sensor model** (`src/navigation/sensor_model.rs`) — a chamfer
+  Euclidean distance field + Thrun §6.4 mixture; `ParticleFilter::update_scan` is
+  the real range-sensor measurement update (≈ AMCL), replacing the toy position
+  Gaussian.
+- **KLD-adaptive particle filter** (`src/navigation/particle.rs`) — Fox-2003
+  sample-size bound; the cloud grows when uncertain, shrinks when confident.
+- **Fleet task auctions** (`src/fleet`) — market-based sequential-auction
+  allocation (`auction_allocate`/`auction_tick`), globally cheaper and
+  order-independent vs per-task greedy; bids include battery eligibility.
+- **EWLS online forecaster** (`src/foresight`) — `Forecaster::with_decay` turns
+  equal-weight OLS into exponentially-weighted least squares so trends track regime
+  changes (`decay == 1.0` preserves prior behavior).
+- **HIL loop test** (`tests/embodied_hil_loop.rs`) — a ClawCam detection flows
+  through the real ingest → world memory → hazard policy → occupancy → A* detour →
+  Track 0–bounded drive, nothing mocked.
+
+### Added — ClawCam as a bidirectional embodied subsystem (`src/vision/`)
+
+- **Full perceive ingest** — converters folding ClawCam node health → `clawcam.node.*`
+  facts, audio classifications → the audio suite (`audio.clawcam:{node}`), and a
+  rolling `vision.count.{subject}` for foresight rate-trending; opt-in via
+  `[perception.clawcam_poll] poll_health/poll_audio`.
+- **Vision-driven rules** (`clawcam_rules`) — reflex (verified subject → escalate,
+  optional capture) + foresight (rising sighting rate → escalate) rule libraries,
+  live via `[perception.vision_rules]`.
+- **Close the loop** (`clawcam_actuate`) — `ClawCamActionSink` translates
+  `clawcam/cmd/*` reflex publishes into ClawCam's gated write tools (capture / arm /
+  alert) over the shared MCP bridge; wired into the reflex sink chain.
+- **Spatial fusion** (`clawcam_spatial`) — `CameraMap` + `mark_detection_hazard`
+  stamp a camera detection into the nav costmap (core; wired on demand).
+
+### Added — Accelerapp cross-pollination (nine transfers)
+
+Grounded in Accelerapp's *real* patterns, avoiding its stubs (see
+`docs/ACCELERAPP-CROSS-POLLINATION.md` for the delivered/deferred status table):
+
+- **Dynamic trust scoring** (`src/security/trust.rs`) — per-node behavioral score
+  (rolling-mean + 3σ anomaly, failure decay, recovery) → `TrustLevel`; `gate()`
+  tightens physical-action approval as trust falls. Wired into `ApprovalManager::decide`
+  and the agent dispatch (`[safety] dynamic_trust`).
+- **Hardware harvest** (`src/peripherals/registry.rs`) — `mesh`/`ibutton`/`psram`
+  tokens, RAK4631 Meshtastic node, board enrichment.
+- **LoRa-mesh transport** (`src/spine/lora_mesh.rs`) — compact fleet-frame codec +
+  pluggable `MeshRadio`, bridging to the fleet coordinator (off-grid, no broker).
+- **No-op-fallback exporter** (`src/observability`) — `ReconcilingExporter` buffers
+  metrics offline, reconciles on reconnect; env-gated loop in `main`.
+- **Node self-test + MockNode** (`src/peripherals/selftest.rs`) — bring-up contract
+  + host-side simulator; composed end-to-end in `tests/offgrid_fleet_loop.rs`.
+- **Saga rollback** (`src/deployment/saga.rs`) — compensating-action unwind for
+  multi-node deployment.
+- **Vendor allowlist** (`src/peripherals/onboarding.rs`), **model registry**
+  (`src/providers/model_registry.rs`), **firmware scaffold**
+  (`src/deployment/firmware_scaffold.rs`).
+- Deferred honestly: **F** Ed25519 asymmetric audit — integrity half already shipped
+  (HMAC-chained audit); asymmetric signing blocked (no signing crate in the offline
+  cache).
+
+### Added — consumers for dormant subsystems
+
+- **`ApprovalManager` activated in the live dispatch** (`src/agent/mod.rs`) — every
+  tool call now gated by autonomy level + auto-approve + grants (+ trust) via
+  `approval_authorize`/`decide`; `main` attaches it. Default `Full` = behavior-
+  neutral; supervised/manual now actually enforce.
+- **`VendorAllowlist` → doctor** — `check_hardware_onboarding` flags configured
+  boards from unrecognized vendors.
+- **`ModelRegistry` → edge** — `EdgeAgentBuilder::prefer_local()` selects the
+  on-device model first over the fallback chain.
+- **Firmware scaffold → deployment planner** — `DeploymentScheme::firmware_sketches()`
+  emits a starter sketch per flashable MCU node.
+
+### Docs
+
+- README rewritten around the embodied control stack; `docs/EMBODIED-ARCHITECTURE.md`
+  gained a ClawCam bidirectional section; `docs/ACCELERAPP-CROSS-POLLINATION.md`
+  banked with delivered-vs-deferred status; ClawCam `NEXT_PHASE_PLAN.md` records the
+  OBC-side integration in lockstep.
+
+---
+
 ## Unreleased — Hardware registry: scout 2026-06-29 AI accelerators
 
 Stacks on the tier-1 additions below. Adds the AI-accelerator hardware from the
