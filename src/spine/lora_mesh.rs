@@ -17,7 +17,7 @@
 //! to a Meshtastic device over serial; tests use an in-memory loopback. Everything
 //! here is hardware-free and testable.
 
-use crate::fleet::NodeState;
+use crate::fleet::{Coordinator, NodeState};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -127,6 +127,30 @@ impl MeshFrame {
     }
 }
 
+// ── RX bridge: received frames → fleet coordinator ──────────────────────────────
+
+/// Bridge a received mesh frame into the fleet coordinator: a heartbeat becomes a
+/// reported `NodeState` (so the auction/exploration logic runs over the mesh).
+/// Returns `true` if the frame was a heartbeat (and thus ingested).
+pub fn bridge_frame(frame: &MeshFrame, coord: &Coordinator, now_ms: u64) -> bool {
+    match frame.to_node_state(now_ms) {
+        Some(state) => {
+            coord.report(state);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Decode one received line of frame bytes and bridge it into the coordinator.
+/// Returns `true` if a heartbeat was ingested; malformed lines are ignored.
+pub fn ingest_line(bytes: &[u8], coord: &Coordinator, now_ms: u64) -> bool {
+    match MeshFrame::decode(bytes) {
+        Some(frame) => bridge_frame(&frame, coord, now_ms),
+        None => false,
+    }
+}
+
 /// A LoRa-mesh radio. A real implementation drives a Meshtastic device over serial;
 /// the spine only needs to hand it framed bytes to transmit.
 #[async_trait]
@@ -189,6 +213,81 @@ impl LoraMeshSpine {
         &self.cfg
     }
 }
+
+// ── Serial radio + RX loop (real hardware; `--features hardware`) ────────────────
+//
+// The pluggable-radio counterpart to the codec above: a `MeshRadio` over a serial
+// link to a LoRa node (T-Beam / Heltec / RAK4631) flashed with OBC firmware that
+// exchanges `MeshFrame`s as newline-delimited bytes over its USB serial. This is
+// *not* a full Meshtastic-protobuf client — it speaks OBC's own compact frame
+// codec, consistent with the rest of this module. Serial I/O is feature-gated
+// behind `hardware` (tokio-serial), matching the peripheral drivers.
+#[cfg(feature = "hardware")]
+mod serial {
+    use super::{ingest_line, Coordinator, MeshRadio};
+    use anyhow::Context;
+    use std::sync::Arc;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
+    use tokio::sync::Mutex;
+    use tokio_serial::{SerialPortBuilderExt, SerialStream};
+
+    /// A [`MeshRadio`](super::MeshRadio) over a serial link to an OBC-firmware LoRa
+    /// node. `transmit` writes a newline-framed frame; the paired read half drives
+    /// [`run_serial_rx`].
+    pub struct SerialMeshRadio {
+        writer: Mutex<WriteHalf<SerialStream>>,
+    }
+
+    impl SerialMeshRadio {
+        /// Open the serial port; returns the radio (for transmit) and the read half
+        /// for the RX loop.
+        pub fn open(port: &str, baud: u32) -> anyhow::Result<(Self, ReadHalf<SerialStream>)> {
+            let serial = tokio_serial::new(port, baud)
+                .open_native_async()
+                .with_context(|| format!("failed to open LoRa serial port {port}"))?;
+            let (rd, wr) = tokio::io::split(serial);
+            Ok((Self { writer: Mutex::new(wr) }, rd))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MeshRadio for SerialMeshRadio {
+        async fn transmit(&self, bytes: &[u8]) -> anyhow::Result<()> {
+            let mut w = self.writer.lock().await;
+            w.write_all(bytes).await?;
+            w.write_all(b"\n").await?;
+            w.flush().await?;
+            Ok(())
+        }
+    }
+
+    /// RX loop: read newline-framed frames from the LoRa node and bridge each into
+    /// the fleet coordinator. Runs until the serial link closes (EOF / error).
+    pub async fn run_serial_rx<F>(
+        read_half: ReadHalf<SerialStream>,
+        coord: Arc<Coordinator>,
+        now_ms: F,
+    ) where
+        F: Fn() -> u64 + Send,
+    {
+        let mut lines = BufReader::new(read_half).lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    let _ = ingest_line(line.trim().as_bytes(), &coord, now_ms());
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!("LoRa serial RX error: {e}");
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "hardware")]
+pub use serial::{run_serial_rx, SerialMeshRadio};
 
 #[cfg(test)]
 mod tests {
@@ -296,5 +395,29 @@ mod tests {
         assert_eq!(state.last_seen_ms, 1_000);
         // an assignment is not a node report
         assert!(MeshFrame::Assign { node: "x".into(), x: 0.0, y: 0.0 }.to_node_state(1).is_none());
+    }
+
+    #[test]
+    fn a_received_heartbeat_line_is_bridged_into_the_coordinator() {
+        let coord = Coordinator::new();
+        let hb = MeshFrame::Heartbeat {
+            node: "rover-a".into(),
+            x: Some(0.0),
+            y: Some(0.0),
+            battery: Some(80.0),
+            mode: "normal".into(),
+        };
+        assert!(ingest_line(&hb.encode(), &coord, 1_000));
+        // the node is now known: a task at the origin is auctioned to it
+        coord.add_task(crate::fleet::Task { id: "t".into(), x: 0.0, y: 0.0, min_battery: 0.0 });
+        assert_eq!(coord.auction_tick(1_000), vec![("t".to_string(), "rover-a".to_string())]);
+    }
+
+    #[test]
+    fn assignments_and_garbage_lines_are_not_node_reports() {
+        let coord = Coordinator::new();
+        let asn = MeshFrame::Assign { node: "x".into(), x: 1.0, y: 2.0 };
+        assert!(!ingest_line(&asn.encode(), &coord, 1));
+        assert!(!ingest_line(b"not a frame", &coord, 1));
     }
 }
