@@ -9,6 +9,7 @@
 //! model becomes eligible again after `recheck_after_ms`, so a node that briefly
 //! lost its local model recovers to it automatically instead of staying on cloud.
 
+use crate::config::ProviderConfig;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -79,6 +80,60 @@ impl ModelRegistry {
     }
 }
 
+// ── Bridge to the provider config (edge local-first selection) ──────────────────
+
+impl ModelEntry {
+    /// Derive a registry entry from a provider config. Treated as **local** when the
+    /// provider is Ollama or its base URL is a loopback address.
+    pub fn from_provider(cfg: &ProviderConfig, priority: u32) -> Self {
+        let local = cfg.name.eq_ignore_ascii_case("ollama")
+            || cfg.base_url.as_deref().map(is_loopback).unwrap_or(false);
+        Self {
+            name: cfg.model.clone(),
+            endpoint: cfg.base_url.clone().unwrap_or_default(),
+            local,
+            priority,
+        }
+    }
+}
+
+fn is_loopback(url: &str) -> bool {
+    url.contains("localhost")
+        || url.contains("127.0.0.1")
+        || url.contains("[::1]")
+        || url.contains("0.0.0.0")
+}
+
+/// Flatten a primary provider config + its fallback chain into a candidate list
+/// `[primary, fallback0, fallback1, …]` (each without its own nested fallbacks).
+pub fn flatten_candidates(primary: &ProviderConfig) -> Vec<ProviderConfig> {
+    let mut head = primary.clone();
+    let fallbacks = std::mem::take(&mut head.fallbacks);
+    let mut out = Vec::with_capacity(1 + fallbacks.len());
+    out.push(head);
+    out.extend(fallbacks);
+    out
+}
+
+/// Build a [`ModelRegistry`] from an ordered candidate list (index = priority).
+pub fn registry_from_providers(configs: &[ProviderConfig], recheck_after_ms: u64) -> ModelRegistry {
+    ModelRegistry::new(
+        configs.iter().enumerate().map(|(i, c)| ModelEntry::from_provider(c, i as u32)),
+        recheck_after_ms,
+    )
+}
+
+/// Select the preferred usable provider config — local-first, health-aware — from a
+/// candidate list and its registry. `None` if every candidate is freshly unhealthy.
+pub fn select_provider<'a>(
+    configs: &'a [ProviderConfig],
+    registry: &ModelRegistry,
+    now_ms: u64,
+) -> Option<&'a ProviderConfig> {
+    let entry = registry.select(now_ms)?;
+    configs.iter().find(|c| c.model == entry.name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +186,57 @@ mod tests {
         assert!(r.select(2_000).is_none(), "no usable model while all are freshly down");
         // but once stale, selection resumes (local first)
         assert_eq!(r.select(12_000).unwrap().name, "llama3.2");
+    }
+
+    fn provider(name: &str, model: &str, base_url: Option<&str>) -> ProviderConfig {
+        ProviderConfig {
+            name: name.into(),
+            model: model.into(),
+            api_key: None,
+            base_url: base_url.map(String::from),
+            temperature: 0.7,
+            fallbacks: vec![],
+            retry: None,
+            response_format: None,
+        }
+    }
+
+    #[test]
+    fn ollama_and_loopback_are_local() {
+        assert!(ModelEntry::from_provider(&provider("ollama", "llama3.2", Some("http://localhost:11434")), 0).local);
+        assert!(ModelEntry::from_provider(&provider("compat", "m", Some("http://127.0.0.1:8080")), 0).local);
+        assert!(!ModelEntry::from_provider(&provider("openai", "gpt-4o", None), 0).local);
+    }
+
+    #[test]
+    fn flatten_pulls_primary_and_fallbacks() {
+        let mut primary = provider("openai", "gpt-4o", None);
+        primary.fallbacks = vec![provider("ollama", "llama3.2", Some("http://localhost:11434"))];
+        let flat = flatten_candidates(&primary);
+        assert_eq!(flat.len(), 2);
+        assert_eq!(flat[0].model, "gpt-4o");
+        assert!(flat[0].fallbacks.is_empty(), "the primary keeps no nested fallbacks");
+        assert_eq!(flat[1].model, "llama3.2");
+    }
+
+    #[test]
+    fn selection_prefers_the_local_fallback_over_a_cloud_primary() {
+        let mut primary = provider("openai", "gpt-4o", None);
+        primary.fallbacks = vec![provider("ollama", "llama3.2", Some("http://localhost:11434"))];
+        let candidates = flatten_candidates(&primary);
+        let registry = registry_from_providers(&candidates, 60_000);
+        let chosen = select_provider(&candidates, &registry, 0).unwrap();
+        assert_eq!(chosen.name, "ollama", "edge prefers the on-device model");
+    }
+
+    #[test]
+    fn selection_falls_back_to_cloud_when_local_is_down() {
+        let mut primary = provider("openai", "gpt-4o", None);
+        primary.fallbacks = vec![provider("ollama", "llama3.2", Some("http://localhost:11434"))];
+        let candidates = flatten_candidates(&primary);
+        let registry = registry_from_providers(&candidates, 60_000);
+        registry.record_health("llama3.2", false, 1_000);
+        let chosen = select_provider(&candidates, &registry, 1_000).unwrap();
+        assert_eq!(chosen.name, "openai", "local down → cloud fallback");
     }
 }
