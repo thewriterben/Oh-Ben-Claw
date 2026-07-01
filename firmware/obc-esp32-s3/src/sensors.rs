@@ -312,13 +312,13 @@ fn compensate_pressure(adc_p: i32, c: &Bme280Calib, t_fine: i32) -> u32 {
 /// Compensated relative humidity in Q22.10 %RH (value / 1024 = %RH).
 fn compensate_humidity(adc_h: i32, c: &Bme280Calib, t_fine: i32) -> u32 {
     let mut v = t_fine - 76_800;
-    v = (((((adc_h << 14) - ((c.h4 as i32) << 20) - ((c.h5 as i32) * v)) + 16_384) >> 15)
+    v = ((((adc_h << 14) - ((c.h4 as i32) << 20) - ((c.h5 as i32) * v)) + 16_384) >> 15)
         * (((((((v * (c.h6 as i32)) >> 10) * (((v * (c.h3 as i32)) >> 11) + 32_768)) >> 10)
             + 2_097_152)
             * (c.h2 as i32)
             + 8_192)
-            >> 14));
-    v -= (((((v >> 15) * (v >> 15)) >> 7) * (c.h1 as i32)) >> 4);
+            >> 14);
+    v -= ((((v >> 15) * (v >> 15)) >> 7) * (c.h1 as i32)) >> 4;
     v = v.clamp(0, 419_430_400);
     (v >> 12) as u32
 }

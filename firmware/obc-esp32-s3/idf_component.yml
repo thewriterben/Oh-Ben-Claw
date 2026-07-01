@@ -1,0 +1,3 @@
+# Unused. esp-idf-sys does not read this file; the esp32-camera component is
+# declared in Cargo.toml via [[package.metadata.esp-idf-sys.extra_components]]
+# (see CAMERA.md). Kept only to avoid confusion — safe to delete.
