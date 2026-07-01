@@ -5,6 +5,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — On-MCU Track 0 gate: host-pushable limits + rate limit (2026-06-30)
+
+The ESP32-S3 firmware's Track 0 actuator gate went from three compile-time
+constants to a real, evolvable policy — the last item its own doc comment flagged
+as pending v2.0 work.
+
+### Added — on-MCU `SafetyGate` (`firmware/obc-esp32-s3/src/safety.rs`)
+
+- A pure (`std`+`serde`) node-side mirror of the host `security::limits::SafetyGate`:
+  pin allow-list (default-deny), inclusive value range, and a **new per-pin rate
+  limit** (min interval between writes, against the `esp_timer` monotonic clock).
+- Wire-compatible `SafetyLimit` — a limit authored host-side validates identically
+  on the MCU. `apply_pushed()` adopts the `gpio_write` limit addressed to this node,
+  replacing the active policy but never silently dropping the gate.
+- 6 unit tests (default == the old constants, host tightening, rate-limit
+  block/allow, no-`gpio_write` push is a no-op, empty allow-list denies all, host
+  JSON round-trip). Gate logic independently cross-checked.
+
+### Changed — firmware integration (`firmware/obc-esp32-s3/src/main.rs`)
+
+- The gate lives in `AgentState`; **all four actuation paths** (host `gpio_write`
+  command, `reflex_tick`, the autonomous reflex loop, and the LLM edge-tool path)
+  route through the one gate — no path can bypass Track 0.
+- Boot policy reproduces the old `OUTPUT_PINS`/`0..=1` constants, so behaviour is
+  unchanged until a host pushes something stricter.
+- New **`set_limits`** command (mirrors `set_reflex_rules`): the host pushes
+  `[[safety.limit]]` over `obc/nodes/{id}/limits` to tighten the allow-list / range /
+  rate in the field with no reflash; acks the resulting active policy. Added to
+  `capabilities`. Removed the old `safety_check_gpio_write` free fn + `GPIO_VALUE_MAX`.
+- `.gitignore` added for the crate's `/target` build output.
+
+---
+
 ## Unreleased — LoRa-mesh off-grid fleet + Ed25519 signed audit (2026-06-30)
 
 Built the LoRa-mesh transport out from a codec into a complete off-grid coordination
