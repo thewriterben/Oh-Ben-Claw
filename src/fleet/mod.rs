@@ -195,6 +195,11 @@ pub struct Coordinator {
     /// Minimum separation between two nodes' targets (conflict avoidance).
     min_separation: f64,
     source: String,
+    /// Off-grid: assignment intents `(node, x, y)` awaiting broadcast over a
+    /// transport (e.g. the LoRa mesh). Only collected when `collect_outbox` is set;
+    /// bounded so it never grows without a drain.
+    outbox: Mutex<Vec<(String, f64, f64)>>,
+    collect_outbox: bool,
 }
 
 impl Coordinator {
@@ -208,12 +213,46 @@ impl Coordinator {
             stale_ms: 30_000,
             min_separation: 2.0,
             source: "fleet".to_string(),
+            outbox: Mutex::new(Vec::new()),
+            collect_outbox: false,
         }
     }
 
     pub fn with_world_memory(mut self, world: Arc<WorldMemory>) -> Self {
         self.world = Some(world);
         self
+    }
+
+    /// Collect assignment intents into a bounded outbox for off-grid broadcast
+    /// (e.g. the LoRa mesh). Off by default so single-brain deployments pay nothing.
+    pub fn with_assignment_outbox(mut self) -> Self {
+        self.collect_outbox = true;
+        self
+    }
+
+    fn outbox(&self) -> std::sync::MutexGuard<'_, Vec<(String, f64, f64)>> {
+        self.outbox.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Record an assignment intent for off-grid broadcast. No-op unless
+    /// `with_assignment_outbox` was set; bounded so it never grows without a drain.
+    fn enqueue_assignment(&self, node: &str, x: f64, y: f64) {
+        if !self.collect_outbox {
+            return;
+        }
+        const CAP: usize = 256;
+        let mut ob = self.outbox();
+        ob.push((node.to_string(), x, y));
+        if ob.len() > CAP {
+            let excess = ob.len() - CAP;
+            ob.drain(0..excess);
+        }
+    }
+
+    /// Drain the assignment outbox; a transport (LoRa mesh) broadcasts these as
+    /// `MeshFrame::Assign`. Empty unless assignment-outbox collection is enabled.
+    pub fn drain_outbox(&self) -> Vec<(String, f64, f64)> {
+        std::mem::take(&mut *self.outbox())
     }
 
     pub fn with_stale_ms(mut self, stale_ms: u64) -> Self {
@@ -312,6 +351,7 @@ impl Coordinator {
             if let Some(target) = options.into_iter().find(|f| plan(grid, (nx, ny), *f).is_some()) {
                 self.registry().set_busy(&id, true);
                 self.claims().insert(id.clone(), target);
+                self.enqueue_assignment(&id, target.0, target.1);
                 claimed.push(target);
                 if let Some(world) = &self.world {
                     let _ = world.observe(
@@ -347,6 +387,7 @@ impl Coordinator {
                 Some(node) => {
                     self.registry().set_busy(&node, true);
                     self.assignments().insert(task.id.clone(), node.clone());
+                    self.enqueue_assignment(&node, task.x, task.y);
                     if let Some(world) = &self.world {
                         let _ = world.observe(
                             &format!("fleet.assignment.{}", task.id),
@@ -385,8 +426,9 @@ impl Coordinator {
         for (task_id, node) in &awards {
             self.registry().set_busy(node, true);
             self.assignments().insert(task_id.clone(), node.clone());
-            if let Some(world) = &self.world {
-                if let Some(t) = tasks.iter().find(|t| &t.id == task_id) {
+            if let Some(t) = tasks.iter().find(|t| &t.id == task_id) {
+                self.enqueue_assignment(node, t.x, t.y);
+                if let Some(world) = &self.world {
                     let _ = world.observe(
                         &format!("fleet.assignment.{task_id}"),
                         json!({ "node": node, "x": t.x, "y": t.y, "via": "auction" }),
@@ -471,14 +513,21 @@ pub fn spine_heartbeat_handler(coord: Arc<Coordinator>) -> MessageHandler {
     })
 }
 
+/// The spine topic an assignment for `node` is published on (`obc/fleet/assign/{node}`).
+/// Pure — the wire contract, testable without a broker.
+pub fn assignment_topic(node: &str) -> String {
+    format!("{}/fleet/assign/{node}", crate::spine::TOPIC_PREFIX)
+}
+
+/// The assignment payload for `goal`. Pure — the wire contract, testable without
+/// a broker (mirrors the LoRa side's `MeshFrame::Assign`).
+pub fn assignment_payload(goal: &NavGoal) -> Value {
+    json!({ "x": goal.x, "y": goal.y, "tolerance": goal.tolerance })
+}
+
 /// Publish an assignment back to a node over the spine (`obc/fleet/assign/{node}`).
 pub async fn publish_assignment(spine: &SpineClient, node: &str, goal: &NavGoal) -> anyhow::Result<()> {
-    spine
-        .publish(
-            &format!("{}/fleet/assign/{node}", crate::spine::TOPIC_PREFIX),
-            &json!({ "x": goal.x, "y": goal.y, "tolerance": goal.tolerance }),
-        )
-        .await
+    spine.publish(&assignment_topic(node), &assignment_payload(goal)).await
 }
 
 #[cfg(test)]

@@ -622,6 +622,19 @@ impl ReconcilingExporter {
     }
 }
 
+/// A [`MetricSink`] that logs each delivered batch and always succeeds — the default
+/// when no remote collector is configured, so the export loop still runs end to end
+/// (swap in a real HTTP/OTLP sink to push off-host).
+pub struct LoggingMetricSink;
+
+#[async_trait::async_trait]
+impl MetricSink for LoggingMetricSink {
+    async fn send(&self, batch: &[MetricSnapshot]) -> anyhow::Result<()> {
+        tracing::debug!(metrics = batch.len(), "metrics exported");
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -17,7 +17,7 @@
 //! to a Meshtastic device over serial; tests use an in-memory loopback. Everything
 //! here is hardware-free and testable.
 
-use crate::fleet::NodeState;
+use crate::fleet::{Coordinator, NodeState};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -127,6 +127,30 @@ impl MeshFrame {
     }
 }
 
+// ── RX bridge: received frames → fleet coordinator ──────────────────────────────
+
+/// Bridge a received mesh frame into the fleet coordinator: a heartbeat becomes a
+/// reported `NodeState` (so the auction/exploration logic runs over the mesh).
+/// Returns `true` if the frame was a heartbeat (and thus ingested).
+pub fn bridge_frame(frame: &MeshFrame, coord: &Coordinator, now_ms: u64) -> bool {
+    match frame.to_node_state(now_ms) {
+        Some(state) => {
+            coord.report(state);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Decode one received line of frame bytes and bridge it into the coordinator.
+/// Returns `true` if a heartbeat was ingested; malformed lines are ignored.
+pub fn ingest_line(bytes: &[u8], coord: &Coordinator, now_ms: u64) -> bool {
+    match MeshFrame::decode(bytes) {
+        Some(frame) => bridge_frame(&frame, coord, now_ms),
+        None => false,
+    }
+}
+
 /// A LoRa-mesh radio. A real implementation drives a Meshtastic device over serial;
 /// the spine only needs to hand it framed bytes to transmit.
 #[async_trait]
@@ -190,6 +214,263 @@ impl LoraMeshSpine {
     }
 }
 
+// ── TX bridge: coordinator assignments → mesh ───────────────────────────────────
+
+/// Broadcast a coordinator's queued assignment intents onto the mesh: each drained
+/// `(node, x, y)` becomes a [`MeshFrame::Assign`] transmitted through `radio`. This
+/// is the outbound half of the fleet↔mesh bridge (the inbound half is
+/// [`ingest_line`]); together they let the fleet coordinate off-grid — heartbeats
+/// in, "go here" assignments out. Returns the number of frames sent.
+pub async fn broadcast_outbox<R: MeshRadio + ?Sized>(radio: &R, coord: &Coordinator) -> usize {
+    let mut sent = 0;
+    for (node, x, y) in coord.drain_outbox() {
+        let frame = MeshFrame::Assign { node, x, y };
+        if radio.transmit(&frame.encode()).await.is_ok() {
+            sent += 1;
+        }
+    }
+    sent
+}
+
+/// Transmit a single assignment as a [`MeshFrame::Assign`]. When `ttl > 0` the frame
+/// is wrapped with relay metadata ([`relay::originate`]) so it can hop across the
+/// mesh; `ttl == 0` sends a bare single-hop frame. Returns whether the send
+/// succeeded. Lets `main` emit assignments without importing the [`MeshRadio`] trait.
+pub async fn send_assignment_frame<R: MeshRadio + ?Sized>(
+    radio: &R,
+    node: &str,
+    x: f64,
+    y: f64,
+    id: u64,
+    ttl: u8,
+) -> bool {
+    let frame = MeshFrame::Assign { node: node.to_string(), x, y };
+    let bytes = if ttl > 0 { relay::originate(&frame, id, ttl) } else { frame.encode() };
+    radio.transmit(&bytes).await.is_ok()
+}
+
+// ── Multi-hop relay (TTL rebroadcast + de-duplication) ──────────────────────────
+
+/// Multi-hop flooding over the single-hop broadcast transport. A frame may carry
+/// two optional envelope keys — `i` (a unique message id) and `h` (remaining hops).
+/// A node that hears an id it hasn't seen processes it locally and, if hops remain,
+/// rebroadcasts it with `h-1`; a repeat id is dropped. Bare frames (no `i`) are
+/// single-hop as before, so this is fully backward-compatible and the node firmware
+/// stays a dumb byte relay — multi-hop is entirely a host-side concern.
+pub mod relay {
+    use super::MeshFrame;
+    use serde_json::{json, Value};
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    /// What to do with a received frame.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct RelayDecision {
+        /// Whether this node should handle the frame (ingest it) — false for a
+        /// duplicate already seen, or unparseable bytes.
+        pub process_local: bool,
+        /// Bytes to rebroadcast (with decremented hop count), if any.
+        pub rebroadcast: Option<Vec<u8>>,
+    }
+
+    /// Wrap a frame with relay metadata so it floods up to `ttl` hops. `id` must be
+    /// unique per originated message (a monotonic counter is fine).
+    pub fn originate(frame: &MeshFrame, id: u64, ttl: u8) -> Vec<u8> {
+        let mut v: Value = match serde_json::from_slice(&frame.encode()) {
+            Ok(v) => v,
+            Err(_) => return frame.encode(),
+        };
+        if let Value::Object(ref mut m) = v {
+            m.insert("i".into(), json!(id));
+            m.insert("h".into(), json!(ttl));
+        }
+        serde_json::to_vec(&v).unwrap_or_else(|_| frame.encode())
+    }
+
+    /// A bounded de-duplication window over recently-seen message ids.
+    pub struct MeshRelay {
+        seen: Mutex<VecDeque<u64>>,
+        cap: usize,
+    }
+
+    impl MeshRelay {
+        pub fn new() -> Self {
+            Self { seen: Mutex::new(VecDeque::new()), cap: 512 }
+        }
+
+        /// Record `id`; returns `true` if it is newly seen, `false` if a duplicate.
+        fn mark_seen(&self, id: u64) -> bool {
+            let mut seen = self.seen.lock().unwrap_or_else(|p| p.into_inner());
+            if seen.contains(&id) {
+                return false;
+            }
+            seen.push_back(id);
+            while seen.len() > self.cap {
+                seen.pop_front();
+            }
+            true
+        }
+
+        /// Decide how to handle received frame bytes: whether to process it locally
+        /// and whether (and what) to rebroadcast.
+        pub fn on_receive(&self, bytes: &[u8]) -> RelayDecision {
+            let Ok(v) = serde_json::from_slice::<Value>(bytes) else {
+                return RelayDecision { process_local: false, rebroadcast: None };
+            };
+            // Bare frame (no relay envelope): single-hop, process, never rebroadcast.
+            let Some(id) = v.get("i").and_then(Value::as_u64) else {
+                return RelayDecision { process_local: true, rebroadcast: None };
+            };
+            if !self.mark_seen(id) {
+                // Already flooded through here — drop to break the loop.
+                return RelayDecision { process_local: false, rebroadcast: None };
+            }
+            let ttl = v.get("h").and_then(Value::as_u64).unwrap_or(0);
+            let rebroadcast = if ttl > 0 {
+                let mut relayed = v.clone();
+                if let Value::Object(ref mut m) = relayed {
+                    m.insert("h".into(), json!(ttl - 1));
+                }
+                serde_json::to_vec(&relayed).ok()
+            } else {
+                None
+            };
+            RelayDecision { process_local: true, rebroadcast }
+        }
+    }
+
+    impl Default for MeshRelay {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+}
+
+/// Decode + bridge a received line into the coordinator, applying multi-hop relay:
+/// ingests the frame locally when appropriate and returns any bytes the caller
+/// should rebroadcast (with a decremented hop count). Combines [`ingest_line`] with
+/// [`relay::MeshRelay`].
+pub fn ingest_line_relayed(
+    bytes: &[u8],
+    coord: &Coordinator,
+    relay: &relay::MeshRelay,
+    now_ms: u64,
+) -> Option<Vec<u8>> {
+    let decision = relay.on_receive(bytes);
+    if decision.process_local {
+        let _ = ingest_line(bytes, coord, now_ms);
+    }
+    decision.rebroadcast
+}
+
+// ── Serial radio + RX loop (real hardware; `--features hardware`) ────────────────
+//
+// The pluggable-radio counterpart to the codec above: a `MeshRadio` over a serial
+// link to a LoRa node (T-Beam / Heltec / RAK4631) flashed with OBC firmware that
+// exchanges `MeshFrame`s as newline-delimited bytes over its USB serial. This is
+// *not* a full Meshtastic-protobuf client — it speaks OBC's own compact frame
+// codec, consistent with the rest of this module. Serial I/O is feature-gated
+// behind `hardware` (tokio-serial), matching the peripheral drivers.
+#[cfg(feature = "hardware")]
+mod serial {
+    use super::relay::MeshRelay;
+    use super::{ingest_line, ingest_line_relayed, Coordinator, MeshRadio};
+    use anyhow::Context;
+    use std::sync::Arc;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
+    use tokio::sync::Mutex;
+    use tokio_serial::{SerialPortBuilderExt, SerialStream};
+
+    /// A [`MeshRadio`](super::MeshRadio) over a serial link to an OBC-firmware LoRa
+    /// node. `transmit` writes a newline-framed frame; the paired read half drives
+    /// [`run_serial_rx`].
+    pub struct SerialMeshRadio {
+        writer: Mutex<WriteHalf<SerialStream>>,
+    }
+
+    impl SerialMeshRadio {
+        /// Open the serial port; returns the radio (for transmit) and the read half
+        /// for the RX loop.
+        pub fn open(port: &str, baud: u32) -> anyhow::Result<(Self, ReadHalf<SerialStream>)> {
+            let serial = tokio_serial::new(port, baud)
+                .open_native_async()
+                .with_context(|| format!("failed to open LoRa serial port {port}"))?;
+            let (rd, wr) = tokio::io::split(serial);
+            Ok((Self { writer: Mutex::new(wr) }, rd))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MeshRadio for SerialMeshRadio {
+        async fn transmit(&self, bytes: &[u8]) -> anyhow::Result<()> {
+            let mut w = self.writer.lock().await;
+            w.write_all(bytes).await?;
+            w.write_all(b"\n").await?;
+            w.flush().await?;
+            Ok(())
+        }
+    }
+
+    /// RX loop: read newline-framed frames from the LoRa node and bridge each into
+    /// the fleet coordinator. Runs until the serial link closes (EOF / error).
+    pub async fn run_serial_rx<F>(
+        read_half: ReadHalf<SerialStream>,
+        coord: Arc<Coordinator>,
+        now_ms: F,
+    ) where
+        F: Fn() -> u64 + Send,
+    {
+        let mut lines = BufReader::new(read_half).lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    let _ = ingest_line(line.trim().as_bytes(), &coord, now_ms());
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!("LoRa serial RX error: {e}");
+                    break;
+                }
+            }
+        }
+    }
+
+    /// RX loop with multi-hop relay: like [`run_serial_rx`], but each received frame
+    /// is run through a [`MeshRelay`] — ingested locally when appropriate and
+    /// rebroadcast over `radio` (with a decremented hop count) when hops remain, so
+    /// heartbeats and assignments flood beyond a single hop.
+    pub async fn run_serial_rx_relay<F>(
+        read_half: ReadHalf<SerialStream>,
+        coord: Arc<Coordinator>,
+        radio: Arc<SerialMeshRadio>,
+        relay: Arc<MeshRelay>,
+        now_ms: F,
+    ) where
+        F: Fn() -> u64 + Send,
+    {
+        let mut lines = BufReader::new(read_half).lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    if let Some(rebroadcast) =
+                        ingest_line_relayed(line.trim().as_bytes(), &coord, &relay, now_ms())
+                    {
+                        let _ = radio.transmit(&rebroadcast).await;
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!("LoRa serial RX error: {e}");
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "hardware")]
+pub use serial::{run_serial_rx, run_serial_rx_relay, SerialMeshRadio};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +513,111 @@ mod tests {
     fn assignment_frame_round_trips() {
         let f = MeshFrame::Assign { node: "rover-2".into(), x: 9.5, y: 0.5 };
         assert_eq!(MeshFrame::decode(&f.encode()).unwrap(), f);
+    }
+
+    fn idle_node(id: &str, t: u64) -> NodeState {
+        NodeState {
+            id: id.into(),
+            x: Some(0.0),
+            y: Some(0.0),
+            battery: Some(90.0),
+            mode: "normal".into(),
+            busy: false,
+            last_seen_ms: t,
+        }
+    }
+
+    #[tokio::test]
+    async fn coordinator_assignments_are_broadcast_over_the_mesh() {
+        // Coordinator with the off-grid outbox enabled; one idle node reports in.
+        let coord = Coordinator::new().with_assignment_outbox();
+        coord.report(idle_node("rover-a", 1_000));
+        coord.add_task(crate::fleet::Task { id: "t".into(), x: 5.0, y: 6.0, min_battery: 0.0 });
+        // A tick allocates the task -> the intent lands in the outbox.
+        assert_eq!(coord.tick(2_000), vec![("t".to_string(), "rover-a".to_string())]);
+
+        // Broadcasting drains the outbox into MeshFrame::Assign frames on the radio.
+        let radio = LoopbackRadio::new();
+        assert_eq!(broadcast_outbox(&radio, &coord).await, 1);
+        assert_eq!(
+            MeshFrame::decode(&radio.last().unwrap()).unwrap(),
+            MeshFrame::Assign { node: "rover-a".into(), x: 5.0, y: 6.0 }
+        );
+        // Drained: a second broadcast sends nothing.
+        assert_eq!(broadcast_outbox(&radio, &coord).await, 0);
+    }
+
+    #[test]
+    fn a_bare_frame_is_processed_but_never_relayed() {
+        let relay = relay::MeshRelay::new();
+        let bytes = MeshFrame::Assign { node: "r".into(), x: 1.0, y: 2.0 }.encode();
+        let d = relay.on_receive(&bytes);
+        assert!(d.process_local);
+        assert!(d.rebroadcast.is_none());
+    }
+
+    #[test]
+    fn a_relayed_frame_floods_then_dedups() {
+        let relay = relay::MeshRelay::new();
+        let origin = MeshFrame::Assign { node: "r".into(), x: 1.0, y: 2.0 };
+        let bytes = relay::originate(&origin, 42, 2);
+        // First hearing: process locally + rebroadcast with hops decremented to 1.
+        let d = relay.on_receive(&bytes);
+        assert!(d.process_local);
+        let rebc = d.rebroadcast.expect("hops remain, so it rebroadcasts");
+        let v: serde_json::Value = serde_json::from_slice(&rebc).unwrap();
+        assert_eq!(v.get("h").and_then(|h| h.as_u64()), Some(1));
+        // The rebroadcast payload still decodes to the original frame.
+        assert_eq!(MeshFrame::decode(&rebc).unwrap(), origin);
+        // Hearing the same id again (echo from a neighbour): dropped, no rebroadcast.
+        let d2 = relay.on_receive(&bytes);
+        assert!(!d2.process_local);
+        assert!(d2.rebroadcast.is_none());
+    }
+
+    #[test]
+    fn a_relayed_frame_with_no_hops_left_is_the_last_stop() {
+        let relay = relay::MeshRelay::new();
+        let bytes = relay::originate(&MeshFrame::Heartbeat {
+            node: "n".into(),
+            x: None,
+            y: None,
+            battery: None,
+            mode: "idle".into(),
+        }, 7, 0);
+        let d = relay.on_receive(&bytes);
+        assert!(d.process_local, "still ingested at the final hop");
+        assert!(d.rebroadcast.is_none(), "ttl 0 → no further flooding");
+    }
+
+    #[test]
+    fn relayed_ingest_bridges_a_heartbeat_and_returns_the_rebroadcast() {
+        let coord = Coordinator::new();
+        let relay = relay::MeshRelay::new();
+        let hb = MeshFrame::Heartbeat {
+            node: "rover-z".into(),
+            x: Some(2.0),
+            y: Some(3.0),
+            battery: Some(80.0),
+            mode: "explore".into(),
+        };
+        let bytes = relay::originate(&hb, 100, 3);
+        let rebc = ingest_line_relayed(&bytes, &coord, &relay, 5_000);
+        assert!(rebc.is_some(), "hops remain, so caller should rebroadcast");
+        // The heartbeat was bridged: the node is now auctionable.
+        coord.add_task(crate::fleet::Task { id: "t".into(), x: 2.0, y: 3.0, min_battery: 0.0 });
+        assert_eq!(coord.auction_tick(6_000), vec![("t".to_string(), "rover-z".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn assignments_are_not_collected_without_the_outbox() {
+        // Default coordinator (no outbox) collects nothing — single-brain pays zero.
+        let coord = Coordinator::new();
+        coord.report(idle_node("rover-a", 1_000));
+        coord.add_task(crate::fleet::Task { id: "t".into(), x: 5.0, y: 6.0, min_battery: 0.0 });
+        coord.tick(2_000);
+        let radio = LoopbackRadio::new();
+        assert_eq!(broadcast_outbox(&radio, &coord).await, 0);
     }
 
     #[test]
@@ -296,5 +682,29 @@ mod tests {
         assert_eq!(state.last_seen_ms, 1_000);
         // an assignment is not a node report
         assert!(MeshFrame::Assign { node: "x".into(), x: 0.0, y: 0.0 }.to_node_state(1).is_none());
+    }
+
+    #[test]
+    fn a_received_heartbeat_line_is_bridged_into_the_coordinator() {
+        let coord = Coordinator::new();
+        let hb = MeshFrame::Heartbeat {
+            node: "rover-a".into(),
+            x: Some(0.0),
+            y: Some(0.0),
+            battery: Some(80.0),
+            mode: "normal".into(),
+        };
+        assert!(ingest_line(&hb.encode(), &coord, 1_000));
+        // the node is now known: a task at the origin is auctioned to it
+        coord.add_task(crate::fleet::Task { id: "t".into(), x: 0.0, y: 0.0, min_battery: 0.0 });
+        assert_eq!(coord.auction_tick(1_000), vec![("t".to_string(), "rover-a".to_string())]);
+    }
+
+    #[test]
+    fn assignments_and_garbage_lines_are_not_node_reports() {
+        let coord = Coordinator::new();
+        let asn = MeshFrame::Assign { node: "x".into(), x: 1.0, y: 2.0 };
+        assert!(!ingest_line(&asn.encode(), &coord, 1));
+        assert!(!ingest_line(b"not a frame", &coord, 1));
     }
 }

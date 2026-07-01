@@ -11,3 +11,12 @@ build-std = ["std", "panic_abort"]
 
 [env]
 ESP_IDF_VERSION = "v5.3.2"
+# Required because CARGO_TARGET_DIR is moved out of the crate (the Windows
+# path-length workaround). Without this, embuild can't find the crate root and
+# silently ignores Cargo.toml metadata (extra_components) AND sdkconfig.defaults.
+CARGO_WORKSPACE_DIR = { value = "", relative = true }
+# Install the ESP-IDF framework to a SHORT path. The default (crate/.embuild) is
+# too deep on Windows — ESP-IDF ships files (mbedtls/openthread test certs) whose
+# full path exceeds 260 chars and the git checkout fails. Also enable git long
+# paths once: `git config --global core.longpaths true`.
+ESP_IDF_TOOLS_INSTALL_DIR = "custom:C:/esp"

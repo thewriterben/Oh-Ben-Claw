@@ -60,6 +60,11 @@ pub struct ActionRecord {
     pub prev_mac: String,
     /// HMAC-SHA256 over this record's canonical fields.
     pub mac: String,
+    /// Optional Ed25519 detached signature (hex) over the same canonical fields, so
+    /// a third party can verify with only the public key. Absent on legacy/unsigned
+    /// records (the HMAC chain still guarantees integrity for the key holder).
+    #[serde(default)]
+    pub sig: Option<String>,
 }
 
 /// SHA-256 (hex) of a tool's arguments. `serde_json` sorts map keys, so this is
@@ -97,6 +102,7 @@ pub struct ActionAuditor {
     path: PathBuf,
     seq: u64,
     prev_mac: String,
+    signer: Option<crate::security::audit_sign::AuditSigner>,
 }
 
 impl ActionAuditor {
@@ -115,7 +121,16 @@ impl ActionAuditor {
             path,
             seq,
             prev_mac,
+            signer: None,
         })
+    }
+
+    /// Attach an Ed25519 signer so each new record also carries a detached signature
+    /// verifiable by anyone holding the public key (asymmetric non-repudiation).
+    /// The HMAC chain is unaffected; signing is additive.
+    pub fn with_signer(mut self, signer: crate::security::audit_sign::AuditSigner) -> Self {
+        self.signer = Some(signer);
+        self
     }
 
     fn last_record(path: &Path) -> anyhow::Result<Option<ActionRecord>> {
@@ -149,6 +164,7 @@ impl ActionAuditor {
             self.seq, ts_ms, node_id, tool, &args_hash, &decision, &self.prev_mac,
         );
         let mac = compute_mac(&self.key, &canon)?;
+        let sig = self.signer.as_ref().map(|s| s.sign_hex(canon.as_bytes()));
         let rec = ActionRecord {
             seq: self.seq,
             ts_ms,
@@ -159,6 +175,7 @@ impl ActionAuditor {
             decision,
             prev_mac: self.prev_mac.clone(),
             mac: mac.clone(),
+            sig,
         };
 
         let mut file = OpenOptions::new()
@@ -243,6 +260,38 @@ pub fn verify(path: impl AsRef<Path>, key: &[u8]) -> anyhow::Result<usize> {
     Ok(count)
 }
 
+/// Verify the **Ed25519 detached signatures** in an audit log against `public_hex`
+/// — asymmetric verification that needs only the public key, not the HMAC secret.
+/// Returns the number of signed records verified. Errors on the first invalid
+/// signature; unsigned legacy records are skipped (they remain covered by the HMAC
+/// chain via [`verify`]).
+pub fn verify_signatures(path: impl AsRef<Path>, public_hex: &str) -> anyhow::Result<usize> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Ok(0);
+    }
+    let file = std::fs::File::open(path)?;
+    let mut verified = 0usize;
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let rec: ActionRecord = serde_json::from_str(&line)?;
+        if let Some(sig) = &rec.sig {
+            let canon = canonical(
+                rec.seq, rec.ts_ms, &rec.node_id, &rec.tool, &rec.args_sha256, &rec.decision,
+                &rec.prev_mac,
+            );
+            if !crate::security::audit_sign::verify_hex(public_hex, canon.as_bytes(), sig) {
+                anyhow::bail!("audit: bad Ed25519 signature at seq {}", rec.seq);
+            }
+            verified += 1;
+        }
+    }
+    Ok(verified)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,6 +323,42 @@ mod tests {
             a.record(2_000, "node-1", "capture_now", &json!({}), RiskClass::physical(true, BlastRadius::Low), Decision::NeedsApproval).unwrap();
         }
         assert_eq!(verify(&path, key).unwrap(), 3);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn signed_records_verify_with_the_public_key() {
+        use crate::security::audit_sign::AuditSigner;
+        let path = tmp_path("signed");
+        let key = b"k";
+        let signer = AuditSigner::generate();
+        let public = signer.public_hex();
+        {
+            let mut a = ActionAuditor::open(key.to_vec(), path.clone())
+                .unwrap()
+                .with_signer(signer);
+            a.record(1_000, "n", "gpio_write", &json!({"pin":17,"value":1}), high_risk(), Decision::Allowed).unwrap();
+            a.record(2_000, "n", "capture_now", &json!({}), RiskClass::physical(true, BlastRadius::Low), Decision::NeedsApproval).unwrap();
+        }
+        // The HMAC chain still verifies for the key holder …
+        assert_eq!(verify(&path, key).unwrap(), 2);
+        // … and the Ed25519 signatures verify with only the public key.
+        assert_eq!(verify_signatures(&path, &public).unwrap(), 2);
+        // a wrong public key is rejected.
+        let other = AuditSigner::generate().public_hex();
+        assert!(verify_signatures(&path, &other).is_err());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn unsigned_records_have_no_signatures_to_verify() {
+        let path = tmp_path("unsigned");
+        {
+            let mut a = ActionAuditor::open(b"k".to_vec(), path.clone()).unwrap();
+            a.record(1, "n", "gpio_write", &json!({"pin":17}), high_risk(), Decision::Allowed).unwrap();
+        }
+        // No signer ⇒ no signatures; verification is a vacuous pass (HMAC still covers it).
+        assert_eq!(verify_signatures(&path, "deadbeef").unwrap(), 0);
         let _ = std::fs::remove_file(&path);
     }
 

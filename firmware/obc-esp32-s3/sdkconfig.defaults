@@ -1,0 +1,12 @@
+# ESP-IDF default config. Needed for the camera (--features camera); harmless
+# otherwise. PSRAM holds the OV2640 frame buffer.
+#
+# Match the PSRAM mode to YOUR module: most 8 MB ESP32-S3 modules are octal (OPI);
+# some are quad (QSPI). Wrong mode = the board boots but esp_camera_init fails.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+# CONFIG_SPIRAM_MODE_QUAD=y   # <- use this instead if your module is quad-SPI
+CONFIG_SPIRAM_SPEED_80M=y
+
+# A little more main-task stack for the capture + agent paths.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

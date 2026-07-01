@@ -28,9 +28,11 @@
 //! decisions; `audit::verify` detects any edit, insertion, deletion, or reorder.
 
 pub mod audit;
+pub mod audit_sign;
 pub mod limits;
 pub mod pairing;
 pub mod policy;
+pub mod trust;
 pub mod vault;
 
 #[allow(unused_imports)]

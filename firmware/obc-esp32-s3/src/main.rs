@@ -105,6 +105,22 @@ mod reflex;
 /// On-MCU safing mirror (Phase 18) — built-in battery self-protection.
 mod safing;
 
+/// On-MCU Track 0 safety gate — deterministic, host-pushable actuator limits.
+mod safety;
+
+/// Real I2C sensor drivers (MAX17048 fuel gauge, MPU6050 IMU).
+// Under `--features camera` the I2C bus is disabled (shared SCCB pins), so the
+// sensor constructor/probe paths are intentionally unused in that build.
+#[cfg_attr(feature = "camera", allow(dead_code))]
+mod sensors;
+
+/// I2S microphone driver (loudness/RMS).
+mod audio;
+
+/// OV2640 camera driver — opt-in via `--features camera` (see CAMERA.md).
+#[cfg(feature = "camera")]
+mod camera;
+
 /// Maximum line length for incoming serial commands (bytes).
 const MAX_LINE_LEN: usize = 512;
 
@@ -180,6 +196,14 @@ struct AgentState {
     wifi_password: String,
     /// On-MCU reflex engine (System 1), populated from host-pushed rules.
     reflex: reflex::ReflexEngine,
+    /// On-MCU Track 0 gate for actuator writes (default-deny; host-pushable).
+    safety: safety::SafetyGate,
+    /// Real I2C sensor bus, if one initialised at boot. `None` ⇒ sensor reads fall
+    /// back to the stub, so the node still boots and reacts without sensors wired.
+    sensors: Option<sensors::SensorBus>,
+    /// I2S microphone, if one initialised at boot. `None` ⇒ `audio_sample` falls
+    /// back to the stub RMS.
+    audio: Option<audio::AudioMic>,
 }
 
 impl AgentState {
@@ -190,6 +214,9 @@ impl AgentState {
             wifi_ssid: String::new(),
             wifi_password: String::new(),
             reflex: reflex::ReflexEngine::default(),
+            safety: safety::SafetyGate::with_output_pins(OUTPUT_PINS),
+            sensors: None,
+            audio: None,
         }
     }
 
@@ -310,6 +337,58 @@ fn main() -> anyhow::Result<()> {
     );
 
     let mut agent_state = AgentState::new();
+    // Real I2C sensor bus (SDA=GPIO4, SCL=GPIO5). If init fails (or no sensors are
+    // fitted), reads fall back to the stub so the node still boots and the reflex
+    // loop still runs.
+    //
+    // Disabled when the `camera` feature is on: the OV2640's SCCB uses these same
+    // GPIO4/5 pins on this board, so the two can't share the bus. Wire the sensors
+    // to other pins if you need both.
+    #[cfg(not(feature = "camera"))]
+    {
+        use esp_idf_svc::hal::i2c::config::Config as I2cConfig;
+        use esp_idf_svc::hal::i2c::I2cDriver;
+        use esp_idf_svc::hal::units::FromValueType;
+        let i2c_cfg = I2cConfig::new().baudrate(100_u32.kHz().into());
+        match I2cDriver::new(peripherals.i2c0, pins.gpio4, pins.gpio5, &i2c_cfg) {
+            Ok(drv) => {
+                agent_state.sensors = Some(sensors::SensorBus::new(drv));
+                info!("I2C sensor bus ready (SDA=4, SCL=5)");
+            }
+            Err(e) => {
+                log::warn!("I2C sensor bus init failed ({e}); sensor reads fall back to stubs")
+            }
+        }
+    }
+    // OV2640 camera (opt-in). Owns the SCCB on GPIO4/5 and the parallel data bus.
+    #[cfg(feature = "camera")]
+    match camera::init() {
+        Ok(()) => info!("OV2640 camera initialised"),
+        Err(e) => log::warn!("camera init failed ({e}); camera_capture falls back to stub"),
+    }
+    // I2S microphone (SCK=GPIO0, WS=GPIO1, SD=GPIO2). Falls back to the stub RMS if
+    // init fails or no mic is fitted.
+    {
+        use esp_idf_svc::hal::i2s::{config, I2sDriver};
+        let i2s_cfg = config::StdConfig::philips(
+            audio::SAMPLE_RATE_HZ,
+            config::DataBitWidth::Bits32,
+        );
+        match I2sDriver::new_std_rx(
+            peripherals.i2s0,
+            &i2s_cfg,
+            pins.gpio0,                                            // BCLK / SCK
+            pins.gpio2,                                            // DIN / SD
+            Option::<esp_idf_svc::hal::gpio::AnyIOPin>::None,      // no MCLK
+            pins.gpio1,                                            // WS / LRCLK
+        ) {
+            Ok(drv) => {
+                agent_state.audio = Some(audio::AudioMic::new(drv));
+                info!("I2S mic ready (SCK=0, WS=1, SD=2)");
+            }
+            Err(e) => log::warn!("I2S mic init failed ({e}); audio_sample falls back to stub"),
+        }
+    }
     // Load the built-in safing rules so the node self-protects from boot, even
     // before (or without) any host-pushed rule set or spine connection.
     agent_state.reflex.set_rules(safing::default_safing_rules());
@@ -372,7 +451,7 @@ fn main() -> anyhow::Result<()> {
             && agent_state.reflex.rule_count() > 0
         {
             last_reflex_ms = now;
-            let mut snapshot = read_sensor_snapshot();
+            let mut snapshot = read_sensor_snapshot(&mut agent_state.sensors);
             // Feed the link-silence duration so the built-in `safe-link-offline`
             // rule can fire, and self-report the link state.
             let silence_ms = now.saturating_sub(last_host_contact_ms);
@@ -409,7 +488,7 @@ fn main() -> anyhow::Result<()> {
                 let mut error: Option<String> = None;
                 if let reflex::Action::GpioWrite { pin, value, .. } = &fired.action {
                     // Safety-gated local actuation (Track 0).
-                    match gpio_write(*pin as i32, *value as u64) {
+                    match gpio_write(&mut agent_state.safety, *pin as i32, *value as u64, now) {
                         Ok(()) => applied = true,
                         Err(e) => error = Some(e.to_string()),
                     }
@@ -446,6 +525,8 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                     {"name": "camera_capture", "description": "Capture a JPEG image from the OV2640 camera."},
                     {"name": "audio_sample", "description": "Sample audio from the I2S microphone."},
                     {"name": "sensor_read", "description": "Read a value from an I2C/SPI sensor."},
+                    {"name": "set_reflex_rules", "description": "Push the on-MCU reflex (System 1) rule set."},
+                    {"name": "set_limits", "description": "Push the Track 0 actuator safety limits (allow-list, range, rate)."},
                     {"name": "agent_chat", "description": "Chat with the on-device LLM agent."},
                     {"name": "agent_config", "description": "Configure WiFi and LLM settings."},
                     {"name": "agent_clear", "description": "Clear the agent conversation history."}
@@ -469,8 +550,27 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
         "gpio_write" => {
             let pin = req.args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let value = req.args.get("value").and_then(|v| v.as_u64()).unwrap_or(0);
-            gpio_write(pin, value)?;
+            gpio_write(&mut state.safety, pin, value, now_ms())?;
             Ok("done".into())
+        }
+
+        // Track 0: host pushes this node's deterministic actuator limits (mirror of
+        // the host `[[safety.limit]]` set). Retained on `obc/nodes/{id}/limits`.
+        // Tightens the boot default-deny policy in the field with no reflash.
+        "set_limits" => {
+            let limits: Vec<safety::SafetyLimit> = serde_json::from_value(
+                req.args.get("limits").cloned().unwrap_or(serde_json::json!([])),
+            )?;
+            let applied = state.safety.apply_pushed(limits, NODE_ID);
+            let policy = state.safety.policy();
+            Ok(serde_json::json!({
+                "applied": applied,
+                "allowed_pins": policy.allowed_pins,
+                "value_min": policy.value_min,
+                "value_max": policy.value_max,
+                "min_interval_ms": policy.min_interval_ms,
+            })
+            .to_string())
         }
 
         // Phase 18: host pushes this node's reflex rule set (mirror of the host
@@ -509,7 +609,7 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                 let mut applied = false;
                 let mut error: Option<String> = None;
                 if let reflex::Action::GpioWrite { pin, value, .. } = &f.action {
-                    match gpio_write(*pin as i32, *value as u64) {
+                    match gpio_write(&mut state.safety, *pin as i32, *value as u64, now_ms) {
                         Ok(()) => applied = true,
                         Err(e) => error = Some(e.to_string()),
                     }
@@ -552,7 +652,7 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                 .get("raw")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            audio_sample(duration_ms, raw)
+            audio_sample(&mut state.audio, duration_ms, raw)
         }
 
         "sensor_read" => {
@@ -568,7 +668,7 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                 .and_then(|v| v.as_str())
                 .unwrap_or("temperature")
                 .to_string();
-            sensor_read(&sensor, &field)
+            read_sensor(&mut state.sensors, &sensor, &field).map(|v| v.to_string())
         }
 
         // ── Edge-Native Agent Commands ─────────────────────────────────────
@@ -634,33 +734,22 @@ fn gpio_read(pin: i32) -> anyhow::Result<u32> {
     Ok(level as u32)
 }
 
-/// Maximum permitted GPIO output level (digital high). Track 0 deterministic limit.
-const GPIO_VALUE_MAX: u64 = 1;
-
-/// Deterministic, model-independent safety gate for actuator writes (Track 0).
+/// Drive a GPIO pin, gated by the Track 0 [`safety::SafetyGate`].
 ///
 /// Enforced on the MCU itself, so a compromised host, a poisoned skill, or a
-/// hallucinated tool call still cannot drive a pin outside policy. Default-deny:
-/// only pins configured as outputs (`OUTPUT_PINS`) may be written, and only to a
-/// valid digital level.
-///
-/// NOTE (v2.0 Track 0): the allow-list and value range will become NVS-backed
-/// and pushed from the host over the retained `obc/nodes/{id}/limits` topic; a
-/// rate limit (min interval) lands with a monotonic-clock source. For now the
-/// limits are compile-time constants mirroring the boot output-pin set.
-fn safety_check_gpio_write(pin: i32, value: u64) -> anyhow::Result<()> {
-    if !OUTPUT_PINS.contains(&pin) {
-        anyhow::bail!("safety: pin {} not in output allow-list", pin);
-    }
-    if value > GPIO_VALUE_MAX {
-        anyhow::bail!("safety: value {} out of range (max {})", value, GPIO_VALUE_MAX);
-    }
-    Ok(())
-}
-
-fn gpio_write(pin: i32, value: u64) -> anyhow::Result<()> {
+/// hallucinated tool call still cannot drive a pin outside policy. The gate is
+/// default-deny (boot policy = the `OUTPUT_PINS` allow-list, digital range 0..=1)
+/// and can be tightened in the field by a host-pushed limit set (`set_limits`),
+/// including a per-pin rate limit. `now_ms` is the monotonic clock the rate limit
+/// measures against.
+fn gpio_write(
+    gate: &mut safety::SafetyGate,
+    pin: i32,
+    value: u64,
+    now_ms: u64,
+) -> anyhow::Result<()> {
     // Track 0: refuse out-of-policy actuator commands BEFORE touching hardware.
-    safety_check_gpio_write(pin, value)?;
+    gate.check(pin as i64, value as i64, now_ms)?;
     let ret = unsafe { esp_idf_svc::sys::gpio_set_level(pin, value as u32) };
     if ret != esp_idf_svc::sys::ESP_OK {
         anyhow::bail!("gpio_set_level failed for pin {} with error {}", pin, ret);
@@ -671,53 +760,75 @@ fn gpio_write(pin: i32, value: u64) -> anyhow::Result<()> {
 // ── Camera ────────────────────────────────────────────────────────────────────
 
 fn camera_capture(quality: u8, format: &str) -> anyhow::Result<String> {
-    // NOTE: Full camera capture requires the ESP-IDF camera component.
-    // Enable in sdkconfig.defaults:
-    //   CONFIG_ESP32_CAMERA=y
-    //   CONFIG_SPIRAM=y
-    //
-    // This stub returns a placeholder base64 string.
-    // Replace with actual esp_camera_fb_get() / esp_camera_fb_return() calls.
-    log::info!("camera_capture: quality={}, format={}", quality, format);
-    Ok(format!(
-        "STUB:camera_capture:quality={quality}:format={format}:base64_jpeg_data_here"
-    ))
+    #[cfg(feature = "camera")]
+    {
+        // Format/quality are baked into the driver config at init; capture returns
+        // a base64 JPEG frame from the OV2640.
+        let _ = (quality, format);
+        camera::capture_base64()
+    }
+    #[cfg(not(feature = "camera"))]
+    {
+        // Built without the `camera` feature — return the placeholder (see CAMERA.md).
+        log::info!("camera_capture stub: quality={}, format={}", quality, format);
+        Ok(format!(
+            "STUB:camera_capture:quality={quality}:format={format}:base64_jpeg_data_here"
+        ))
+    }
 }
 
 // ── Audio ─────────────────────────────────────────────────────────────────────
 
-fn audio_sample(duration_ms: u64, raw: bool) -> anyhow::Result<String> {
-    // NOTE: Full audio sampling requires the ESP-IDF I2S driver.
-    // Enable in sdkconfig.defaults:
-    //   CONFIG_I2S_ENABLE=y
-    //
-    // This stub returns a placeholder RMS value.
-    // Replace with actual i2s_read() calls.
-    log::info!("audio_sample: duration_ms={}, raw={}", duration_ms, raw);
+fn audio_sample(
+    mic: &mut Option<audio::AudioMic>,
+    duration_ms: u64,
+    raw: bool,
+) -> anyhow::Result<String> {
     if raw {
-        Ok(format!(
+        // Streaming raw PCM over the serial link is impractical; keep the stub.
+        return Ok(format!(
             "STUB:audio_sample:duration_ms={duration_ms}:raw_pcm_data_here"
-        ))
-    } else {
-        Ok("0.05".to_string()) // Placeholder RMS level
+        ));
     }
+    if let Some(m) = mic.as_mut() {
+        let level = m.rms(duration_ms)?;
+        return Ok(format!("{level:.4}"));
+    }
+    Ok("0.05".to_string()) // stub RMS when no mic is fitted
 }
 
 // ── Sensors ───────────────────────────────────────────────────────────────────
 
-fn sensor_read(sensor: &str, field: &str) -> anyhow::Result<String> {
-    // NOTE: Full sensor reading requires I2C driver initialization and
-    // sensor-specific register reads. This stub returns placeholder values.
-    log::info!("sensor_read: sensor={}, field={}", sensor, field);
+/// Read a sensor value, preferring the real I2C bus and falling back to the stub
+/// for sensors the driver does not (yet) handle or when no bus is present. Returns
+/// a numeric value (host world-memory convention).
+fn read_sensor(
+    bus: &mut Option<sensors::SensorBus>,
+    sensor: &str,
+    field: &str,
+) -> anyhow::Result<f64> {
+    if let Some(b) = bus.as_mut() {
+        if let Some(result) = b.read(sensor, field) {
+            return result; // real reading (or an honest I2C error)
+        }
+    }
+    sensor_read_stub(sensor, field)
+}
+
+/// Placeholder sensor values for parts the real driver does not cover yet (BME280
+/// environment, SHT31) or when no I2C bus initialised. `max17048` is intentionally
+/// absent so `sensor.battery_soc` stays out of the snapshot (safing dormant) unless
+/// a real fuel gauge is present.
+fn sensor_read_stub(sensor: &str, field: &str) -> anyhow::Result<f64> {
     match (sensor, field) {
-        ("bme280", "temperature") => Ok("22.5".to_string()),
-        ("bme280", "humidity") => Ok("55.0".to_string()),
-        ("bme280", "pressure") => Ok("1013.25".to_string()),
-        ("mpu6050", "accel_x") => Ok("0.01".to_string()),
-        ("mpu6050", "accel_y") => Ok("0.00".to_string()),
-        ("mpu6050", "accel_z") => Ok("9.81".to_string()),
-        ("sht31", "temperature") => Ok("22.3".to_string()),
-        ("sht31", "humidity") => Ok("54.8".to_string()),
+        ("bme280", "temperature") => Ok(22.5),
+        ("bme280", "humidity") => Ok(55.0),
+        ("bme280", "pressure") => Ok(1013.25),
+        ("mpu6050", "accel_x") => Ok(0.01),
+        ("mpu6050", "accel_y") => Ok(0.00),
+        ("mpu6050", "accel_z") => Ok(9.81),
+        ("sht31", "temperature") => Ok(22.3),
+        ("sht31", "humidity") => Ok(54.8),
         (s, f) => Err(anyhow::anyhow!("Unknown sensor/field: {}/{}", s, f)),
     }
 }
@@ -732,7 +843,9 @@ fn now_ms() -> u64 {
 /// Build a reflex snapshot from the node's local sensors. Entity keys follow the
 /// host world-memory convention (`sensor.{quantity}`) so a rule authored against
 /// world memory (e.g. `sensor.temperature > 60`) evaluates identically on-device.
-fn read_sensor_snapshot() -> std::collections::HashMap<String, f64> {
+fn read_sensor_snapshot(
+    bus: &mut Option<sensors::SensorBus>,
+) -> std::collections::HashMap<String, f64> {
     const READS: &[(&str, &str, &str)] = &[
         ("sensor.temperature", "bme280", "temperature"),
         ("sensor.humidity", "bme280", "humidity"),
@@ -741,16 +854,14 @@ fn read_sensor_snapshot() -> std::collections::HashMap<String, f64> {
         ("sensor.accel_y", "mpu6050", "accel_y"),
         ("sensor.accel_z", "mpu6050", "accel_z"),
         // Battery state of charge from the fuel gauge — feeds the built-in safing
-        // rules. Absent (read error) when no gauge is fitted, so safing stays
-        // dormant rather than firing on a missing reading.
+        // rules. Absent (read error / no gauge fitted) so safing stays dormant
+        // rather than firing on a missing reading.
         ("sensor.battery_soc", "max17048", "soc"),
     ];
     let mut snapshot = std::collections::HashMap::new();
     for (entity, sensor, field) in READS {
-        if let Ok(raw) = sensor_read(sensor, field) {
-            if let Ok(value) = raw.parse::<f64>() {
-                snapshot.insert(entity.to_string(), value);
-            }
+        if let Ok(value) = read_sensor(bus, sensor, field) {
+            snapshot.insert(entity.to_string(), value);
         }
     }
     snapshot
@@ -800,7 +911,14 @@ fn agent_chat(message: &str, state: &mut AgentState) -> anyhow::Result<String> {
             let args: serde_json::Value =
                 serde_json::from_str(&tool_call.function.arguments).unwrap_or_default();
 
-            let tool_result = execute_local_tool(&tool_call.function.name, &args);
+            let tool_result = execute_local_tool(
+                &mut state.safety,
+                &mut state.sensors,
+                &mut state.audio,
+                now_ms(),
+                &tool_call.function.name,
+                &args,
+            );
 
             // Add tool result to history so the LLM can continue.
             let result_text = match tool_result {
@@ -831,8 +949,17 @@ fn agent_chat(message: &str, state: &mut AgentState) -> anyhow::Result<String> {
     Ok(text)
 }
 
-/// Execute a single tool call locally on the ESP32-S3.
-fn execute_local_tool(name: &str, args: &serde_json::Value) -> anyhow::Result<String> {
+/// Execute a single tool call locally on the ESP32-S3. `gpio_write` is gated by
+/// the same Track 0 [`safety::SafetyGate`] as the host-command and reflex paths,
+/// so an LLM-driven write cannot bypass the policy either.
+fn execute_local_tool(
+    gate: &mut safety::SafetyGate,
+    sensors: &mut Option<sensors::SensorBus>,
+    audio: &mut Option<audio::AudioMic>,
+    now_ms: u64,
+    name: &str,
+    args: &serde_json::Value,
+) -> anyhow::Result<String> {
     match name {
         "gpio_read" => {
             let pin = args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
@@ -841,7 +968,7 @@ fn execute_local_tool(name: &str, args: &serde_json::Value) -> anyhow::Result<St
         "gpio_write" => {
             let pin = args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let value = args.get("value").and_then(|v| v.as_u64()).unwrap_or(0);
-            gpio_write(pin, value).map(|_| "done".to_string())
+            gpio_write(gate, pin, value, now_ms).map(|_| "done".to_string())
         }
         "camera_capture" => {
             let quality = args
@@ -862,7 +989,7 @@ fn execute_local_tool(name: &str, args: &serde_json::Value) -> anyhow::Result<St
                 .unwrap_or(AUDIO_DURATION_DEFAULT_MS)
                 .clamp(AUDIO_DURATION_MIN_MS, AUDIO_DURATION_MAX_MS);
             let raw = args.get("raw").and_then(|v| v.as_bool()).unwrap_or(false);
-            audio_sample(dur, raw)
+            audio_sample(audio, dur, raw)
         }
         "sensor_read" => {
             let sensor = args
@@ -873,7 +1000,7 @@ fn execute_local_tool(name: &str, args: &serde_json::Value) -> anyhow::Result<St
                 .get("field")
                 .and_then(|v| v.as_str())
                 .unwrap_or("temperature");
-            sensor_read(sensor, field)
+            read_sensor(sensors, sensor, field).map(|v| v.to_string())
         }
         unknown => Err(anyhow::anyhow!("Unknown local tool: {}", unknown)),
     }

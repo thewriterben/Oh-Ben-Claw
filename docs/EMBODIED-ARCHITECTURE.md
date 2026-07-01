@@ -91,6 +91,23 @@ And two capabilities make the system *self-improving* and *self-directed*:
 
 Localization is also now *uncertainty-aware*: a particle filter (`src/navigation/particle`) carries a belief cloud and reports a position **spread**, so the stack can act on how sure it is about where it is, rather than treating pose as exact.
 
+## ClawCam — a bidirectional embodied subsystem
+
+ClawCam (the vision subsystem, reached over the MCP stdio/HTTP bridge) is wired as a full **perceive → remember → react → act** participant, not just a detection feed. One shared `clawcam_client` carries both directions (`src/vision/`):
+
+**Read (perceive → remember):**
+- *Detections* fold into `vision.subject.{species}` facts (`clawcam_ingest`), and a rolling `vision.count.{subject}` counter is maintained so foresight can trend the **detection rate**.
+- *Node health* (`poll_health`) folds into namespaced `clawcam.node.{id}` facts — kept deliberately **separate** from the robot's own power/comms suites, since a camera is a distinct body whose battery must not flap the robot's `power.mode`. Per-source converters (`node_health_to_battery`/`_to_link`) exist for running a per-camera controller when wanted.
+- *Audio classifications* (`poll_audio`) feed the audio suite as distinct `audio.clawcam:{node}` streams, so a glassbreak becomes a safing-classifiable alarm.
+
+**React (vision drives behavior):** `clawcam_rules` authors two libraries that merge into the live engines — `vision_security_rules` (a confirmed sighting of an alert subject escalates through Track 0, optionally firing a capture) and `vision_foresight_rules` (a rising sighting rate escalates *ahead* of the peak). Both reuse the exact reflex/foresight rule types, bounded by the escalation budget.
+
+**Act (close the loop):** `ClawCamActionSink` wraps the reflex sink and intercepts `clawcam/cmd/*` publishes (`map_command`), translating them into ClawCam's gated write tools (`capture_now`, `set_device_state`, `create_alert_rule`) over the same bridge — still passing ClawCam's own approval model. OBC can now *command* the cameras, not only read them.
+
+**Spatial (built, wired on demand):** `clawcam_spatial` maps fixed cameras to world positions and stamps a hazard disc into the nav grid on a detection (`mark_detection_hazard`), so a static camera reshapes a mobile robot's path via costmap inflation. The core is tested; it is wired only for deployments where a mobile robot shares space with the cameras.
+
+All of the above is config-gated (`[perception.clawcam_poll]`, `[perception.vision_rules]`), default off, and composes on the one world memory behind the one Track 0 gate.
+
 ## End-to-end verification
 
-`tests/embodied_full_stack.rs` exercises the whole stack in one scenario: a mission to cross a room plans around a mapped wall and issues a gated drive command; as the battery drains, safing engages load-shedding; at critical charge the mission guard preempts and halts navigation; on recharge, safing recovers — all through one world memory. Each layer also carries its own unit + integration tests.
+`tests/embodied_full_stack.rs` exercises the whole stack in one scenario: a mission to cross a room plans around a mapped wall and issues a gated drive command; as the battery drains, safing engages load-shedding; at critical charge the mission guard preempts and halts navigation; on recharge, safing recovers — all through one world memory. `tests/embodied_hil_loop.rs` proves the vision seam end to end with nothing mocked: a ClawCam detection flows through the real ingest into world memory, the hazard policy turns a verified in-corridor animal into occupancy, navigation re-plans a detour, and a Track 0–bounded drive command is issued. Each layer also carries its own unit + integration tests.
