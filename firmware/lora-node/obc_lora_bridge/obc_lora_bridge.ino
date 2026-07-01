@@ -21,7 +21,7 @@
 // Radio library: RadioLib 6.x (https://github.com/jgromes/RadioLib). Install via
 // the Arduino Library Manager ("RadioLib" by Jan Gromes). RadioLib abstracts the
 // SX127x (T-Beam / Heltec V2) and SX126x (RAK4631 / newer T-Beam Supreme) chips
-// behind one API, so this single sketch covers all three target boards — pick your
+// behind one API, so this single sketch covers all four target boards — pick your
 // board with the #define below.
 //
 // STATUS: reference firmware. This has NOT been compiled or flashed by its author;
@@ -30,12 +30,14 @@
 // your regulatory region before transmitting.
 
 #include <RadioLib.h>
+#include <SPI.h>
 
 // ─── Board selection ────────────────────────────────────────────────────────────
 // Uncomment exactly one. Pin maps below are the common community values; confirm
 // against your specific board revision.
 #define BOARD_TBEAM_SX1276      // LilyGO T-Beam v1.x (SX1276, 433/868/915)
 // #define BOARD_HELTEC_V2_SX1276  // Heltec WiFi LoRa 32 v2 (SX1276)
+// #define BOARD_HELTEC_V3_SX1262  // Heltec WiFi LoRa 32 v3 (SX1262, ESP32-S3)
 // #define BOARD_RAK4631_SX1262    // RAK4631 / WisBlock (SX1262)
 
 // ─── Radio parameters ───────────────────────────────────────────────────────────
@@ -71,11 +73,20 @@ static const unsigned long SELFTEST_PERIOD_MS = 5000;
 #elif defined(BOARD_HELTEC_V2_SX1276)
   // Heltec WiFi LoRa 32 v2: NSS=18 DIO0=26 RST=14 DIO1=35
   SX1276 radio = new Module(18, 26, 14, 35);
+#elif defined(BOARD_HELTEC_V3_SX1262)
+  // Heltec WiFi LoRa 32 v3 (ESP32-S3): SX1262 on a *dedicated* SPI bus.
+  // NSS=8 DIO1=14 RST=12 BUSY=13 ; SPI SCK=9 MISO=11 MOSI=10
+  SX1262 radio = new Module(8, 14, 12, 13);
+  // Non-default SPI pins — must be applied with SPI.begin() before radio.begin().
+  #define LORA_SPI_SCK  9
+  #define LORA_SPI_MISO 11
+  #define LORA_SPI_MOSI 10
+  #define LORA_SPI_NSS  8
 #elif defined(BOARD_RAK4631_SX1262)
   // RAK4631 WisBlock: NSS=42 DIO1=47 RST=38 BUSY=46
   SX1262 radio = new Module(42, 47, 38, 46);
 #else
-  #error "Select a board: define one of BOARD_TBEAM_SX1276 / BOARD_HELTEC_V2_SX1276 / BOARD_RAK4631_SX1262"
+  #error "Select a board: define one of BOARD_TBEAM_SX1276 / BOARD_HELTEC_V2_SX1276 / BOARD_HELTEC_V3_SX1262 / BOARD_RAK4631_SX1262"
 #endif
 
 // ─── RX interrupt plumbing ──────────────────────────────────────────────────────
@@ -98,6 +109,12 @@ static bool   lineOverflow = false;
 void setup() {
   Serial.begin(SERIAL_BAUD);
   while (!Serial && millis() < 3000) { /* wait for USB CDC on native-USB boards */ }
+
+  // Boards that put the LoRa radio on a non-default SPI bus (e.g. Heltec V3) must
+  // configure those pins before RadioLib touches the chip.
+#ifdef LORA_SPI_SCK
+  SPI.begin(LORA_SPI_SCK, LORA_SPI_MISO, LORA_SPI_MOSI, LORA_SPI_NSS);
+#endif
 
   int state = radio.begin(RADIO_FREQ_MHZ, RADIO_BW_KHZ, RADIO_SF, RADIO_CR,
                           RADIO_SYNCWORD, RADIO_POWER_DBM, RADIO_PREAMBLE);
