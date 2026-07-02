@@ -1683,6 +1683,11 @@ pub struct SelfImprovementConfig {
     /// Max descriptions rewritten per evolution pass. Default 5.
     #[serde(default)]
     pub evolve_max_per_pass: Option<usize>,
+    /// Enable the dense (local-embedding) retrieval leg for episode memory.
+    /// Requires a build with the `semantic` cargo feature; the model downloads
+    /// once then inference is fully offline. Default false.
+    #[serde(default)]
+    pub semantic: bool,
 }
 
 /// One `[[self_improvement.verification]]` entry: a check that synthesized

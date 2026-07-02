@@ -82,17 +82,34 @@ pub struct Episode {
     pub tokens_est: Option<u64>,
 }
 
+/// Produces vector embeddings for episode objectives (Phase 16 retrieval).
+///
+/// Implementations must be cheap enough for the record path or interior-
+/// buffered; the built-in backend (`semantic` cargo feature) runs a local
+/// ONNX model via fastembed — no network at inference time.
+pub trait Embedder: Send + Sync {
+    /// Embed one text into a dense vector.
+    fn embed(&self, text: &str) -> Result<Vec<f32>>;
+}
+
 /// SQLite-backed store of agent [`Episode`]s.
 pub struct TrajectoryStore {
     conn: Mutex<Connection>,
+    /// Whether the FTS5 side-table is available (bundled SQLite normally: yes).
+    fts: bool,
+    /// Optional embedder: when set, objectives are embedded at record time and
+    /// a dense leg joins the hybrid retrieval fusion.
+    embedder: Option<Box<dyn Embedder>>,
 }
 
 impl TrajectoryStore {
     /// Open (or create) a trajectory database at `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path.as_ref())?;
-        let store = Self {
+        let mut store = Self {
             conn: Mutex::new(conn),
+            fts: false,
+            embedder: None,
         };
         store.migrate()?;
         Ok(store)
@@ -101,14 +118,23 @@ impl TrajectoryStore {
     /// Open an in-memory store (for tests).
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        let store = Self {
+        let mut store = Self {
             conn: Mutex::new(conn),
+            fts: false,
+            embedder: None,
         };
         store.migrate()?;
         Ok(store)
     }
 
-    fn migrate(&self) -> Result<()> {
+    /// Attach an embedder: objectives are embedded at record time and a dense
+    /// cosine leg joins the retrieval fusion. Call before sharing the store.
+    pub fn with_embedder(mut self, embedder: Box<dyn Embedder>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
+    fn migrate(&mut self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(
             "
@@ -125,21 +151,44 @@ impl TrajectoryStore {
             );
             CREATE INDEX IF NOT EXISTS idx_episodes_ts ON episodes(ts_ms);
             CREATE INDEX IF NOT EXISTS idx_episodes_outcome ON episodes(outcome);
+
+            CREATE TABLE IF NOT EXISTS episode_vecs (
+                id  TEXT PRIMARY KEY,
+                dim INTEGER NOT NULL,
+                vec BLOB NOT NULL
+            );
             ",
         )?;
-        // Additive Phase 16 P4 columns (ignore "duplicate column" on re-open).
+        // Additive Phase 16 P4 columns (ignore \"duplicate column\" on re-open).
         for ddl in [
             "ALTER TABLE episodes ADD COLUMN duration_ms INTEGER",
             "ALTER TABLE episodes ADD COLUMN tokens_est INTEGER",
         ] {
             let _ = conn.execute(ddl, []);
         }
+        // FTS5 lexical side-table (BM25 leg of hybrid retrieval). The bundled
+        // SQLite ships FTS5; degrade gracefully if a system build doesn't.
+        self.fts = conn
+            .execute_batch(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts
+                 USING fts5(id UNINDEXED, objective)",
+            )
+            .is_ok();
+        if !self.fts {
+            tracing::warn!("SQLite FTS5 unavailable — retrieval runs without the BM25 leg");
+        }
         Ok(())
     }
 
-    /// Persist an episode.
+    /// Persist an episode (and keep the FTS/vector side-tables in sync).
     pub fn record(&self, ep: &Episode) -> Result<()> {
         let steps_json = serde_json::to_string(&ep.steps)?;
+        // Embed outside the connection lock (the model call can be slow).
+        let embedding = self.embedder.as_ref().and_then(|e| {
+            e.embed(&ep.objective)
+                .map_err(|err| tracing::warn!(error = %err, "episode embedding failed"))
+                .ok()
+        });
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO episodes
@@ -156,6 +205,20 @@ impl TrajectoryStore {
                 ep.tokens_est.map(|v| v as i64),
             ],
         )?;
+        if self.fts {
+            let _ = conn.execute("DELETE FROM episodes_fts WHERE id = ?1", params![ep.id]);
+            let _ = conn.execute(
+                "INSERT INTO episodes_fts (id, objective) VALUES (?1, ?2)",
+                params![ep.id, ep.objective],
+            );
+        }
+        if let Some(vec) = embedding {
+            let blob: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO episode_vecs (id, dim, vec) VALUES (?1, ?2, ?3)",
+                params![ep.id, vec.len() as i64, blob],
+            );
+        }
         Ok(())
     }
 
@@ -254,15 +317,24 @@ impl TrajectoryStore {
     }
 
     /// Successful episodes whose objective resembles `objective`, ranked by
-    /// deterministic token-overlap similarity (see [`lexical_score`]) — the
-    /// same keyword-scoring approach as the RAG datasheet index. An embedding
-    /// backend can replace this scorer later without changing the API.
+    /// **hybrid retrieval with Reciprocal Rank Fusion** over up to three legs
+    /// (2026 hybrid-search practice — legs are complementary, fusion is
+    /// rank-based so no score normalization is needed):
     ///
-    /// Only episodes scoring above a small threshold are returned, best first;
-    /// ties break newest-first.
+    /// 1. token-overlap ([`lexical_score`], threshold 0.2) — exact anchors;
+    /// 2. SQLite FTS5/BM25 (when available) — weighted lexical recall;
+    /// 3. dense cosine over locally-embedded objectives (when an [`Embedder`]
+    ///    is attached) — paraphrase recall.
+    ///
+    /// Only episodes surfaced by at least one leg are returned, best first;
+    /// ties break newest-first. Fully deterministic given the same store.
     pub fn similar(&self, objective: &str, k: usize) -> Result<Vec<Episode>> {
         const MIN_SCORE: f32 = 0.2;
-        // Score over a bounded window of recent successes.
+        const MIN_COSINE: f32 = 0.3;
+        const RRF_K: f32 = 60.0;
+        const LEG_DEPTH: usize = 50;
+
+        // Bounded window of recent successes = the candidate universe.
         let candidates = self.query(
             &format!(
                 "SELECT {} FROM episodes
@@ -271,19 +343,121 @@ impl TrajectoryStore {
             ),
             [],
         )?;
-        let mut scored: Vec<(f32, Episode)> = candidates
-            .into_iter()
-            .filter_map(|ep| {
-                let s = lexical_score(objective, &ep.objective);
-                (s >= MIN_SCORE).then_some((s, ep))
-            })
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let index_of: std::collections::HashMap<&str, usize> = candidates
+            .iter()
+            .enumerate()
+            .map(|(i, ep)| (ep.id.as_str(), i))
             .collect();
-        scored.sort_by(|a, b| {
+
+        let mut legs: Vec<Vec<usize>> = Vec::new();
+
+        // Leg 1 — token overlap (always available).
+        {
+            let mut scored: Vec<(f32, usize)> = candidates
+                .iter()
+                .enumerate()
+                .filter_map(|(i, ep)| {
+                    let s = lexical_score(objective, &ep.objective);
+                    (s >= MIN_SCORE).then_some((s, i))
+                })
+                .collect();
+            scored.sort_by(|a, b| {
+                b.0.partial_cmp(&a.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(candidates[b.1].ts_ms.cmp(&candidates[a.1].ts_ms))
+            });
+            legs.push(scored.into_iter().take(LEG_DEPTH).map(|(_, i)| i).collect());
+        }
+
+        // Leg 2 — FTS5/BM25 (tokens OR-joined; FTS syntax kept out of reach).
+        if self.fts {
+            let match_expr = tokens(objective)
+                .into_iter()
+                .map(|t| format!("\"{t}\""))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            if !match_expr.is_empty() {
+                let conn = self.conn.lock().unwrap();
+                let ids: Vec<String> = conn
+                    .prepare(
+                        "SELECT id FROM episodes_fts WHERE episodes_fts MATCH ?1
+                         ORDER BY bm25(episodes_fts) LIMIT ?2",
+                    )
+                    .and_then(|mut stmt| {
+                        stmt.query_map(params![match_expr, LEG_DEPTH as i64], |row| row.get(0))?
+                            .collect::<rusqlite::Result<Vec<String>>>()
+                    })
+                    .unwrap_or_default();
+                drop(conn);
+                let leg: Vec<usize> = ids
+                    .iter()
+                    .filter_map(|id| index_of.get(id.as_str()).copied())
+                    .collect();
+                if !leg.is_empty() {
+                    legs.push(leg);
+                }
+            }
+        }
+
+        // Leg 3 — dense cosine (only when an embedder is attached).
+        if let Some(embedder) = &self.embedder {
+            if let Ok(qv) = embedder.embed(objective) {
+                let conn = self.conn.lock().unwrap();
+                let rows: Vec<(String, Vec<u8>)> = conn
+                    .prepare("SELECT id, vec FROM episode_vecs")
+                    .and_then(|mut stmt| {
+                        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                            .collect::<rusqlite::Result<Vec<_>>>()
+                    })
+                    .unwrap_or_default();
+                drop(conn);
+                let mut scored: Vec<(f32, usize)> = rows
+                    .into_iter()
+                    .filter_map(|(id, blob)| {
+                        let i = *index_of.get(id.as_str())?;
+                        let v: Vec<f32> = blob
+                            .chunks_exact(4)
+                            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                            .collect();
+                        let s = cosine(&qv, &v);
+                        (s >= MIN_COSINE).then_some((s, i))
+                    })
+                    .collect();
+                scored.sort_by(|a, b| {
+                    b.0.partial_cmp(&a.0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(candidates[b.1].ts_ms.cmp(&candidates[a.1].ts_ms))
+                });
+                let leg: Vec<usize> =
+                    scored.into_iter().take(LEG_DEPTH).map(|(_, i)| i).collect();
+                if !leg.is_empty() {
+                    legs.push(leg);
+                }
+            }
+        }
+
+        // Reciprocal Rank Fusion across whichever legs produced results.
+        let mut fused: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        for leg in &legs {
+            for (rank, &i) in leg.iter().enumerate() {
+                *fused.entry(i).or_insert(0.0) += 1.0 / (RRF_K + rank as f32 + 1.0);
+            }
+        }
+        let mut ranked: Vec<(f32, usize)> = fused.into_iter().map(|(i, s)| (s, i)).collect();
+        ranked.sort_by(|a, b| {
             b.0.partial_cmp(&a.0)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then(b.1.ts_ms.cmp(&a.1.ts_ms))
+                .then(candidates[b.1].ts_ms.cmp(&candidates[a.1].ts_ms))
+                .then(candidates[a.1].id.cmp(&candidates[b.1].id))
         });
-        Ok(scored.into_iter().take(k).map(|(_, ep)| ep).collect())
+        Ok(ranked
+            .into_iter()
+            .take(k)
+            .map(|(_, i)| candidates[i].clone())
+            .collect())
     }
 
     /// Total episode count.
@@ -365,6 +539,24 @@ fn tokens(text: &str) -> std::collections::HashSet<String> {
         .collect()
 }
 
+/// Cosine similarity between two dense vectors (0 on dimension mismatch).
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let (mut dot, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
+    for (x, y) in a.iter().zip(b) {
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na.sqrt() * nb.sqrt())
+    }
+}
+
 /// Deterministic similarity between two objectives: cosine-style token overlap
 /// `|A ∩ B| / sqrt(|A| · |B|)` in `[0, 1]`. Zero when either side has no tokens.
 pub fn lexical_score(a: &str, b: &str) -> f32 {
@@ -398,6 +590,61 @@ mod tests {
             duration_ms: None,
             tokens_est: None,
         }
+    }
+
+    /// Deterministic mock: known strings map to fixed vectors.
+    struct MockEmbedder;
+    impl Embedder for MockEmbedder {
+        fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+            // "door"-ish texts cluster on axis 0; "weather"-ish on axis 1.
+            Ok(if text.contains("door") || text.contains("entrance") {
+                vec![1.0, 0.0]
+            } else if text.contains("weather") || text.contains("forecast") {
+                vec![0.0, 1.0]
+            } else {
+                vec![0.6, 0.6]
+            })
+        }
+    }
+
+    #[test]
+    fn dense_leg_finds_paraphrases_with_zero_token_overlap() {
+        let s = TrajectoryStore::open_in_memory()
+            .unwrap()
+            .with_embedder(Box::new(MockEmbedder));
+        s.record(&ep("d1", "unlock the entrance", Outcome::Success, 1)).unwrap();
+        s.record(&ep("w1", "fetch the forecast", Outcome::Success, 2)).unwrap();
+
+        // "open the door" shares NO ≥3-char content tokens with either
+        // objective — only the dense leg can surface the right episode.
+        let hits = s.similar("open the door", 1).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "d1", "paraphrase retrieved via embeddings");
+    }
+
+    #[test]
+    fn fts_leg_matches_and_hybrid_stays_deterministic() {
+        let s = TrajectoryStore::open_in_memory().unwrap();
+        s.record(&ep("a", "calibrate the pan tilt camera mount", Outcome::Success, 1)).unwrap();
+        s.record(&ep("b", "water the tomato plants", Outcome::Success, 2)).unwrap();
+        let first = s.similar("calibrate camera", 5).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].id, "a");
+        // Same store, same query → identical ranking (RRF is rank-based).
+        let second = s.similar("calibrate camera", 5).unwrap();
+        assert_eq!(
+            first.iter().map(|e| &e.id).collect::<Vec<_>>(),
+            second.iter().map(|e| &e.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn fts_query_syntax_is_neutralized() {
+        let s = TrajectoryStore::open_in_memory().unwrap();
+        s.record(&ep("a", "check the weather", Outcome::Success, 1)).unwrap();
+        // FTS5 operators / broken quotes in the objective must not error.
+        let hits = s.similar("weather\" OR (NEAR *", 5).unwrap();
+        assert_eq!(hits.len(), 1, "sanitized query still matches by token");
     }
 
     #[test]
