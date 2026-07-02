@@ -100,7 +100,7 @@ fn pattern_matches(pattern: &str, name: &str) -> bool {
 }
 
 /// Run a shell command on the host and return its exit code (platform-aware).
-async fn run_host_command(cmd: &str) -> i32 {
+pub(crate) async fn run_host_command(cmd: &str) -> i32 {
     #[cfg(windows)]
     let mut process = {
         let mut p = tokio::process::Command::new("cmd");

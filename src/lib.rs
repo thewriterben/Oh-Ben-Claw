@@ -39,6 +39,7 @@ pub mod doctor;
 pub mod fleet;
 pub mod foresight;
 pub mod gateway;
+pub mod harness;
 pub mod hooks;
 pub mod learning;
 pub mod mcp;
