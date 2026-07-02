@@ -7,6 +7,7 @@
 pub mod delegation_tools;
 pub mod edge;
 pub mod handle;
+pub mod judge;
 pub mod orchestrator;
 pub mod pool;
 pub mod reflex;
@@ -83,6 +84,10 @@ pub struct Agent {
     /// similar past successful episodes — so the model prefers a verified
     /// recipe over reasoning from scratch.
     experience_k: Option<usize>,
+    /// Phase 15/9: token cost tracking — `(tracker, in_price/M, out_price/M)`.
+    /// Each run records an estimated `TokenUsage` (chars/4 heuristic, same as
+    /// episode metrics) so the gateway can show a live cost summary.
+    cost: Option<(Arc<crate::cost::CostTracker>, f64, f64)>,
     /// Track 0 staged rollout (Phase 16 P3): clean-run/failure record for
     /// staged skills. Without it, simulate/supervised gating still applies —
     /// runs just aren't counted toward promotion.
@@ -114,6 +119,7 @@ impl Agent {
             trust: None,
             approval: None,
             experience_k: None,
+            cost: None,
             rollout: None,
             forge_dir: None,
         }
@@ -156,6 +162,18 @@ impl Agent {
     /// relevant learned skills and `k` similar past successes into the prompt.
     pub fn with_experience_retrieval(mut self, k: usize) -> Self {
         self.experience_k = Some(k.max(1));
+        self
+    }
+
+    /// Attach a cost tracker (Phase 15/9): each run records an estimated
+    /// `TokenUsage` priced at the given USD-per-million-token rates.
+    pub fn with_cost(
+        mut self,
+        tracker: Arc<crate::cost::CostTracker>,
+        input_price_per_million: f64,
+        output_price_per_million: f64,
+    ) -> Self {
+        self.cost = Some((tracker, input_price_per_million, output_price_per_million));
         self
     }
 
@@ -477,6 +495,32 @@ impl Agent {
             obs.metrics.counter("agent_turns_total").inc();
         }
 
+        // Rough token split for cost + episode metrics (chars/4 heuristic —
+        // a relative signal, not billing-grade accounting): the model *reads*
+        // the user message and tool results, and *writes* tool args and the
+        // final response.
+        let input_est = {
+            let chars = user_message.len()
+                + tool_calls_made.iter().map(|tc| tc.result.len()).sum::<usize>();
+            (chars / 4) as u64
+        };
+        let output_est = {
+            let chars = final_response.len()
+                + tool_calls_made.iter().map(|tc| tc.args.len()).sum::<usize>();
+            (chars / 4) as u64
+        };
+
+        // Phase 15/9: record estimated usage against the cost budget.
+        if let Some((tracker, in_price, out_price)) = &self.cost {
+            tracker.record_usage(crate::cost::TokenUsage::new(
+                provider_config.model.clone(),
+                input_est,
+                output_est,
+                *in_price,
+                *out_price,
+            ));
+        }
+
         // Phase 16: capture this run as an episode for experiential self-improvement.
         if let Some(traj) = &self.trajectory {
             let steps: Vec<EpisodeStep> = tool_calls_made
@@ -491,14 +535,6 @@ impl Agent {
                         && !tc.result.contains("refused by safety gate"),
                 })
                 .collect();
-            // Rough token estimate (chars/4 over the run's visible text) — a
-            // relative efficiency signal, not billing-grade accounting.
-            let chars: usize = user_message.len()
-                + final_response.len()
-                + tool_calls_made
-                    .iter()
-                    .map(|tc| tc.args.len() + tc.result.len())
-                    .sum::<usize>();
             let episode = Episode {
                 id: uuid::Uuid::new_v4().to_string(),
                 session_id: session_id.to_string(),
@@ -511,7 +547,7 @@ impl Agent {
                 },
                 ts_ms: now_ms(),
                 duration_ms: Some(run_started.elapsed().as_millis() as u64),
-                tokens_est: Some((chars / 4) as u64),
+                tokens_est: Some(input_est + output_est),
             };
             if let Err(e) = traj.record(&episode) {
                 tracing::warn!(error = %e, "Failed to record trajectory episode");

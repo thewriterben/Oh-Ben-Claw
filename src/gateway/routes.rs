@@ -64,14 +64,35 @@ pub async fn get_metrics(State(state): State<Arc<GatewayState>>) -> impl IntoRes
             }
         }
         let snap = obs.snapshot();
-        json!({
+        // Every registered counter (Phase 16 self-improvement, rollout
+        // simulations, experience retrieval, …), not just the fixed set.
+        let counters: serde_json::Map<String, Value> = obs
+            .metrics
+            .snapshot()
+            .into_iter()
+            .map(|m| (m.name, json!(m.value)))
+            .collect();
+        let mut metrics = json!({
             "requests_total": snap.requests_total,
             "tool_calls_total": snap.tool_calls_total,
             "tool_errors_total": snap.tool_errors_total,
             "agent_turns_total": snap.agent_turns_total,
             "uptime_secs": snap.uptime_secs,
             "active_sessions": snap.active_sessions,
-        })
+            "counters": counters,
+        });
+        // Phase 15/9: live cost summary when tracking is enabled.
+        if let Some(cost) = &state.cost {
+            let s = cost.session_summary();
+            metrics["cost"] = json!({
+                "session_usd": s.session_cost_usd,
+                "daily_usd": s.daily_cost_usd,
+                "monthly_usd": s.monthly_cost_usd,
+                "total_tokens_est": s.total_tokens,
+                "requests": s.request_count,
+            });
+        }
+        metrics
     } else {
         json!({ "error": "Observability not initialized" })
     };

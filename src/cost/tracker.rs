@@ -246,6 +246,7 @@ mod tests {
             daily_limit_usd: 10.0,
             monthly_limit_usd: 100.0,
             warn_threshold: 0.8,
+            ..Default::default()
         }
     }
 

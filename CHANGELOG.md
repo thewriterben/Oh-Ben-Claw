@@ -5,6 +5,48 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Phase 15 closeout: cost summary in /metrics + LLM-as-judge advisory (2026-07-02)
+
+The last two open Phase 15 work items (all that remains is the scheduled
+July 28 MCP default-mode flip).
+
+### Added — live cost tracking end-to-end
+
+- Audit finding: `CostTracker` (Phase 9) existed but was **never
+  instantiated** — no budget was ever enforced and no usage recorded. Now:
+  `main` builds it from `[cost]` when enabled (persisted at the Track 0 data
+  dir as `costs.db`, session-only fallback), `Agent::with_cost` records an
+  estimated `TokenUsage` per run (chars/4 heuristic split into read/write
+  sides — same convention as episode metrics; USD priced from new `[cost]`
+  `input_price_per_million`/`output_price_per_million`, default 0 so token
+  counts always flow), and orchestrator mode gets the same tracker via
+  `InnerAgentDeps.cost`.
+- `GET /api/v1/metrics` gains a `cost` object (session/daily/monthly USD,
+  estimated tokens, request count) — and now exposes **every registered
+  counter** under `counters` (the Phase 16 `self_improve_*`,
+  `learned_skill_invocations_total`, `skill_simulations_total`,
+  `experience_blocks_injected_total` counters were previously recorded but
+  invisible to the endpoint).
+
+### Added — LLM-as-judge advisory scoring (`src/agent/judge.rs`)
+
+- `LlmJudge`: env-configured judge (`OBC_JUDGE_PROVIDER`, `OBC_JUDGE_MODEL`,
+  optional `OBC_JUDGE_API_KEY`/`OBC_JUDGE_BASE_URL`) scoring a response
+  against its task on a 0–1 rubric; reuses the reflexion critique parser
+  (default 0.7 when unparseable, clamped).
+- `eval_llm_judge_advisory_scoring` in the harness: skips cleanly (with a
+  printed notice) when no judge is configured; when configured it prints the
+  score and asserts only parse-sanity. **Gates stay deterministic** per the
+  WS4 rule.
+
+### Tests
+
+- 3 judge unit tests (parse/rationale, default + clamp, env-absent) and the
+  advisory eval. Full workspace on Windows: **1117 lib tests, evals 30/30**,
+  clippy still warning-free.
+
+---
+
 ## Unreleased — Audit: orchestrator-mode safety parity + lint pass (2026-07-02)
 
 Post-`BRAIN UPDATE` audit of the day's 3 825-line change set plus a hunt for
