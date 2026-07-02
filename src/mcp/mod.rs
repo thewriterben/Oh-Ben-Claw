@@ -196,6 +196,12 @@ impl Tool for McpRemoteTool {
         self.schema.clone()
     }
 
+    fn output_trust(&self) -> crate::tools::traits::OutputTrust {
+        // Output comes from a remote MCP server outside the trust boundary
+        // (Track 0 taint tracking).
+        crate::tools::traits::OutputTrust::External
+    }
+
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         let mut client = self.client.lock().await;
         match client.call_tool(&self.name, args).await {

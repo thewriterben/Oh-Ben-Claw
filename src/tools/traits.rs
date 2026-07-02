@@ -116,6 +116,22 @@ impl RolloutStage {
     }
 }
 
+/// How trustworthy a tool's *output* is as a data source (Track 0 taint
+/// tracking). Tools that surface content from outside the trust boundary —
+/// web pages, remote MCP servers, arbitrary inbound messages — return
+/// [`OutputTrust::External`]; their output is pooled and any privileged
+/// action whose arguments echo that content is flagged/refused. The default
+/// is `Trusted` (local computation, the operator's own files, sensors).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputTrust {
+    /// Local/first-party output — not a prompt-injection vector.
+    #[default]
+    Trusted,
+    /// Output may contain attacker-controlled content from outside the
+    /// trust boundary (web, remote MCP, untrusted inbound text).
+    External,
+}
+
 /// The result of a tool execution.
 #[derive(Debug, Clone)]
 pub struct ToolResult {
@@ -219,6 +235,14 @@ pub trait Tool: Send + Sync {
     fn rollout_stage(&self) -> RolloutStage {
         RolloutStage::Autonomous
     }
+
+    /// Trust level of this tool's **output** as a data source (Track 0 taint
+    /// tracking). Tools that surface content from outside the trust boundary
+    /// (web fetch, remote MCP, untrusted inbound text) MUST override this to
+    /// [`OutputTrust::External`]. Default: `Trusted`.
+    fn output_trust(&self) -> OutputTrust {
+        OutputTrust::Trusted
+    }
 }
 
 /// A shared handle to a tool is itself a tool (pure delegation).
@@ -255,6 +279,10 @@ impl Tool for std::sync::Arc<dyn Tool> {
 
     fn rollout_stage(&self) -> RolloutStage {
         (**self).rollout_stage()
+    }
+
+    fn output_trust(&self) -> OutputTrust {
+        (**self).output_trust()
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {

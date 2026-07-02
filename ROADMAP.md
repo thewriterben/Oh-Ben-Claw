@@ -512,7 +512,8 @@ every phase below. Aligns Oh-Ben-Claw with the OWASP Top 10 for Agentic Applicat
 - [ ] **Pre-action authorization** at the tool-call boundary with cryptographically signed audit records for every physical action (extends `src/approval/` + `src/observability/`)
 - [ ] **Staged rollout** for new/synthesized physical skills: `simulate` → `supervised` → `autonomous`, promotion gated on a clean record
 - [ ] **Physical-aware approval prompts** — surface risk class, device, and concrete effect ("open GPIO 17 → unlock front door") in the approval UI
-- [ ] Embodied red-team evals: injected-malicious-skill and injected-prompt tests must not be able to drive an out-of-limit actuator command (extends Phase 15 eval harness)
+- [x] **Argument provenance ("taint") tracking** — CaMeL-style data-flow guard: `External`-trust tool output (web/browser/remote-MCP) is pooled per run, and a privileged (physical/irreversible/blast) call whose argument values echo that untrusted content is refused (`enforce`) or flagged (`warn`), unless explicitly operator-granted (`src/security/taint.rs`; `[safety].taint_mode`; OWASP ASI01/02). *(2026-07-02)*
+- [ ] Embodied red-team evals: injected-malicious-skill and injected-prompt tests must not be able to drive an out-of-limit actuator command (extends Phase 15 eval harness) — *injected-prompt→actuation covered by the `taint_redteam` evals; injected-malicious-skill by the Phase 16 P3 red-team evals*
 
 ## Phase 16: Experiential Self-Improvement ✅ Complete *(flagship)*
 

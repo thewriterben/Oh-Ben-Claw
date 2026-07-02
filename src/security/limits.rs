@@ -77,6 +77,12 @@ pub struct SafetyConfig {
     /// (does not replace) the deterministic `limits` above.
     #[serde(default)]
     pub dynamic_trust: bool,
+    /// **Taint tracking** mode (Track 0 provenance guard): `"off"`, `"warn"`
+    /// (default — log + count), or `"enforce"` (refuse a privileged call whose
+    /// argument values echo untrusted external content, unless the tool is
+    /// explicitly operator-granted). Unset ⇒ off (opt-in).
+    #[serde(default)]
+    pub taint_mode: Option<String>,
 }
 
 /// Why a physical action was refused by the gate.
