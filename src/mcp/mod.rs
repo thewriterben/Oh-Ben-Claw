@@ -30,6 +30,17 @@ pub mod server;
 pub const PROTOCOL_VERSION_LEGACY: &str = "2024-11-05";
 /// MCP protocol version string for the stateless 2026-07-28 specification.
 pub const PROTOCOL_VERSION_2026: &str = "2026-07-28";
+/// Every published protocol revision this implementation accepts on the wire.
+/// All pre-2026 revisions share the handshake lifecycle the bilingual server
+/// speaks, so they are all valid values for `MCP-Protocol-Version` and for a
+/// legacy client's `initialize.params.protocolVersion`.
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
+    "2024-11-05",
+    "2025-03-26",
+    "2025-06-18",
+    "2025-11-25",
+    PROTOCOL_VERSION_2026,
+];
 
 /// Which MCP protocol lifecycle to speak.
 ///

@@ -451,8 +451,8 @@ malicious; `SKILL.md` external-URL payloads defeat static scanning).
 The MCP release candidate is breaking: stateless protocol core (no init
 handshake / session header), extensions framework, Tasks primitive.
 
-- [ ] Audit MCP client + server against the 2026-07-28 RC
-- [ ] Dual-mode operation (current spec + RC) behind a config flag
+- [x] Audit MCP client + server against the 2026-07-28 RC (locked 2026-05-21) — conformant on the stateless core (`_meta` clientInfo, `server/discover`, SEP-2243 headers, SEP-2549 `ttlMs`/`cacheScope`, SEP-2164 error codes; no deprecated roots/sampling/logging). Four gaps found + fixed: header accept-list now covers every published revision (2025-11-25 was rejected!), `initialize` echoes a supported requested version, notifications no longer get responses (stdio silent, HTTP 202), `extensions: {}` capability map added (SEP-2133)
+- [x] Dual-mode operation (current spec + RC) behind a config flag — `ProtocolMode` (`legacy-2024` default / `stateless-2026`) per MCP server connection; bilingual server answers both lifecycles
 - [x] Cross-repo integration test with ClawCam (brain ↔ adapter ↔ stdio bridge ↔ gateway) in both modes — `ClawCam/tests/integration/test_phase15_cross_repo_mcp.py` (17/17): both protocol modes + plan-mode authorization + no-session-affinity (stdio + plain HTTP)
 - [ ] Flip default mode when the final spec ships (July 28)
 
@@ -514,21 +514,23 @@ every phase below. Aligns Oh-Ben-Claw with the OWASP Top 10 for Agentic Applicat
 - [ ] **Physical-aware approval prompts** — surface risk class, device, and concrete effect ("open GPIO 17 → unlock front door") in the approval UI
 - [ ] Embodied red-team evals: injected-malicious-skill and injected-prompt tests must not be able to drive an out-of-limit actuator command (extends Phase 15 eval harness)
 
-## Phase 16: Experiential Self-Improvement 📋 Planned *(flagship / near-term)*
+## Phase 16: Experiential Self-Improvement ✅ Complete *(flagship)*
 
 The agent learns reusable, verified skills from its own successful task
 trajectories — not just authored or ClawHub-installed skills. Builds directly on
 `skill_forge`, `memory`, and the agent loop. The single highest-demand frontier
 capability (the engine behind Hermes Agent's adoption), grounded so reflection is
 anchored to real verification rather than the model's own say-so.
+Gap analysis + step plan: `docs/PHASE16-PLAN.md`.
 
-- [ ] **Trajectory capture** — record agent runs (objective, tool calls, args, results, outcome) as structured episodes (`src/memory/`)
-- [ ] **Reflection + skill synthesis** — distil a successful trajectory into a named, parameterized, reusable skill (`src/skill_forge/`)
-- [ ] **Self-verification gate** — a synthesized skill must pass concrete verification (test execution and/or sensor/camera confirmation) before it is trusted; never trust intrinsic self-report alone
-- [ ] **Learned-skill library + retrieval** — store synthesized skills in the existing local skill library (ClawHub-compatible format); retrieve relevant skills before reasoning from scratch
-- [ ] **Offline trace evolution** — GEPA/DSPy-style reflective optimization of prompts and skill descriptions from accumulated execution traces (batch/scheduled job)
-- [ ] **Safety interlock** — any synthesized skill that invokes a physical/actuator tool is registered through Track 0 (risk class + staged rollout) before it may run unattended
-- [ ] Metrics: learned-skill reuse rate; token/latency reduction on repeated routine tasks; zero unsafe auto-runs of synthesized actuator skills
+- [x] **Trajectory capture** — record agent runs (objective, tool calls, args, results, outcome) as structured episodes (`src/memory/trajectory.rs`, wired via `Agent::with_trajectory_store`)
+- [x] **Loop closure (P0)** — learned/authored skills are live agent tools: startup + hot reload (`Agent::sync_skills`, `ReplayExecutor::on_skills_changed`), shadow guard, and `Delegate` skills resolved inside the execution chokepoint so policy/Track 0/trust/approval see the real underlying call (bounded hops)
+- [x] **Reflection + skill synthesis** — distil a successful trajectory into a named, parameterized, reusable skill (`src/skill_forge/synthesis.rs`) — *P2: multi-step `Sequence` recipes with typed `{param}` placeholders; `parameterize()` generalizes ≥2 same-chain episodes (uniform args fixed, varying args become schema parameters); LLM-reflective naming deferred to pair with P4*
+- [x] **Self-verification gate** — a synthesized skill must pass concrete verification (test execution and/or sensor/camera confirmation) before it is trusted; never trust intrinsic self-report alone — *P2: replay of the exemplar's proven steps + configurable `[[self_improvement.verification]]` rules (`test_command` host checks, read-only `sensor_assertion`); physical skills can earn `track0:sensor-verified` promotion evidence but are never auto-enabled*
+- [x] **Learned-skill library + retrieval** — store synthesized skills in the existing local skill library (ClawHub-compatible format); retrieve relevant skills before reasoning from scratch — *P0: skills are live tools; P1: token-overlap retrieval injects relevant learned skills + similar past successes as a system block each run (`Agent::with_experience_retrieval`, `[self_improvement].retrieval`); embedding-based scorer is a drop-in upgrade later*
+- [x] **Offline trace evolution** — GEPA/DSPy-style reflective optimization of prompts and skill descriptions from accumulated execution traces (batch/scheduled job) — *P4: `DescriptionEvolver` (config-gated, default off, daily): LLM rewrites learned-skill descriptions from real usage traces; only `description` ever changes; JSONL diff log; `skill revert-description` CLI*
+- [x] **Safety interlock** — any synthesized skill that invokes a physical/actuator tool is registered through Track 0 (risk class + staged rollout) before it may run unattended — *P3: `simulate → supervised → autonomous` staged rollout; simulate dry-runs in the chokepoint (actuator untouched), supervised requires an explicit operator grant (Full autonomy is not a grant), promotion gated on a clean run record (`skill promote` CLI + gateway endpoints), failed supervised runs auto-demote; red-team evals pin all of it*
+- [x] Metrics: learned-skill reuse rate; token/latency reduction on repeated routine tasks; zero unsafe auto-runs of synthesized actuator skills — *reuse: `learned_skill_invocations_total` + `self_improve_*` counters (P0); token/latency: per-episode `duration_ms`/`tokens_est` + `TrajectoryStore::efficiency_stats()` learned-vs-rest comparison logged each pass (P4); zero-unsafe-auto-runs: pinned by the P3 red-team evals*
 
 ## Phase 17: Long-Horizon Embodied Autonomy Harness 📋 Planned
 

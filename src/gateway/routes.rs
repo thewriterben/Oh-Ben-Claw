@@ -418,6 +418,104 @@ pub async fn list_tools(State(state): State<Arc<GatewayState>>) -> impl IntoResp
     }))
 }
 
+/// `GET /api/v1/skills` — installed skills with rollout stage + run record.
+pub async fn list_skills(State(state): State<Arc<GatewayState>>) -> impl IntoResponse {
+    let Some(ops) = &state.skills else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Skill operations not available" })),
+        )
+            .into_response();
+    };
+    let forge = crate::skill_forge::SkillForge::new(ops.skill_dir.clone());
+    let manifests = match forge.list_manifests() {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let skills: Vec<Value> = manifests
+        .into_iter()
+        .map(|m| {
+            let rec = ops.tracker.record(&m.name).unwrap_or_default();
+            let (clean, failures) = if rec.stage == m.stage {
+                (rec.clean_runs, rec.failures)
+            } else {
+                (0, 0)
+            };
+            json!({
+                "name": m.name,
+                "description": m.description,
+                "stage": m.stage.as_str(),
+                "enabled": m.enabled,
+                "tags": m.tags,
+                "version": m.version,
+                "clean_runs": clean,
+                "failures": failures,
+                "promotion_requires": ops.required_clean,
+            })
+        })
+        .collect();
+    let count = skills.len();
+    Json(json!({ "skills": skills, "count": count })).into_response()
+}
+
+/// Shared body of the promote/demote endpoints.
+async fn change_skill_stage(
+    state: &GatewayState,
+    name: &str,
+    promote: bool,
+) -> axum::response::Response {
+    let Some(ops) = &state.skills else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Skill operations not available" })),
+        )
+            .into_response();
+    };
+    let forge = crate::skill_forge::SkillForge::new(ops.skill_dir.clone());
+    let outcome = if promote {
+        crate::skill_forge::rollout::promote(&forge, &ops.tracker, name, ops.required_clean)
+    } else {
+        crate::skill_forge::rollout::demote(&forge, &ops.tracker, name)
+    };
+    match outcome {
+        Ok(stage) => {
+            // Hot-reload the live agent so the stage change applies immediately.
+            if let Some(handle) = &state.agent {
+                handle.sync_skills(&forge);
+            }
+            Json(json!({ "skill": name, "stage": stage.as_str() })).into_response()
+        }
+        Err(e) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "skill": name, "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/v1/skills/{name}/promote` — one stage up, gated on the clean-run
+/// record (Track 0 staged rollout).
+pub async fn promote_skill(
+    State(state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    change_skill_stage(&state, &name, true).await
+}
+
+/// `POST /api/v1/skills/{name}/demote` — one stage down (always allowed).
+pub async fn demote_skill(
+    State(state): State<Arc<GatewayState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    change_skill_stage(&state, &name, false).await
+}
+
 /// `POST /api/v1/tools/{name}` — Execute a tool directly by name.
 pub async fn execute_tool(
     State(state): State<Arc<GatewayState>>,

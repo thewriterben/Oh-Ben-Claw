@@ -455,6 +455,21 @@ impl ApprovalManager {
         }
     }
 
+    /// Returns `true` only when an operator has **explicitly** granted this
+    /// tool — via the `auto_approve` config list, a session "Always" grant, or
+    /// a persisted forever grant. Unlike [`needs_approval`](Self::needs_approval),
+    /// `Full` autonomy does NOT count as a grant: this is the gate for
+    /// supervised-rollout-stage skills (Track 0), which must never run
+    /// unattended merely because the autonomy level is permissive.
+    pub fn explicitly_granted(&self, tool_name: &str) -> bool {
+        if self.config.always_ask.iter().any(|t| t == tool_name) {
+            return false;
+        }
+        self.config.auto_approve.iter().any(|t| t == tool_name)
+            || self.session_allowlist.lock().contains(tool_name)
+            || self.forever_grants.contains(tool_name)
+    }
+
     /// Trust-aware approval check for a tool call by `node_id` with risk profile
     /// `risk`. Behavioral trust can only **tighten** the normal decision, never
     /// relax it: for a physical action, an untrusted node is `Deny`ed and a node on

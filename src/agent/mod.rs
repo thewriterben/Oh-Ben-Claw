@@ -29,10 +29,13 @@ use crate::security::limits::SafetyGate;
 use crate::security::PolicyEngine;
 use crate::approval::ApprovalManager;
 use crate::security::trust::{self, TrustGate, TrustScorer};
-use crate::tools::traits::{RiskClass, Tool};
+use crate::skill_forge::rollout::RolloutTracker;
+use crate::skill_forge::{SkillForge, SkillTool};
+use crate::tools::traits::{RiskClass, RolloutStage, Tool};
 use anyhow::Result;
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, RwLock};
 
 /// Maximum tool-use iterations per user message to prevent runaway loops.
 pub const MAX_TOOL_ITERATIONS: usize = 10;
@@ -47,7 +50,13 @@ pub struct Agent {
     config: AgentConfig,
     provider: Arc<dyn Provider>,
     memory: Arc<MemoryStore>,
-    tools: Vec<Box<dyn Tool>>,
+    /// Tool registry. `RwLock` + `Arc` elements so skills learned at runtime
+    /// (Phase 16) can be hot-added/removed while calls are in flight; every
+    /// LLM call takes a cheap snapshot.
+    tools: RwLock<Vec<Arc<dyn Tool>>>,
+    /// Names of tools that came from the skill forge (managed by
+    /// [`Agent::sync_skills`]); disjoint from built-in tool names.
+    skill_names: Mutex<HashSet<String>>,
     /// Optional policy engine for tool execution enforcement.
     policy: Option<PolicyEngine>,
     /// Optional observability context (Phase 15 WS5): when attached, every
@@ -69,6 +78,18 @@ pub struct Agent {
     /// Approval policy: when attached, every tool call is gated by the autonomy
     /// level, auto-approve list, and session/forever grants (composing with trust).
     approval: Option<Arc<ApprovalManager>>,
+    /// Phase 16 P1: when `Some(k)`, each run injects a compact "learned
+    /// experience" system block — up to `k` relevant learned skills and `k`
+    /// similar past successful episodes — so the model prefers a verified
+    /// recipe over reasoning from scratch.
+    experience_k: Option<usize>,
+    /// Track 0 staged rollout (Phase 16 P3): clean-run/failure record for
+    /// staged skills. Without it, simulate/supervised gating still applies —
+    /// runs just aren't counted toward promotion.
+    rollout: Option<Arc<RolloutTracker>>,
+    /// Skill-forge directory, enabling auto-demotion of a failing supervised
+    /// skill (manifest rewrite + hot resync).
+    forge_dir: Option<std::path::PathBuf>,
 }
 
 impl Agent {
@@ -83,7 +104,8 @@ impl Agent {
             config,
             provider,
             memory,
-            tools,
+            tools: RwLock::new(tools.into_iter().map(Arc::from).collect()),
+            skill_names: Mutex::new(HashSet::new()),
             policy: None,
             obs: None,
             safety: None,
@@ -91,6 +113,9 @@ impl Agent {
             trajectory: None,
             trust: None,
             approval: None,
+            experience_k: None,
+            rollout: None,
+            forge_dir: None,
         }
     }
 
@@ -127,6 +152,27 @@ impl Agent {
         self
     }
 
+    /// Enable experience retrieval (Phase 16 P1): each run injects up to `k`
+    /// relevant learned skills and `k` similar past successes into the prompt.
+    pub fn with_experience_retrieval(mut self, k: usize) -> Self {
+        self.experience_k = Some(k.max(1));
+        self
+    }
+
+    /// Attach the Track 0 staged-rollout tracker: simulated and supervised
+    /// skill runs are recorded toward (or against) promotion.
+    pub fn with_rollout(mut self, tracker: Arc<RolloutTracker>) -> Self {
+        self.rollout = Some(tracker);
+        self
+    }
+
+    /// Tell the agent where the skill forge lives, enabling auto-demotion of
+    /// a failing supervised-stage skill (manifest rewrite + hot resync).
+    pub fn with_forge_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.forge_dir = Some(dir.into());
+        self
+    }
+
     /// Attach a Track 0 dynamic trust scorer. Physical tool calls from an
     /// untrusted node are then refused, and every tool round-trip feeds the score.
     pub fn with_trust(mut self, trust: Arc<TrustScorer>) -> Self {
@@ -144,8 +190,83 @@ impl Agent {
     }
 
     /// Add tools to the agent's registry.
-    pub fn add_tools(&mut self, tools: Vec<Box<dyn Tool>>) {
-        self.tools.extend(tools);
+    pub fn add_tools(&self, tools: Vec<Box<dyn Tool>>) {
+        let mut reg = self.tools.write().unwrap_or_else(|p| p.into_inner());
+        reg.extend(tools.into_iter().map(Arc::<dyn Tool>::from));
+    }
+
+    /// A point-in-time snapshot of the tool registry, boxed for the provider
+    /// call. Each element is an `Arc` clone — cheap, and keeps the tool alive
+    /// even if the registry changes mid-run.
+    fn tools_snapshot(&self) -> Vec<Box<dyn Tool>> {
+        let reg = self.tools.read().unwrap_or_else(|p| p.into_inner());
+        reg.iter()
+            .map(|t| Box::new(Arc::clone(t)) as Box<dyn Tool>)
+            .collect()
+    }
+
+    /// Look up a registered tool by name (shared handle).
+    fn find_tool(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        let reg = self.tools.read().unwrap_or_else(|p| p.into_inner());
+        reg.iter().find(|t| t.name() == name).cloned()
+    }
+
+    /// Synchronize the tool registry with the skill forge (Phase 16).
+    ///
+    /// Rebuilds the forge-managed slice of the registry from the **enabled**
+    /// manifests on disk, so both membership changes *and* manifest edits
+    /// (e.g. a rollout-stage promotion) take effect hot:
+    /// - newly enabled skills are added (no restart),
+    /// - skills that were disabled/removed on disk are unregistered,
+    /// - changed manifests are swapped in,
+    /// - a skill whose name would shadow a built-in tool is skipped with a
+    ///   warning (skills may never replace built-ins).
+    ///
+    /// Returns `(added, removed, shadowed)` — net membership change.
+    pub fn sync_skills(&self, forge: &SkillForge) -> (usize, usize, usize) {
+        let manifests = match forge.list_manifests() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(error = %e, "sync_skills: failed to list skill manifests");
+                return (0, 0, 0);
+            }
+        };
+
+        let mut skill_names = self.skill_names.lock().unwrap_or_else(|p| p.into_inner());
+        let mut reg = self.tools.write().unwrap_or_else(|p| p.into_inner());
+        let before: HashSet<String> = skill_names.clone();
+
+        // Drop every forge-managed tool; re-add from the manifests on disk.
+        reg.retain(|t| !skill_names.contains(t.name()));
+        skill_names.clear();
+
+        let mut shadowed = 0;
+        for manifest in manifests.into_iter().filter(|m| m.enabled) {
+            if reg.iter().any(|t| t.name() == manifest.name) {
+                tracing::warn!(
+                    skill = %manifest.name,
+                    "sync_skills: skill would shadow a built-in tool; skipped"
+                );
+                shadowed += 1;
+                continue;
+            }
+            match SkillTool::new(manifest) {
+                Ok(tool) => {
+                    if !before.contains(tool.name()) {
+                        tracing::info!(skill = %tool.name(), "sync_skills: skill registered");
+                    }
+                    skill_names.insert(tool.name().to_string());
+                    reg.push(Arc::new(tool));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "sync_skills: invalid skill manifest; skipped");
+                }
+            }
+        }
+
+        let added = skill_names.difference(&before).count();
+        let removed = before.difference(&skill_names).count();
+        (added, removed, shadowed)
     }
 
     /// Process a user message and return the assistant's final response.
@@ -170,6 +291,8 @@ impl Agent {
             span.set_attr("session_id", session_id);
             span
         });
+        // Phase 16 P4: wall-clock + rough token measurement for the episode.
+        let run_started = std::time::Instant::now();
 
         // 1. Store the user message
         self.memory
@@ -178,9 +301,29 @@ impl Agent {
         // 2. Build conversation context
         let mut messages = self.build_context(session_id)?;
 
+        // Phase 16 P1: surface verified experience (learned skills + similar
+        // past successes) as a system block right after the system prompt.
+        if let Some(k) = self.experience_k {
+            if let Some(block) = self.experience_block(user_message, k) {
+                if let Some(obs) = &self.obs {
+                    obs.metrics.counter("experience_blocks_injected_total").inc();
+                }
+                messages.insert(
+                    1.min(messages.len()),
+                    ChatMessage {
+                        role: ChatRole::System,
+                        content: block,
+                    },
+                );
+            }
+        }
+
         let max_iterations = self.config.max_tool_iterations.min(MAX_TOOL_ITERATIONS);
         let mut tool_calls_made = Vec::new();
         let mut final_response = String::new();
+
+        // Stable tool set for this run (hot-added skills apply from the next run).
+        let tool_list = self.tools_snapshot();
 
         // 3–6. Agent loop
         for iteration in 0..max_iterations {
@@ -193,7 +336,7 @@ impl Agent {
 
             let completion = self
                 .provider
-                .chat_completion(&messages, &self.tools, provider_config)
+                .chat_completion(&messages, &tool_list, provider_config)
                 .await?;
 
             if completion.tool_calls.is_empty() {
@@ -214,6 +357,10 @@ impl Agent {
                 // WS5: per-tool-call span + counters.
                 let mut tool_span = self.obs.as_ref().map(|obs| {
                     obs.record_tool_call(&call.name);
+                    // Phase 16 reuse metric: invocations of learned skills.
+                    if call.name.starts_with("learned_") {
+                        obs.metrics.counter("learned_skill_invocations_total").inc();
+                    }
                     let mut span = obs.span("agent.tool");
                     span.set_attr("tool", &call.name);
                     span.set_attr("session_id", session_id);
@@ -344,6 +491,14 @@ impl Agent {
                         && !tc.result.contains("refused by safety gate"),
                 })
                 .collect();
+            // Rough token estimate (chars/4 over the run's visible text) — a
+            // relative efficiency signal, not billing-grade accounting.
+            let chars: usize = user_message.len()
+                + final_response.len()
+                + tool_calls_made
+                    .iter()
+                    .map(|tc| tc.args.len() + tc.result.len())
+                    .sum::<usize>();
             let episode = Episode {
                 id: uuid::Uuid::new_v4().to_string(),
                 session_id: session_id.to_string(),
@@ -355,6 +510,8 @@ impl Agent {
                     Outcome::Success
                 },
                 ts_ms: now_ms(),
+                duration_ms: Some(run_started.elapsed().as_millis() as u64),
+                tokens_est: Some((chars / 4) as u64),
             };
             if let Err(e) = traj.record(&episode) {
                 tracing::warn!(error = %e, "Failed to record trajectory episode");
@@ -365,6 +522,84 @@ impl Agent {
             message: final_response,
             tool_calls: tool_calls_made,
         })
+    }
+
+    /// Build the "learned experience" system block for an objective: up to `k`
+    /// relevant registered learned skills and `k` similar past successful
+    /// episodes, both ranked by deterministic token overlap. `None` when
+    /// nothing relevant is known — no prompt noise on novel tasks.
+    fn experience_block(&self, objective: &str, k: usize) -> Option<String> {
+        use crate::memory::trajectory::lexical_score;
+        const MIN_SCORE: f32 = 0.2;
+
+        // Relevant learned skills currently registered as tools.
+        let mut skills: Vec<(f32, String, String)> = {
+            let reg = self.tools.read().unwrap_or_else(|p| p.into_inner());
+            reg.iter()
+                .filter(|t| t.name().starts_with("learned_"))
+                .filter_map(|t| {
+                    // Match on the skill name (de-slugged) + description.
+                    let haystack =
+                        format!("{} {}", t.name().replace('_', " "), t.description());
+                    let s = lexical_score(objective, &haystack);
+                    (s >= MIN_SCORE).then(|| {
+                        (s, t.name().to_string(), t.description().to_string())
+                    })
+                })
+                .collect()
+        };
+        skills.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        skills.truncate(k);
+
+        // Similar past successful episodes (proven recipes).
+        let episodes = self
+            .trajectory
+            .as_ref()
+            .and_then(|t| t.similar(objective, k).ok())
+            .unwrap_or_default();
+
+        if skills.is_empty() && episodes.is_empty() {
+            return None;
+        }
+
+        let mut block = String::from(
+            "[Learned experience — verified results from this agent's past successful runs]\n",
+        );
+        if !skills.is_empty() {
+            block.push_str(
+                "Learned skills relevant to this task (prefer them over re-deriving the steps):\n",
+            );
+            for (_, name, desc) in &skills {
+                block.push_str(&format!("- {name}: {desc}\n"));
+            }
+        }
+        if !episodes.is_empty() {
+            block.push_str("Similar past successes (proven tool recipes):\n");
+            for ep in &episodes {
+                let recipe = ep
+                    .steps
+                    .iter()
+                    .filter(|s| s.ok)
+                    .take(3)
+                    .map(|s| {
+                        let mut args = s.args.to_string();
+                        if args.len() > 80 {
+                            args.truncate(77);
+                            args.push_str("...");
+                        }
+                        format!("{}({})", s.tool, args)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" → ");
+                let recipe = if recipe.is_empty() {
+                    "(no tool calls)".to_string()
+                } else {
+                    recipe
+                };
+                block.push_str(&format!("- \"{}\" → {}\n", ep.objective.trim(), recipe));
+            }
+        }
+        Some(block)
     }
 
     /// Build the conversation context for an LLM call.
@@ -398,36 +633,168 @@ impl Agent {
         name: &str,
         args_str: &str,
     ) -> Result<crate::tools::traits::ToolResult> {
-        // Policy check
-        if let Some(ref policy) = self.policy {
-            let verdict = policy.evaluate(name, args_str);
-            if !verdict.is_allowed() {
-                let reason = verdict
-                    .reason
-                    .as_deref()
-                    .unwrap_or("blocked by security policy");
-                let policy_name = verdict.policy_name.as_deref().unwrap_or("unknown");
-                tracing::warn!(
-                    tool = %name,
-                    policy = %policy_name,
-                    reason = %reason,
-                    "Tool call blocked by policy"
-                );
+        self.execute_tool_inner(name, args_str, false).await
+    }
+
+    /// The execution chokepoint. `in_sequence` marks a call made on behalf of
+    /// a Sequence-skill step, so nested sequences are refused (bounded depth).
+    async fn execute_tool_inner(
+        &self,
+        name: &str,
+        args_str: &str,
+        in_sequence: bool,
+    ) -> Result<crate::tools::traits::ToolResult> {
+        let mut name = name.to_string();
+        let mut args_str = args_str.to_string();
+
+        // Resolve delegate skills (Phase 16 learned recipes) to the underlying
+        // tool *before* the safety layers run, so policy (per hop), Track 0,
+        // trust, and approval all evaluate the real call. A bounded hop count
+        // prevents delegate cycles.
+        const MAX_DELEGATE_HOPS: usize = 3;
+        let mut hops = 0;
+        // Set when a supervised-rollout-stage skill passed its grant gate; the
+        // run's outcome is then recorded toward (or against) promotion.
+        let mut staged_skill: Option<String> = None;
+        let (tool, args) = loop {
+            // Policy check — evaluated at every hop (skill name and target).
+            if let Some(ref policy) = self.policy {
+                let verdict = policy.evaluate(&name, &args_str);
+                if !verdict.is_allowed() {
+                    let reason = verdict
+                        .reason
+                        .as_deref()
+                        .unwrap_or("blocked by security policy");
+                    let policy_name = verdict.policy_name.as_deref().unwrap_or("unknown");
+                    tracing::warn!(
+                        tool = %name,
+                        policy = %policy_name,
+                        reason = %reason,
+                        "Tool call blocked by policy"
+                    );
+                    return Ok(crate::tools::traits::ToolResult::err(format!(
+                        "Tool '{}' blocked by security policy '{}': {}",
+                        name, policy_name, reason
+                    )));
+                }
+            }
+
+            let tool = self
+                .find_tool(&name)
+                .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", name))?;
+
+            let args: serde_json::Value =
+                serde_json::from_str(&args_str).unwrap_or_else(|_| serde_json::json!({}));
+
+            // Track 0 staged rollout (Phase 16 P3) — checked on the *wrapper*
+            // before delegate resolution, and on every hop target.
+            match tool.rollout_stage() {
+                RolloutStage::Simulate => {
+                    // Dry-run: report what would execute; nothing runs.
+                    let description = describe_simulation(&tool, &args);
+                    if let Some(tracker) = &self.rollout {
+                        tracker.record_clean(&name, RolloutStage::Simulate);
+                    }
+                    if let Some(obs) = &self.obs {
+                        obs.metrics.counter("skill_simulations_total").inc();
+                    }
+                    tracing::info!(skill = %name, "staged skill simulated (stage=simulate)");
+                    return Ok(crate::tools::traits::ToolResult::ok(format!(
+                        "SIMULATION — Track 0 staged rollout (stage=simulate): skill '{}' did \
+                         NOT execute. It {}. Clean simulated runs count toward promotion; an \
+                         operator can promote with `oh-ben-claw skill promote {}`.",
+                        name, description, name
+                    )));
+                }
+                RolloutStage::Supervised => {
+                    // Fail closed: an explicit operator grant is required; a
+                    // permissive autonomy level is NOT a grant.
+                    let granted = self
+                        .approval
+                        .as_ref()
+                        .is_some_and(|a| a.explicitly_granted(&name));
+                    if !granted {
+                        tracing::warn!(
+                            skill = %name,
+                            "supervised-stage skill refused: no explicit operator grant"
+                        );
+                        return Ok(crate::tools::traits::ToolResult::err(format!(
+                            "Skill '{}' is at rollout stage 'supervised' and requires an \
+                             explicit operator grant (auto_approve list, session, or forever \
+                             grant) before it may execute",
+                            name
+                        )));
+                    }
+                    staged_skill = Some(name.clone());
+                }
+                RolloutStage::Autonomous => {}
+            }
+
+            match tool.as_delegate() {
+                Some((target, fixed_args)) => {
+                    hops += 1;
+                    if hops > MAX_DELEGATE_HOPS {
+                        return Ok(crate::tools::traits::ToolResult::err(format!(
+                            "Delegate chain exceeded {} hops at '{}' (cycle?)",
+                            MAX_DELEGATE_HOPS, name
+                        )));
+                    }
+                    let merged = merge_delegate_args(fixed_args, &args);
+                    tracing::debug!(skill = %name, target = %target, "Resolving delegate skill");
+                    args_str = merged.to_string();
+                    name = target;
+                }
+                None => break (tool, args),
+            }
+        };
+        let name = name.as_str();
+
+        // Sequence skills (Phase 16 P2): run each step through this same
+        // chokepoint, so every real call is policy/Track 0/trust/approval-
+        // gated individually. Nested sequences are refused (bounded depth);
+        // the first failing step aborts the recipe.
+        if let Some(steps) = tool.as_sequence() {
+            if in_sequence {
                 return Ok(crate::tools::traits::ToolResult::err(format!(
-                    "Tool '{}' blocked by security policy '{}': {}",
-                    name, policy_name, reason
+                    "Sequence skill '{}' cannot run inside another sequence",
+                    name
                 )));
             }
+            let mut outputs = Vec::with_capacity(steps.len());
+            for (i, (step_tool, template)) in steps.iter().enumerate() {
+                let step_args =
+                    crate::skill_forge::substitute_args(template, &args).to_string();
+                let result = Box::pin(self.execute_tool_inner(step_tool, &step_args, true))
+                    .await;
+                match result {
+                    Ok(r) if r.success => {
+                        outputs.push(format!("[step {} {}] {}", i + 1, step_tool, r.output));
+                    }
+                    Ok(r) => {
+                        self.record_staged_run(&staged_skill, false);
+                        return Ok(crate::tools::traits::ToolResult::err(format!(
+                            "Sequence '{}' failed at step {} ({}): {}",
+                            name,
+                            i + 1,
+                            step_tool,
+                            r.error.as_deref().unwrap_or("tool error")
+                        )));
+                    }
+                    Err(e) => {
+                        self.record_staged_run(&staged_skill, false);
+                        return Ok(crate::tools::traits::ToolResult::err(format!(
+                            "Sequence '{}' failed at step {} ({}): {}",
+                            name,
+                            i + 1,
+                            step_tool,
+                            e
+                        )));
+                    }
+                }
+            }
+            self.record_staged_run(&staged_skill, true);
+            return Ok(crate::tools::traits::ToolResult::ok(outputs.join("\n")));
         }
-
-        let tool = self
-            .tools
-            .iter()
-            .find(|t| t.name() == name)
-            .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", name))?;
-
-        let args: serde_json::Value =
-            serde_json::from_str(args_str).unwrap_or_else(|_| serde_json::json!({}));
 
         // Track 0: for physical actions, enforce deterministic safety limits and
         // record a tamper-evident audit entry BEFORE the tool runs. Refused
@@ -488,12 +855,48 @@ impl Agent {
 
         let started = std::time::Instant::now();
         let result = tool.execute(args).await;
+        let success = result.as_ref().map(|r| r.success).unwrap_or(false);
         if let Some(scorer) = &self.trust {
             let latency_ms = started.elapsed().as_millis() as f64;
-            let success = result.as_ref().map(|r| r.success).unwrap_or(false);
             scorer.record(&node_id, latency_ms, success);
         }
+        self.record_staged_run(&staged_skill, success);
         result
+    }
+
+    /// Record the outcome of a supervised-rollout-stage skill run. A failure
+    /// auto-demotes the skill back to `simulate` (Track 0: halt on drift) when
+    /// the forge directory is attached.
+    fn record_staged_run(&self, staged_skill: &Option<String>, success: bool) {
+        let Some(skill) = staged_skill else { return };
+        if let Some(tracker) = &self.rollout {
+            if success {
+                tracker.record_clean(skill, RolloutStage::Supervised);
+                return;
+            }
+            tracker.record_failure(skill, RolloutStage::Supervised);
+            if let Some(dir) = &self.forge_dir {
+                let forge = SkillForge::new(dir.clone());
+                match crate::skill_forge::rollout::demote(&forge, tracker, skill) {
+                    Ok(stage) => {
+                        tracing::warn!(
+                            skill = %skill,
+                            demoted_to = stage.as_str(),
+                            "supervised skill failed a real run — auto-demoted"
+                        );
+                        self.sync_skills(&forge);
+                    }
+                    Err(e) => {
+                        tracing::warn!(skill = %skill, error = %e, "auto-demotion failed");
+                    }
+                }
+            }
+        } else if !success {
+            tracing::warn!(
+                skill = %skill,
+                "supervised skill failed but no rollout tracker is attached"
+            );
+        }
     }
 
     /// Execute a tool directly by name with a JSON `Value` argument.
@@ -511,20 +914,19 @@ impl Agent {
     }
 
     /// Return the names of all registered tools.
-    pub fn tool_names(&self) -> Vec<&str> {
-        self.tools.iter().map(|t| t.name()).collect()
+    pub fn tool_names(&self) -> Vec<String> {
+        let reg = self.tools.read().unwrap_or_else(|p| p.into_inner());
+        reg.iter().map(|t| t.name().to_string()).collect()
     }
 
     /// Return the number of registered tools.
     pub fn tool_count(&self) -> usize {
-        self.tools.len()
+        self.tools.read().unwrap_or_else(|p| p.into_inner()).len()
     }
 
     /// The declared physical-risk of a registered tool (default-safe if unknown).
     pub fn tool_risk(&self, name: &str) -> RiskClass {
-        self.tools
-            .iter()
-            .find(|t| t.name() == name)
+        self.find_tool(name)
             .map(|t| t.risk_class())
             .unwrap_or_default()
     }
@@ -555,6 +957,38 @@ fn approval_authorize(
             "requires operator approval (autonomy is supervised/manual and it is not auto-approved or granted)"
                 .to_string(),
         ),
+    }
+}
+
+/// Merge a delegate skill's fixed args with the runtime args (runtime wins).
+fn merge_delegate_args(fixed: Value, runtime: &Value) -> Value {
+    let mut merged = fixed;
+    if let (Some(m), Some(a)) = (merged.as_object_mut(), runtime.as_object()) {
+        for (k, v) in a {
+            m.insert(k.clone(), v.clone());
+        }
+    }
+    merged
+}
+
+/// Human/model-readable description of what a simulate-stage skill *would*
+/// execute — used in the dry-run result so the trace is auditable.
+fn describe_simulation(tool: &Arc<dyn Tool>, args: &Value) -> String {
+    if let Some((target, fixed)) = tool.as_delegate() {
+        let merged = merge_delegate_args(fixed, args);
+        format!("would call tool '{}' with args {}", target, merged)
+    } else if let Some(steps) = tool.as_sequence() {
+        let rendered: Vec<String> = steps
+            .iter()
+            .enumerate()
+            .map(|(i, (t, tmpl))| {
+                let concrete = crate::skill_forge::substitute_args(tmpl, args);
+                format!("step {} → {}({})", i + 1, t, concrete)
+            })
+            .collect();
+        format!("would run {} steps: {}", rendered.len(), rendered.join("; "))
+    } else {
+        format!("would execute with args {}", args)
     }
 }
 

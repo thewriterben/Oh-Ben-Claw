@@ -207,6 +207,12 @@ impl AgentHandle {
         self.agent.tool_count()
     }
 
+    /// Hot-resync the agent's skill tools from the forge (Phase 16). Returns
+    /// `(added, removed, shadowed)`.
+    pub fn sync_skills(&self, forge: &crate::skill_forge::SkillForge) -> (usize, usize, usize) {
+        self.agent.sync_skills(forge)
+    }
+
     /// Update the connected peripheral node count.
     pub async fn set_node_count(&self, count: usize) {
         *self.node_count.lock().await = count;

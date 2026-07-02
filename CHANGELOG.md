@@ -5,6 +5,48 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Phase 15: MCP 2026-07-28 RC audit + conformance fixes (2026-07-02)
+
+Audited `src/mcp` (client + server) against the 2026-07-28 release candidate
+as locked on 2026-05-21 (primary source: the MCP blog RC announcement). The
+Phase 15 dual-mode implementation is conformant on the stateless core: exact
+`_meta` key (`io.modelcontextprotocol/clientInfo`), `server/discover`
+(SEP-2575), routing headers with body-mismatch rejection (SEP-2243),
+`ttlMs`/`cacheScope` on `tools/list` + client-side TTL (SEP-2549), JSON-RPC
+standard error codes (SEP-2164), and none of the newly deprecated features
+(roots/sampling/logging, SEP-2577) were ever implemented. Four gaps found and
+fixed:
+
+### Fixed — `src/mcp/`
+
+- **Header accept-list was two versions wide** — `MCP-Protocol-Version:
+  2025-11-25` (the *currently shipping* revision) was rejected with a 400.
+  New `SUPPORTED_PROTOCOL_VERSIONS` covers every published revision.
+- **`initialize` ignored the client's requested version** — now echoes the
+  requested `protocolVersion` when supported (falls back to the 2024-11-05
+  baseline otherwise).
+- **JSON-RPC violation: notifications got responses** — the stdio loop wrote
+  a response line for id-less requests (`notifications/initialized`); it is
+  now silent, and the HTTP transport answers notifications with `202
+  Accepted` and no body.
+- **Missing `extensions: {}` capability map** (SEP-2133 negotiation surface)
+  on `initialize`/`server/discover` results.
+
+Remaining (blocked on the spec date): flip `ProtocolMode` default to
+`stateless-2026` when the final specification ships on **July 28, 2026**.
+Optional post-final follow-ups noted in the audit: the Tasks extension and
+SEP-2322 `InputRequiredResult` (both extensions/optional; not needed for
+conformance).
+
+### Tests
+
+- 5 new: every published version accepted on the wire; requested-version
+  echo + unknown-version fallback; extensions map present; HTTP notification
+  → 202 with empty body; HTTP request → 200 with body.
+- Full workspace green on Windows: **1113 lib tests, evals 29/29**.
+
+---
+
 ## Unreleased — Phase 16 P4: offline trace evolution + efficiency metrics — Phase 16 complete (2026-07-02)
 
 The final Phase 16 slice: a GEPA/DSPy-inspired offline job that evolves

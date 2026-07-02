@@ -46,9 +46,11 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub mod evolve;
 pub mod improve;
 pub mod install_policy;
 pub mod registry;
+pub mod rollout;
 pub mod synthesis;
 
 // ── Skill Manifest ────────────────────────────────────────────────────────────
@@ -78,6 +80,66 @@ pub enum SkillKind {
         #[serde(default)]
         fixed_args: Value,
     },
+    /// An ordered multi-step recipe: each step calls a registered tool.
+    /// `{param}` placeholders in step-arg **string values** are substituted
+    /// with runtime argument values. Executed by the agent chokepoint one step
+    /// at a time, so policy/Track 0/trust/approval evaluate every real call
+    /// (Phase 16 P2 learned recipes).
+    Sequence { steps: Vec<SkillStep> },
+}
+
+/// One step of a [`SkillKind::Sequence`] recipe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillStep {
+    /// Registered tool name to call.
+    pub tool: String,
+    /// Arguments for the call; string values may contain `{param}` placeholders.
+    #[serde(default)]
+    pub args: Value,
+}
+
+/// Substitute `{param}` placeholders in the string values of `template` with
+/// values from `runtime`. A string that is *exactly* one placeholder (e.g.
+/// `"{pin}"`) is replaced by the runtime value itself, preserving its JSON
+/// type (numbers stay numbers); placeholders embedded in longer strings are
+/// replaced textually. Objects and arrays are walked recursively.
+pub fn substitute_args(template: &Value, runtime: &Value) -> Value {
+    match template {
+        Value::String(s) => {
+            // Whole-value placeholder: type-preserving substitution.
+            if s.len() > 2 && s.starts_with('{') && s.ends_with('}') {
+                let key = &s[1..s.len() - 1];
+                if !key.contains(['{', '}']) {
+                    if let Some(val) = runtime.get(key) {
+                        return val.clone();
+                    }
+                }
+            }
+            let mut out = s.clone();
+            if let Some(obj) = runtime.as_object() {
+                for (key, val) in obj {
+                    let placeholder = format!("{{{key}}}");
+                    if out.contains(&placeholder) {
+                        let replacement = match val {
+                            Value::String(v) => v.clone(),
+                            other => other.to_string(),
+                        };
+                        out = out.replace(&placeholder, &replacement);
+                    }
+                }
+            }
+            Value::String(out)
+        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), substitute_args(v, runtime)))
+                .collect(),
+        ),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|v| substitute_args(v, runtime)).collect())
+        }
+        other => other.clone(),
+    }
 }
 
 fn default_http_method() -> String {
@@ -99,6 +161,11 @@ pub struct SkillManifest {
     /// Semantic version of the skill (optional).
     #[serde(default)]
     pub version: Option<String>,
+    /// Track 0 staged-rollout stage (`simulate`/`supervised`/`autonomous`).
+    /// Defaults to `autonomous` (authored/installed skills behave as before);
+    /// synthesized physical skills start at `simulate`.
+    #[serde(default)]
+    pub stage: crate::tools::traits::RolloutStage,
     /// Free-form tags for categorisation.
     #[serde(default)]
     pub tags: Vec<String>,
@@ -148,6 +215,18 @@ impl SkillManifest {
                 "Skill name '{}' contains invalid characters (use a-z, 0-9, _)",
                 self.name
             );
+        }
+        if let SkillKind::Sequence { steps } = &self.kind {
+            if steps.is_empty() {
+                anyhow::bail!("Sequence skill '{}' has no steps", self.name);
+            }
+            if let Some(bad) = steps.iter().find(|s| s.tool.is_empty()) {
+                anyhow::bail!(
+                    "Sequence skill '{}' has a step with an empty tool name: {:?}",
+                    self.name,
+                    bad
+                );
+            }
         }
         Ok(())
     }
@@ -204,6 +283,31 @@ impl Tool for SkillTool {
 
     fn parameters_schema(&self) -> Value {
         self.manifest.parameters.clone()
+    }
+
+    fn as_delegate(&self) -> Option<(String, Value)> {
+        match &self.manifest.kind {
+            SkillKind::Delegate { tool, fixed_args } if self.manifest.enabled => {
+                Some((tool.clone(), fixed_args.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    fn as_sequence(&self) -> Option<Vec<(String, Value)>> {
+        match &self.manifest.kind {
+            SkillKind::Sequence { steps } if self.manifest.enabled => Some(
+                steps
+                    .iter()
+                    .map(|s| (s.tool.clone(), s.args.clone()))
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
+    fn rollout_stage(&self) -> crate::tools::traits::RolloutStage {
+        self.manifest.stage
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
@@ -298,17 +402,25 @@ impl Tool for SkillTool {
                 }
             }
 
-            SkillKind::Delegate { tool, fixed_args } => {
-                // Merge fixed_args with runtime args (runtime args take precedence)
-                let mut merged = fixed_args.clone();
-                if let (Some(m), Some(a)) = (merged.as_object_mut(), args.as_object()) {
-                    for (k, v) in a {
-                        m.insert(k.clone(), v.clone());
-                    }
-                }
-                Ok(ToolResult::ok(format!(
-                    "Delegate to tool '{}' with args: {}",
-                    tool, merged
+            SkillKind::Delegate { tool, .. } => {
+                // Delegate skills are resolved by the agent's execution
+                // chokepoint (see `Tool::as_delegate`), so policy/Track 0/
+                // approval evaluate the real underlying call. Executing the
+                // wrapper directly (outside an agent) cannot route the call.
+                Ok(ToolResult::err(format!(
+                    "Delegate skill '{}' targets tool '{}' and must be executed \
+                     through the agent (no tool router in standalone execution)",
+                    self.manifest.name, tool
+                )))
+            }
+
+            SkillKind::Sequence { steps } => {
+                // Same chokepoint rule as Delegate (see `Tool::as_sequence`).
+                Ok(ToolResult::err(format!(
+                    "Sequence skill '{}' ({} steps) must be executed through the \
+                     agent (no tool router in standalone execution)",
+                    self.manifest.name,
+                    steps.len()
                 )))
             }
         }
@@ -586,6 +698,7 @@ mod tests {
             },
             parameters: default_empty_schema(),
             version: Some("1.0.0".to_string()),
+            stage: Default::default(),
             tags: vec!["test".to_string()],
             enabled: true,
             timeout_secs: 5,
@@ -839,7 +952,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delegate_skill_merges_args() {
+    async fn delegate_skill_exposes_target_and_refuses_standalone_execution() {
         let m = SkillManifest {
             kind: SkillKind::Delegate {
                 tool: "shell".to_string(),
@@ -848,8 +961,60 @@ mod tests {
             ..sample_shell_manifest("delegate_skill")
         };
         let tool = SkillTool::new(m).unwrap();
+
+        // The agent chokepoint resolves the delegation via `as_delegate`.
+        let (target, fixed) = tool.as_delegate().expect("delegate target exposed");
+        assert_eq!(target, "shell");
+        assert_eq!(fixed["fixed"], "value");
+
+        // Standalone execution (no agent to route through) is an explicit error,
+        // never a fake success.
         let result = tool.execute(json!({"runtime": "arg"})).await.unwrap();
-        assert!(result.success);
-        assert!(result.output.contains("shell"));
+        assert!(!result.success);
+        assert!(result.error.as_deref().unwrap_or("").contains("shell"));
+    }
+
+    #[test]
+    fn substitute_args_preserves_types_and_replaces_inline() {
+        let template = json!({
+            "pin": "{pin}",
+            "url": "https://x/{city}/now",
+            "nested": {"level": "{pin}"},
+            "fixed": true,
+        });
+        let runtime = json!({"pin": 17, "city": "Oslo"});
+        let out = substitute_args(&template, &runtime);
+        assert_eq!(out["pin"], 17, "whole-value placeholder keeps the number type");
+        assert_eq!(out["url"], "https://x/Oslo/now", "inline placeholder is textual");
+        assert_eq!(out["nested"]["level"], 17, "recursion into objects");
+        assert_eq!(out["fixed"], true);
+        // Unknown placeholder is left as-is (visible, not silently dropped).
+        let out2 = substitute_args(&json!({"a": "{missing}"}), &json!({}));
+        assert_eq!(out2["a"], "{missing}");
+    }
+
+    #[test]
+    fn sequence_manifest_validation() {
+        let mut m = sample_shell_manifest("seq");
+        m.kind = SkillKind::Sequence { steps: vec![] };
+        assert!(m.validate().is_err(), "empty sequence rejected");
+        m.kind = SkillKind::Sequence {
+            steps: vec![SkillStep { tool: "http".into(), args: json!({}) }],
+        };
+        assert!(m.validate().is_ok());
+    }
+
+    #[tokio::test]
+    async fn disabled_delegate_skill_exposes_no_target() {
+        let m = SkillManifest {
+            enabled: false,
+            kind: SkillKind::Delegate {
+                tool: "shell".to_string(),
+                fixed_args: json!({}),
+            },
+            ..sample_shell_manifest("delegate_skill_off")
+        };
+        let tool = SkillTool::new(m).unwrap();
+        assert!(tool.as_delegate().is_none());
     }
 }

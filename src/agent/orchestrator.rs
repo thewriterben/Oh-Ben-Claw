@@ -165,8 +165,13 @@ impl OrchestratorAgent {
             inner = inner.with_action_auditor(a);
         }
         if let Some(t) = trajectory {
-            inner = inner.with_trajectory_store(t);
+            inner = inner.with_trajectory_store(t).with_experience_retrieval(3);
         }
+        // Phase 16: enabled forge skills (authored + learned) are first-class
+        // tools on the orchestrator's inner agent too.
+        inner.sync_skills(&crate::skill_forge::SkillForge::new(
+            crate::skill_forge::SkillForge::default_dir(),
+        ));
         let agent = Arc::new(inner);
         let handle = AgentHandle::new(Arc::clone(&agent), provider_config.clone());
 

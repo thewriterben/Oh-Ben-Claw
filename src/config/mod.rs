@@ -1647,6 +1647,55 @@ pub struct SelfImprovementConfig {
     /// Cap on auto-installed learned skills. Default 500.
     #[serde(default)]
     pub max_learned: Option<usize>,
+    /// Inject relevant learned skills + similar past successes into the prompt
+    /// each run (experience retrieval, Phase 16 P1). Default true.
+    #[serde(default)]
+    pub retrieval: Option<bool>,
+    /// How many learned skills / past episodes to retrieve per run. Default 3.
+    #[serde(default)]
+    pub retrieval_k: Option<usize>,
+    /// Extra verification requirements for synthesized skills
+    /// (`[[self_improvement.verification]]`, Phase 16 P2).
+    #[serde(default)]
+    pub verification: Vec<VerificationRuleConfig>,
+    /// Clean runs required at the current stage before `skill promote` is
+    /// allowed (Track 0 staged rollout, Phase 16 P3). Default 3.
+    #[serde(default)]
+    pub promotion_clean_runs: Option<u32>,
+    /// Enable the offline description-evolution job (Phase 16 P4): an LLM
+    /// periodically rewrites learned-skill descriptions from usage traces
+    /// (diff-logged, revertible; never touches stage/enabled). Default false.
+    #[serde(default)]
+    pub evolve: bool,
+    /// How often (seconds) the evolution job runs. Default 86400 (daily).
+    #[serde(default)]
+    pub evolve_interval_secs: Option<u64>,
+    /// Max descriptions rewritten per evolution pass. Default 5.
+    #[serde(default)]
+    pub evolve_max_per_pass: Option<usize>,
+}
+
+/// One `[[self_improvement.verification]]` entry: a check that synthesized
+/// skills matching `skill` (exact name, or prefix ending in `*`) must pass
+/// before being trusted.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VerificationRuleConfig {
+    /// Skill-name pattern (e.g. `"learned_*"` or an exact name).
+    pub skill: String,
+    /// Check kind: `"test_command"` or `"sensor_assertion"`.
+    pub kind: String,
+    /// Shell command to run (test_command).
+    #[serde(default)]
+    pub cmd: Option<String>,
+    /// Expected exit code (test_command). Default 0.
+    #[serde(default)]
+    pub expect_exit: Option<i32>,
+    /// Read-only tool to invoke (sensor_assertion), e.g. `"sensor_read"`.
+    #[serde(default)]
+    pub tool: Option<String>,
+    /// Substring the tool output must contain (sensor_assertion).
+    #[serde(default)]
+    pub contains: Option<String>,
 }
 
 /// Mission sequencer configuration (`[mission]`). Named missions (each
