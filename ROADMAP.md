@@ -532,19 +532,20 @@ Gap analysis + step plan: `docs/PHASE16-PLAN.md`.
 - [x] **Safety interlock** — any synthesized skill that invokes a physical/actuator tool is registered through Track 0 (risk class + staged rollout) before it may run unattended — *P3: `simulate → supervised → autonomous` staged rollout; simulate dry-runs in the chokepoint (actuator untouched), supervised requires an explicit operator grant (Full autonomy is not a grant), promotion gated on a clean run record (`skill promote` CLI + gateway endpoints), failed supervised runs auto-demote; red-team evals pin all of it*
 - [x] Metrics: learned-skill reuse rate; token/latency reduction on repeated routine tasks; zero unsafe auto-runs of synthesized actuator skills — *reuse: `learned_skill_invocations_total` + `self_improve_*` counters (P0); token/latency: per-episode `duration_ms`/`tokens_est` + `TrajectoryStore::efficiency_stats()` learned-vs-rest comparison logged each pass (P4); zero-unsafe-auto-runs: pinned by the P3 red-team evals*
 
-## Phase 17: Long-Horizon Embodied Autonomy Harness 📋 Planned
+## Phase 17: Long-Horizon Embodied Autonomy Harness ✅ Complete
 
 Durable, resumable, self-verifying operation across hours/days and across crashes,
 reboots, and context limits — the Anthropic initializer+worker harness pattern,
 adapted so the externalized "progress file" is the **physical world state**. Builds
 on `scheduler`, `heartbeat`, `agent`, `memory`, and `runtime`. Depends on Track 0.
+Design: `docs/PHASE17-PLAN.md`. Implementation: `src/harness/`.
 
-- [ ] **Durable execution** — checkpoint agent/task state to persistent storage; resume cleanly after crash/reboot without re-running completed physical actions (model "non-persistable regions" around side-effecting tool calls)
-- [ ] **Initializer + worker split** — initializer establishes environment and an externalized world-state/objective record; worker advances one objective at a time
-- [ ] **Externalized world-state progress record** — structured (JSON) objective list with per-objective status, resilient to context compaction
-- [ ] **Mandatory self-verification before "done"** — confirm each objective via sensors/cameras/tests, not assertion; re-open objectives that fail verification on resume
-- [ ] **Resume smoke test** — on restart, re-establish context cheaply (current device states, outstanding objectives) before acting
-- [ ] Long-horizon eval: an unattended fleet completes a defined multi-hour routine across an induced crash/reboot with correct resume and no duplicated physical actions
+- [x] **Durable execution** — checkpoint agent/task state to persistent storage; resume cleanly after crash/reboot without re-running completed physical actions (model "non-persistable regions" around side-effecting tool calls) — *atomic tmp+rename checkpoints at every transition; objectives marked `InFlight` **before** the agent acts; resume never blindly re-runs — verification evidence decides; check-less in-flight objectives fail closed*
+- [x] **Initializer + worker split** — initializer establishes environment and an externalized world-state/objective record; worker advances one objective at a time — *`Harness::initialize` (load-or-create + env snapshot + in-flight quarantine) / `run_once` (one transition per pass, verification backlog first)*
+- [x] **Externalized world-state progress record** — structured (JSON) objective list with per-objective status, resilient to context compaction — *`ProgressRecord` at `~/.oh-ben-claw/harness/<mission>.json`; operator-inspectable*
+- [x] **Mandatory self-verification before "done"** — confirm each objective via sensors/cameras/tests, not assertion; re-open objectives that fail verification on resume — *`HarnessCheck::{ToolContains, Command, WorldFact}`, all tool reads through the safety chokepoint; check-less completions are explicitly marked UNVERIFIED*
+- [x] **Resume smoke test** — on restart, re-establish context cheaply (current device states, outstanding objectives) before acting — *compact resume-context block (tally + statuses + world facts) prefixes every worker prompt*
+- [x] Long-horizon eval: an unattended fleet completes a defined multi-hour routine across an induced crash/reboot with correct resume and no duplicated physical actions — *`tests/harness_long_horizon.rs`: fresh harness per "boot", crash induced mid-objective, actuator fires exactly once across the whole mission; fail-closed and reopen-then-complete scenarios pinned*
 
 ## Phase 18: Dual-System Perception-Action + World Memory 📋 Planned
 

@@ -5,6 +5,68 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Phase 17: Long-Horizon Embodied Autonomy Harness (2026-07-02)
+
+Durable, resumable, self-verifying missions — the initializer+worker pattern
+with the progress file externalized as structured JSON and completion decided
+by **physical evidence**, never the model's say-so. Design:
+`docs/PHASE17-PLAN.md` (includes the substrate audit: the `mission` sequencer
+is a reactive in-memory step executor; the harness is its durable,
+LLM-driven, objective-level complement).
+
+### Added — `src/harness/mod.rs`
+
+- **Progress record**: `ProgressRecord`/`Objective` persisted at
+  `~/.oh-ben-claw/harness/<mission>.json` with atomic tmp+rename writes —
+  every state transition is a crash-safe checkpoint. Status machine:
+  `Pending → InFlight → (NeedsVerification on resume) → Done | Failed`.
+- **Non-persistable regions / no duplicate actuation**: objectives are
+  checkpointed `InFlight` *before* the agent acts. On resume, `InFlight`
+  objectives are quarantined to `NeedsVerification` and their evidence
+  decides: side effect landed → `Done` (actuator untouched); didn't →
+  reopened. A check-less in-flight objective **fails closed** ("manual
+  review", never a blind re-run).
+- **Verification** (mandatory before `Done`): `HarnessCheck::ToolContains`
+  (sensor/camera reads through the agent chokepoint — policy/Track 0/trust/
+  approval all apply), `Command` (host test), `WorldFact` (world-memory
+  fact). Check-less completions are explicitly marked UNVERIFIED.
+- **Initializer** (`initialize`): load-or-create, `run_count` bump, in-flight
+  quarantine, environment snapshot (world entities) into the record.
+  **Worker** (`run_once`): one transition per pass — verification backlog
+  first, then the next pending objective with a compact resume-context block
+  (tally + statuses + current world facts) prefixing the prompt.
+  `run_mission` drives to settlement under a hard pass budget.
+
+### Config / wiring
+
+- `[harness]` (`enabled`, `pass_delay_ms`, `max_passes`) +
+  `[[harness.mission]]` (name, autostart) +
+  `[[harness.mission.objective]]` (id, description, max_attempts, nested
+  `verify` checks). Autostart missions spawn in `main` on the **active**
+  agent (`AgentHandle::agent_arc`), with world memory attached when enabled;
+  per-mission conversation sessions via new
+  `MemoryStore::create_session_with_id` (idempotent).
+
+### Tests
+
+- Unit: atomic store roundtrip (no stray tmp), mission-name sanitization
+  (path traversal), tally/settled.
+- `tests/harness_long_horizon.rs` — the roadmap's headline eval, compressed
+  to test time: a 3-objective routine across an induced mid-objective crash
+  with a fresh harness instance per "boot" (only the on-disk record carries
+  over). The completed physical objective survives the reboot untouched, the
+  in-flight one resumes via sensor evidence, and **the actuator fires exactly
+  once across the whole mission**. Plus: check-less in-flight fails closed;
+  failed resume-verification reopens (attempts counted) then completes.
+- Full workspace on Windows: **1120 lib tests, harness eval 3/3,
+  evals 30/30**, clippy warning-free.
+
+Phase 17 complete — all six roadmap items. Follow-ups deliberately deferred:
+gateway/CLI mission-control surface, LLM-decomposed objectives from a
+free-form goal, multi-mission concurrency.
+
+---
+
 ## Unreleased — Phase 15 closeout: cost summary in /metrics + LLM-as-judge advisory (2026-07-02)
 
 The last two open Phase 15 work items (all that remains is the scheduled

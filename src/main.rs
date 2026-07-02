@@ -1731,6 +1731,84 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
 
+    // Phase 17: spawn autostart harness missions — durable, resumable,
+    // self-verifying long-horizon objectives (design: docs/PHASE17-PLAN.md).
+    if config.harness.enabled {
+        let pass_delay =
+            std::time::Duration::from_millis(config.harness.pass_delay_ms.unwrap_or(2_000));
+        let max_passes = config.harness.max_passes.unwrap_or(1_000);
+        for mission_cfg in config.harness.mission.iter().filter(|m| m.autostart) {
+            use oh_ben_claw::harness::{Harness, HarnessCheck, Objective, ProgressStore};
+
+            // Map config objectives + checks into the harness types.
+            let objectives: Vec<Objective> = mission_cfg
+                .objective
+                .iter()
+                .map(|o| Objective {
+                    id: o.id.clone(),
+                    description: o.description.clone(),
+                    verify: o
+                        .verify
+                        .iter()
+                        .filter_map(|c| match c.kind.as_str() {
+                            "tool_contains" => Some(HarnessCheck::ToolContains {
+                                tool: c.tool.clone()?,
+                                args: c.args.clone().unwrap_or(serde_json::json!({})),
+                                contains: c.contains.clone()?,
+                            }),
+                            "command" => Some(HarnessCheck::Command {
+                                cmd: c.cmd.clone()?,
+                                expect_exit: c.expect_exit.unwrap_or(0),
+                            }),
+                            "world_fact" => Some(HarnessCheck::WorldFact {
+                                entity: c.entity.clone()?,
+                                contains: c.contains.clone()?,
+                            }),
+                            other => {
+                                tracing::warn!(kind = %other, "unknown harness check kind; ignored");
+                                None
+                            }
+                        })
+                        .collect(),
+                    status: oh_ben_claw::harness::ObjectiveStatus::Pending,
+                    attempts: 0,
+                    max_attempts: o.max_attempts.unwrap_or(3),
+                    note: String::new(),
+                })
+                .collect();
+
+            // Dedicated conversation session per mission (idempotent).
+            let harness_session = format!("harness-{}", mission_cfg.name);
+            let _ = memory.create_session_with_id(&harness_session);
+
+            let mut harness = Harness::new(
+                ProgressStore::new(ProgressStore::default_dir()),
+                handle.agent_arc(),
+                config.provider.clone(),
+                harness_session,
+            );
+            if let Some(world) = &world_mem {
+                harness = harness.with_world(Arc::clone(world));
+            }
+            let mission_name = mission_cfg.name.clone();
+            tokio::spawn(async move {
+                match harness.initialize(&mission_name, objectives) {
+                    Ok(mut record) => {
+                        if let Err(e) =
+                            harness.run_mission(&mut record, max_passes, pass_delay).await
+                        {
+                            tracing::warn!(mission = %mission_name, error = %e, "harness mission errored");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(mission = %mission_name, error = %e, "harness init failed")
+                    }
+                }
+            });
+            info!(mission = %mission_cfg.name, "Phase 17 harness mission spawned");
+        }
+    }
+
     // Start the gateway (with live agent attached) if enabled
     let _gateway_state = if config.gateway.enabled {
         // Build the full gateway state with all subsystems (reusing the shared

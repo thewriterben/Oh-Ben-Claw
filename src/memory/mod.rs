@@ -148,6 +148,18 @@ impl MemoryStore {
         Ok(id)
     }
 
+    /// Get or create a session with an explicit id (idempotent). Used by
+    /// background subsystems that need a stable session across restarts —
+    /// e.g. the Phase 17 harness's per-mission worker session.
+    pub fn create_session_with_id(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO sessions (id, title) VALUES (?1, ?1)",
+            params![id],
+        )?;
+        Ok(())
+    }
+
     /// Get or create the "default" session.
     pub fn default_session(&self) -> Result<String> {
         let conn = self.conn.lock().unwrap();

@@ -1708,6 +1708,69 @@ pub struct VerificationRuleConfig {
     pub contains: Option<String>,
 }
 
+/// Phase 17 long-horizon harness configuration (`[harness]`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HarnessConfig {
+    /// Enable the harness (autostart missions spawn on agent start).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Delay between worker passes, ms. Default 2000.
+    #[serde(default)]
+    pub pass_delay_ms: Option<u64>,
+    /// Hard budget of worker passes per mission run. Default 1000.
+    #[serde(default)]
+    pub max_passes: Option<usize>,
+    /// Missions (`[[harness.mission]]`).
+    #[serde(default)]
+    pub mission: Vec<HarnessMissionConfig>,
+}
+
+/// One `[[harness.mission]]` entry.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HarnessMissionConfig {
+    /// Mission name (also the progress-record filename).
+    pub name: String,
+    /// Start automatically when the agent starts. Default false.
+    #[serde(default)]
+    pub autostart: bool,
+    /// Objectives (`[[harness.mission.objective]]`).
+    #[serde(default)]
+    pub objective: Vec<HarnessObjectiveConfig>,
+}
+
+/// One `[[harness.mission.objective]]` entry.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HarnessObjectiveConfig {
+    pub id: String,
+    pub description: String,
+    /// Attempts before the objective is marked failed. Default 3.
+    #[serde(default)]
+    pub max_attempts: Option<u32>,
+    /// Verification checks (`[[harness.mission.objective.verify]]`):
+    /// `kind = "tool_contains" | "command" | "world_fact"` with the matching
+    /// fields (`tool`/`args`/`contains`, `cmd`/`expect_exit`, `entity`).
+    #[serde(default)]
+    pub verify: Vec<HarnessCheckConfig>,
+}
+
+/// One verification-check entry for a harness objective.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HarnessCheckConfig {
+    pub kind: String,
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub args: Option<serde_json::Value>,
+    #[serde(default)]
+    pub contains: Option<String>,
+    #[serde(default)]
+    pub cmd: Option<String>,
+    #[serde(default)]
+    pub expect_exit: Option<i32>,
+    #[serde(default)]
+    pub entity: Option<String>,
+}
+
 /// Mission sequencer configuration (`[mission]`). Named missions (each
 /// `[[mission.definition]]`) the `mission` tool can start; a runner ticks the
 /// active one over the navigation + audio suites.
@@ -1863,6 +1926,9 @@ pub struct Config {
     pub autonomy: AutonomyConfig,
     #[serde(default)]
     pub cost: CostConfig,
+    /// Phase 17 long-horizon harness (`[harness]`).
+    #[serde(default)]
+    pub harness: HarnessConfig,
     #[serde(default)]
     pub runtime: RuntimeConfig,
     #[serde(default)]
