@@ -389,7 +389,7 @@ mod tests {
         let resp = server.handle_request(req).await;
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].clone();
-        assert!(tools.as_array().unwrap().len() >= 1);
+        assert!(!tools.as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -19,10 +19,12 @@ use std::sync::Arc;
 /// Whether the pack is taking on or giving up charge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ChargeState {
     Charging,
     Discharging,
     Full,
+    #[default]
     Unknown,
 }
 
@@ -37,11 +39,6 @@ impl ChargeState {
     }
 }
 
-impl Default for ChargeState {
-    fn default() -> Self {
-        ChargeState::Unknown
-    }
-}
 
 /// A single battery telemetry reading.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

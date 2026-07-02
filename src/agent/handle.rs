@@ -213,6 +213,14 @@ impl AgentHandle {
         self.agent.sync_skills(forge)
     }
 
+    /// A shared handle to the underlying agent — the one actually serving
+    /// this handle's traffic. Used so background loops (e.g. the Phase 16
+    /// improver) operate on the **active** agent in both plain and
+    /// orchestrator modes.
+    pub fn agent_arc(&self) -> Arc<Agent> {
+        Arc::clone(&self.agent)
+    }
+
     /// Update the connected peripheral node count.
     pub async fn set_node_count(&self, count: usize) {
         *self.node_count.lock().await = count;

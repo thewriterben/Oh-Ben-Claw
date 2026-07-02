@@ -1471,6 +1471,40 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
 
+    // Shared safety subsystems — the SAME instances go to the plain agent and,
+    // in orchestrator mode, to the orchestrator's inner agent, so both modes
+    // enforce an identical safety posture (audit 2026-07-02).
+    //
+    // Approval policy: the autonomy level + auto-approve list + session/forever
+    // grants gate every tool call (composing with Track 0 + trust). Full
+    // autonomy (the default) passes everything; under supervised/manual an
+    // un-granted tool is refused in this autonomous loop.
+    let approval = Arc::new(oh_ben_claw::approval::ApprovalManager::from_config(
+        &config.autonomy,
+    ));
+    // Track 0 dynamic trust: refuse physical actions from a node whose behavior
+    // (latency/failures) has demoted it; every tool round-trip feeds the score.
+    let trust_scorer = if config.safety.enabled && config.safety.dynamic_trust {
+        info!("Track 0 dynamic trust scoring enabled");
+        Some(Arc::new(
+            oh_ben_claw::security::trust::TrustScorer::default(),
+        ))
+    } else {
+        None
+    };
+    // Phase 16 P3: Track 0 staged rollout — clean-run record + auto-demotion.
+    let rollout_tracker = Arc::new(oh_ben_claw::skill_forge::rollout::RolloutTracker::load(
+        oh_ben_claw::skill_forge::rollout::RolloutTracker::default_path(),
+    ));
+    // Phase 16 P1: experience retrieval top-k (None = disabled).
+    let experience_k = if trajectory_store.is_some()
+        && config.self_improvement.retrieval.unwrap_or(true)
+    {
+        Some(config.self_improvement.retrieval_k.unwrap_or(3))
+    } else {
+        None
+    };
+
     // Build the plain reasoning agent, attaching Track 0 + Phase 16 when configured.
     let mut agent = Agent::new(
         config.agent.clone(),
@@ -1478,7 +1512,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         Arc::clone(&memory),
         all_tools,
     )
-    .with_policy(security_ctx.policy);
+    .with_policy(security_ctx.policy.clone());
     if let Some(gate) = &safety_gate {
         agent = agent.with_safety_gate(Arc::clone(gate));
     }
@@ -1487,30 +1521,15 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     }
     if let Some(t) = &trajectory_store {
         agent = agent.with_trajectory_store(Arc::clone(t));
-        // Phase 16 P1: experience retrieval into the prompt (default on).
-        if config.self_improvement.retrieval.unwrap_or(true) {
-            agent = agent
-                .with_experience_retrieval(config.self_improvement.retrieval_k.unwrap_or(3));
-        }
     }
-    // Track 0 dynamic trust: refuse physical actions from a node whose behavior
-    // (latency/failures) has demoted it, and feed the score from every round-trip.
-    if config.safety.enabled && config.safety.dynamic_trust {
-        agent = agent.with_trust(Arc::new(oh_ben_claw::security::trust::TrustScorer::default()));
-        info!("Track 0 dynamic trust scoring enabled");
+    if let Some(k) = experience_k {
+        agent = agent.with_experience_retrieval(k);
     }
-    // Approval policy in the live dispatch: the autonomy level + auto-approve list +
-    // session/forever grants gate every tool call (composing with Track 0 + trust).
-    // Full autonomy (the default) passes everything; under supervised/manual an
-    // un-granted tool is refused in this autonomous loop.
-    agent = agent.with_approval(Arc::new(oh_ben_claw::approval::ApprovalManager::from_config(
-        &config.autonomy,
-    )));
+    if let Some(trust) = &trust_scorer {
+        agent = agent.with_trust(Arc::clone(trust));
+    }
+    agent = agent.with_approval(Arc::clone(&approval));
     agent = agent.with_obs(Arc::clone(&obs));
-    // Phase 16 P3: Track 0 staged rollout — clean-run record + auto-demotion.
-    let rollout_tracker = Arc::new(oh_ben_claw::skill_forge::rollout::RolloutTracker::load(
-        oh_ben_claw::skill_forge::rollout::RolloutTracker::default_path(),
-    ));
     agent = agent
         .with_rollout(Arc::clone(&rollout_tracker))
         .with_forge_dir(oh_ben_claw::skill_forge::SkillForge::default_dir());
@@ -1528,9 +1547,62 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     }
     let agent = Arc::new(agent);
 
+    // Build orchestrator or plain agent handle
+    let (handle, maybe_pool) = if config.orchestrator.enabled {
+        info!("Multi-agent orchestration enabled — building OrchestratorAgent");
+        // Same safety posture as the plain agent: policy, approval, trust,
+        // obs, rollout, and forge dir all attach to the inner agent too
+        // (audit 2026-07-02 — these were previously missing in orchestrator
+        // mode, which silently skipped policy + autonomy enforcement).
+        let orch = OrchestratorAgent::new_with_deps(
+            config.agent.clone(),
+            config.provider.clone(),
+            Arc::clone(&memory),
+            config.orchestrator.clone(),
+            session_id.clone(),
+            oh_ben_claw::agent::orchestrator::InnerAgentDeps {
+                safety: safety_gate.clone(),
+                auditor: action_auditor.clone(),
+                trajectory: trajectory_store.clone(),
+                policy: Some(security_ctx.policy.clone()),
+                approval: Some(Arc::clone(&approval)),
+                obs: Some(Arc::clone(&obs)),
+                trust: trust_scorer.clone(),
+                rollout: Some(Arc::clone(&rollout_tracker)),
+                forge_dir: Some(oh_ben_claw::skill_forge::SkillForge::default_dir()),
+                experience_k,
+            },
+        )?;
+        let pool = orch.pool.clone();
+        let h = orch.handle.clone();
+        h.set_node_count(node_count).await;
+        info!(
+            sub_agents = pool.active_count(),
+            tool_count = h.tool_count(),
+            node_count = node_count,
+            session_id = %session_id,
+            "Orchestrator ready"
+        );
+        (h, Some(pool))
+    } else {
+        let handle = AgentHandle::new(Arc::clone(&agent), config.provider.clone());
+        handle.set_node_count(node_count).await;
+        info!(
+            tool_count = agent.tool_count(),
+            node_count = node_count,
+            session_id = %session_id,
+            "Agent ready"
+        );
+        (handle, None)
+    };
+
     // Phase 16: spawn the autonomous self-improvement loop when enabled. It
     // periodically synthesizes + verifies skills from successful trajectories;
     // physical skills are quarantined for operator promotion (Track 0).
+    // The executor is the **active** agent (the handle's) so replay runs
+    // through the live chokepoint and hot-reloads reach the agent actually
+    // serving traffic — in orchestrator mode that's the inner agent, not the
+    // plain one (audit 2026-07-02).
     if config.self_improvement.enabled {
         if let Some(traj) = &trajectory_store {
             let improver = oh_ben_claw::skill_forge::improve::SkillImprover::new(
@@ -1579,7 +1651,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     .collect(),
             );
             let executor: Arc<dyn oh_ben_claw::skill_forge::improve::ReplayExecutor> =
-                agent.clone();
+                handle.agent_arc();
             let interval = std::time::Duration::from_secs(
                 config.self_improvement.interval_secs.unwrap_or(3600),
             );
@@ -1619,42 +1691,6 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             }
         }
     }
-
-    // Build orchestrator or plain agent handle
-    let (handle, maybe_pool) = if config.orchestrator.enabled {
-        info!("Multi-agent orchestration enabled — building OrchestratorAgent");
-        let orch = OrchestratorAgent::new_with_track0(
-            config.agent.clone(),
-            config.provider.clone(),
-            Arc::clone(&memory),
-            config.orchestrator.clone(),
-            session_id.clone(),
-            safety_gate.clone(),
-            action_auditor.clone(),
-            trajectory_store.clone(),
-        )?;
-        let pool = orch.pool.clone();
-        let h = orch.handle.clone();
-        h.set_node_count(node_count).await;
-        info!(
-            sub_agents = pool.active_count(),
-            tool_count = h.tool_count(),
-            node_count = node_count,
-            session_id = %session_id,
-            "Orchestrator ready"
-        );
-        (h, Some(pool))
-    } else {
-        let handle = AgentHandle::new(Arc::clone(&agent), config.provider.clone());
-        handle.set_node_count(node_count).await;
-        info!(
-            tool_count = agent.tool_count(),
-            node_count = node_count,
-            session_id = %session_id,
-            "Agent ready"
-        );
-        (handle, None)
-    };
 
     // Start the gateway (with live agent attached) if enabled
     let _gateway_state = if config.gateway.enabled {

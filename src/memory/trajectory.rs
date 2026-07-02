@@ -334,11 +334,11 @@ pub struct EfficiencyBucket {
 impl EfficiencyBucket {
     /// Mean duration per run (ms), 0 when empty.
     pub fn avg_ms(&self) -> u64 {
-        if self.runs == 0 { 0 } else { self.total_ms / self.runs }
+        self.total_ms.checked_div(self.runs).unwrap_or(0)
     }
     /// Mean estimated tokens per run, 0 when empty.
     pub fn avg_tokens_est(&self) -> u64 {
-        if self.runs == 0 { 0 } else { self.total_tokens_est / self.runs }
+        self.total_tokens_est.checked_div(self.runs).unwrap_or(0)
     }
 }
 

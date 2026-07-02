@@ -23,7 +23,7 @@ use oh_ben_claw::spine::lora_mesh::relay::{originate, MeshRelay};
 use oh_ben_claw::spine::lora_mesh::{
     broadcast_outbox, ingest_line, ingest_line_relayed, MeshFrame, MeshRadio,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 /// A loopback radio that records every transmitted frame (stands in for a real
 /// Meshtastic device).

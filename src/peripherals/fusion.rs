@@ -535,7 +535,7 @@ mod tests {
 
     #[test]
     fn min_max_strategies() {
-        let readings = vec![10.0_f64, 20.0, 30.0];
+        let readings = [10.0_f64, 20.0, 30.0];
 
         let mut min_f = SensorFusion::new("pressure", FusionStrategy::Min);
         let mut max_f = SensorFusion::new("pressure", FusionStrategy::Max);

@@ -293,7 +293,7 @@ impl ForesightController {
                 }
                 Action::Publish { topic, payload } => self.sink.publish(topic, payload).await?,
                 Action::Escalate { reason } => {
-                    let allowed = self.escalation_budget.as_ref().map_or(true, |b| b.allow(now_ms));
+                    let allowed = self.escalation_budget.as_ref().is_none_or(|b| b.allow(now_ms));
                     if allowed {
                         self.sink.escalate(reason).await?;
                     } else {

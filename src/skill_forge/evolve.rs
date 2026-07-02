@@ -246,8 +246,7 @@ pub fn revert_description(
     let last: EvolutionEntry = content
         .lines()
         .filter_map(|l| serde_json::from_str::<EvolutionEntry>(l).ok())
-        .filter(|e| e.skill == name && e.kind == "evolve")
-        .next_back()
+        .rfind(|e| e.skill == name && e.kind == "evolve")
         .ok_or_else(|| anyhow::anyhow!("no evolution entry for '{name}'"))?;
 
     let mut manifest = forge

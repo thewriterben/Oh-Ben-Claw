@@ -30,6 +30,37 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+// ── Inner-agent dependencies ──────────────────────────────────────────────────
+
+/// Optional subsystems attached to the orchestrator's **inner** agent — the
+/// one that executes tools directly. Mirrors what `main` attaches to the
+/// plain agent, so orchestrator mode has the **same safety posture** as plain
+/// mode: without these, tool policies and the autonomy level were silently
+/// unenforced when orchestration was enabled (audit 2026-07-02).
+#[derive(Default)]
+pub struct InnerAgentDeps {
+    /// Track 0 deterministic safety gate.
+    pub safety: Option<Arc<crate::security::SafetyGate>>,
+    /// Track 0 tamper-evident action auditor.
+    pub auditor: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
+    /// Phase 16 trajectory capture.
+    pub trajectory: Option<Arc<crate::memory::trajectory::TrajectoryStore>>,
+    /// Tool security policy engine.
+    pub policy: Option<crate::security::PolicyEngine>,
+    /// Approval manager (autonomy level + grants; gates supervised skills).
+    pub approval: Option<Arc<crate::approval::ApprovalManager>>,
+    /// Observability context (spans + counters).
+    pub obs: Option<Arc<crate::observability::ObsContext>>,
+    /// Track 0 dynamic trust scorer.
+    pub trust: Option<Arc<crate::security::trust::TrustScorer>>,
+    /// Phase 16 P3 staged-rollout run record.
+    pub rollout: Option<Arc<crate::skill_forge::rollout::RolloutTracker>>,
+    /// Skill-forge directory (enables supervised-skill auto-demotion).
+    pub forge_dir: Option<std::path::PathBuf>,
+    /// Phase 16 P1 experience retrieval top-k (None = disabled).
+    pub experience_k: Option<usize>,
+}
+
 // ── Routing Strategy ──────────────────────────────────────────────────────────
 
 /// How the orchestrator routes tasks to sub-agents.
@@ -128,7 +159,8 @@ impl OrchestratorAgent {
 
     /// Like [`OrchestratorAgent::new`], but attaches a Track 0 safety gate
     /// and/or tamper-evident action auditor to the orchestrator's inner
-    /// reasoning agent (the one that executes tools directly).
+    /// reasoning agent. Kept for API stability; new call sites should use
+    /// [`OrchestratorAgent::new_with_deps`].
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_track0(
         agent_config: AgentConfig,
@@ -139,6 +171,34 @@ impl OrchestratorAgent {
         safety: Option<Arc<crate::security::SafetyGate>>,
         auditor: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
         trajectory: Option<Arc<crate::memory::trajectory::TrajectoryStore>>,
+    ) -> Result<Self> {
+        let experience_k = trajectory.as_ref().map(|_| 3);
+        Self::new_with_deps(
+            agent_config,
+            provider_config,
+            memory,
+            orchestrator_config,
+            session_id,
+            InnerAgentDeps {
+                safety,
+                auditor,
+                trajectory,
+                experience_k,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Build an orchestrator whose inner agent carries the full set of
+    /// subsystems from [`InnerAgentDeps`] — the same safety posture as the
+    /// plain (non-orchestrated) agent.
+    pub fn new_with_deps(
+        agent_config: AgentConfig,
+        provider_config: ProviderConfig,
+        memory: Arc<MemoryStore>,
+        orchestrator_config: OrchestratorConfig,
+        session_id: String,
+        deps: InnerAgentDeps,
     ) -> Result<Self> {
         let pool = AgentPool::new(provider_config.clone(), Arc::clone(&memory));
         let session_arc = Arc::new(Mutex::new(session_id));
@@ -156,16 +216,37 @@ impl OrchestratorAgent {
         // Build the provider
         let provider = providers::from_config(&provider_config)?;
 
-        // Track 0: attach safety gate / auditor to the inner agent before sealing it.
+        // Attach every provided subsystem before sealing the inner agent.
         let mut inner = Agent::new(config, provider, Arc::clone(&memory), tools);
-        if let Some(gate) = safety {
+        if let Some(policy) = deps.policy {
+            inner = inner.with_policy(policy);
+        }
+        if let Some(gate) = deps.safety {
             inner = inner.with_safety_gate(gate);
         }
-        if let Some(a) = auditor {
+        if let Some(a) = deps.auditor {
             inner = inner.with_action_auditor(a);
         }
-        if let Some(t) = trajectory {
-            inner = inner.with_trajectory_store(t).with_experience_retrieval(3);
+        if let Some(t) = deps.trajectory {
+            inner = inner.with_trajectory_store(t);
+        }
+        if let Some(k) = deps.experience_k {
+            inner = inner.with_experience_retrieval(k);
+        }
+        if let Some(approval) = deps.approval {
+            inner = inner.with_approval(approval);
+        }
+        if let Some(obs) = deps.obs {
+            inner = inner.with_obs(obs);
+        }
+        if let Some(trust) = deps.trust {
+            inner = inner.with_trust(trust);
+        }
+        if let Some(rollout) = deps.rollout {
+            inner = inner.with_rollout(rollout);
+        }
+        if let Some(dir) = deps.forge_dir {
+            inner = inner.with_forge_dir(dir);
         }
         // Phase 16: enabled forge skills (authored + learned) are first-class
         // tools on the orchestrator's inner agent too.
@@ -258,6 +339,66 @@ mod tests {
         assert!(tool_names.iter().any(|n| n == "delegate_task"));
         assert!(tool_names.iter().any(|n| n == "list_agents"));
         assert!(tool_names.iter().any(|n| n == "stop_agent"));
+    }
+
+    /// Audit 2026-07-02 regression guard: the inner agent must carry the same
+    /// safety subsystems as the plain agent. Without approval, the autonomy
+    /// level was silently unenforced in orchestrator mode; without policy,
+    /// tool security policies were skipped.
+    #[test]
+    fn orchestrator_inner_agent_enforces_policy_and_approval() {
+        use crate::approval::{ApprovalManager, ForeverGrants};
+        use crate::config::{AutonomyConfig, AutonomyLevel};
+
+        let grants = std::env::temp_dir().join(format!(
+            "obc-orch-parity-grants-{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let approval = Arc::new(ApprovalManager::with_grants(
+            &AutonomyConfig {
+                level: AutonomyLevel::Supervised,
+                auto_approve: vec![],
+                always_ask: vec![],
+            },
+            ForeverGrants::load(grants),
+            true,
+        ));
+
+        let orch = OrchestratorAgent::new_with_deps(
+            AgentConfig::default(),
+            ProviderConfig::default(),
+            Arc::new(MemoryStore::open_in_memory().unwrap()),
+            OrchestratorConfig::default(),
+            "parity-session".to_string(),
+            InnerAgentDeps {
+                approval: Some(approval),
+                policy: Some(crate::security::PolicyEngine::new(vec![])),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Under supervised autonomy with no grants, the inner agent must
+        // refuse an un-granted tool instead of silently executing it.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt
+            .block_on(orch.handle.agent_arc().execute_tool_direct(
+                "shell",
+                serde_json::json!({"command": "echo parity"}),
+            ))
+            .unwrap();
+        assert!(!result.success, "supervised autonomy must gate the inner agent");
+        assert!(
+            result.error.as_deref().unwrap_or("").contains("approval"),
+            "{:?}",
+            result.error
+        );
     }
 
     #[test]

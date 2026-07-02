@@ -5,6 +5,70 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Audit: orchestrator-mode safety parity + lint pass (2026-07-02)
+
+Post-`BRAIN UPDATE` audit of the day's 3 825-line change set plus a hunt for
+latent integration gaps. Headline finding (pre-existing, Phase 9-era, made
+more visible by today's work): **orchestrator mode silently skipped safety
+enforcement** — the orchestrator's inner agent (the one that actually executes
+tools when orchestration is enabled) was built without the policy engine, the
+approval manager, obs, trust, the rollout tracker, or the forge dir. With no
+approval manager attached, `approval_authorize` permits everything, so a
+configured `supervised`/`manual` autonomy level was **ignored** in
+orchestrator mode; tool security policies were likewise unenforced, learned
+skills never hot-reloaded onto the serving agent, and staged-skill runs went
+unrecorded.
+
+### Fixed — orchestrator parity (`src/agent/orchestrator.rs`, `src/main.rs`)
+
+- New `InnerAgentDeps` struct + `OrchestratorAgent::new_with_deps()`: the
+  inner agent now receives the **same shared instances** as the plain agent —
+  policy engine, approval manager, obs context, trust scorer, rollout
+  tracker, forge dir, and config-driven experience retrieval (was hardcoded
+  k=3). `new_with_track0` kept as a delegating shim.
+- `main.rs` hoists approval/trust into shared `Arc`s used by both agents, and
+  the Phase 16 improver/evolver now spawn **after** handle construction with
+  `AgentHandle::agent_arc()` as the replay executor — so replay verification
+  and skill hot-reloads target the agent actually serving traffic in both
+  modes (previously, in orchestrator mode, the improver synced skills onto
+  the idle plain agent and the serving agent never saw them until restart).
+- Regression guard: `orchestrator_inner_agent_enforces_policy_and_approval` —
+  under supervised autonomy with no grants, the inner agent must refuse an
+  un-granted tool.
+
+### Fixed — lints
+
+- `EfficiencyBucket` averages use `checked_div`; evolution-log revert uses
+  `rfind`; two trivial pre-existing test lints (`len() >= 1`, unused import
+  in `mesh_fleet_e2e`).
+- Full pre-existing lint sweep: `cargo clippy --fix` cleared 10 warnings
+  (doctor, fleet, foresight, power, fusion, image, reflex, hil test); the 3
+  `needless_range_loop`s in `navigation/slam.rs` were rewritten by hand —
+  gauge-anchor clearing uses `fill` + column iteration, the Gaussian-
+  elimination pivot search uses `enumerate().skip()`, and row elimination
+  uses `split_at_mut` + `zip` (identical arithmetic, no per-column indexing).
+  **`cargo clippy --workspace --all-targets` is now warning-free.**
+
+### Known limitations (documented, accepted)
+
+- A skill installed via the `skill_forge` tool mid-session becomes callable at
+  the next sync (periodic improver pass or operator promote), not instantly —
+  the tool description now says so.
+- A CLI `skill promote` while the agent is running takes effect on the next
+  improvement-pass sync (the gateway promote endpoint hot-reloads
+  immediately); an interim dry-run of the still-cached simulate-stage skill
+  can reset the tracker's stage record, which biases **against** promotion —
+  safe direction.
+- In a sequence whose steps traverse multiple supervised skills, only the
+  most recent staged skill's run is recorded (single-slot tracking).
+
+### Verified
+
+- Full workspace on Windows: **1114 lib tests** (+1 parity guard),
+  **evals 29/29**, `cargo clippy` clean on today's files.
+
+---
+
 ## Unreleased — Phase 15: MCP 2026-07-28 RC audit + conformance fixes (2026-07-02)
 
 Audited `src/mcp` (client + server) against the 2026-07-28 release candidate

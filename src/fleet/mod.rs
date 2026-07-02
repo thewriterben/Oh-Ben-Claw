@@ -115,7 +115,7 @@ pub fn allocate(registry: &FleetRegistry, task: &Task, now_ms: u64, stale_ms: u6
     registry
         .nodes()
         .filter(|n| n.online(now_ms, stale_ms) && !n.busy)
-        .filter(|n| n.battery.map_or(true, |b| b >= task.min_battery))
+        .filter(|n| n.battery.is_none_or(|b| b >= task.min_battery))
         .filter_map(|n| match (n.x, n.y) {
             (Some(x), Some(y)) => {
                 let d2 = (x - task.x).powi(2) + (y - task.y).powi(2);

@@ -582,8 +582,9 @@ impl Tool for SkillForgeTool {
 
     fn description(&self) -> &str {
         "Manage the skill forge: list installed skills, install new skills from a JSON \
-        manifest, or remove existing skills. Skills extend the agent's capabilities at \
-        runtime without requiring a restart."
+        manifest, or remove existing skills. Note: a skill installed or removed here \
+        becomes callable (or uncallable) at the next skill sync — the periodic \
+        self-improvement pass or an operator promote — not instantly."
     }
 
     fn parameters_schema(&self) -> Value {
