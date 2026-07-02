@@ -5,6 +5,54 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Research adoptions: MCP conformance CI + hybrid episode retrieval (2026-07-02)
+
+First two adopt-now items from `AI-Agents-Research-July2026.md`.
+
+### Added — MCP conformance in CI
+
+- `oh-ben-claw mcp-serve` — runs the MCP server standalone (`--transport
+  stdio|http`, `--port`, `--mode legacy-2024|stateless-2026`); stdio keeps
+  stdout as the pure JSON-RPC stream (status → stderr, per MCP convention).
+- New CI job `mcp-conformance`: the official
+  `@modelcontextprotocol/conformance` suite runs against the OBC server in
+  **both** protocol modes (`--spec-version 2025-11-25` and `draft`).
+  Advisory (`continue-on-error`) until an `--expected-failures` baseline is
+  captured from the first runs, then flip to blocking.
+
+### Changed — hybrid episode retrieval (`TrajectoryStore::similar`)
+
+Token-overlap-only ranking becomes **Reciprocal Rank Fusion** over up to
+three legs (2026 hybrid-search practice — rank-based fusion, no score
+normalization):
+
+1. token overlap (unchanged, exact anchors);
+2. **SQLite FTS5/BM25** side-table (`episodes_fts`, kept in sync on record;
+   query tokens are individually quoted so FTS syntax can't be injected;
+   graceful degradation if a system SQLite lacks FTS5 — the bundled one has
+   it);
+3. **dense cosine** over locally-embedded objectives (`episode_vecs` blob
+   table) when an `Embedder` is attached — paraphrase recall with zero
+   token overlap ("open the door" now finds "unlock the entrance").
+
+- New `Embedder` trait + `memory/embed.rs` `FastEmbedder` backend behind the
+  new **`semantic` cargo feature** (fastembed/ONNX; model downloads once,
+  then fully offline — no per-turn network). Off by default so ordinary
+  builds and CI stay light; runtime-gated by `[self_improvement].semantic`.
+  Embedding happens on the record path outside the connection lock; retrieval
+  stays fully deterministic given the same store.
+
+### Tests
+
+- Dense-leg paraphrase retrieval via a mock embedder (zero token overlap);
+  hybrid determinism (same store+query → same ranking); FTS5 query-syntax
+  neutralization (`"weather" OR (NEAR *` cannot error or inject). All prior
+  retrieval tests unchanged and green.
+- Full workspace on Windows: **1123 lib tests**, harness 3/3, evals 30/30,
+  clippy warning-free; `cargo check --features semantic` clean.
+
+---
+
 ## Unreleased — Phase 17: Long-Horizon Embodied Autonomy Harness (2026-07-02)
 
 Durable, resumable, self-verifying missions — the initializer+worker pattern

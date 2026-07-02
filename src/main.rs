@@ -92,6 +92,21 @@ enum Commands {
     #[command(subcommand)]
     Skill(SkillCommands),
 
+    /// Run the MCP server standalone (stdio for host integration, http for
+    /// gateways and the official conformance suite).
+    McpServe {
+        /// Transport: "stdio" or "http".
+        #[arg(long, default_value = "stdio")]
+        transport: String,
+        /// Port for the http transport.
+        #[arg(long, default_value = "3411")]
+        port: u16,
+        /// Protocol mode: "legacy-2024" (headers optional) or
+        /// "stateless-2026" (2026-07-28 routing headers required).
+        #[arg(long, default_value = "legacy-2024")]
+        mode: String,
+    },
+
     /// Run system diagnostics to check configuration and connectivity.
     Doctor,
 }
@@ -204,6 +219,9 @@ async fn main() -> Result<()> {
         }
         Commands::Skill(cmd) => {
             run_skill(&config, cmd)?;
+        }
+        Commands::McpServe { transport, port, mode } => {
+            run_mcp_serve(&transport, port, &mode).await?;
         }
         Commands::Doctor => {
             oh_ben_claw::doctor::run(&config)?;
@@ -438,6 +456,27 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
         match oh_ben_claw::memory::trajectory::TrajectoryStore::open(&traj_path) {
             Ok(store) => {
+                // Dense retrieval leg (local embeddings) — build- and
+                // config-gated; the store works identically without it.
+                #[allow(unused_mut)]
+                let mut store = store;
+                if config.self_improvement.semantic {
+                    #[cfg(feature = "semantic")]
+                    match oh_ben_claw::memory::embed::FastEmbedder::try_default() {
+                        Ok(embedder) => {
+                            store = store.with_embedder(Box::new(embedder));
+                            info!("Phase 16 semantic retrieval leg active (local embeddings)");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "semantic retrieval requested but embedder failed to init");
+                        }
+                    }
+                    #[cfg(not(feature = "semantic"))]
+                    tracing::warn!(
+                        "[self_improvement].semantic is set but this build lacks the \
+                         `semantic` cargo feature — rebuild with `--features semantic`"
+                    );
+                }
                 trajectory_store = Some(Arc::new(store));
                 info!(path = %traj_path, "Phase 16 trajectory capture active");
             }
@@ -2105,6 +2144,38 @@ async fn run_peripheral(mut config: Config, cmd: PeripheralCommands) -> Result<(
         }
     }
     Ok(())
+}
+
+/// `oh-ben-claw mcp-serve` — run the MCP server standalone with the default
+/// tool set. The http transport is what the official conformance suite tests
+/// (`npx @modelcontextprotocol/conformance server --url http://…/mcp`).
+async fn run_mcp_serve(transport: &str, port: u16, mode: &str) -> Result<()> {
+    use oh_ben_claw::mcp::{server::McpServer, ProtocolMode};
+    use oh_ben_claw::tools::default_tools;
+
+    let mode = match mode {
+        "stateless-2026" => ProtocolMode::Stateless2026,
+        "legacy-2024" => ProtocolMode::Legacy2024,
+        other => anyhow::bail!("unknown protocol mode '{other}' (legacy-2024 | stateless-2026)"),
+    };
+    let server = McpServer::with_mode(default_tools(), mode);
+
+    match transport {
+        "stdio" => {
+            // stdout is the JSON-RPC stream — status goes to stderr (MCP rule).
+            eprintln!("MCP server on stdio ({} tools)", server.tool_count());
+            server.run_stdio().await
+        }
+        "http" => {
+            let router = server.http_router();
+            let addr = format!("127.0.0.1:{port}");
+            let listener = tokio::net::TcpListener::bind(&addr).await?;
+            info!(url = %format!("http://{addr}/mcp"), mode = ?mode, "MCP server on http");
+            axum::serve(listener, router).await?;
+            Ok(())
+        }
+        other => anyhow::bail!("unknown transport '{other}' (stdio | http)"),
+    }
 }
 
 /// `oh-ben-claw skill …` — learned-skill management + Track 0 staged rollout.

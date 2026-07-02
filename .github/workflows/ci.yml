@@ -38,6 +38,48 @@ jobs:
         run: cargo clippy --workspace --exclude obc-esp32-s3 -- -D warnings
       - name: Format check
         run: cargo fmt --all --check
+  # ── MCP conformance (official suite vs. our hand-rolled implementation) ───
+  # Runs the Model Context Protocol conformance suite against the OBC MCP
+  # server in BOTH protocol modes. Advisory (continue-on-error) until an
+  # --expected-failures baseline is captured from the first runs; then flip
+  # to blocking.
+  mcp-conformance:
+    name: MCP Conformance (2025-11-25 + 2026-07-28 draft)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build OBC
+        run: cargo build --bin oh-ben-claw
+      - name: Conformance — legacy lifecycle (2025-11-25)
+        run: |
+          ./target/debug/oh-ben-claw mcp-serve --transport http --port 3411 --mode legacy-2024 &
+          SERVER_PID=$!
+          sleep 2
+          npx --yes @modelcontextprotocol/conformance server \
+            --url http://127.0.0.1:3411/mcp --spec-version 2025-11-25 || true
+          kill $SERVER_PID
+      - name: Conformance — stateless lifecycle (2026-07-28 draft)
+        run: |
+          ./target/debug/oh-ben-claw mcp-serve --transport http --port 3412 --mode stateless-2026 &
+          SERVER_PID=$!
+          sleep 2
+          npx --yes @modelcontextprotocol/conformance server \
+            --url http://127.0.0.1:3412/mcp --spec-version draft || true
+          kill $SERVER_PID
   # ── Cross-compile for AArch64 (NanoPi Neo3) ───────────────────────────────
   cross-aarch64:
     name: Cross-compile AArch64 (NanoPi Neo3)

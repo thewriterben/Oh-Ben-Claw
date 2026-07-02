@@ -122,6 +122,10 @@ crossterm = { version = "0.28", default-features = false, features = ["events"],
 # System info
 libc = { version = "0.2", default-features = false }
 
+# Local semantic embeddings (optional — `semantic` feature). ONNX inference
+# via fastembed; the model downloads once, then inference is fully offline.
+fastembed = { version = "5", optional = true }
+
 # Raspberry Pi GPIO (Linux only)
 [target.'cfg(target_os = "linux")'.dependencies]
 rppal = { version = "0.14", optional = true }
@@ -135,6 +139,10 @@ peripheral-nanopi = []
 peripheral-stm32 = []
 gui = []
 dashboard = ["ratatui", "crossterm"]
+# Dense retrieval leg for episode memory: local ONNX embeddings (fastembed).
+# Off by default so ordinary builds/CI stay light; enable at build time with
+# `--features semantic` and at runtime with `[self_improvement].semantic`.
+semantic = ["fastembed"]
 
 [profile.release]
 opt-level = "z"
