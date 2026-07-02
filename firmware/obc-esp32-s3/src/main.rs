@@ -323,7 +323,10 @@ fn main() -> anyhow::Result<()> {
         peripherals.usb_serial,
         pins.gpio19,
         pins.gpio20,
-        &UsbSerialConfig::new(),
+        // TX buffer defaults to 256 B — too small for multi-rule `reflex_tick`
+        // and `capabilities` replies, which then truncate. Bump it so whole
+        // responses fit and go out in one write.
+        &UsbSerialConfig::new().tx_buffer_size(4096),
     )?;
 
     // Configure output pins via raw ESP-IDF sys API.
@@ -624,15 +627,20 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                     }
                 }
             }
-            let now_ms = req.args.get("now_ms").and_then(|v| v.as_u64()).unwrap_or(0);
-            let fired = state.reflex.evaluate(&snapshot, now_ms);
+            // The injected `now_ms` arg is intentionally ignored: reflex_tick now
+            // evaluates against an isolated scratch pass (no shared debounce state),
+            // so a bench tick reports exactly what this snapshot would trigger
+            // without contending with the autonomous loop. Any resulting actuation
+            // is gated with the real monotonic clock below.
+            let gate_now = now_ms();
+            let fired = state.reflex.evaluate_scratch(&snapshot);
 
             let mut reports = Vec::with_capacity(fired.len());
             for f in &fired {
                 let mut applied = false;
                 let mut error: Option<String> = None;
                 if let reflex::Action::GpioWrite { pin, value, .. } = &f.action {
-                    match gpio_write(&mut state.safety, *pin as i32, *value as u64, now_ms) {
+                    match gpio_write(&mut state.safety, *pin as i32, *value as u64, gate_now) {
                         Ok(()) => applied = true,
                         Err(e) => error = Some(e.to_string()),
                     }

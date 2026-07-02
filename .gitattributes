@@ -1,0 +1,37 @@
+# Normalize line endings across all platforms.
+#
+# Without this, a Windows checkout can rewrite the entire working tree to CRLF
+# while the committed blobs are LF, making every file show as "modified" (a
+# whole-repo phantom diff). `text=auto eol=lf` tells Git to store text as LF and
+# check it out as LF everywhere, so the working tree and the repo always agree.
+
+# Default: detect text vs binary; store + check out text as LF.
+* text=auto eol=lf
+
+# Windows batch files must stay CRLF to run correctly.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Explicit binaries — never normalize or diff as text.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.svg  text eol=lf
+*.webp binary
+*.woff  binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary
+*.eot  binary
+*.pdf  binary
+*.zip  binary
+*.gz   binary
+*.wav  binary
+*.mp3  binary
+*.bin  binary
+*.a    binary
+*.so   binary
+*.dylib binary
+*.dll  binary

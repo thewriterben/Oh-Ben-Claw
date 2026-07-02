@@ -11,3 +11,13 @@ Cargo.lock
 node_modules/
 gui/node_modules/
 npm-debug.log*
+
+# Rust / ESP-IDF build output (any crate, any depth)
+**/target/
+.embuild/
+**/.embuild/
+
+# Editors / IDEs
+.vs/
+.vscode/
+*.user

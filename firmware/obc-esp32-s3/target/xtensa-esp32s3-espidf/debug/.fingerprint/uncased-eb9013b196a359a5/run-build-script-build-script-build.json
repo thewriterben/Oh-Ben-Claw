@@ -1,1 +1,0 @@
-{"rustc":4152789917738851473,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[7648903741785607723,"build_script_build",false,10932659386494842741],[4138202624458718477,"build_script_build",false,9025052246661374088]],"local":[{"Precalculated":"0.9.10"}],"rustflags":["--cfg","espidf_time64"],"config":0,"compile_kind":0}

@@ -5,6 +5,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Isolated scratch engine for `reflex_tick` (A6 bench clean-up) (2026-07-02)
+
+Follow-up to the on-bench validation: the manual `reflex_tick` command shared
+debounce state with the live autonomous loop, so injecting a `now_ms` collided with
+the real uptime clock and made individual manual fires look flaky. Fixed so a bench
+tick is a clean, deterministic "what would this snapshot trigger?".
+
+### Changed — `firmware/obc-esp32-s3/src/reflex.rs`, `main.rs`
+
+- New `ReflexEngine::evaluate_scratch(&self, snapshot)` — a pure, non-mutating pass
+  that returns every rule matching the snapshot, ignoring debounce/rate and never
+  reading or writing `last_fire`.
+- `reflex_tick` now calls `evaluate_scratch` instead of the stateful `evaluate`, so
+  a manual tick no longer contends with the autonomous loop. The injected `now_ms`
+  arg is ignored for the decision; any actuation is still gated with the real
+  monotonic clock (`now_ms()`), so the Track 0 rate limit behaves correctly.
+- The autonomous reflex loop still uses the stateful `evaluate` (debounce intact) —
+  only the bench command path changed.
+- New unit test `scratch_eval_ignores_debounce_history`: a rule debounced on the
+  stateful path still reports through the scratch path.
+- Bumped the USB-Serial-JTAG **TX buffer 256 → 4096 B**
+  (`UsbSerialConfig::tx_buffer_size`) so multi-rule `reflex_tick` and
+  `capabilities` replies fit in one write instead of truncating.
+
+### Validated — on-bench (Seeed XIAO ESP32-S3)
+
+- `reflex_tick {"sensor.battery_soc":6.0}` fires `safe-battery-critical` →
+  drives the safe pin (GPIO21, onboard LED **lit**) through the Track 0 gate,
+  plus `safe-battery-low` (escalate) — **deterministically, every call**. A6
+  fully green: on-MCU battery self-protection confirmed on real silicon.
+
+---
+
 ## Unreleased — XIAO ESP32-S3 port + first on-bench validation of the decision core (2026-07-02)
 
 The node firmware ran on real silicon for the first time. Ported the command I/O
