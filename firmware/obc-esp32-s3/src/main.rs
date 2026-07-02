@@ -93,9 +93,9 @@
 
 // esp-idf-hal 0.46 removed the `prelude` module — import the specific items used.
 use esp_idf_svc::hal::peripherals::Peripherals;
-use esp_idf_svc::hal::uart::config::Config as UartConfig;
-use esp_idf_svc::hal::uart::UartDriver;
-use esp_idf_svc::hal::units::Hertz;
+// Command I/O runs over the native USB-Serial-JTAG (the XIAO ESP32-S3's only USB
+// interface), not UART0 — UART0's GPIO43/44 aren't wired to the XIAO's USB port.
+use esp_idf_svc::hal::usb_serial::{UsbSerialConfig, UsbSerialDriver};
 use log::info;
 use serde::{Deserialize, Serialize};
 
@@ -151,7 +151,12 @@ const AGENT_MAX_TOOL_ITERATIONS: usize = 3;
 const MAX_LLM_RESPONSE_SIZE: usize = 8 * 1024;
 
 /// GPIO pins configured as outputs during startup.
-const OUTPUT_PINS: &[i32] = &[3, 14, 26, 33, 46];
+///
+/// XIAO ESP32-S3 safe set: the onboard user LED (GPIO21, active-low — write 0 to
+/// light it) plus exposed header pads (D2=GPIO3, D5=GPIO6, D8=GPIO7, D9=GPIO8).
+/// Deliberately avoids GPIO26–37 (consumed by the XIAO's octal PSRAM) and the
+/// I2C (GPIO4/5) and I2S (GPIO1/2) pins.
+const OUTPUT_PINS: &[i32] = &[21, 3, 6, 7, 8];
 
 // ── Agent State ───────────────────────────────────────────────────────────────
 
@@ -245,6 +250,9 @@ impl AgentState {
 struct Request {
     id: String,
     cmd: String,
+    /// Optional — commands with no arguments (e.g. `capabilities`) omit it, so it
+    /// defaults to `Null` and the handlers fall back to their per-arg defaults.
+    #[serde(default)]
     args: serde_json::Value,
 }
 
@@ -308,15 +316,14 @@ fn main() -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
     let pins = peripherals.pins;
 
-    // UART0: TX=43, RX=44 (USB serial bridge on Waveshare board).
-    let config = UartConfig::new().baudrate(Hertz(115_200));
-    let uart = UartDriver::new(
-        peripherals.uart0,
-        pins.gpio43,
-        pins.gpio44,
-        Option::<esp_idf_svc::hal::gpio::Gpio0>::None,
-        Option::<esp_idf_svc::hal::gpio::Gpio1>::None,
-        &config,
+    // Command channel over the native USB-Serial-JTAG (D-=GPIO19, D+=GPIO20 on the
+    // ESP32-S3) — the interface the XIAO's USB-C port actually exposes. The host
+    // sends newline-delimited JSON here and reads responses on the same connection.
+    let mut usb = UsbSerialDriver::new(
+        peripherals.usb_serial,
+        pins.gpio19,
+        pins.gpio20,
+        &UsbSerialConfig::new(),
     )?;
 
     // Configure output pins via raw ESP-IDF sys API.
@@ -330,7 +337,7 @@ fn main() -> anyhow::Result<()> {
 
     info!("Oh-Ben-Claw ESP32-S3 firmware v{} ready", FIRMWARE_VERSION);
     info!("Node ID: {}", NODE_ID);
-    info!("Serial: UART0 TX=43, RX=44, 115200 baud");
+    info!("Serial: native USB-Serial-JTAG (send newline-delimited JSON commands)");
     info!(
         "Commands: gpio_read, gpio_write, camera_capture, audio_sample, sensor_read, \
          capabilities, announce, agent_chat, agent_config, agent_clear"
@@ -415,21 +422,26 @@ fn main() -> anyhow::Result<()> {
     // safing timeout, the built-in `safe-link-offline` rule fires (on-MCU offline
     // safing), independent of battery safing.
     let mut last_host_contact_ms: u64 = now_ms();
+    // Emit link/power status only when it *changes* (not every tick), so the serial
+    // link isn't flooded with unchanged status — usable on a bench, and the right
+    // behaviour for a real node reporting to a host.
+    let mut last_link_offline: Option<bool> = None;
+    let mut last_power_mode: Option<safing::PowerMode> = None;
 
     loop {
         // `Ok(0)` is a read timeout (no host data) — fall through to the reflex
         // tick rather than `continue`, so System 1 keeps running on its own.
-        match uart.read(&mut buf, 100) {
+        match usb.read(&mut buf, 100) {
             Ok(0) => {}
             Ok(n) => {
                 last_host_contact_ms = now_ms(); // any host byte ⇒ link is alive
                 for &b in &buf[..n] {
-                    if b == b'\n' {
+                    if b == b'\n' || b == b'\r' {
                         if !line.is_empty() {
                             if let Ok(line_str) = std::str::from_utf8(&line) {
                                 if let Ok(resp) = handle_request(line_str, &mut agent_state) {
                                     let out = serde_json::to_string(&resp).unwrap_or_default();
-                                    let _ = uart.write(format!("{}\n", out).as_bytes());
+                                    send_line(&mut usb, &out);
                                 }
                             }
                             line.clear();
@@ -457,16 +469,20 @@ fn main() -> anyhow::Result<()> {
             let silence_ms = now.saturating_sub(last_host_contact_ms);
             snapshot.insert(safing::LINK_SILENCE_ENTITY.to_string(), silence_ms as f64);
             let link_offline = safing::link_offline(silence_ms as f64, safing::DEFAULT_LINK_TIMEOUT_MS as f64);
-            let link_report = serde_json::json!({
-                "type": "link_state",
-                "node_id": NODE_ID,
-                "state": if link_offline { "offline" } else { "online" },
-                "silence_ms": silence_ms,
-                "ts_ms": now,
-            });
-            let _ = uart.write(format!("{}\n", link_report).as_bytes());
-            // Self-report the derived power mode when a battery reading is present,
-            // so the host sees on-MCU safing state even if it pushed no rules.
+            // Report link state only on a change (online↔offline).
+            if last_link_offline != Some(link_offline) {
+                last_link_offline = Some(link_offline);
+                let link_report = serde_json::json!({
+                    "type": "link_state",
+                    "node_id": NODE_ID,
+                    "state": if link_offline { "offline" } else { "online" },
+                    "silence_ms": silence_ms,
+                    "ts_ms": now,
+                });
+                send_line(&mut usb, &link_report.to_string());
+            }
+            // Self-report the derived power mode when a battery reading is present —
+            // only when the mode changes, so a steady battery is silent.
             if let Some(&soc) = snapshot.get(safing::BATTERY_SOC_ENTITY) {
                 let mode = safing::derive(
                     soc,
@@ -474,14 +490,17 @@ fn main() -> anyhow::Result<()> {
                     safing::DEFAULT_LOW_PCT,
                     safing::DEFAULT_CRITICAL_PCT,
                 );
-                let report = serde_json::json!({
-                    "type": "power_mode",
-                    "node_id": NODE_ID,
-                    "mode": mode.as_str(),
-                    "soc_pct": soc,
-                    "ts_ms": now,
-                });
-                let _ = uart.write(format!("{}\n", report).as_bytes());
+                if last_power_mode != Some(mode) {
+                    last_power_mode = Some(mode);
+                    let report = serde_json::json!({
+                        "type": "power_mode",
+                        "node_id": NODE_ID,
+                        "mode": mode.as_str(),
+                        "soc_pct": soc,
+                        "ts_ms": now,
+                    });
+                    send_line(&mut usb, &report.to_string());
+                }
             }
             for fired in agent_state.reflex.evaluate(&snapshot, now) {
                 let mut applied = false;
@@ -502,7 +521,7 @@ fn main() -> anyhow::Result<()> {
                     "error": error,
                     "ts_ms": now,
                 });
-                let _ = uart.write(format!("{}\n", report).as_bytes());
+                send_line(&mut usb, &report.to_string());
             }
         }
     }
@@ -512,11 +531,15 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
     let req: Request = serde_json::from_str(line.trim())?;
     let id = req.id.clone();
 
-    let result = match req.cmd.as_str() {
+    // Wrap the dispatch in a closure so a `?` inside any arm returns *here* (into
+    // `result`) rather than escaping `handle_request` — otherwise refused/errored
+    // commands (e.g. a Track 0 safety denial) would send no reply at all.
+    let result: anyhow::Result<String> = (|| {
+        match req.cmd.as_str() {
         "capabilities" | "announce" => {
             let caps = serde_json::json!({
                 "node_id": NODE_ID,
-                "board": "waveshare-esp32-s3-touch-lcd-2.1",
+                "board": "seeed-xiao-esp32-s3",
                 "firmware_version": FIRMWARE_VERSION,
                 "edge_agent": true,
                 "tools": [
@@ -531,11 +554,11 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                     {"name": "agent_config", "description": "Configure WiFi and LLM settings."},
                     {"name": "agent_clear", "description": "Clear the agent conversation history."}
                 ],
-                "gpio": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,26,27,33,34,35,36,37,43,44,46],
-                "camera": true,
+                "gpio": [21, 3, 6, 7, 8],
+                "camera": false,
                 "microphone": true,
                 "i2c_bus": [4, 5],
-                "uart": [43, 44],
+                "transport": "usb-serial-jtag",
                 "wifi": true
             });
             Ok(caps.to_string())
@@ -709,7 +732,8 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
         }
 
         unknown => Err(anyhow::anyhow!("Unknown command: {}", unknown)),
-    };
+        }
+    })();
 
     match result {
         Ok(output) => Ok(Response {
@@ -834,6 +858,35 @@ fn sensor_read_stub(sensor: &str, field: &str) -> anyhow::Result<f64> {
 }
 
 // ── On-MCU reflex support (Phase 18, System 1) ────────────────────────────────
+
+/// Write one newline-terminated line to the USB-Serial-JTAG, looping over partial
+/// writes so a long response (e.g. `capabilities`) goes out whole. Each chunk uses
+/// a short timeout, so if the host isn't reading the node doesn't block — it drops
+/// the remainder and carries on (System 1 keeps ticking).
+fn send_line(usb: &mut UsbSerialDriver, line: &str) {
+    let payload = format!("{line}\n");
+    let bytes = payload.as_bytes();
+    let mut off = 0;
+    let mut stalls = 0u32;
+    while off < bytes.len() {
+        match usb.write(&bytes[off..], 100) {
+            Ok(0) => {
+                // No progress this round (tx buffer full / host draining). Retry a
+                // bounded number of times so large replies (e.g. `capabilities`)
+                // get out, but give up after ~2 s if the host has truly gone.
+                stalls += 1;
+                if stalls > 20 {
+                    return;
+                }
+            }
+            Ok(n) => {
+                off += n;
+                stalls = 0;
+            }
+            Err(_) => return,
+        }
+    }
+}
 
 /// Monotonic milliseconds since boot (ESP timer), for reflex valid-time + debounce.
 fn now_ms() -> u64 {
