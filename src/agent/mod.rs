@@ -95,6 +95,11 @@ pub struct Agent {
     /// Skill-forge directory, enabling auto-demotion of a failing supervised
     /// skill (manifest rewrite + hot resync).
     forge_dir: Option<std::path::PathBuf>,
+    /// Track 0 taint tracking: how privileged calls whose arguments echo
+    /// untrusted (external-origin) tool output are handled. `Off` disables
+    /// scanning; `Warn` (default) logs + counts; `Enforce` refuses unless the
+    /// tool is explicitly operator-granted.
+    taint_mode: crate::security::taint::TaintMode,
 }
 
 impl Agent {
@@ -122,6 +127,7 @@ impl Agent {
             cost: None,
             rollout: None,
             forge_dir: None,
+            taint_mode: crate::security::taint::TaintMode::Off,
         }
     }
 
@@ -188,6 +194,15 @@ impl Agent {
     /// a failing supervised-stage skill (manifest rewrite + hot resync).
     pub fn with_forge_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.forge_dir = Some(dir.into());
+        self
+    }
+
+    /// Set the Track 0 taint-tracking mode (default `Off`). In `Warn`/`Enforce`,
+    /// each run pools output from `External`-trust tools and gated calls whose
+    /// argument values echo that content are flagged (`Warn`) or refused
+    /// (`Enforce`).
+    pub fn with_taint_mode(mut self, mode: crate::security::taint::TaintMode) -> Self {
+        self.taint_mode = mode;
         self
     }
 
@@ -312,6 +327,12 @@ impl Agent {
         // Phase 16 P4: wall-clock + rough token measurement for the episode.
         let run_started = std::time::Instant::now();
 
+        // Track 0 taint tracking: a fresh per-run pool of untrusted (external-
+        // origin) tool output. `None` when scanning is off — no allocation, no
+        // work in the chokepoint. Never shared across runs (no cross-turn taint).
+        let taint_pool = (self.taint_mode != crate::security::taint::TaintMode::Off)
+            .then(crate::security::taint::TaintPool::new);
+
         // 1. Store the user message
         self.memory
             .append_message(session_id, ChatRole::User, user_message)?;
@@ -386,7 +407,9 @@ impl Agent {
                 });
 
                 let t0 = std::time::Instant::now();
-                let result = self.execute_tool(&call.name, &call.args).await;
+                let result = self
+                    .execute_tool(&call.name, &call.args, taint_pool.as_ref())
+                    .await;
                 let duration_ms = t0.elapsed().as_millis() as u64;
 
                 if let Some(span) = tool_span.take() {
@@ -668,17 +691,21 @@ impl Agent {
         &self,
         name: &str,
         args_str: &str,
+        taint: Option<&crate::security::taint::TaintPool>,
     ) -> Result<crate::tools::traits::ToolResult> {
-        self.execute_tool_inner(name, args_str, false).await
+        self.execute_tool_inner(name, args_str, false, taint).await
     }
 
     /// The execution chokepoint. `in_sequence` marks a call made on behalf of
     /// a Sequence-skill step, so nested sequences are refused (bounded depth).
+    /// `taint` is the per-run untrusted-content pool (Track 0 taint tracking);
+    /// `None` disables pooling/scanning for this call.
     async fn execute_tool_inner(
         &self,
         name: &str,
         args_str: &str,
         in_sequence: bool,
+        taint: Option<&crate::security::taint::TaintPool>,
     ) -> Result<crate::tools::traits::ToolResult> {
         let mut name = name.to_string();
         let mut args_str = args_str.to_string();
@@ -800,8 +827,9 @@ impl Agent {
             for (i, (step_tool, template)) in steps.iter().enumerate() {
                 let step_args =
                     crate::skill_forge::substitute_args(template, &args).to_string();
-                let result = Box::pin(self.execute_tool_inner(step_tool, &step_args, true))
-                    .await;
+                let result =
+                    Box::pin(self.execute_tool_inner(step_tool, &step_args, true, taint))
+                        .await;
                 match result {
                     Ok(r) if r.success => {
                         outputs.push(format!("[step {} {}] {}", i + 1, step_tool, r.output));
@@ -889,6 +917,45 @@ impl Agent {
             )));
         }
 
+        // Track 0 taint tracking: before a *privileged* call runs, check whether
+        // its argument values echo untrusted (external-origin) content pooled
+        // earlier this run. This is the CaMeL data-flow guard: fetched web/MCP
+        // text must not steer a physical/irreversible action.
+        use crate::security::taint::{self, TaintMode};
+        if self.taint_mode != TaintMode::Off && taint::gated(risk) {
+            if let Some(pool) = taint {
+                if let Some(hit) = taint::scan_args(&args, pool) {
+                    let granted = self
+                        .approval
+                        .as_ref()
+                        .is_some_and(|a| a.explicitly_granted(name));
+                    if let Some(obs) = &self.obs {
+                        obs.metrics.counter("taint_hits_total").inc();
+                    }
+                    if self.taint_mode == TaintMode::Enforce && !granted {
+                        if let Some(obs) = &self.obs {
+                            obs.metrics.counter("taint_refusals_total").inc();
+                        }
+                        tracing::warn!(
+                            tool = %name, arg = %hit.arg_path, source = %hit.source,
+                            "privileged call refused: argument derives from untrusted content (Track 0 taint)"
+                        );
+                        return Ok(crate::tools::traits::ToolResult::err(format!(
+                            "Tool '{}' refused (Track 0 taint): argument '{}' (={:?}) echoes \
+                             untrusted content from '{}'. A value derived from external content \
+                             may not parameterize a privileged action without an explicit \
+                             operator grant.",
+                            name, hit.arg_path, hit.value, hit.source
+                        )));
+                    }
+                    tracing::warn!(
+                        tool = %name, arg = %hit.arg_path, source = %hit.source, granted,
+                        "privileged call has an argument derived from untrusted content (Track 0 taint, advisory)"
+                    );
+                }
+            }
+        }
+
         let started = std::time::Instant::now();
         let result = tool.execute(args).await;
         let success = result.as_ref().map(|r| r.success).unwrap_or(false);
@@ -897,6 +964,18 @@ impl Agent {
             scorer.record(&node_id, latency_ms, success);
         }
         self.record_staged_run(&staged_skill, success);
+
+        // Pool successful output from External-trust tools (web, remote MCP, …)
+        // so later privileged calls this run can be checked against it.
+        if self.taint_mode != TaintMode::Off {
+            if let (Some(pool), Ok(r)) = (taint, &result) {
+                if r.success
+                    && tool.output_trust() == crate::tools::traits::OutputTrust::External
+                {
+                    pool.add(name, &r.output);
+                }
+            }
+        }
         result
     }
 
@@ -939,14 +1018,15 @@ impl Agent {
     ///
     /// Bypasses the agent loop — useful for direct tool invocation via the
     /// gateway's `POST /api/v1/tools/{name}` endpoint.
-    /// Security policy is still evaluated.
+    /// Security policy is still evaluated. No taint pool: a standalone call has
+    /// no prior in-run external content to be tainted by.
     pub async fn execute_tool_direct(
         &self,
         name: &str,
         args: serde_json::Value,
     ) -> Result<crate::tools::traits::ToolResult> {
         let args_str = args.to_string();
-        self.execute_tool(name, &args_str).await
+        self.execute_tool(name, &args_str, None).await
     }
 
     /// Return the names of all registered tools.

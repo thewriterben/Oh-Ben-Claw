@@ -5,6 +5,62 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Track 0: tool-argument taint tracking (CaMeL-style provenance guard) (2026-07-02)
+
+The one real architectural gap the July research flagged: OBC's chokepoint
+gated *which* tools run, but not *where their argument values came from*. This
+closes it — the strongest validated prompt-injection defense (CaMeL, Google
+DeepMind): a value derived from untrusted external content may not
+parameterize a privileged action. Maps to OWASP ASI01/ASI02. Opt-in.
+
+### Added — `src/security/taint.rs`
+
+- `OutputTrust` on the `Tool` trait (`Trusted` default / `External`).
+  Declared `External` on the injection vectors: `http`, `browser_navigate`,
+  `browser_snapshot`, and every remote `McpRemoteTool`.
+- `TaintPool` — a bounded per-run pool of untrusted output (≤32 chunks, ≤16KB
+  each; never shared across runs — no cross-turn taint). `scan_args`
+  recursively matches string/number argument values against pooled content:
+  case-insensitive substring for strings (≥4 chars), **boundary-aware** for
+  numbers (`99` doesn't fire on `199` or `9.9`; tiny values skipped).
+- `TaintMode` (`Off` default — opt-in / `Warn` / `Enforce`) and `gated(risk)`
+  (physical ∨ irreversible ∨ blast-radius).
+
+### Changed — agent chokepoint (`src/agent/mod.rs`)
+
+- Each `process()` run owns a fresh pool (allocated only when a mode is set).
+  Successful `External`-trust output is pooled; before any **gated** call
+  runs, its args are scanned. `Enforce` refuses (fail closed) unless the tool
+  is **explicitly** operator-granted (the escape hatch — a permissive
+  autonomy level is not a grant); `Warn` logs + counts. Counters
+  `taint_hits_total` / `taint_refusals_total`. Sequence steps share the run
+  pool; `execute_tool_direct` runs with no pool (a standalone call has no
+  prior in-run external content).
+
+### Config / wiring
+
+- `[safety].taint_mode` (`"off"` | `"warn"` | `"enforce"`; unset ⇒ off).
+  Applied to the plain agent and the orchestrator inner agent
+  (`InnerAgentDeps.taint_mode`) — same posture in both modes.
+
+### Tests
+
+- 7 unit tests (case-insensitive string hits, number boundary matching,
+  short-string/clean-arg passes, nested arg paths, bounded pool, gating,
+  mode parsing).
+- 5 red-team evals (`tests/evals.rs`, `taint_redteam`): fetched "set pin 99"
+  content → actuator refused in `Enforce`; `Warn` is advisory (fires);
+  untainted args pass (no false positive); explicit grant overrides; `Off`
+  doesn't scan.
+- Full workspace on Windows: **1130 lib tests, evals 35/35**, clippy
+  warning-free.
+
+Heuristic by design (substring/boundary matching, not dataflow through the
+LLM) — biased to catch the classic "fetched text steers an actuator" attack;
+the explicit-grant escape hatch and `Warn` mode make false positives operable.
+
+---
+
 ## Unreleased — Research adoptions: MCP conformance CI + hybrid episode retrieval (2026-07-02)
 
 First two adopt-now items from `AI-Agents-Research-July2026.md`.

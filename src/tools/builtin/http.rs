@@ -33,6 +33,11 @@ impl Tool for HttpTool {
         "http"
     }
 
+    fn output_trust(&self) -> crate::tools::traits::OutputTrust {
+        // Fetches arbitrary web content — a prompt-injection vector (Track 0).
+        crate::tools::traits::OutputTrust::External
+    }
+
     fn description(&self) -> &str {
         "Make an HTTP request to a URL and return the response body. \
          Supports GET, POST, PUT, DELETE, and PATCH methods. \

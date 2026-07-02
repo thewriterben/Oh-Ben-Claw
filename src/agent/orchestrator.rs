@@ -61,6 +61,8 @@ pub struct InnerAgentDeps {
     pub forge_dir: Option<std::path::PathBuf>,
     /// Phase 16 P1 experience retrieval top-k (None = disabled).
     pub experience_k: Option<usize>,
+    /// Track 0 taint-tracking mode.
+    pub taint_mode: crate::security::taint::TaintMode,
 }
 
 // ── Routing Strategy ──────────────────────────────────────────────────────────
@@ -253,6 +255,7 @@ impl OrchestratorAgent {
         if let Some(dir) = deps.forge_dir {
             inner = inner.with_forge_dir(dir);
         }
+        inner = inner.with_taint_mode(deps.taint_mode);
         // Phase 16: enabled forge skills (authored + learned) are first-class
         // tools on the orchestrator's inner agent too.
         inner.sync_skills(&crate::skill_forge::SkillForge::new(

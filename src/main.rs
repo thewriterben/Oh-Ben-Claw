@@ -1531,6 +1531,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     } else {
         None
     };
+    // Track 0 taint tracking: opt-in (unset ⇒ off). Shared by both the plain
+    // and orchestrator inner agents.
+    let taint_mode =
+        oh_ben_claw::security::taint::TaintMode::from_config(config.safety.taint_mode.as_deref());
+    if taint_mode != oh_ben_claw::security::taint::TaintMode::Off {
+        info!(mode = ?taint_mode, "Track 0 taint tracking enabled");
+    }
     // Phase 16 P3: Track 0 staged rollout — clean-run record + auto-demotion.
     let rollout_tracker = Arc::new(oh_ben_claw::skill_forge::rollout::RolloutTracker::load(
         oh_ben_claw::skill_forge::rollout::RolloutTracker::default_path(),
@@ -1603,7 +1610,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     }
     agent = agent
         .with_rollout(Arc::clone(&rollout_tracker))
-        .with_forge_dir(oh_ben_claw::skill_forge::SkillForge::default_dir());
+        .with_forge_dir(oh_ben_claw::skill_forge::SkillForge::default_dir())
+        .with_taint_mode(taint_mode);
     // Phase 16: load enabled skills (authored + learned) from the forge into the
     // live tool registry. Disabled skills stay invisible; simulate-stage skills
     // load but can only dry-run until promoted.
@@ -1649,6 +1657,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 rollout: Some(Arc::clone(&rollout_tracker)),
                 forge_dir: Some(oh_ben_claw::skill_forge::SkillForge::default_dir()),
                 experience_k,
+                taint_mode,
             },
         )?;
         let pool = orch.pool.clone();

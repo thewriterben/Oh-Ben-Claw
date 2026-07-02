@@ -367,6 +367,11 @@ impl Tool for BrowserNavigateTool {
         "browser_navigate"
     }
 
+    fn output_trust(&self) -> crate::tools::traits::OutputTrust {
+        // Returns the page title — attacker-controllable content (Track 0).
+        crate::tools::traits::OutputTrust::External
+    }
+
     fn description(&self) -> &str {
         "Navigate the browser to a URL and return the page title. \
          Use this before taking a snapshot or interacting with page elements."
@@ -440,6 +445,11 @@ impl BrowserSnapshotTool {
 impl Tool for BrowserSnapshotTool {
     fn name(&self) -> &str {
         "browser_snapshot"
+    }
+
+    fn output_trust(&self) -> crate::tools::traits::OutputTrust {
+        // Returns rendered page content — attacker-controllable (Track 0).
+        crate::tools::traits::OutputTrust::External
     }
 
     fn description(&self) -> &str {
