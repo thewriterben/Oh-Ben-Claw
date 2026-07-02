@@ -426,7 +426,7 @@ and enhanced reliability.
 - [x] All Clippy warnings resolved
 - [x] All code formatted with `rustfmt`
 
-## Phase 15: Production Hardening 🔄 Planned
+## Phase 15: Production Hardening 🔄 In Progress *(one item left: the scheduled July 28 MCP default-mode flip)*
 
 Executed in lockstep with **ClawCam Phase 13** (see `NEXT_PHASE_PLAN.md` in the
 workspace root). No new product surface area: this phase makes the existing 14
@@ -469,14 +469,14 @@ Phase 14's A2A implementation predates the stable v1.0 spec (Linux Foundation).
 - [x] Golden task set for the agent loop (`tests/evals.rs`): direct answer, single-tool route with exact args, multi-step ordering, tool-failure recovery, unknown-tool degradation — driven by a deterministic `ScriptedProvider` mock
 - [x] Wire-shape goldens: MCP (initialize/discover/tools-list/error) and A2A (task lifecycle, ErrorInfo, agent card) + approval policy matrix golden
 - [x] CI gate: evals run as integration tests under the existing `cargo test --workspace` job — no release while evals regress (cargo run pending on Windows)
-- [ ] LLM-as-judge advisory scoring (deferred until a judge provider is wired; gates stay deterministic)
+- [x] LLM-as-judge advisory scoring (`src/agent/judge.rs` + `eval_llm_judge_advisory_scoring`): env-configured judge (`OBC_JUDGE_PROVIDER`/`OBC_JUDGE_MODEL`) scores golden transcripts and prints results; skips cleanly when unconfigured — gates stay deterministic
 
 ### Observability / AgentOps
 
 - [x] Audit finding: `src/observability` (spans, ring-buffer sink, counters, `/api/v1/metrics`) already existed and was wired into the gateway — but the agent loop was blind
 - [x] Structured trace per agent run: `Agent::with_obs()` records an `agent.process` span (session_id, tool_calls) and per-call `agent.tool` spans with error status; turn/tool/error counters at source (no double-count with gateway counters) — 2 new evals in `tests/evals.rs`
 - [x] Counters for approval asks (`ApprovalManager::with_obs()` → `approval_asks_total`); `record_retry`/`record_failover` helpers added — retry/failover already emit structured `tracing::warn!` logs; counter threading into the provider wrappers deferred until the gateway owns an ObsContext for them
-- [ ] Cost summary in the gateway metrics view (CostTracker handle not yet in `GatewayState`; carry to Phase 16)
+- [x] Cost summary in the gateway metrics view — audit finding: `CostTracker` (Phase 9) was never instantiated anywhere; now built from `[cost]` in `main` (persisted `costs.db`), fed estimated per-run usage by the agent (chars/4 heuristic; USD when `[cost]` prices configured), attached to both plain and orchestrator agents, and surfaced in `/api/v1/metrics` (`cost` object) — which now also exposes **all** registered counters, not just the fixed six
 
 ### Approval-Model Upgrade
 

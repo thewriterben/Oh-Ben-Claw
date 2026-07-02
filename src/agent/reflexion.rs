@@ -178,7 +178,7 @@ pub async fn reflexion_loop(
     })
 }
 
-fn parse_quality_score(critique: &str) -> f32 {
+pub(crate) fn parse_quality_score(critique: &str) -> f32 {
     // Look for "QUALITY_SCORE: 0.85" pattern
     for line in critique.lines().rev() {
         if let Some(pos) = line.to_uppercase().find("QUALITY_SCORE:") {

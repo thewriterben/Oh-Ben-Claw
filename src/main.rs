@@ -1496,6 +1496,31 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     let rollout_tracker = Arc::new(oh_ben_claw::skill_forge::rollout::RolloutTracker::load(
         oh_ben_claw::skill_forge::rollout::RolloutTracker::default_path(),
     ));
+    // Phase 15/9: token cost tracking (estimated usage; USD when the operator
+    // configures [cost] prices). Persisted so daily/monthly budgets survive
+    // restarts; falls back to session-only on DB failure.
+    let cost_tracker: Option<Arc<oh_ben_claw::cost::CostTracker>> = if config.cost.enabled {
+        let db_path = track0_data_path("costs.db");
+        if let Some(parent) = std::path::Path::new(&db_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tracker = match oh_ben_claw::cost::CostTracker::with_db(config.cost.clone(), &db_path)
+        {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, "cost DB unavailable; tracking session-only");
+                oh_ben_claw::cost::CostTracker::new(config.cost.clone())
+            }
+        };
+        info!(
+            daily_limit = config.cost.daily_limit_usd,
+            monthly_limit = config.cost.monthly_limit_usd,
+            "Cost tracking enabled"
+        );
+        Some(Arc::new(tracker))
+    } else {
+        None
+    };
     // Phase 16 P1: experience retrieval top-k (None = disabled).
     let experience_k = if trajectory_store.is_some()
         && config.self_improvement.retrieval.unwrap_or(true)
@@ -1530,6 +1555,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     }
     agent = agent.with_approval(Arc::clone(&approval));
     agent = agent.with_obs(Arc::clone(&obs));
+    if let Some(cost) = &cost_tracker {
+        agent = agent.with_cost(
+            Arc::clone(cost),
+            config.cost.input_price_per_million,
+            config.cost.output_price_per_million,
+        );
+    }
     agent = agent
         .with_rollout(Arc::clone(&rollout_tracker))
         .with_forge_dir(oh_ben_claw::skill_forge::SkillForge::default_dir());
@@ -1568,6 +1600,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 approval: Some(Arc::clone(&approval)),
                 obs: Some(Arc::clone(&obs)),
                 trust: trust_scorer.clone(),
+                cost: cost_tracker.as_ref().map(|c| {
+                    (
+                        Arc::clone(c),
+                        config.cost.input_price_per_million,
+                        config.cost.output_price_per_million,
+                    )
+                }),
                 rollout: Some(Arc::clone(&rollout_tracker)),
                 forge_dir: Some(oh_ben_claw::skill_forge::SkillForge::default_dir()),
                 experience_k,
@@ -1709,6 +1748,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 tracker: Arc::clone(&rollout_tracker),
                 required_clean: config.self_improvement.promotion_clean_runs.unwrap_or(3),
             });
+        if let Some(cost) = &cost_tracker {
+            gs = gs.with_cost(Arc::clone(cost));
+        }
         if let Some(pool) = maybe_pool.clone() {
             gs = gs.with_agent_pool(pool);
         }

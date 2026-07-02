@@ -703,6 +703,14 @@ pub struct CostConfig {
     /// Warning threshold as a fraction of the limit (e.g. 0.8 = warn at 80%).
     #[serde(default = "default_warn_threshold")]
     pub warn_threshold: f64,
+    /// Input price in USD per million tokens for the configured model.
+    /// Default 0.0 — token counts are tracked either way; dollar figures
+    /// appear once the operator supplies their model's prices.
+    #[serde(default)]
+    pub input_price_per_million: f64,
+    /// Output price in USD per million tokens. Default 0.0.
+    #[serde(default)]
+    pub output_price_per_million: f64,
 }
 
 fn default_daily_limit() -> f64 {
@@ -722,6 +730,8 @@ impl Default for CostConfig {
             daily_limit_usd: default_daily_limit(),
             monthly_limit_usd: default_monthly_limit(),
             warn_threshold: default_warn_threshold(),
+            input_price_per_million: 0.0,
+            output_price_per_million: 0.0,
         }
     }
 }

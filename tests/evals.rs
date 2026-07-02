@@ -1033,6 +1033,38 @@ mod experience {
     }
 }
 
+// ── Eval: LLM-as-judge advisory scoring (Phase 15 WS4) ───────────────────────
+
+/// Advisory only, per the WS4 rule: gates stay deterministic. Without an
+/// `OBC_JUDGE_PROVIDER`/`OBC_JUDGE_MODEL` environment, the eval skips
+/// cleanly; with one, it runs the judge over a golden transcript, prints the
+/// score, and asserts nothing beyond "a score parsed into [0, 1]".
+#[tokio::test]
+async fn eval_llm_judge_advisory_scoring() {
+    use oh_ben_claw::agent::judge::LlmJudge;
+
+    let Some(judge) = LlmJudge::from_env() else {
+        eprintln!(
+            "advisory: LLM judge not configured (set OBC_JUDGE_PROVIDER / OBC_JUDGE_MODEL); \
+             skipping — deterministic gates are unaffected"
+        );
+        return;
+    };
+
+    // Golden transcript from the routing evals: direct-answer arithmetic.
+    let score = judge
+        .score("what is 2+2?", "The answer is 4.")
+        .await
+        .expect("judge call failed");
+    eprintln!(
+        "advisory judge score: {:.2} — {}",
+        score.score,
+        score.rationale.lines().next().unwrap_or("")
+    );
+    // Parse-sanity only; the score value itself never gates.
+    assert!((0.0..=1.0).contains(&score.score));
+}
+
 // ── Eval: approval policy matrix golden ───────────────────────────────────────
 
 #[test]

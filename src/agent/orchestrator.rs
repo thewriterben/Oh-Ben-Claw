@@ -53,6 +53,8 @@ pub struct InnerAgentDeps {
     pub obs: Option<Arc<crate::observability::ObsContext>>,
     /// Track 0 dynamic trust scorer.
     pub trust: Option<Arc<crate::security::trust::TrustScorer>>,
+    /// Cost tracking: `(tracker, input_price_per_million, output_price_per_million)`.
+    pub cost: Option<(Arc<crate::cost::CostTracker>, f64, f64)>,
     /// Phase 16 P3 staged-rollout run record.
     pub rollout: Option<Arc<crate::skill_forge::rollout::RolloutTracker>>,
     /// Skill-forge directory (enables supervised-skill auto-demotion).
@@ -241,6 +243,9 @@ impl OrchestratorAgent {
         }
         if let Some(trust) = deps.trust {
             inner = inner.with_trust(trust);
+        }
+        if let Some((tracker, in_price, out_price)) = deps.cost {
+            inner = inner.with_cost(tracker, in_price, out_price);
         }
         if let Some(rollout) = deps.rollout {
             inner = inner.with_rollout(rollout);

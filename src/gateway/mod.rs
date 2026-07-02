@@ -120,6 +120,8 @@ pub struct GatewayState {
     pub agent_pool: Option<AgentPool>,
     /// Skill-forge operations (Phase 16 P3 staged rollout) — `None` if not wired.
     pub skills: Option<SkillOps>,
+    /// Cost tracker (Phase 15/9) — `None` if cost tracking is disabled.
+    pub cost: Option<Arc<crate::cost::CostTracker>>,
 }
 
 /// What the gateway needs to serve the skill endpoints: the forge directory,
@@ -157,6 +159,7 @@ impl GatewayState {
             scheduler: None,
             agent_pool: None,
             skills: None,
+            cost: None,
         }
     }
 
@@ -193,6 +196,12 @@ impl GatewayState {
     /// Attach skill-forge operations (Phase 16 P3 staged rollout endpoints).
     pub fn with_skills(mut self, skills: SkillOps) -> Self {
         self.skills = Some(skills);
+        self
+    }
+
+    /// Attach the cost tracker so `/metrics` includes a live cost summary.
+    pub fn with_cost(mut self, cost: Arc<crate::cost::CostTracker>) -> Self {
+        self.cost = Some(cost);
         self
     }
 
