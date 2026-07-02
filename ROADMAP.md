@@ -513,7 +513,7 @@ every phase below. Aligns Oh-Ben-Claw with the OWASP Top 10 for Agentic Applicat
 - [ ] **Staged rollout** for new/synthesized physical skills: `simulate` → `supervised` → `autonomous`, promotion gated on a clean record
 - [ ] **Physical-aware approval prompts** — surface risk class, device, and concrete effect ("open GPIO 17 → unlock front door") in the approval UI
 - [x] **Argument provenance ("taint") tracking** — CaMeL-style data-flow guard: `External`-trust tool output (web/browser/remote-MCP) is pooled per run, and a privileged (physical/irreversible/blast) call whose argument values echo that untrusted content is refused (`enforce`) or flagged (`warn`), unless explicitly operator-granted (`src/security/taint.rs`; `[safety].taint_mode`; OWASP ASI01/02). *(2026-07-02)*
-- [ ] Embodied red-team evals: injected-malicious-skill and injected-prompt tests must not be able to drive an out-of-limit actuator command (extends Phase 15 eval harness) — *injected-prompt→actuation covered by the `taint_redteam` evals; injected-malicious-skill by the Phase 16 P3 red-team evals*
+- [x] Embodied red-team evals: injected-malicious-skill and injected-prompt tests must not be able to drive an out-of-limit actuator command (extends Phase 15 eval harness) — *injected-prompt→actuation covered by `taint_redteam` + the **adaptive OWASP-ASI corpus** (`security/redteam.rs` seed-sampled generator → `asi_redteam` evals: safety invariant holds across the whole generated family, per the NIST "static suites understate" finding); injected-malicious-skill by the Phase 16 P3 red-team evals; mapped to OWASP ASI01/02/04/06*
 
 ## Phase 16: Experiential Self-Improvement ✅ Complete *(flagship)*
 

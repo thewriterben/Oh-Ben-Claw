@@ -32,6 +32,7 @@ pub mod audit_sign;
 pub mod limits;
 pub mod pairing;
 pub mod policy;
+pub mod redteam;
 pub mod taint;
 pub mod trust;
 pub mod vault;
