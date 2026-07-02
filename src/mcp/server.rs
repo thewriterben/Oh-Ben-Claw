@@ -97,12 +97,17 @@ impl McpServer {
                 }
             };
 
-            let id = request.id.clone();
+            // JSON-RPC: a request without an id is a notification — process
+            // it for side effects but never write a response line.
+            let is_notification = request.id.is_none();
             let server_clone = server.clone();
             let response = {
                 let mut srv = server_clone.lock().await;
                 srv.handle_request(request).await
             };
+            if is_notification {
+                continue;
+            }
 
             let mut out = serde_json::to_string(&response)?;
             out.push('\n');
@@ -130,7 +135,7 @@ impl McpServer {
     pub async fn handle_request(&mut self, req: JsonRpcRequest) -> JsonRpcResponse {
         let id = req.id.clone();
         match req.method.as_str() {
-            "initialize" => self.handle_initialize(id),
+            "initialize" => self.handle_initialize(id, &req.params),
             "server/discover" => self.handle_discover(id),
             "notifications/initialized" => {
                 // No response for notifications
@@ -143,12 +148,21 @@ impl McpServer {
         }
     }
 
-    /// Legacy 2024-11-05 handshake response.
-    fn handle_initialize(&self, id: Option<Value>) -> JsonRpcResponse {
+    /// Legacy handshake response (all pre-2026 revisions).
+    ///
+    /// Version negotiation: echo the client's requested `protocolVersion`
+    /// when it is one we support, otherwise answer with our baseline legacy
+    /// version and let the client decide whether to continue.
+    fn handle_initialize(&self, id: Option<Value>, params: &Value) -> JsonRpcResponse {
+        let requested = params.get("protocolVersion").and_then(|v| v.as_str());
+        let version = match requested {
+            Some(v) if super::SUPPORTED_PROTOCOL_VERSIONS.contains(&v) => v,
+            _ => super::PROTOCOL_VERSION_LEGACY,
+        };
         JsonRpcResponse::ok(
             id,
             json!({
-                "protocolVersion": super::PROTOCOL_VERSION_LEGACY,
+                "protocolVersion": version,
                 "capabilities": self.capabilities(),
                 "serverInfo": self.server_info()
             }),
@@ -172,7 +186,9 @@ impl McpServer {
 
     fn capabilities(&self) -> Value {
         json!({
-            "tools": {"listChanged": false}
+            "tools": {"listChanged": false},
+            // SEP-2133: extensions negotiate through this map; empty = none.
+            "extensions": {}
         })
     }
 
@@ -279,7 +295,7 @@ fn validate_http_headers(
     let name = get("mcp-name");
 
     if let Some(v) = &version {
-        if v != super::PROTOCOL_VERSION_LEGACY && v != super::PROTOCOL_VERSION_2026 {
+        if !super::SUPPORTED_PROTOCOL_VERSIONS.contains(&v.as_str()) {
             return Err(format!("Unsupported MCP-Protocol-Version: {v}"));
         }
     }
@@ -315,16 +331,21 @@ async fn http_handler(
     State(server): State<Arc<Mutex<McpServer>>>,
     headers: HeaderMap,
     Json(request): Json<JsonRpcRequest>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let mut srv = server.lock().await;
 
     if let Err(msg) = validate_http_headers(&headers, &request, srv.mode()) {
         let resp = JsonRpcResponse::err(request.id.clone(), -32600, &msg);
-        return (StatusCode::BAD_REQUEST, Json(resp));
+        return (StatusCode::BAD_REQUEST, Json(resp)).into_response();
     }
 
+    // JSON-RPC notification over HTTP: accepted, no response body.
+    let is_notification = request.id.is_none();
     let response = srv.handle_request(request).await;
-    (StatusCode::OK, Json(response))
+    if is_notification {
+        return StatusCode::ACCEPTED.into_response();
+    }
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 #[cfg(test)]
@@ -517,5 +538,74 @@ mod tests {
         let r = req("tools/list", json!({}));
         let err = validate_http_headers(&headers, &r, ProtocolMode::Stateless2026);
         assert!(err.is_err());
+    }
+
+    // ── Phase 15 WS2: 2026-07-28 RC audit fixes ───────────────────────────
+
+    #[test]
+    fn test_http_accepts_every_published_version() {
+        // Notably 2025-11-25 — the currently shipping revision — must pass.
+        for v in super::super::SUPPORTED_PROTOCOL_VERSIONS {
+            let mut headers = HeaderMap::new();
+            headers.insert("mcp-protocol-version", v.parse().unwrap());
+            headers.insert("mcp-method", "tools/list".parse().unwrap());
+            let r = req("tools/list", json!({}));
+            assert!(
+                validate_http_headers(&headers, &r, ProtocolMode::Stateless2026).is_ok(),
+                "version {v} must be accepted"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_initialize_echoes_supported_requested_version() {
+        let mut server = make_server();
+        let resp = server
+            .handle_request(req(
+                "initialize",
+                json!({"protocolVersion": "2025-11-25", "clientInfo": {"name": "t", "version": "1"}}),
+            ))
+            .await;
+        assert_eq!(resp.result.unwrap()["protocolVersion"], "2025-11-25");
+
+        // Unknown requested version → fall back to the baseline legacy version.
+        let resp = server
+            .handle_request(req("initialize", json!({"protocolVersion": "2030-01-01"})))
+            .await;
+        assert_eq!(resp.result.unwrap()["protocolVersion"], "2024-11-05");
+    }
+
+    #[tokio::test]
+    async fn test_capabilities_carry_extensions_map() {
+        let mut server = make_server();
+        let resp = server.handle_request(req("server/discover", json!({}))).await;
+        let caps = &resp.result.unwrap()["capabilities"];
+        assert!(caps["extensions"].is_object(), "SEP-2133 extensions map present");
+    }
+
+    #[tokio::test]
+    async fn test_http_notification_gets_202_and_no_body() {
+        let server = Arc::new(Mutex::new(make_server()));
+        let notification = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            method: "notifications/initialized".to_string(),
+            params: json!({}),
+        };
+        let response =
+            http_handler(State(server), HeaderMap::new(), Json(notification)).await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert!(body.is_empty(), "notifications must not get a response body");
+    }
+
+    #[tokio::test]
+    async fn test_http_request_still_gets_200_with_body() {
+        let server = Arc::new(Mutex::new(make_server()));
+        let response =
+            http_handler(State(server), HeaderMap::new(), Json(req("ping", json!({})))).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        assert!(!body.is_empty());
     }
 }

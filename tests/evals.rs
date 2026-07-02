@@ -30,6 +30,8 @@ struct ScriptedProvider {
     script: Mutex<Vec<ChatCompletion>>,
     /// Records the number of tools visible to the model on each call.
     tool_counts_seen: Mutex<Vec<usize>>,
+    /// Records the message contents visible to the model on each call.
+    messages_seen: Mutex<Vec<Vec<String>>>,
 }
 
 impl ScriptedProvider {
@@ -39,6 +41,7 @@ impl ScriptedProvider {
         Self {
             script: Mutex::new(script),
             tool_counts_seen: Mutex::new(Vec::new()),
+            messages_seen: Mutex::new(Vec::new()),
         }
     }
 
@@ -73,11 +76,14 @@ impl Provider for ScriptedProvider {
 
     async fn chat_completion(
         &self,
-        _messages: &[ChatMessage],
+        messages: &[ChatMessage],
         tools: &[Box<dyn Tool>],
         _config: &ProviderConfig,
     ) -> anyhow::Result<ChatCompletion> {
         self.tool_counts_seen.lock().push(tools.len());
+        self.messages_seen
+            .lock()
+            .push(messages.iter().map(|m| m.content.clone()).collect());
         self.script
             .lock()
             .pop()
@@ -409,6 +415,622 @@ async fn eval_agent_without_obs_records_nothing_and_still_works() {
         .await
         .unwrap();
     assert_eq!(resp.message, "hi");
+}
+
+// ── Eval: Phase 16 learned-skill loop closure ─────────────────────────────────
+
+mod skill_loop {
+    use super::*;
+    use oh_ben_claw::skill_forge::{SkillForge, SkillKind, SkillManifest};
+
+    fn tmp_forge(tag: &str) -> SkillForge {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        SkillForge::new(std::env::temp_dir().join(format!("obc-eval-skills-{tag}-{nanos}")))
+    }
+
+    fn delegate_manifest(name: &str, target: &str, fixed: Value, enabled: bool) -> SkillManifest {
+        SkillManifest {
+            name: name.to_string(),
+            description: format!("eval skill delegating to {target}"),
+            kind: SkillKind::Delegate {
+                tool: target.to_string(),
+                fixed_args: fixed,
+            },
+            parameters: json!({ "type": "object", "properties": {} }),
+            version: Some("0.1.0-eval".to_string()),
+            stage: Default::default(),
+            tags: vec!["learned".to_string()],
+            enabled,
+            timeout_secs: 5,
+        }
+    }
+
+    /// Golden: sync_skills registers enabled skills, skips disabled ones,
+    /// refuses to shadow a built-in, and unregisters skills disabled later.
+    #[tokio::test]
+    async fn eval_sync_skills_hot_add_remove_and_shadow_guard() {
+        let forge = tmp_forge("sync");
+        let provider = Arc::new(ScriptedProvider::new(vec![]));
+        let (builtin, _) = echo_tool("http_fetch", false);
+        let (agent, _session) = make_agent(provider, vec![builtin]);
+
+        forge
+            .install_skill(&delegate_manifest("learned_a", "http_fetch", json!({}), true))
+            .unwrap();
+        forge
+            .install_skill(&delegate_manifest("learned_off", "http_fetch", json!({}), false))
+            .unwrap();
+        forge
+            .install_skill(&delegate_manifest("http_fetch", "http_fetch", json!({}), true))
+            .unwrap(); // would shadow the built-in
+
+        let (added, removed, shadowed) = agent.sync_skills(&forge);
+        assert_eq!((added, removed, shadowed), (1, 0, 1));
+        let names = agent.tool_names();
+        assert!(names.contains(&"learned_a".to_string()));
+        assert!(!names.contains(&"learned_off".to_string()));
+        assert_eq!(names.iter().filter(|n| *n == "http_fetch").count(), 1);
+
+        // Re-sync is idempotent.
+        assert_eq!(agent.sync_skills(&forge), (0, 0, 1));
+
+        // Disable on disk → unregistered on next sync (hot removal).
+        forge
+            .install_skill(&delegate_manifest("learned_a", "http_fetch", json!({}), false))
+            .unwrap();
+        let (added, removed, _) = agent.sync_skills(&forge);
+        assert_eq!((added, removed), (0, 1));
+        assert!(!agent.tool_names().contains(&"learned_a".to_string()));
+
+        std::fs::remove_dir_all(&forge.skill_dir).ok();
+    }
+
+    /// Golden: a learned Delegate skill invoked by the model routes through the
+    /// real underlying tool inside the agent chokepoint — the loop is closed.
+    #[tokio::test]
+    async fn eval_learned_delegate_skill_executes_underlying_tool() {
+        let forge = tmp_forge("route");
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            ScriptedProvider::tool_call("learned_check_weather", json!({"city": "Oslo"})),
+            ScriptedProvider::text("done"),
+        ]));
+        let (builtin, calls) = echo_tool("http_fetch", false);
+        let (agent, session) = make_agent(provider, vec![builtin]);
+
+        forge
+            .install_skill(&delegate_manifest(
+                "learned_check_weather",
+                "http_fetch",
+                json!({"q": "weather"}),
+                true,
+            ))
+            .unwrap();
+        assert_eq!(agent.sync_skills(&forge).0, 1);
+
+        let resp = agent
+            .process(&session, "check the weather", &ProviderConfig::default())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.message, "done");
+        // The underlying tool ran once, with fixed args merged under runtime args.
+        let recorded = calls.lock();
+        assert_eq!(recorded.len(), 1);
+        assert!(recorded[0].contains("\"q\":\"weather\""), "fixed arg kept: {}", recorded[0]);
+        assert!(recorded[0].contains("\"city\":\"Oslo\""), "runtime arg merged: {}", recorded[0]);
+        // And the tool-call record shows a real result, not a delegation stub.
+        assert!(resp.tool_calls[0].result.starts_with("echo:"), "{}", resp.tool_calls[0].result);
+
+        std::fs::remove_dir_all(&forge.skill_dir).ok();
+    }
+
+    /// Golden: a delegate cycle is cut by the hop bound, not an infinite loop.
+    #[tokio::test]
+    async fn eval_delegate_cycle_is_bounded() {
+        let forge = tmp_forge("cycle");
+        let provider = Arc::new(ScriptedProvider::new(vec![]));
+        let (builtin, _) = echo_tool("http_fetch", false);
+        let (agent, _session) = make_agent(provider, vec![builtin]);
+
+        forge
+            .install_skill(&delegate_manifest("learned_x", "learned_y", json!({}), true))
+            .unwrap();
+        forge
+            .install_skill(&delegate_manifest("learned_y", "learned_x", json!({}), true))
+            .unwrap();
+        assert_eq!(agent.sync_skills(&forge).0, 2);
+
+        let result = agent
+            .execute_tool_direct("learned_x", json!({}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.error.as_deref().unwrap_or("").contains("hops"));
+
+        std::fs::remove_dir_all(&forge.skill_dir).ok();
+    }
+
+    fn sequence_manifest(
+        name: &str,
+        steps: Vec<(&str, Value)>,
+        enabled: bool,
+    ) -> SkillManifest {
+        use oh_ben_claw::skill_forge::SkillStep;
+        SkillManifest {
+            name: name.to_string(),
+            description: "eval sequence skill".to_string(),
+            kind: SkillKind::Sequence {
+                steps: steps
+                    .into_iter()
+                    .map(|(tool, args)| SkillStep {
+                        tool: tool.to_string(),
+                        args,
+                    })
+                    .collect(),
+            },
+            parameters: json!({ "type": "object", "properties": {} }),
+            version: Some("0.1.0-eval".to_string()),
+            stage: Default::default(),
+            tags: vec!["learned".to_string()],
+            enabled,
+            timeout_secs: 5,
+        }
+    }
+
+    /// Golden: a Sequence skill runs each step through the chokepoint in
+    /// order, substituting `{param}` placeholders — numbers stay numbers.
+    #[tokio::test]
+    async fn eval_sequence_skill_runs_steps_in_order_with_typed_params() {
+        let forge = tmp_forge("seq");
+        let provider = Arc::new(ScriptedProvider::new(vec![]));
+        let (builtin, calls) = echo_tool("http_fetch", false);
+        let (agent, _session) = make_agent(provider, vec![builtin]);
+
+        forge
+            .install_skill(&sequence_manifest(
+                "learned_report",
+                vec![
+                    ("http_fetch", json!({"q": "weather", "city": "{city}"})),
+                    ("http_fetch", json!({"q": "news", "page": "{page}"})),
+                ],
+                true,
+            ))
+            .unwrap();
+        assert_eq!(agent.sync_skills(&forge).0, 1);
+
+        let result = agent
+            .execute_tool_direct("learned_report", json!({"city": "Oslo", "page": 2}))
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.error);
+        assert!(result.output.contains("[step 1 http_fetch]"));
+        assert!(result.output.contains("[step 2 http_fetch]"));
+
+        let recorded = calls.lock();
+        assert_eq!(recorded.len(), 2);
+        assert!(recorded[0].contains("\"city\":\"Oslo\""), "{}", recorded[0]);
+        assert!(recorded[1].contains("\"page\":2"), "number preserved: {}", recorded[1]);
+
+        std::fs::remove_dir_all(&forge.skill_dir).ok();
+    }
+
+    /// Golden: the first failing step aborts the recipe with a precise error.
+    #[tokio::test]
+    async fn eval_sequence_aborts_on_first_failing_step() {
+        let forge = tmp_forge("seq-abort");
+        let provider = Arc::new(ScriptedProvider::new(vec![]));
+        let (good, _) = echo_tool("http_fetch", false);
+        let (bad, bad_calls) = echo_tool("flaky_tool", true);
+        let (agent, _session) = make_agent(provider, vec![good, bad]);
+
+        forge
+            .install_skill(&sequence_manifest(
+                "learned_flaky",
+                vec![
+                    ("flaky_tool", json!({})),
+                    ("http_fetch", json!({"q": "never reached"})),
+                ],
+                true,
+            ))
+            .unwrap();
+        agent.sync_skills(&forge);
+
+        let result = agent
+            .execute_tool_direct("learned_flaky", json!({}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.error.as_deref().unwrap_or("").contains("failed at step 1 (flaky_tool)"));
+        assert_eq!(bad_calls.lock().len(), 1);
+
+        std::fs::remove_dir_all(&forge.skill_dir).ok();
+    }
+
+    /// Golden: sequences cannot nest — bounded recipe depth.
+    #[tokio::test]
+    async fn eval_nested_sequence_is_refused() {
+        let forge = tmp_forge("seq-nest");
+        let provider = Arc::new(ScriptedProvider::new(vec![]));
+        let (builtin, _) = echo_tool("http_fetch", false);
+        let (agent, _session) = make_agent(provider, vec![builtin]);
+
+        forge
+            .install_skill(&sequence_manifest("learned_inner", vec![("http_fetch", json!({}))], true))
+            .unwrap();
+        forge
+            .install_skill(&sequence_manifest("learned_outer", vec![("learned_inner", json!({}))], true))
+            .unwrap();
+        assert_eq!(agent.sync_skills(&forge).0, 2);
+
+        let result = agent
+            .execute_tool_direct("learned_outer", json!({}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result.error.as_deref().unwrap_or("").contains("cannot run inside another sequence"),
+            "{:?}",
+            result.error
+        );
+
+        std::fs::remove_dir_all(&forge.skill_dir).ok();
+    }
+
+    /// Golden: learned-skill invocations are counted (Phase 16 reuse metric).
+    #[tokio::test]
+    async fn eval_learned_skill_invocation_counter() {
+        use oh_ben_claw::observability::ObsContext;
+
+        let forge = tmp_forge("metric");
+        let obs = Arc::new(ObsContext::new());
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            ScriptedProvider::tool_call("learned_ping", json!({})),
+            ScriptedProvider::text("ok"),
+        ]));
+        let (builtin, _) = echo_tool("http_fetch", false);
+        let (agent, session) = make_agent(provider, vec![builtin]);
+        let agent = agent.with_obs(obs.clone());
+
+        forge
+            .install_skill(&delegate_manifest("learned_ping", "http_fetch", json!({}), true))
+            .unwrap();
+        agent.sync_skills(&forge);
+
+        agent
+            .process(&session, "ping", &ProviderConfig::default())
+            .await
+            .unwrap();
+
+        assert_eq!(obs.metrics.counter("learned_skill_invocations_total").get(), 1);
+
+        std::fs::remove_dir_all(&forge.skill_dir).ok();
+    }
+}
+
+// ── Eval: Phase 16 P3 staged rollout (Track 0 red-team) ──────────────────────
+
+mod staged_rollout {
+    use super::*;
+    use oh_ben_claw::approval::{ApprovalManager, ForeverGrants};
+    use oh_ben_claw::skill_forge::rollout::tracker_in;
+    use oh_ben_claw::skill_forge::{SkillForge, SkillKind, SkillManifest};
+    use oh_ben_claw::tools::traits::RolloutStage;
+
+    fn tmp_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("obc-eval-rollout-{tag}-{nanos}"))
+    }
+
+    fn staged_manifest(name: &str, target: &str, stage: RolloutStage) -> SkillManifest {
+        SkillManifest {
+            name: name.to_string(),
+            description: "physical learned skill".to_string(),
+            kind: SkillKind::Delegate {
+                tool: target.to_string(),
+                fixed_args: json!({"pin": 17, "value": 1}),
+            },
+            parameters: json!({ "type": "object", "properties": {} }),
+            version: Some("0.1.0-learned".to_string()),
+            stage,
+            tags: vec!["learned".to_string(), "track0:supervised".to_string()],
+            enabled: true,
+            timeout_secs: 5,
+        }
+    }
+
+    fn approval(level: AutonomyLevel, auto_approve: Vec<String>) -> Arc<ApprovalManager> {
+        let cfg = AutonomyConfig {
+            level,
+            auto_approve,
+            always_ask: vec![],
+        };
+        let grants = std::env::temp_dir().join(format!(
+            "obc-eval-rollout-grants-{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        Arc::new(ApprovalManager::with_grants(&cfg, ForeverGrants::load(grants), true))
+    }
+
+    /// RED TEAM: even if the model calls a simulate-stage actuator skill, the
+    /// actuator is never touched — the run is a dry-run, counted toward
+    /// promotion, with an auditable description of what would have happened.
+    #[tokio::test]
+    async fn eval_redteam_simulate_stage_skill_never_actuates() {
+        let dir = tmp_dir("simulate");
+        let forge = SkillForge::new(&dir);
+        forge
+            .install_skill(&staged_manifest("learned_unlock", "gpio_write", RolloutStage::Simulate))
+            .unwrap();
+        let tracker = Arc::new(tracker_in(&dir));
+
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            ScriptedProvider::tool_call("learned_unlock", json!({})),
+            ScriptedProvider::text("done"),
+        ]));
+        let (actuator, actuator_calls) = echo_tool("gpio_write", false);
+        let (agent, session) = make_agent(provider, vec![actuator]);
+        let agent = agent.with_rollout(Arc::clone(&tracker));
+        agent.sync_skills(&forge);
+
+        let resp = agent
+            .process(&session, "unlock the door", &ProviderConfig::default())
+            .await
+            .unwrap();
+
+        assert!(actuator_calls.lock().is_empty(), "the actuator must never fire");
+        assert!(resp.tool_calls[0].result.contains("SIMULATION"), "{}", resp.tool_calls[0].result);
+        assert!(resp.tool_calls[0].result.contains("gpio_write"), "auditable description");
+        let rec = tracker.record("learned_unlock").unwrap();
+        assert_eq!((rec.stage, rec.clean_runs), (RolloutStage::Simulate, 1));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// RED TEAM: a supervised-stage skill is refused without an explicit
+    /// operator grant — Full autonomy is NOT a grant, and no approval manager
+    /// at all fails closed.
+    #[tokio::test]
+    async fn eval_redteam_supervised_skill_refused_without_explicit_grant() {
+        let dir = tmp_dir("supervised-refuse");
+        let forge = SkillForge::new(&dir);
+        forge
+            .install_skill(&staged_manifest("learned_unlock", "gpio_write", RolloutStage::Supervised))
+            .unwrap();
+
+        // Case 1: no approval manager attached → fail closed.
+        let provider = Arc::new(ScriptedProvider::new(vec![]));
+        let (actuator, calls) = echo_tool("gpio_write", false);
+        let (agent, _s) = make_agent(provider, vec![actuator]);
+        agent.sync_skills(&forge);
+        let r = agent.execute_tool_direct("learned_unlock", json!({})).await.unwrap();
+        assert!(!r.success);
+        assert!(r.error.as_deref().unwrap_or("").contains("explicit operator grant"));
+        assert!(calls.lock().is_empty());
+
+        // Case 2: Full autonomy, but no explicit grant → still refused.
+        let provider = Arc::new(ScriptedProvider::new(vec![]));
+        let (actuator, calls) = echo_tool("gpio_write", false);
+        let (agent, _s) = make_agent(provider, vec![actuator]);
+        let agent = agent.with_approval(approval(AutonomyLevel::Full, vec![]));
+        agent.sync_skills(&forge);
+        let r = agent.execute_tool_direct("learned_unlock", json!({})).await.unwrap();
+        assert!(!r.success, "Full autonomy must not count as an operator grant");
+        assert!(calls.lock().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Golden: with an explicit grant a supervised skill executes for real,
+    /// and the clean run is recorded toward promotion.
+    #[tokio::test]
+    async fn eval_supervised_skill_runs_with_grant_and_records_clean() {
+        let dir = tmp_dir("supervised-run");
+        let forge = SkillForge::new(&dir);
+        forge
+            .install_skill(&staged_manifest("learned_unlock", "gpio_write", RolloutStage::Supervised))
+            .unwrap();
+        let tracker = Arc::new(tracker_in(&dir));
+
+        let provider = Arc::new(ScriptedProvider::new(vec![]));
+        let (actuator, calls) = echo_tool("gpio_write", false);
+        let (agent, _s) = make_agent(provider, vec![actuator]);
+        let agent = agent
+            .with_approval(approval(AutonomyLevel::Full, vec!["learned_unlock".to_string()]))
+            .with_rollout(Arc::clone(&tracker));
+        agent.sync_skills(&forge);
+
+        let r = agent.execute_tool_direct("learned_unlock", json!({})).await.unwrap();
+        assert!(r.success, "{:?}", r.error);
+        assert_eq!(calls.lock().len(), 1, "the real actuator ran exactly once");
+        let rec = tracker.record("learned_unlock").unwrap();
+        assert_eq!((rec.stage, rec.clean_runs, rec.failures), (RolloutStage::Supervised, 1, 0));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Golden: a supervised skill that fails a real run is auto-demoted to
+    /// simulate — the next invocation is a dry-run (halt on drift).
+    #[tokio::test]
+    async fn eval_supervised_failure_auto_demotes_to_simulate() {
+        let dir = tmp_dir("supervised-demote");
+        let forge = SkillForge::new(&dir);
+        forge
+            .install_skill(&staged_manifest("learned_flaky", "gpio_write", RolloutStage::Supervised))
+            .unwrap();
+        let tracker = Arc::new(tracker_in(&dir));
+
+        let provider = Arc::new(ScriptedProvider::new(vec![]));
+        let (actuator, calls) = echo_tool("gpio_write", true); // fails
+        let (agent, _s) = make_agent(provider, vec![actuator]);
+        let agent = agent
+            .with_approval(approval(AutonomyLevel::Full, vec!["learned_flaky".to_string()]))
+            .with_rollout(Arc::clone(&tracker))
+            .with_forge_dir(&dir);
+        agent.sync_skills(&forge);
+
+        let r = agent.execute_tool_direct("learned_flaky", json!({})).await.unwrap();
+        assert!(!r.success);
+        assert_eq!(calls.lock().len(), 1);
+
+        // Manifest demoted on disk…
+        let m = forge
+            .list_manifests()
+            .unwrap()
+            .into_iter()
+            .find(|m| m.name == "learned_flaky")
+            .unwrap();
+        assert_eq!(m.stage, RolloutStage::Simulate, "auto-demoted after real-run failure");
+
+        // …and the live registry was resynced: the next call only simulates.
+        let r2 = agent.execute_tool_direct("learned_flaky", json!({})).await.unwrap();
+        assert!(r2.success);
+        assert!(r2.output.contains("SIMULATION"));
+        assert_eq!(calls.lock().len(), 1, "actuator not touched again");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+// ── Eval: Phase 16 P1 experience retrieval ────────────────────────────────────
+
+mod experience {
+    use super::*;
+    use oh_ben_claw::memory::trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};
+
+    fn seeded_store(objective: &str, tool: &str) -> Arc<TrajectoryStore> {
+        let store = TrajectoryStore::open_in_memory().unwrap();
+        store
+            .record(&Episode {
+                id: "past-1".to_string(),
+                session_id: "old".to_string(),
+                objective: objective.to_string(),
+                steps: vec![EpisodeStep {
+                    tool: tool.to_string(),
+                    args: json!({"q": "weather"}),
+                    result: "ok".to_string(),
+                    ok: true,
+                }],
+                outcome: Outcome::Success,
+                ts_ms: 1,
+                duration_ms: None,
+                tokens_est: None,
+            })
+            .unwrap();
+        Arc::new(store)
+    }
+
+    /// Golden: a similar past success is surfaced as a system block containing
+    /// the proven recipe, inserted right after the system prompt.
+    #[tokio::test]
+    async fn eval_experience_block_surfaces_similar_past_success() {
+        let provider = Arc::new(ScriptedProvider::new(vec![ScriptedProvider::text("done")]));
+        let (tool, _) = echo_tool("http_fetch", false);
+        let (agent, session) = make_agent(provider.clone(), vec![tool]);
+        let agent = agent
+            .with_trajectory_store(seeded_store("check the weather", "http_fetch"))
+            .with_experience_retrieval(3);
+
+        agent
+            .process(&session, "check the weather in Oslo", &ProviderConfig::default())
+            .await
+            .unwrap();
+
+        let seen = provider.messages_seen.lock();
+        let first_call = &seen[0];
+        // Block is the second message (right after the system prompt).
+        assert!(first_call[1].starts_with("[Learned experience"), "{}", first_call[1]);
+        assert!(first_call[1].contains("\"check the weather\""));
+        assert!(first_call[1].contains("http_fetch"));
+    }
+
+    /// Golden: novel tasks get no block — zero prompt noise, no counter tick.
+    #[tokio::test]
+    async fn eval_no_experience_block_on_novel_task() {
+        use oh_ben_claw::observability::ObsContext;
+
+        let obs = Arc::new(ObsContext::new());
+        let provider = Arc::new(ScriptedProvider::new(vec![ScriptedProvider::text("hi")]));
+        let (tool, _) = echo_tool("http_fetch", false);
+        let (agent, session) = make_agent(provider.clone(), vec![tool]);
+        let agent = agent
+            .with_trajectory_store(seeded_store("water the tomato plants", "http_fetch"))
+            .with_experience_retrieval(3)
+            .with_obs(obs.clone());
+
+        agent
+            .process(&session, "photograph incoming birds", &ProviderConfig::default())
+            .await
+            .unwrap();
+
+        let seen = provider.messages_seen.lock();
+        assert!(
+            seen[0].iter().all(|m| !m.contains("[Learned experience")),
+            "novel task must not get an experience block"
+        );
+        assert_eq!(obs.metrics.counter("experience_blocks_injected_total").get(), 0);
+    }
+
+    /// Golden: a registered learned skill relevant to the task is recommended
+    /// in the block by name (and the injection counter ticks).
+    #[tokio::test]
+    async fn eval_experience_block_recommends_learned_skill() {
+        use oh_ben_claw::observability::ObsContext;
+        use oh_ben_claw::skill_forge::{SkillForge, SkillKind, SkillManifest};
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let forge =
+            SkillForge::new(std::env::temp_dir().join(format!("obc-eval-exp-{nanos}")));
+        forge
+            .install_skill(&SkillManifest {
+                name: "learned_check_the_weather".to_string(),
+                description: "Learned from a successful run: check the weather".to_string(),
+                kind: SkillKind::Delegate {
+                    tool: "http_fetch".to_string(),
+                    fixed_args: json!({"q": "weather"}),
+                },
+                parameters: json!({ "type": "object", "properties": {} }),
+                version: Some("0.1.0-learned".to_string()),
+                stage: Default::default(),
+                tags: vec!["learned".to_string()],
+                enabled: true,
+                timeout_secs: 5,
+            })
+            .unwrap();
+
+        let obs = Arc::new(ObsContext::new());
+        let provider = Arc::new(ScriptedProvider::new(vec![ScriptedProvider::text("done")]));
+        let (tool, _) = echo_tool("http_fetch", false);
+        let (agent, session) = make_agent(provider.clone(), vec![tool]);
+        let agent = agent.with_experience_retrieval(3).with_obs(obs.clone());
+        agent.sync_skills(&forge);
+
+        agent
+            .process(&session, "check the weather", &ProviderConfig::default())
+            .await
+            .unwrap();
+
+        let seen = provider.messages_seen.lock();
+        assert!(
+            seen[0][1].contains("learned_check_the_weather"),
+            "learned skill recommended by name: {}",
+            seen[0][1]
+        );
+        assert_eq!(obs.metrics.counter("experience_blocks_injected_total").get(), 1);
+
+        std::fs::remove_dir_all(&forge.skill_dir).ok();
+    }
 }
 
 // ── Eval: approval policy matrix golden ───────────────────────────────────────

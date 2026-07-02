@@ -118,6 +118,17 @@ pub struct GatewayState {
     pub scheduler: Option<Arc<Scheduler>>,
     /// Multi-agent pool — `None` if orchestration is disabled.
     pub agent_pool: Option<AgentPool>,
+    /// Skill-forge operations (Phase 16 P3 staged rollout) — `None` if not wired.
+    pub skills: Option<SkillOps>,
+}
+
+/// What the gateway needs to serve the skill endpoints: the forge directory,
+/// the rollout record, and the promotion threshold.
+#[derive(Clone)]
+pub struct SkillOps {
+    pub skill_dir: std::path::PathBuf,
+    pub tracker: Arc<crate::skill_forge::rollout::RolloutTracker>,
+    pub required_clean: u32,
 }
 
 impl std::fmt::Debug for GatewayState {
@@ -145,6 +156,7 @@ impl GatewayState {
             obs: None,
             scheduler: None,
             agent_pool: None,
+            skills: None,
         }
     }
 
@@ -178,6 +190,12 @@ impl GatewayState {
         self
     }
 
+    /// Attach skill-forge operations (Phase 16 P3 staged rollout endpoints).
+    pub fn with_skills(mut self, skills: SkillOps) -> Self {
+        self.skills = Some(skills);
+        self
+    }
+
     /// Broadcast an event to all connected SSE subscribers.
     pub fn broadcast(&self, event: GatewayEvent) {
         let _ = self.event_tx.send(event);
@@ -196,6 +214,9 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .route("/chat", post(routes::chat))
         .route("/tools", get(routes::list_tools))
         .route("/tools/{name}", post(routes::execute_tool))
+        .route("/skills", get(routes::list_skills))
+        .route("/skills/{name}/promote", post(routes::promote_skill))
+        .route("/skills/{name}/demote", post(routes::demote_skill))
         .route("/nodes", get(routes::list_nodes))
         .route("/tunnel", get(routes::get_tunnel_status))
         .route("/scheduler/tasks", get(routes::list_tasks))

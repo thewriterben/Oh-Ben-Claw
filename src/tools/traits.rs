@@ -67,6 +67,55 @@ impl Default for RiskClass {
     }
 }
 
+/// Track 0 staged-rollout stage of a tool (relevant to learned/installed
+/// skills; ordinary built-in tools are always `Autonomous`).
+///
+/// A skill climbs `Simulate → Supervised → Autonomous`, each promotion gated
+/// on a clean run record and performed by an operator:
+/// - `Simulate` — the agent may *invoke* the skill, but the execution
+///   chokepoint only reports what **would** run; nothing executes.
+/// - `Supervised` — executes only with an explicit operator grant
+///   (auto-approve list, session, or forever grant); a failure demotes.
+/// - `Autonomous` — runs like any other tool (still subject to policy,
+///   Track 0 limits, trust, and approval).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RolloutStage {
+    Simulate,
+    Supervised,
+    #[default]
+    Autonomous,
+}
+
+impl RolloutStage {
+    /// The next stage up, if any.
+    pub fn next(self) -> Option<Self> {
+        match self {
+            Self::Simulate => Some(Self::Supervised),
+            Self::Supervised => Some(Self::Autonomous),
+            Self::Autonomous => None,
+        }
+    }
+
+    /// The next stage down, if any.
+    pub fn prev(self) -> Option<Self> {
+        match self {
+            Self::Autonomous => Some(Self::Supervised),
+            Self::Supervised => Some(Self::Simulate),
+            Self::Simulate => None,
+        }
+    }
+
+    /// Stable string form (matches the serde wire format).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Simulate => "simulate",
+            Self::Supervised => "supervised",
+            Self::Autonomous => "autonomous",
+        }
+    }
+}
+
 /// The result of a tool execution.
 #[derive(Debug, Clone)]
 pub struct ToolResult {
@@ -145,4 +194,70 @@ pub trait Tool: Send + Sync {
 
     /// Execute the tool with the given arguments.
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult>;
+
+    /// If this tool is a pure delegation to another registered tool (a
+    /// skill-forge `Delegate` skill), the target tool name and fixed args.
+    ///
+    /// The agent resolves delegate chains **inside its execution chokepoint**,
+    /// so policy, Track 0, trust, and approval all evaluate the *real*
+    /// underlying call, not just the skill wrapper. Default: not a delegate.
+    fn as_delegate(&self) -> Option<(String, Value)> {
+        None
+    }
+
+    /// If this tool is an ordered multi-step recipe (a skill-forge `Sequence`
+    /// skill), its steps as `(tool, arg-template)` pairs. Like `as_delegate`,
+    /// the agent executes each step through its chokepoint so every real call
+    /// is policy/Track 0/trust/approval-gated. Default: not a sequence.
+    fn as_sequence(&self) -> Option<Vec<(String, Value)>> {
+        None
+    }
+
+    /// Track 0 staged-rollout stage. Built-in tools are `Autonomous`; skills
+    /// carry their manifest's stage and are simulated / operator-gated by the
+    /// agent chokepoint until promoted.
+    fn rollout_stage(&self) -> RolloutStage {
+        RolloutStage::Autonomous
+    }
+}
+
+/// A shared handle to a tool is itself a tool (pure delegation).
+///
+/// This lets the agent keep its registry as `Arc<dyn Tool>` (so tools can be
+/// hot-added while calls are in flight — Phase 16 skill reload) while still
+/// producing the `Box<dyn Tool>` slices the provider trait expects:
+/// `Box::new(Arc::clone(&tool))` is a cheap per-call snapshot.
+#[async_trait]
+impl Tool for std::sync::Arc<dyn Tool> {
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+
+    fn description(&self) -> &str {
+        (**self).description()
+    }
+
+    fn parameters_schema(&self) -> Value {
+        (**self).parameters_schema()
+    }
+
+    fn risk_class(&self) -> RiskClass {
+        (**self).risk_class()
+    }
+
+    fn as_delegate(&self) -> Option<(String, Value)> {
+        (**self).as_delegate()
+    }
+
+    fn as_sequence(&self) -> Option<Vec<(String, Value)>> {
+        (**self).as_sequence()
+    }
+
+    fn rollout_stage(&self) -> RolloutStage {
+        (**self).rollout_stage()
+    }
+
+    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
+        (**self).execute(args).await
+    }
 }

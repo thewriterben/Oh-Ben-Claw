@@ -88,6 +88,10 @@ enum Commands {
     #[command(subcommand)]
     History(HistoryCommands),
 
+    /// Manage learned skills and their Track 0 staged rollout.
+    #[command(subcommand)]
+    Skill(SkillCommands),
+
     /// Run system diagnostics to check configuration and connectivity.
     Doctor,
 }
@@ -136,6 +140,25 @@ enum HistoryCommands {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum SkillCommands {
+    /// List installed skills with stage and clean-run record.
+    List,
+    /// Show one skill's manifest and rollout record.
+    Show { name: String },
+    /// Promote a skill one stage up (simulate → supervised → autonomous).
+    /// Refused without the required clean-run record (Track 0).
+    Promote { name: String },
+    /// Demote a skill one stage down (always allowed).
+    Demote { name: String },
+    /// Reset a skill's clean-run/failure record at its current stage.
+    ResetRecord { name: String },
+    /// Revert a skill's description to the value before its last evolution.
+    RevertDescription { name: String },
+    /// Remove a skill from the forge.
+    Remove { name: String },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let subscriber = FmtSubscriber::builder()
@@ -179,6 +202,9 @@ async fn main() -> Result<()> {
         Commands::History(cmd) => {
             run_history(cmd).await?;
         }
+        Commands::Skill(cmd) => {
+            run_skill(&config, cmd)?;
+        }
         Commands::Doctor => {
             oh_ben_claw::doctor::run(&config)?;
         }
@@ -214,6 +240,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
 
     // Build tool registry
     let mut all_tools = default_tools();
+    // Skill forge management tool (list/install/remove skills at runtime).
+    all_tools.push(Box::new(
+        oh_ben_claw::skill_forge::SkillForgeTool::default_dir(),
+    ));
     let mut node_count = 0usize;
 
     // Connect to MQTT spine and discover peripheral tools
@@ -1457,6 +1487,11 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     }
     if let Some(t) = &trajectory_store {
         agent = agent.with_trajectory_store(Arc::clone(t));
+        // Phase 16 P1: experience retrieval into the prompt (default on).
+        if config.self_improvement.retrieval.unwrap_or(true) {
+            agent = agent
+                .with_experience_retrieval(config.self_improvement.retrieval_k.unwrap_or(3));
+        }
     }
     // Track 0 dynamic trust: refuse physical actions from a node whose behavior
     // (latency/failures) has demoted it, and feed the score from every round-trip.
@@ -1471,6 +1506,26 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     agent = agent.with_approval(Arc::new(oh_ben_claw::approval::ApprovalManager::from_config(
         &config.autonomy,
     )));
+    agent = agent.with_obs(Arc::clone(&obs));
+    // Phase 16 P3: Track 0 staged rollout — clean-run record + auto-demotion.
+    let rollout_tracker = Arc::new(oh_ben_claw::skill_forge::rollout::RolloutTracker::load(
+        oh_ben_claw::skill_forge::rollout::RolloutTracker::default_path(),
+    ));
+    agent = agent
+        .with_rollout(Arc::clone(&rollout_tracker))
+        .with_forge_dir(oh_ben_claw::skill_forge::SkillForge::default_dir());
+    // Phase 16: load enabled skills (authored + learned) from the forge into the
+    // live tool registry. Disabled skills stay invisible; simulate-stage skills
+    // load but can only dry-run until promoted.
+    {
+        let forge = oh_ben_claw::skill_forge::SkillForge::new(
+            oh_ben_claw::skill_forge::SkillForge::default_dir(),
+        );
+        let (added, _removed, shadowed) = agent.sync_skills(&forge);
+        if added > 0 || shadowed > 0 {
+            info!(added, shadowed, "Skill forge tools registered");
+        }
+    }
     let agent = Arc::new(agent);
 
     // Phase 16: spawn the autonomous self-improvement loop when enabled. It
@@ -1490,6 +1545,38 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     "servo".to_string(),
                 ],
                 config.self_improvement.max_learned.unwrap_or(500),
+            )
+            .with_obs(Arc::clone(&obs))
+            .with_verification_rules(
+                config
+                    .self_improvement
+                    .verification
+                    .iter()
+                    .filter_map(|r| {
+                        use oh_ben_claw::skill_forge::synthesis::VerificationCheck;
+                        let check = match r.kind.as_str() {
+                            "test_command" => Some(VerificationCheck::TestCommand {
+                                cmd: r.cmd.clone()?,
+                                expect_exit: r.expect_exit.unwrap_or(0),
+                            }),
+                            "sensor_assertion" => Some(VerificationCheck::SensorAssertion {
+                                tool: r.tool.clone()?,
+                                contains: r.contains.clone()?,
+                            }),
+                            other => {
+                                tracing::warn!(
+                                    kind = %other,
+                                    "unknown [[self_improvement.verification]] kind; ignored"
+                                );
+                                None
+                            }
+                        }?;
+                        Some(oh_ben_claw::skill_forge::improve::VerificationRule {
+                            skill_pattern: r.skill.clone(),
+                            check,
+                        })
+                    })
+                    .collect(),
             );
             let executor: Arc<dyn oh_ben_claw::skill_forge::improve::ReplayExecutor> =
                 agent.clone();
@@ -1500,6 +1587,36 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 improver.run_periodically(executor, interval).await;
             });
             info!("Phase 16 self-improvement loop spawned");
+
+            // Phase 16 P4: offline description evolution (config-gated, daily
+            // by default). Uses its own provider instance; only rewrites
+            // learned-skill descriptions — never stage/enabled/kind.
+            if config.self_improvement.evolve {
+                match providers::from_config(&config.provider) {
+                    Ok(evolve_provider) => {
+                        let evolver = oh_ben_claw::skill_forge::evolve::DescriptionEvolver::new(
+                            oh_ben_claw::skill_forge::SkillForge::new(
+                                oh_ben_claw::skill_forge::SkillForge::default_dir(),
+                            ),
+                            Arc::clone(traj),
+                            evolve_provider,
+                            config.provider.clone(),
+                            oh_ben_claw::skill_forge::evolve::default_log_path(),
+                            config.self_improvement.evolve_max_per_pass.unwrap_or(5),
+                        );
+                        let evolve_interval = std::time::Duration::from_secs(
+                            config.self_improvement.evolve_interval_secs.unwrap_or(86_400),
+                        );
+                        tokio::spawn(async move {
+                            evolver.run_periodically(evolve_interval).await;
+                        });
+                        info!("Phase 16 offline evolution job spawned");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Phase 16 evolution: provider unavailable");
+                    }
+                }
+            }
         }
     }
 
@@ -1550,7 +1667,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             .with_agent(handle.clone())
             .with_memory(Arc::clone(&memory))
             .with_obs(obs)
-            .with_scheduler(sched);
+            .with_scheduler(sched)
+            .with_skills(gateway::SkillOps {
+                skill_dir: oh_ben_claw::skill_forge::SkillForge::default_dir(),
+                tracker: Arc::clone(&rollout_tracker),
+                required_clean: config.self_improvement.promotion_clean_runs.unwrap_or(3),
+            });
         if let Some(pool) = maybe_pool.clone() {
             gs = gs.with_agent_pool(pool);
         }
@@ -1824,6 +1946,100 @@ async fn run_peripheral(mut config: Config, cmd: PeripheralCommands) -> Result<(
                     board
                 );
             }
+        }
+    }
+    Ok(())
+}
+
+/// `oh-ben-claw skill …` — learned-skill management + Track 0 staged rollout.
+/// Works directly on the forge directory and rollout record; a running agent
+/// picks changes up via the gateway endpoints or its next improvement pass.
+fn run_skill(config: &Config, cmd: SkillCommands) -> Result<()> {
+    use oh_ben_claw::skill_forge::{rollout, SkillForge};
+
+    let forge = SkillForge::new(SkillForge::default_dir());
+    let tracker = rollout::RolloutTracker::load(rollout::RolloutTracker::default_path());
+    let required = config.self_improvement.promotion_clean_runs.unwrap_or(3);
+
+    match cmd {
+        SkillCommands::List => {
+            let manifests = forge.list_manifests()?;
+            if manifests.is_empty() {
+                println!("No skills installed in {}", forge.skill_dir.display());
+                return Ok(());
+            }
+            println!(
+                "{:<40} {:<11} {:<8} {:<7} {:<9} TAGS",
+                "NAME", "STAGE", "ENABLED", "CLEAN", "FAILURES"
+            );
+            for m in manifests {
+                let rec = tracker.record(&m.name).unwrap_or_default();
+                let (clean, failures) = if rec.stage == m.stage {
+                    (rec.clean_runs, rec.failures)
+                } else {
+                    (0, 0)
+                };
+                println!(
+                    "{:<40} {:<11} {:<8} {:<7} {:<9} {}",
+                    m.name,
+                    m.stage.as_str(),
+                    m.enabled,
+                    clean,
+                    failures,
+                    m.tags.join(",")
+                );
+            }
+        }
+        SkillCommands::Show { name } => {
+            let manifest = forge
+                .list_manifests()?
+                .into_iter()
+                .find(|m| m.name == name)
+                .ok_or_else(|| anyhow::anyhow!("no skill named '{name}'"))?;
+            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            match tracker.record(&name) {
+                Some(rec) => println!(
+                    "\nRollout record: stage={} clean_runs={} failures={} (promotion needs {} clean)",
+                    rec.stage.as_str(),
+                    rec.clean_runs,
+                    rec.failures,
+                    required
+                ),
+                None => println!("\nRollout record: none (promotion needs {required} clean runs)"),
+            }
+        }
+        SkillCommands::Promote { name } => {
+            let stage = rollout::promote(&forge, &tracker, &name, required)?;
+            println!("'{name}' promoted to stage '{}'", stage.as_str());
+            println!("(a running agent applies this on its next self-improvement pass, or promote via the gateway for an immediate hot reload)");
+        }
+        SkillCommands::Demote { name } => {
+            let stage = rollout::demote(&forge, &tracker, &name)?;
+            println!("'{name}' demoted to stage '{}'", stage.as_str());
+        }
+        SkillCommands::ResetRecord { name } => {
+            let manifest = forge
+                .list_manifests()?
+                .into_iter()
+                .find(|m| m.name == name)
+                .ok_or_else(|| anyhow::anyhow!("no skill named '{name}'"))?;
+            tracker.reset(&name, manifest.stage);
+            println!(
+                "record for '{name}' reset at stage '{}'",
+                manifest.stage.as_str()
+            );
+        }
+        SkillCommands::RevertDescription { name } => {
+            let restored = oh_ben_claw::skill_forge::evolve::revert_description(
+                &forge,
+                &oh_ben_claw::skill_forge::evolve::default_log_path(),
+                &name,
+            )?;
+            println!("'{name}' description reverted to: {restored}");
+        }
+        SkillCommands::Remove { name } => {
+            forge.remove_skill(&name)?;
+            println!("'{name}' removed from the forge");
         }
     }
     Ok(())
