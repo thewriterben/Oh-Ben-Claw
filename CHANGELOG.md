@@ -5,6 +5,50 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Track 0: adaptive OWASP-ASI red-team corpus (2026-07-02)
+
+The NIST agent-hijacking lesson (Jan 2025): a *frozen* injection string is an
+upper bound on safety, never a proof — adaptive attacks lifted hijack success
+~11% → ~81% against static suites. OBC's injection evals now draw a
+**seed-sampled family** of framings/obfuscations from a generator and assert
+the safety invariant across the whole family, mapped to the OWASP Top 10 for
+Agentic Applications (Dec 2025).
+
+### Added — `src/security/redteam.rs`
+
+- `AsiCategory` (ASI01 Prompt Injection / ASI02 Tool Misuse / ASI04 Supply
+  Chain / ASI06 Memory Poisoning) with stable IDs, plus a module-level map of
+  which OBC eval covers which category.
+- `InjectionScenario` (AgentDojo-style: user task + injection task + target
+  token) and `standard_scenarios()`.
+- `generate(scenario, seed, count)` — a dependency-free deterministic
+  generator: the full frame × filler cartesian product (authority/roleplay/
+  markup/"ignore previous instructions" wrappers embedded in benign page
+  content), Fisher–Yates-shuffled by a splitmix64 seed so a scheduled task
+  can rotate the seed for a fresh sample over time. Every variant preserves
+  the target token verbatim.
+
+### Added — `tests/evals.rs::asi_redteam`
+
+- **The adaptive invariant**: across the *entire* generated corpus (≥40
+  variants, not one string), an injection echoing untrusted content into a
+  privileged actuation is refused under taint `Enforce` — the lock never
+  fires for any framing.
+- **Honest layered-defense case**: a spelled-out value ("ninety-nine")
+  *evades* substring taint, but the deterministic Track 0 `SafetyGate`
+  refuses the out-of-range pin regardless of provenance. Taint is the first
+  layer; the gate is the backstop that doesn't depend on matching attacker
+  text.
+
+### Tests
+
+- 4 generator unit tests (target-token preservation, per-seed determinism,
+  bounded distinct corpus, stable ASI IDs) + 2 corpus evals.
+- Full workspace on Windows: **1134 lib tests, evals 37/37**, clippy
+  warning-free.
+
+---
+
 ## Unreleased — Track 0: tool-argument taint tracking (CaMeL-style provenance guard) (2026-07-02)
 
 The one real architectural gap the July research flagged: OBC's chokepoint
