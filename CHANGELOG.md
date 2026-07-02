@@ -5,6 +5,299 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Phase 16 P3: Track 0 staged rollout for learned skills (2026-07-02)
+
+Learned skills that can touch the physical world now climb
+`simulate → supervised → autonomous`, each promotion operator-initiated and
+gated on a clean run record. This replaces the P0 "installed disabled"
+quarantine: physical learned skills now **load** so the model can invoke them —
+but at `simulate` the chokepoint only reports what would run, and at
+`supervised` execution requires an explicit operator grant. Aligns with the
+Track 0 roadmap item ("staged rollout, promotion gated on a clean record").
+
+### Added — `RolloutStage` (`src/tools/traits.rs`, `src/skill_forge/mod.rs`)
+
+- `RolloutStage { Simulate, Supervised, Autonomous }` with `next()/prev()`;
+  `Tool::rollout_stage()` (default `Autonomous`; `SkillTool` carries its
+  manifest's stage). `SkillManifest.stage` serde-defaults to `autonomous`, so
+  authored/ClawHub skills behave exactly as before.
+
+### Added — `src/skill_forge/rollout.rs`
+
+- `RolloutTracker` — persisted per-skill clean-run/failure record at the
+  current stage (`~/.oh-ben-claw/skill_rollout.json`); counts reset on stage
+  change.
+- `promote()` — one stage up, **refused** unless ≥ N clean runs at the current
+  stage (`[self_improvement].promotion_clean_runs`, default 3) and zero
+  failures on record. `demote()` — one stage down, unconditional.
+
+### Changed — agent chokepoint (`src/agent/mod.rs`)
+
+- Stage checked on the skill wrapper *and* on every delegate-hop target:
+  - `simulate` → dry-run: an auditable description of exactly what would have
+    executed (resolved delegate args / substituted sequence steps); the
+    actuator is never touched; the clean simulated run is recorded toward
+    promotion (`skill_simulations_total` counter).
+  - `supervised` → fails closed: refused unless the operator **explicitly**
+    granted the skill (auto-approve list, session, or forever grant) — new
+    `ApprovalManager::explicitly_granted()`; a permissive autonomy level
+    (`Full`) deliberately does NOT count. Clean runs recorded; a failed real
+    run **auto-demotes the skill to `simulate`** (manifest rewrite + hot
+    resync — halt on drift).
+- `sync_skills` now rebuilds the forge-managed slice of the registry, so
+  manifest *edits* (stage changes) hot-swap, not just membership changes.
+- `Agent::with_rollout(tracker)` + `with_forge_dir(dir)`;
+  `AgentHandle::sync_skills()` for the gateway.
+
+### Changed — improver + synthesis
+
+- `tag_physical()` now sets `stage = simulate` + `enabled = true` (was:
+  installed disabled). `approve()` sets `stage = autonomous`.
+- `run_periodically` resyncs the live registry every pass, picking up
+  out-of-band operator changes (CLI promote/demote, manual manifest edits).
+
+### Added — operator surface
+
+- CLI: `oh-ben-claw skill list|show|promote|demote|reset-record|remove` —
+  works directly on the forge + rollout record; promotion prints the Track 0
+  refusal reason when the record is insufficient.
+- Gateway: `GET /api/v1/skills` (stage + record per skill),
+  `POST /api/v1/skills/{name}/promote|demote` — stage changes hot-reload the
+  live agent immediately (`GatewayState::with_skills(SkillOps)`).
+
+### Tests
+
+- `rollout.rs`: record accumulation/reset/persistence; promotion gating
+  (clean-run threshold, failure block); unconditional bounded demotion.
+- Red-team evals (`tests/evals.rs`, `staged_rollout`): a simulate-stage
+  actuator skill **never actuates** even when the model calls it; a
+  supervised skill is refused with no approval manager (fail closed) and
+  under Full autonomy without an explicit grant; with a grant it runs and
+  records a clean run; a failed supervised run auto-demotes and the next
+  invocation only simulates.
+- Full workspace green on Windows: **1102 lib tests, evals 29/29**.
+
+---
+
+## Unreleased — Phase 16 P2: multi-step + parameterized synthesis, real verification checks (2026-07-02)
+
+Learned skills grow from one-shot single-tool recipes into generalized,
+multi-step, parameterized recipes — and the verification gate gains real
+signals beyond replay (host test commands, read-only sensor assertions),
+per the V2-STRATEGY caution that reflection degrades without grounding.
+
+### Added — `SkillKind::Sequence` (`src/skill_forge/mod.rs`)
+
+- New skill kind: an ordered list of `SkillStep { tool, args }`. `{param}`
+  placeholders in step args are substituted from runtime arguments;
+  `substitute_args` is **type-preserving** for whole-value placeholders
+  (`"{pin}"` with `pin: 17` yields the number 17, not `"17"`) and textual for
+  inline ones (`"https://x/{city}/now"`). Standalone execution refuses (like
+  `Delegate`); `Tool::as_sequence` exposes the steps for chokepoint execution.
+- `SkillManifest::validate()` rejects empty sequences and empty step names.
+
+### Changed — `src/agent/mod.rs`
+
+- The execution chokepoint runs Sequence skills **one step at a time through
+  itself**, so every real call gets its own policy/Track 0/trust/approval
+  evaluation. The first failing step aborts with a precise error; nested
+  sequences are refused (bounded recipe depth, no cycles).
+
+### Added — synthesis upgrades (`src/skill_forge/synthesis.rs`)
+
+- `synthesize()` now produces a `Sequence` recipe from a fully-ok multi-step
+  episode (single ok step → `Delegate` as before; mixed ok/failed → first
+  proven step only).
+- New `parameterize(&[&Episode])`: ≥ 2 successful episodes with the same tool
+  chain generalize into one parameterized skill — uniform arg fields stay
+  fixed, varying fields become declared JSON-schema parameters (example values
+  preserved, deterministic order). Named after the shortest (most generic)
+  objective; tagged `parameterized`; quarantined like everything else.
+- `chain_signature()` — the grouping key (ordered ok-step tool names).
+
+### Changed — improver (`src/skill_forge/improve.rs`)
+
+- Pass restructured around candidates with an **exemplar episode**: replay
+  verification always re-runs the exemplar's proven concrete steps (never
+  `{param}` templates). Parameterized group skills are synthesized first, so
+  the generalized recipe wins name collisions with one-off recipes.
+- Quarantine gating generalized to all steps of a recipe: any step in the
+  Track 0 name list or with an unsafe declared `RiskClass` quarantines the
+  whole skill.
+- **Configured verification rules** (`[[self_improvement.verification]]`,
+  mapped in `main.rs`): `test_command` (host command must exit with
+  `expect_exit`) and `sensor_assertion` (read-only tool output must contain a
+  substring; captured via new `ReplayExecutor::replay_capture`, which the
+  agent implements through its chokepoint). Non-physical candidates must pass
+  replay **and** all matching rules to be enabled. Physical candidates run
+  only their read-only sensor rules: all passing earns a
+  `track0:sensor-verified` tag as promotion evidence — **never** auto-enable.
+
+### Config
+
+- `SelfImprovementConfig` gains `verification: Vec<VerificationRuleConfig>`
+  (`skill` pattern with trailing-`*` support, `kind`, `cmd`/`expect_exit`,
+  `tool`/`contains`).
+
+### Deferred
+
+- LLM-reflective synthesis (naming/description/parameter proposals via the provider)
+  deliberately deferred to pair with the P4 offline-evolution job; the
+  deterministic pipeline stays the trust anchor either way.
+
+### Tests
+
+- Synthesis: sequence from multi-step, mixed-step fallback, parameter
+  extraction (single + multi-step, typed placeholders), group rejection rules.
+- Improver: sequence install after per-step replay; parameterized group wins;
+  failing/passing `test_command` rules; sensor rule tags physical skill while
+  keeping it disabled.
+- Agent evals: sequence executes steps in order with typed `{param}`
+  substitution; first failing step aborts; nested sequences refused.
+- `substitute_args` type preservation + sequence manifest validation.
+- Full workspace green on Windows: **1097 lib tests, evals 25/25**.
+
+---
+
+## Unreleased — Phase 16 P1: experience retrieval before reasoning (2026-07-02)
+
+The agent now *uses* its experience up front instead of only exposing learned
+skills in the tool list: each run retrieves relevant learned skills and similar
+past successful episodes and surfaces them as a compact system block, so the
+model prefers a verified recipe over re-deriving the steps.
+
+### Added — `src/memory/trajectory.rs`
+
+- `TrajectoryStore::similar()` upgraded from `LIKE` substring matching to
+  deterministic token-overlap ranking: `lexical_score(a, b)` = cosine-style
+  overlap of lowercased ≥3-char tokens minus a small stopword list, threshold
+  0.2, best-first (ties newest-first), scored over the last 1 000 successes.
+  Same keyword-scoring philosophy as the RAG datasheet index; an embedding
+  backend can replace the scorer later without changing the API. (A semantic
+  layer was considered and deferred: no embedder is configured anywhere yet,
+  and it would add per-turn network latency — see `docs/PHASE16-PLAN.md`.)
+
+### Added — `src/agent/mod.rs`
+
+- `Agent::with_experience_retrieval(k)` + `experience_block()`: before the LLM
+  call, retrieve up to `k` relevant registered `learned_*` skills (matched on
+  de-slugged name + description) and `k` similar past successes (objective +
+  proven tool recipe, args truncated) and insert them as a system message right
+  after the system prompt. Novel tasks get **no block** — zero prompt noise.
+- Counter `experience_blocks_injected_total` (when obs attached).
+
+### Config / wiring
+
+- `[self_improvement]` gains `retrieval` (default **true**) and `retrieval_k`
+  (default 3); applied in `main.rs` whenever the trajectory store is active,
+  and on the orchestrator's inner agent.
+
+### Tests
+
+- `trajectory.rs`: ranking, failure exclusion, scorer bounds/stopword behavior.
+- 3 new goldens in `tests/evals.rs` (`experience`): similar past success
+  surfaced with its recipe as the second message; novel task gets no block and
+  no counter tick; a relevant learned skill is recommended by name.
+- Full workspace green on Windows: **1085 lib tests, evals 22/22**.
+
+---
+
+## Unreleased — Phase 16 P0: close the self-improvement loop (2026-07-02)
+
+Audit finding (`docs/PHASE16-PLAN.md`): the Phase 16 pipeline synthesized,
+verified, and installed learned skills that **nothing could ever execute** —
+`SkillForge::load_all()` was never called, and `SkillKind::Delegate` execution
+was a stub that returned a "Delegate to tool …" string instead of invoking
+anything. This change closes the loop: learned (and authored) skills are live
+tools, hot-reloaded when the improver installs one, and delegate skills route
+through the real underlying tool inside the agent's safety chokepoint.
+
+### Changed — `src/agent/mod.rs`
+
+- Tool registry refactor: `tools: Vec<Box<dyn Tool>>` → `RwLock<Vec<Arc<dyn Tool>>>`
+  so skills can be hot-added/removed while calls are in flight. Every run takes a
+  cheap `Arc`-clone snapshot (`tools_snapshot()`); `Agent::new`'s signature is
+  unchanged (`Arc::from` per tool at construction). `add_tools` now takes `&self`.
+- New `Agent::sync_skills(&SkillForge) -> (added, removed, shadowed)` — diffs the
+  forge's **enabled** manifests against the registry: hot-add, hot-remove
+  (disabled/deleted on disk), and a shadow guard (a skill may never replace a
+  built-in tool name; skipped with a warning).
+- **Delegate resolution moved into the execution chokepoint**: `execute_tool`
+  resolves `Delegate` skills to their underlying tool *before* the safety layers
+  run, so policy (re-evaluated per hop), Track 0, dynamic trust, and approval all
+  see the real call (e.g. the actual `gpio_write`), not the wrapper. Delegate
+  chains are bounded (3 hops) so cycles terminate deterministically.
+- `tool_names()` returns `Vec<String>` (was `Vec<&str>`; can't borrow through the
+  lock). All call sites already went through `AgentHandle`, which returned owned
+  strings anyway.
+- Phase 16 reuse metric: `learned_skill_invocations_total` counter incremented
+  for every `learned_*` tool call (when obs is attached).
+
+### Changed — `src/tools/traits.rs`
+
+- New default trait method `Tool::as_delegate() -> Option<(String, Value)>` —
+  a `Delegate` skill exposes its target + fixed args for chokepoint resolution.
+- New `impl Tool for Arc<dyn Tool>` (pure delegation, including `risk_class` and
+  `as_delegate`) so registry snapshots can be boxed for the provider call without
+  touching the `Provider` trait.
+
+### Changed — `src/skill_forge/`
+
+- `SkillTool` (`mod.rs`): `as_delegate()` override for enabled `Delegate` skills;
+  standalone execution of a `Delegate` skill is now an **explicit error** (it
+  previously returned a fake success string — silent no-op).
+- `SkillImprover` (`improve.rs`): new `ReplayExecutor::on_skills_changed(&SkillForge)`
+  hook (default no-op) — the agent implements it as `sync_skills`, so a pass that
+  installs skills hot-reloads the live registry, no restart. New `.with_obs()`:
+  each pass records `self_improve_{scanned,candidates,installed,quarantined,rejected}_total`.
+
+### Changed — `src/main.rs`, `src/agent/orchestrator.rs`
+
+- `SkillForgeTool` (list/install/remove) registered as a built-in tool (it was
+  never wired in).
+- Startup `sync_skills` on the plain agent and the orchestrator's inner agent —
+  enabled forge skills are first-class tools from boot.
+- The agent now gets the shared `ObsContext` (`with_obs`) in `main.rs` — Phase 15
+  wired agent spans/counters but never attached the context at startup; agent-loop
+  spans and the new Phase 16 counters are live in `/api/v1/metrics`.
+- The improvement loop gets `.with_obs(obs)`.
+
+### Tests
+
+- 4 new goldens in `tests/evals.rs` (`skill_loop`): hot add/remove + shadow guard;
+  a learned delegate skill executes the real underlying tool with fixed args
+  merged under runtime args; delegate cycles are cut by the hop bound; the
+  learned-skill invocation counter increments.
+- `improve.rs`: hot-reload hook fires exactly once after an installing pass.
+- `skill_forge/mod.rs`: delegate skills expose their target and refuse standalone
+  execution; disabled delegates expose no target.
+- Full workspace: **1082 lib tests + all integration suites green** (evals 19/19)
+  on Windows.
+
+Safety invariants preserved: quarantined (disabled) skills are never registered;
+physical learned skills stay operator-gated; delegate resolution *strengthens*
+Track 0 (the gate now sees the real actuator call instead of a skill wrapper).
+
+---
+
+## Unreleased — Finite I²C timeout: a bad sensor can no longer hang the node (2026-07-02)
+
+Bench-found robustness bug. Every I²C transaction in the sensor driver used
+`delay::BLOCK` (an infinite timeout), so a stuck bus — e.g. a half-wired sensor
+holding SDA low — made `write_read` block forever, freezing the single-threaded
+main loop and hanging the entire node until a physical power-cycle. For an embodied
+brain, one flaky sensor must never be able to take down System 1.
+
+### Changed — `firmware/obc-esp32-s3/src/sensors.rs`
+
+- Introduced `const I2C_TIMEOUT = TickType::new_millis(50).ticks()` and replaced all
+  11 `BLOCK` timeouts (MPU6050 wake + read, MAX17048, BME280 probe/config/measure/read)
+  with it. A stuck or absent sensor now returns a clean `{"ok":false,"error":...}`
+  read error within 50 ms instead of hanging the node — the reflex/safing loops keep
+  running. 50 ms is generous for a 100 kHz bus (each transaction is well under 1 ms).
+
+---
+
 ## Unreleased — Isolated scratch engine for `reflex_tick` (A6 bench clean-up) (2026-07-02)
 
 Follow-up to the on-bench validation: the manual `reflex_tick` command shared

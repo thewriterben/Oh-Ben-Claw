@@ -21,8 +21,16 @@
 //! from the device datasheets, but verify on the bench (see `BRINGUP.md` §4/§6).
 
 use anyhow::Context;
-use esp_idf_svc::hal::delay::BLOCK;
+use esp_idf_svc::hal::delay::{TickType, TickType_t};
 use esp_idf_svc::hal::i2c::I2cDriver;
+
+/// Per-transaction I2C timeout. Critical: without a finite bound, a stuck bus
+/// (e.g. a half-wired sensor holding SDA low) makes `write_read` block *forever*,
+/// which freezes the single-threaded main loop and hangs the whole node until a
+/// physical power-cycle. A finite timeout turns a bad/absent sensor into a clean
+/// read error instead — the node keeps ticking. 50 ms is generous for a 100 kHz
+/// bus (each transaction is well under 1 ms).
+const I2C_TIMEOUT: TickType_t = TickType::new_millis(50).ticks();
 
 // ── MAX17048 fuel gauge ─────────────────────────────────────────────────────────
 const MAX17048_ADDR: u8 = 0x36;
@@ -80,9 +88,28 @@ impl SensorBus {
         let mut bus = Self { i2c, bme280: None };
         let _ = bus
             .i2c
-            .write(MPU6050_ADDR, &[MPU6050_REG_PWR_MGMT_1, 0x00], BLOCK);
+            .write(MPU6050_ADDR, &[MPU6050_REG_PWR_MGMT_1, 0x00], I2C_TIMEOUT);
         bus.bme280 = bus.probe_bme280();
         bus
+    }
+
+    /// Probe every 7-bit address (0x08–0x77) and return those that ACK. Pure
+    /// bench diagnostic: a 1-byte read is side-effect-free, and the finite
+    /// `I2C_TIMEOUT` means a stuck bus can't hang the scan. Expected hits:
+    /// MPU6050 = 0x68 (0x69 if AD0 high), BME280 = 0x76/0x77, MAX17048 = 0x36.
+    pub fn scan(&mut self) -> Vec<u8> {
+        // Short per-probe timeout: a real device ACKs in well under 1 ms, so a
+        // tight bound keeps a full 112-address sweep quick even on a stuck bus
+        // (vs. ~5.6 s at the 50 ms read timeout).
+        let probe = TickType::new_millis(10).ticks();
+        let mut found = Vec::new();
+        let mut byte = [0u8; 1];
+        for addr in 0x08u8..=0x77 {
+            if self.i2c.read(addr, &mut byte, probe).is_ok() {
+                found.push(addr);
+            }
+        }
+        found
     }
 
     /// Real read for supported `(sensor, field)` pairs.
@@ -112,7 +139,7 @@ impl SensorBus {
     fn read_soc(&mut self) -> anyhow::Result<f64> {
         let mut buf = [0u8; 2];
         self.i2c
-            .write_read(MAX17048_ADDR, &[MAX17048_REG_SOC], &mut buf, BLOCK)
+            .write_read(MAX17048_ADDR, &[MAX17048_REG_SOC], &mut buf, I2C_TIMEOUT)
             .context("MAX17048 SoC read")?;
         Ok(decode_soc(buf))
     }
@@ -121,7 +148,7 @@ impl SensorBus {
         // Burst-read the 6 accel bytes (XH,XL,YH,YL,ZH,ZL) from ACCEL_XOUT_H.
         let mut buf = [0u8; 6];
         self.i2c
-            .write_read(MPU6050_ADDR, &[MPU6050_REG_ACCEL_XOUT_H], &mut buf, BLOCK)
+            .write_read(MPU6050_ADDR, &[MPU6050_REG_ACCEL_XOUT_H], &mut buf, I2C_TIMEOUT)
             .context("MPU6050 accel read")?;
         Ok(decode_accel([buf[axis * 2], buf[axis * 2 + 1]]))
     }
@@ -133,13 +160,13 @@ impl SensorBus {
             let mut id = [0u8; 1];
             if self
                 .i2c
-                .write_read(addr, &[BME280_REG_CHIP_ID], &mut id, BLOCK)
+                .write_read(addr, &[BME280_REG_CHIP_ID], &mut id, I2C_TIMEOUT)
                 .is_ok()
                 && id[0] == BME280_CHIP_ID
             {
                 if let Ok(calib) = self.read_bme280_calib(addr) {
                     // Filter off, forced mode is driven per-read.
-                    let _ = self.i2c.write(addr, &[BME280_REG_CONFIG, 0x00], BLOCK);
+                    let _ = self.i2c.write(addr, &[BME280_REG_CONFIG, 0x00], I2C_TIMEOUT);
                     return Some(Bme280State { addr, calib });
                 }
             }
@@ -151,11 +178,11 @@ impl SensorBus {
     fn read_bme280_calib(&mut self, addr: u8) -> anyhow::Result<Bme280Calib> {
         let mut a = [0u8; 26];
         self.i2c
-            .write_read(addr, &[BME280_REG_CALIB_00], &mut a, BLOCK)
+            .write_read(addr, &[BME280_REG_CALIB_00], &mut a, I2C_TIMEOUT)
             .context("BME280 calib 0x88")?;
         let mut b = [0u8; 7];
         self.i2c
-            .write_read(addr, &[BME280_REG_CALIB_26], &mut b, BLOCK)
+            .write_read(addr, &[BME280_REG_CALIB_26], &mut b, I2C_TIMEOUT)
             .context("BME280 calib 0xE1")?;
         Ok(parse_bme280_calib(&a, &b))
     }
@@ -165,16 +192,16 @@ impl SensorBus {
     fn read_bme280(&mut self, st: Bme280State, field: &str) -> anyhow::Result<f64> {
         // Forced mode: set humidity oversampling, then ctrl_meas re-arms one shot.
         self.i2c
-            .write(st.addr, &[BME280_REG_CTRL_HUM, BME280_CTRL_HUM_X1], BLOCK)
+            .write(st.addr, &[BME280_REG_CTRL_HUM, BME280_CTRL_HUM_X1], I2C_TIMEOUT)
             .context("BME280 ctrl_hum")?;
         self.i2c
-            .write(st.addr, &[BME280_REG_CTRL_MEAS, BME280_CTRL_MEAS_FORCED], BLOCK)
+            .write(st.addr, &[BME280_REG_CTRL_MEAS, BME280_CTRL_MEAS_FORCED], I2C_TIMEOUT)
             .context("BME280 ctrl_meas")?;
         // Wait for the measurement to complete (status.measuring clears), bounded.
         for _ in 0..64 {
             let mut s = [0u8; 1];
             self.i2c
-                .write_read(st.addr, &[BME280_REG_STATUS], &mut s, BLOCK)
+                .write_read(st.addr, &[BME280_REG_STATUS], &mut s, I2C_TIMEOUT)
                 .context("BME280 status")?;
             if s[0] & 0x08 == 0 {
                 break;
@@ -183,7 +210,7 @@ impl SensorBus {
         // Burst-read press[3] temp[3] hum[2].
         let mut d = [0u8; 8];
         self.i2c
-            .write_read(st.addr, &[BME280_REG_RAW_DATA], &mut d, BLOCK)
+            .write_read(st.addr, &[BME280_REG_RAW_DATA], &mut d, I2C_TIMEOUT)
             .context("BME280 raw read")?;
         let adc_p = ((d[0] as i32) << 12) | ((d[1] as i32) << 4) | ((d[2] as i32) >> 4);
         let adc_t = ((d[3] as i32) << 12) | ((d[4] as i32) << 4) | ((d[5] as i32) >> 4);
