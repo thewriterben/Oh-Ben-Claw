@@ -79,6 +79,29 @@ operator for explicit approval before execution. A session-scoped allowlist
 remembers previous decisions. All approvals and denials are written to an
 immutable audit log.
 
+## OWASP Top 10 for Agentic Applications (ASI) Coverage
+
+Oh-Ben-Claw's Track 0 controls are mapped to the [OWASP Top 10 for Agentic
+Applications](https://genai.owasp.org/) (Dec 2025 taxonomy). Each mapped
+category is exercised by executable red-team evaluations, not just asserted.
+
+| ASI | Category | Primary controls | Covering evals |
+|---|---|---|---|
+| **ASI01** | Agent Instruction & Prompt Injection | Argument taint tracking (`[safety].taint_mode`, `src/security/taint.rs`) — external-origin content may not parameterize a privileged action; deterministic `SafetyGate` backstop | `tests/evals.rs::taint_redteam`, `asi_redteam` (seed-sampled injection family, ≥40 framings) |
+| **ASI02** | Tool Misuse & Exploitation | Per-tool security policy engine; Track 0 `SafetyGate` (pin allow-list, value range, rate limit) enforced in code the model cannot override | `asi_redteam` (actuator boundary), `src/security/limits.rs` tests |
+| **ASI04** | Supply Chain (skills) | ClawHub install policy (checksum + operator consent + version pinning + static flagging); Phase 16 staged rollout | `src/skill_forge/install_policy.rs`, `src/skill_forge/improve.rs` red-team tests |
+| **ASI05** | Insufficient Access Controls | Node pairing (HMAC), dynamic trust scoring, autonomy-level approval gate, encrypted secrets vault | `src/security/pairing.rs`, `trust.rs`, `src/approval/` tests |
+| **ASI06** | Memory & Trajectory Poisoning | Synthesized skills quarantined + verified (replay/sensor) + staged `simulate → supervised → autonomous`; failed supervised runs auto-demote | Phase 16 P3 red-team evals (`tests/evals.rs::staged_rollout`) |
+| **ASI08** | Cascading / Unbounded Autonomy | Deterministic actuator limits, cost budget enforcement, long-horizon harness with evidence-based (not self-asserted) completion | `src/harness/` + `tests/harness_long_horizon.rs`, `src/cost/` tests |
+
+**Adaptive testing.** Per NIST's agent-hijacking guidance (a frozen injection
+corpus is an upper bound, never a proof — adaptive attacks lifted hijack
+success ~11%→81% against static suites), the `asi_redteam` corpus is
+**seed-sampled**: `src/security/redteam.rs` generates a varied family of
+framings/obfuscations rather than pinning one string, and a scheduled task can
+rotate the seed to draw fresh samples over time. The safety invariant is
+asserted across the whole generated family.
+
 ## Known Advisory Status
 
 | Advisory | Crate | Status |
