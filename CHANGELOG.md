@@ -5,6 +5,57 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Phase 16 P4: offline trace evolution + efficiency metrics — Phase 16 complete (2026-07-02)
+
+The final Phase 16 slice: a GEPA/DSPy-inspired offline job that evolves
+learned-skill *descriptions* from real usage traces, and the token/latency
+metric the roadmap called for. With this, **every Phase 16 roadmap item is
+implemented**: capture → synthesis → verification → live tools → retrieval →
+staged rollout → offline evolution → metrics.
+
+### Added — `src/skill_forge/evolve.rs`
+
+- `DescriptionEvolver` — scheduled, **config-gated** (`[self_improvement].evolve`,
+  default **off**; daily cadence via `evolve_interval_secs`, cap via
+  `evolve_max_per_pass`): for each learned skill with observed usage, the LLM
+  proposes an improved description from the skill's real usage traces
+  (objectives + outcomes). Strict invariants:
+  - only `description` is ever mutated — never `enabled`, `stage`, `kind`, or
+    `parameters` (evolution can make a skill easier to *select*, never easier
+    to *run*);
+  - proposals are sanitized (fence/quote stripping, single paragraph, ≤ 300
+    chars) and dropped when empty or unchanged;
+  - every change appends to `~/.oh-ben-claw/skill_evolution.jsonl` and is
+    revertible: `oh-ben-claw skill revert-description <name>` (the revert is
+    itself logged — append-only history).
+- Skills with no usage traces are skipped: no evidence, no rewrite.
+
+### Added — episode efficiency measurement (Phase 16 metrics item)
+
+- `Episode` gains `duration_ms` + `tokens_est` (additive SQLite migration;
+  chars/4 heuristic — a relative efficiency signal, not billing-grade), both
+  recorded by `Agent::process`.
+- `TrajectoryStore::efficiency_stats()` — mean duration/tokens for successful
+  runs that invoked a `learned_*` skill vs. those that didn't (the roadmap's
+  "token/latency reduction on repeated routine tasks"); logged each
+  improvement pass.
+
+### Wiring
+
+- `main.rs` spawns the evolver alongside the improvement loop when enabled
+  (separate provider instance); CLI gains `skill revert-description`.
+
+### Tests
+
+- Evolution: rewrites description only (stage/enabled/kind pinned unchanged) +
+  logs the diff; identical proposals rejected; unused skills skipped; revert
+  restores and logs; proposal-sanitizer rules.
+- Trajectory: duration/tokens roundtrip through the DB; efficiency stats split
+  learned vs. plain and exclude unmeasured runs.
+- Full workspace green on Windows: **1108 lib tests, evals 29/29**.
+
+---
+
 ## Unreleased — Phase 16 P3: Track 0 staged rollout for learned skills (2026-07-02)
 
 Learned skills that can touch the physical world now climb
@@ -277,6 +328,33 @@ through the real underlying tool inside the agent's safety chokepoint.
 Safety invariants preserved: quarantined (disabled) skills are never registered;
 physical learned skills stay operator-gated; delegate resolution *strengthens*
 Track 0 (the gate now sees the real actuator call instead of a skill wrapper).
+
+---
+
+## Unreleased — DHT22/AM2302 temperature + humidity driver (2026-07-02)
+
+Added a real single-wire environmental sensor driver, since the MPU6050 on the
+bench was lost to an earlier short and the DHT22 is the sensor actually in hand.
+
+### Added — `firmware/obc-esp32-s3/src/dht.rs`
+
+- Bit-banged DHT22/AM2302 reader returning `(temperature_c, humidity)`. The
+  40-bit frame is read inside an **interrupt-free critical section** (~5 ms) so
+  RTOS/WiFi preemption can't corrupt the µs-level pulse timing, with **every
+  edge-wait bounded** (a missing/dead sensor errors instead of hanging — same
+  principle as the I²C timeout fix) and **no heap allocation** inside the
+  critical section. Result is checksum- **and** range-validated before it's
+  trusted; a bit-threshold constant (`HIGH_BIT_THRESHOLD_US`) is exposed for
+  on-bench tuning.
+
+### Changed — `firmware/obc-esp32-s3/src/main.rs`
+
+- `sensor_read` handles `sensor:"dht22"` (`temperature`/`humidity`) on its own
+  single-wire GPIO, separate from the I²C bus. Data pin: **D10 / GPIO9**
+  (`DHT22_GPIO`) — a free pad clear of the actuators, I²C (4/5), and I²S (1/2).
+- Not yet wired into the autonomous snapshot: the DHT22 needs ~2 s between reads,
+  so the snapshot integration (with rate-limiting) is a follow-up once timing is
+  confirmed on the bench.
 
 ---
 

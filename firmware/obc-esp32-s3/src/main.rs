@@ -117,6 +117,9 @@ mod sensors;
 /// I2S microphone driver (loudness/RMS).
 mod audio;
 
+/// DHT22/AM2302 single-wire temperature + humidity driver.
+mod dht;
+
 /// OV2640 camera driver — opt-in via `--features camera` (see CAMERA.md).
 #[cfg(feature = "camera")]
 mod camera;
@@ -157,6 +160,11 @@ const MAX_LLM_RESPONSE_SIZE: usize = 8 * 1024;
 /// Deliberately avoids GPIO26–37 (consumed by the XIAO's octal PSRAM) and the
 /// I2C (GPIO4/5) and I2S (GPIO1/2) pins.
 const OUTPUT_PINS: &[i32] = &[21, 3, 6, 7, 8];
+
+/// DHT22/AM2302 data line. Uses D10 (GPIO9) — a free exposed pad that avoids the
+/// actuator outputs, the I2C bus (4/5), and the I2S mic pins (1/2). Wire the
+/// module's `out` pin here (with `+`→3V3 and `-`→GND).
+const DHT22_GPIO: i32 = 9;
 
 // ── Agent State ───────────────────────────────────────────────────────────────
 
@@ -699,6 +707,16 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                 .and_then(|v| v.as_str())
                 .unwrap_or("temperature")
                 .to_string();
+            if sensor == "dht22" {
+                // Not on the I2C bus — its own single-wire GPIO (D10). ~5 ms read.
+                let (t, h) = dht::read_dht22(DHT22_GPIO)?;
+                let v = match field.as_str() {
+                    "temperature" => t,
+                    "humidity" => h,
+                    other => anyhow::bail!("unknown dht22 field: {other}"),
+                };
+                return Ok(format!("{v:.1}"));
+            }
             read_sensor(&mut state.sensors, &sensor, &field).map(|v| v.to_string())
         }
 
