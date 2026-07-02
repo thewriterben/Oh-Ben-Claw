@@ -565,7 +565,7 @@ impl ReflexController {
                     let allowed = self
                         .escalation_budget
                         .as_ref()
-                        .map_or(true, |b| b.allow(now_ms));
+                        .is_none_or(|b| b.allow(now_ms));
                     if allowed {
                         self.sink.escalate(reason).await?;
                     } else {

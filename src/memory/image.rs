@@ -330,7 +330,7 @@ mod tests {
         let entry = store.get(&id).unwrap().unwrap();
         // base64 of 300 bytes is 400 chars; estimated_bytes ≈ 300
         let est = entry.estimated_bytes();
-        assert!(est >= 200 && est <= 400, "estimated_bytes = {est}");
+        assert!((200..=400).contains(&est), "estimated_bytes = {est}");
     }
 
     #[test]

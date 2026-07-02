@@ -226,11 +226,11 @@ fn check_hardware_onboarding(config: &Config, results: &mut Vec<DiagResult>) {
             Some(kb) => match allow.decide(kb.vid) {
                 OnboardDecision::AutoTrust => results.push(DiagResult::ok(
                     "hardware",
-                    &format!("Board '{}' vendor '{}' is trusted", b.board, kb.vendor),
+                    format!("Board '{}' vendor '{}' is trusted", b.board, kb.vendor),
                 )),
                 OnboardDecision::Quarantine => results.push(DiagResult::warn(
                     "hardware",
-                    &format!(
+                    format!(
                         "Board '{}' vendor {:#06x} is not allowlisted — quarantine",
                         b.board, kb.vid
                     ),
@@ -238,7 +238,7 @@ fn check_hardware_onboarding(config: &Config, results: &mut Vec<DiagResult>) {
             },
             None => results.push(DiagResult::warn(
                 "hardware",
-                &format!(
+                format!(
                     "Board '{}' is not in the hardware registry — vendor unverified, no capability data",
                     b.board
                 ),

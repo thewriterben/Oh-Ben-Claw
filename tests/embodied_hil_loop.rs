@@ -64,7 +64,7 @@ async fn clawcam_detection_reroutes_navigation_through_the_safety_gate() {
     let goal = NavGoal { x: 9.5, y: 0.5, tolerance: 0.3 };
 
     // ── Phase A: clear corridor → the plan is a straight shot ─────────────────
-    let before = nav.plan_to(goal.clone(), 1_000).unwrap();
+    let before = nav.plan_to(goal, 1_000).unwrap();
     assert_eq!(before, PlanOutcome::Planned(1), "open room ⇒ single straight waypoint");
 
     // ── Phase B: ClawCam sees a deer mid-corridor (real ingest seam) ──────────

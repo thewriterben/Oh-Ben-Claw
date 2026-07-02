@@ -236,9 +236,9 @@ impl PoseGraph {
             }
             // Anchor node 0: pin its update to zero (removes the gauge freedom).
             for r in 0..3 {
-                for c in 0..dim {
-                    h[r][c] = 0.0;
-                    h[c][r] = 0.0;
+                h[r].fill(0.0); // row r
+                for row in h.iter_mut() {
+                    row[r] = 0.0; // column r
                 }
                 h[r][r] = 1.0;
                 b[r] = 0.0;
@@ -367,9 +367,10 @@ fn gauss_solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     for col in 0..n {
         let mut piv = col;
         let mut best = a[col][col].abs();
-        for r in (col + 1)..n {
-            if a[r][col].abs() > best {
-                best = a[r][col].abs();
+        for (r, row) in a.iter().enumerate().skip(col + 1) {
+            let v = row[col].abs();
+            if v > best {
+                best = v;
                 piv = r;
             }
         }
@@ -379,13 +380,17 @@ fn gauss_solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
         a.swap(col, piv);
         b.swap(col, piv);
         let pivval = a[col][col];
-        for r in (col + 1)..n {
-            let factor = a[r][col] / pivval;
+        // Split so the pivot row can be read while the rows below it are
+        // eliminated in place (same arithmetic as the classic index loop).
+        let (top, bottom) = a.split_at_mut(col + 1);
+        let pivot_row = &top[col];
+        for (offset, row) in bottom.iter_mut().enumerate() {
+            let factor = row[col] / pivval;
             if factor != 0.0 {
-                for c in col..n {
-                    a[r][c] -= factor * a[col][c];
+                for (av, pv) in row[col..].iter_mut().zip(&pivot_row[col..]) {
+                    *av -= factor * pv;
                 }
-                b[r] -= factor * b[col];
+                b[col + 1 + offset] -= factor * b[col];
             }
         }
     }
