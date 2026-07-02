@@ -702,6 +702,21 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
             read_sensor(&mut state.sensors, &sensor, &field).map(|v| v.to_string())
         }
 
+        // Bench diagnostic: list every I2C address that ACKs on the bus, so a
+        // non-responding sensor can be told apart from wiring/address problems.
+        "i2c_scan" => {
+            let addrs: Vec<String> = match &mut state.sensors {
+                Some(bus) => bus.scan().iter().map(|a| format!("0x{a:02X}")).collect(),
+                None => Vec::new(),
+            };
+            Ok(serde_json::json!({
+                "node_id": NODE_ID,
+                "count": addrs.len(),
+                "addresses": addrs,
+            })
+            .to_string())
+        }
+
         // ── Edge-Native Agent Commands ─────────────────────────────────────
         "agent_config" => {
             if let Some(ssid) = req.args.get("wifi_ssid").and_then(|v| v.as_str()) {
