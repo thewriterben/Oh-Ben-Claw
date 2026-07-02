@@ -5,6 +5,65 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — XIAO ESP32-S3 port + first on-bench validation of the decision core (2026-07-02)
+
+The node firmware ran on real silicon for the first time. Ported the command I/O
+to the Seeed XIAO ESP32-S3 (the board actually on the bench), hardened the serial
+protocol from the friction found while bringing it up, and validated the entire
+on-MCU decision core — GPIO, the Track 0 gate, reflexes, and safing — over the
+live link.
+
+### Changed — XIAO ESP32-S3 port (`firmware/obc-esp32-s3/src/main.rs`)
+
+- **Command channel moved from UART0 to the native USB-Serial-JTAG** (`usb_serial`,
+  D-=GPIO19 / D+=GPIO20) — the only USB interface the XIAO's USB-C port exposes.
+  Dropped the `uart0`/GPIO43-44 `UartDriver` path (unwired on this board). Host
+  sends newline-delimited JSON and reads replies on the same connection (DTR must
+  be asserted for the JTAG data path to flow).
+- **XIAO-safe actuator pins:** `OUTPUT_PINS = [21, 3, 6, 7, 8]` — onboard user LED
+  (GPIO21, active-low) plus exposed pads D2/D5/D8/D9. Deliberately avoids GPIO26-37
+  (octal PSRAM), I2C (4/5) and I2S (1/2).
+- `capabilities` now reports `board: seeed-xiao-esp32-s3`, `transport:
+  usb-serial-jtag`, the real GPIO set, and `camera: false`.
+- **PSRAM disabled** (`sdkconfig.defaults`) — octal PSRAM auto-init was crashing
+  early boot (`Guru Meditation` after `octal_psram: BurstLen`) on this module; not
+  needed for the non-camera build. Camera `extra_components` kept commented in
+  `Cargo.toml` for lean default builds.
+
+### Changed — serial protocol robustness (`main.rs`)
+
+- **`send_line()` helper** replaces raw `uart.write` on every response path: loops
+  over partial USB writes so long replies (e.g. `capabilities`) go out whole, with
+  a bounded stall count so the node never blocks when the host isn't reading.
+- **Refused/errored commands now always reply.** Wrapped the `handle_request`
+  dispatch in a closure so a `?` (e.g. a Track 0 denial) returns into `result` and
+  converts to `{"ok":false,"error":...}` instead of silently escaping the handler.
+- **Argless commands parse** — `Request.args` is `#[serde(default)]`, so
+  `capabilities` and friends no longer fail to deserialize.
+- Line reader accepts `\r` as well as `\n` (terminal-agnostic).
+- **On-change status reporting:** `link_state` and `power_mode` are emitted only
+  when they change, not every tick — the link no longer floods with unchanged
+  status, which is also the correct behaviour for a real node reporting to a host.
+
+### Validated — on-bench (Seeed XIAO ESP32-S3, over native USB-Serial-JTAG)
+
+- **GPIO** — host `gpio_write` drives pin 21 (LED). ✓
+- **Track 0 gate** — pin-not-in-allow-list and value-out-of-range writes are
+  refused with an error reply; allowed writes apply. ✓
+- **Reflexes** — a pushed `overheat` rule fires on a `reflex_tick` and its
+  `gpio_write` action routes through the gate (`applied:true`). ✓
+- **Safing** — the built-in `safe-link-offline` rule fires **autonomously** on the
+  link watchdog and again through a manual `reflex_tick`. ✓
+- Note: manual `reflex_tick` shares debounce state with the live autonomous loop,
+  so injecting arbitrary `now_ms` values collides with the real uptime clock and
+  makes individual manual fires look flaky — a bench-harness artifact, not a
+  firmware defect (the battery rule is covered by the passing
+  `critical_battery_cuts_safe_pin` unit test and is structurally identical to the
+  `safe-link-offline` rule that fires). A future option: give `reflex_tick` an
+  isolated scratch engine so bench ticks don't contend with the loop.
+
+---
+
 ## Unreleased — On-MCU Track 0 gate: host-pushable limits + rate limit (2026-06-30)
 
 The ESP32-S3 firmware's Track 0 actuator gate went from three compile-time

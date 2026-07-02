@@ -46,9 +46,9 @@ path = "src/main.rs"
 # (not gated by the cargo feature): it pulls the component into every build. Comment
 # this block out — and the PSRAM lines in `sdkconfig.defaults` — for lean non-camera
 # builds. After changing this block, run `cargo clean` so esp-idf-sys regenerates.
-[[package.metadata.esp-idf-sys.extra_components]]
-remote_component = { name = "espressif/esp32-camera", version = "2.0.7" }
-bindings_header = "src/camera_bindings.h"
-# Bindings land in their own `esp_idf_sys::camera` module (the documented pattern
-# for this component — avoids duplicate-binding clashes with the base esp-idf set).
-bindings_module = "camera"
+# DISABLED for lean/default builds. Uncomment ALL FOUR lines (and the PSRAM lines in
+# sdkconfig.defaults) only when building the camera with `--features camera`.
+# [[package.metadata.esp-idf-sys.extra_components]]
+# remote_component = { name = "espressif/esp32-camera", version = "2.0.7" }
+# bindings_header = "src/camera_bindings.h"
+# bindings_module = "camera"   # bindings land in their own esp_idf_sys::camera module
