@@ -217,6 +217,11 @@ struct AgentState {
     /// I2S microphone, if one initialised at boot. `None` ⇒ `audio_sample` falls
     /// back to the stub RMS.
     audio: Option<audio::AudioMic>,
+    /// DHT22 rate-limit cache. The sensor needs ~2 s between reads but the reflex
+    /// loop ticks faster, so it's read at most every 2 s and the last good value
+    /// is reused in between. `(monotonic ms of last read attempt, last reading)`.
+    dht_last_read_ms: u64,
+    dht_last: Option<(f32, f32)>,
 }
 
 impl AgentState {
@@ -230,6 +235,8 @@ impl AgentState {
             safety: safety::SafetyGate::with_output_pins(OUTPUT_PINS),
             sensors: None,
             audio: None,
+            dht_last_read_ms: 0,
+            dht_last: None,
         }
     }
 
@@ -475,6 +482,20 @@ fn main() -> anyhow::Result<()> {
         {
             last_reflex_ms = now;
             let mut snapshot = read_sensor_snapshot(&mut agent_state.sensors);
+            // DHT22 environment (single-wire, off the I2C bus): read at most once
+            // per ~2 s (the sensor's minimum) and reuse the last good value in
+            // between. Overrides the stubbed sensor.temperature with a real reading
+            // so overheat/safing rules act on measured data; adds sensor.humidity.
+            if now.saturating_sub(agent_state.dht_last_read_ms) >= 2000 {
+                agent_state.dht_last_read_ms = now;
+                if let Ok((t, h)) = dht::read_dht22(DHT22_GPIO) {
+                    agent_state.dht_last = Some((t, h));
+                }
+            }
+            if let Some((t, h)) = agent_state.dht_last {
+                snapshot.insert("sensor.temperature".to_string(), t as f64);
+                snapshot.insert("sensor.humidity".to_string(), h as f64);
+            }
             // Feed the link-silence duration so the built-in `safe-link-offline`
             // rule can fire, and self-report the link state.
             let silence_ms = now.saturating_sub(last_host_contact_ms);

@@ -352,9 +352,11 @@ bench was lost to an earlier short and the DHT22 is the sensor actually in hand.
 - `sensor_read` handles `sensor:"dht22"` (`temperature`/`humidity`) on its own
   single-wire GPIO, separate from the I²C bus. Data pin: **D10 / GPIO9**
   (`DHT22_GPIO`) — a free pad clear of the actuators, I²C (4/5), and I²S (1/2).
-- Not yet wired into the autonomous snapshot: the DHT22 needs ~2 s between reads,
-  so the snapshot integration (with rate-limiting) is a follow-up once timing is
-  confirmed on the bench.
+- **Wired into the autonomous reflex snapshot**, rate-limited to the sensor's
+  ~2 s minimum (last good value reused between the faster reflex ticks, cached on
+  `AgentState`). Real `sensor.temperature` now overrides the stub and drives the
+  overheat/safing rules on measured data; `sensor.humidity` is also published.
+  A DHT read failure keeps the last good value rather than dropping to the stub.
 
 ---
 
