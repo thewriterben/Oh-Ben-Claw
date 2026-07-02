@@ -150,6 +150,23 @@ impl ReflexEngine {
         self.rules.len()
     }
 
+    /// Bench/one-shot evaluation: return every rule whose condition matches
+    /// `snapshot`, WITHOUT reading or mutating the live debounce state. Used by
+    /// the `reflex_tick` command so a manual tick reports what a snapshot *would*
+    /// trigger without contending with the autonomous loop (which advances
+    /// `last_fire` on the real uptime clock). Debounce/rate are intentionally
+    /// ignored here — a single isolated tick has no history to suppress.
+    pub fn evaluate_scratch(&self, snapshot: &HashMap<String, f64>) -> Vec<FiredReflex> {
+        self.rules
+            .iter()
+            .filter(|rule| rule.when.eval(snapshot))
+            .map(|rule| FiredReflex {
+                rule_id: rule.id.clone(),
+                action: rule.then.clone(),
+            })
+            .collect()
+    }
+
     /// Evaluate all rules against `snapshot` at `now_ms`, honouring debounce/
     /// rate, recording fire times. Returns the reflexes that fired.
     pub fn evaluate(&mut self, snapshot: &HashMap<String, f64>, now_ms: u64) -> Vec<FiredReflex> {
@@ -181,6 +198,23 @@ impl ReflexEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scratch_eval_ignores_debounce_history() {
+        let mut eng = ReflexEngine::new(vec![rule(
+            "batt-crit",
+            Condition::Sensor { entity: "sensor.battery_soc".into(), op: Cmp::Le, value: 10.0 },
+            Action::Escalate { reason: "critical".into() },
+            5_000,
+        )]);
+        // Stateful path: fires once, then is debounced on an immediate re-tick.
+        assert_eq!(eng.evaluate(&snap(&[("sensor.battery_soc", 6.0)]), 1_000).len(), 1);
+        assert!(eng.evaluate(&snap(&[("sensor.battery_soc", 6.0)]), 1_100).is_empty());
+        // Scratch path ignores that history and still reports the live match…
+        assert_eq!(eng.evaluate_scratch(&snap(&[("sensor.battery_soc", 6.0)])).len(), 1);
+        // …and a healthy reading fires nothing.
+        assert!(eng.evaluate_scratch(&snap(&[("sensor.battery_soc", 85.0)])).is_empty());
+    }
 
     fn snap(pairs: &[(&str, f64)]) -> HashMap<String, f64> {
         pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
