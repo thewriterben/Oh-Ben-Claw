@@ -530,6 +530,51 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             None
         };
 
+    // Phase B: LoRa mesh gateway bridge — pipe a base-station Heltec's USB console
+    // into world memory. Node spine messages heard over the air (link state, power
+    // mode, reflex/safing reports) are parsed from the gateway's `SPINE ◄ … : {json}`
+    // lines and observed into the brain's world model, exactly as if the node were
+    // on the wired MQTT spine. Read-only; needs the `hardware` feature (serial I/O).
+    if let Some(gw) = &config.lora_gateway {
+        match &world_mem {
+            Some(world) => {
+                info!(port = %gw.port, baud = gw.baud, "Phase B: LoRa gateway bridge → world memory");
+                #[cfg(feature = "hardware")]
+                {
+                    let world_rx = Arc::clone(world);
+                    let (port, baud) = (gw.port.clone(), gw.baud);
+                    tokio::spawn(async move {
+                        let now_ms = || {
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0)
+                        };
+                        if let Err(e) = oh_ben_claw::spine::lora_gateway::run_gateway_rx(
+                            port, baud, world_rx, now_ms,
+                        )
+                        .await
+                        {
+                            tracing::warn!("LoRa gateway bridge exited: {e}");
+                        }
+                    });
+                }
+                #[cfg(not(feature = "hardware"))]
+                {
+                    let _ = world;
+                    tracing::warn!(
+                        "[lora_gateway] configured but this build lacks the `hardware` \
+                         feature (serial I/O); the bridge will not start"
+                    );
+                }
+            }
+            None => tracing::warn!(
+                "[lora_gateway] configured but [perception].world_memory is off — \
+                 there is nowhere to ingest mesh messages; ignoring"
+            ),
+        }
+    }
+
     // Movement subsystem: expose the safety-bounded `move_actuator` tool to the
     // agent (System 2), and keep the controller so System 1 reflexes can route
     // `Action::Move` through the *same* gate (below). Physical actuation MUST be

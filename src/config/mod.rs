@@ -1900,6 +1900,19 @@ fn default_lora_baud() -> u32 {
     115_200
 }
 
+/// Host-side LoRa **mesh gateway bridge** (Phase B). Opens a base-station Heltec's
+/// USB console (running `firmware/heltec-lora-linktest`) and ingests the node spine
+/// messages it hears over the air into world memory. Read-only; only active when
+/// built with the `hardware` feature and `[perception].world_memory` is on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoraGatewayConfig {
+    /// Serial device path of the base-station Heltec console, e.g. `COM6`.
+    pub port: String,
+    /// Baud rate of the Heltec console (ESP-IDF default 115200).
+    #[serde(default = "default_lora_baud")]
+    pub baud: u32,
+}
+
 fn default_relay_hops() -> u8 {
     3
 }
@@ -1913,6 +1926,10 @@ pub struct Config {
     pub provider: ProviderConfig,
     #[serde(default)]
     pub spine: SpineConfig,
+    /// Phase B: host-side LoRa mesh gateway bridge — reads a base-station Heltec's
+    /// console and ingests received node spine messages into world memory.
+    #[serde(default)]
+    pub lora_gateway: Option<LoraGatewayConfig>,
     #[serde(default)]
     pub peripherals: PeripheralsConfig,
     #[serde(default)]

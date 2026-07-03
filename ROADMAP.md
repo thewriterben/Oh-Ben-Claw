@@ -602,9 +602,10 @@ UART to a Heltec LoRa gateway, which carries it over the mesh. Runbook:
 - [x] Heltec UART↔LoRa gateway bridge (UART1 TX=4 / RX=2)
 - [x] XIAO spine mirror — autonomous JSON out UART1/GPIO43 (D6) (`firmware/obc-esp32-s3`)
 - [x] Flood-relay (TTL + dedup, no-loop confirmed)
+- [x] Host ⇄ mesh (inbound): base-station Heltec console → host **world memory** — parses `SPINE ◄ … : {json}` and observes each node message (`src/spine/lora_gateway.rs`, unit-tested; serial loop under `--features hardware`)
 - [ ] XIAO→Heltec physical jumper (continuity check pending)
 - [ ] True 3-hop relay (needs a 3rd radio out of direct range)
-- [ ] Host ⇄ mesh: pipe the base-station Heltec into the host spine (bidirectional)
+- [ ] Host ⇄ mesh (outbound): host assignments/commands → LoRa → node (return path)
 
 ---
 
