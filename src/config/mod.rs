@@ -1989,6 +1989,10 @@ pub struct NotificationsConfig {
     /// disables de-dup (every escalation notifies).
     #[serde(default)]
     pub dedup_window_ms: u64,
+    /// Emit a periodic digest (the escalation log rolled up by reason) every this many
+    /// ms, over the same trailing window. `0` disables it; e.g. `86400000` = daily.
+    #[serde(default)]
+    pub digest_interval_ms: u64,
 }
 
 impl Default for NotificationsConfig {
@@ -1999,6 +2003,7 @@ impl Default for NotificationsConfig {
             webhook_url: None,
             speak_escalations: false,
             dedup_window_ms: 0,
+            digest_interval_ms: 0,
         }
     }
 }

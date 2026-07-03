@@ -887,9 +887,15 @@ carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runb
   repeats are collapsed into a digest, never silently dropped. Scoped to notifications: the
   System 2 wake still fires each time (governed by the reflex's own escalation budget), and
   distinct reasons are never deduped against each other.
+- **Periodic digest**: with `digest_interval_ms` set (e.g. `86400000` for daily), a
+  scheduled loop rolls the escalation log (`notifications.escalation`) up by reason — most
+  frequent first, over the same trailing window — and delivers a one-line summary through the
+  same channels. A low-noise companion to per-event alerts; prior digests are excluded from
+  the next one (no compounding).
 - Unit-tested: the log-of-record write, the Slack-shaped payload, the speech headlining, the
-  de-dup window + suppressed-count digest, and that the decorator notifies *and* still
-  delegates the escalate downstream.
+  de-dup window + suppressed-count rollup, the digest grouping/windowing/formatting, digest
+  delivery bypassing de-dup, and that the decorator notifies *and* still delegates the
+  escalate downstream.
 
 ### Changed — `firmware/obc-esp32-s3` (XIAO node)
 

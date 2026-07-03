@@ -88,11 +88,19 @@ impl NotificationChannel for WebhookChannel {
     }
 }
 
+/// Prefix on every periodic digest message. Also used to exclude prior digests from the
+/// raw escalation history when the next digest is built (so digests don't compound).
+pub const DIGEST_PREFIX: &str = "OBC escalation digest";
+
+/// The first sentence of a reason (reasons may carry a full triage directive).
+fn first_sentence(reason: &str) -> &str {
+    reason.split_once(". ").map(|(h, _)| h).unwrap_or(reason).trim_end_matches('.')
+}
+
 /// The short spoken form of an escalation reason: just the first sentence, so a full
 /// triage directive isn't read aloud in its entirety.
 fn speech_headline(reason: &str) -> String {
-    let first = reason.split_once(". ").map(|(h, _)| h).unwrap_or(reason);
-    format!("Attention. {}.", first.trim_end_matches('.'))
+    format!("Attention. {}.", first_sentence(reason))
 }
 
 /// Speak channel: renders the escalation aloud through a [`SpeechSink`] (a TTS engine or
@@ -126,6 +134,62 @@ impl NotificationChannel for SpeechChannel {
         };
         self.speech.speak(&u).await
     }
+}
+
+// ── Periodic digest (scheduled roll-up of the escalation log) ────────────────────
+
+/// One recorded escalation, read from the `notifications.escalation` world-memory log.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EscalationRecord {
+    pub reason: String,
+    pub ts_ms: u64,
+}
+
+/// A grouped line in a digest: one distinct reason, how often it fired, and its span.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DigestLine {
+    pub reason: String,
+    pub count: u64,
+    pub first_ms: u64,
+    pub last_ms: u64,
+}
+
+/// Roll `records` up by reason (most frequent first), keeping only those within
+/// `[now_ms - window_ms, now_ms]`. Pure and testable.
+pub fn build_digest(records: &[EscalationRecord], window_ms: u64, now_ms: u64) -> Vec<DigestLine> {
+    let cutoff = now_ms.saturating_sub(window_ms);
+    let mut by_reason: std::collections::BTreeMap<String, DigestLine> = Default::default();
+    for r in records {
+        if r.ts_ms < cutoff {
+            continue;
+        }
+        let e = by_reason.entry(r.reason.clone()).or_insert(DigestLine {
+            reason: r.reason.clone(),
+            count: 0,
+            first_ms: r.ts_ms,
+            last_ms: r.ts_ms,
+        });
+        e.count += 1;
+        e.first_ms = e.first_ms.min(r.ts_ms);
+        e.last_ms = e.last_ms.max(r.ts_ms);
+    }
+    let mut lines: Vec<DigestLine> = by_reason.into_values().collect();
+    lines.sort_by(|a, b| b.count.cmp(&a.count).then(a.reason.cmp(&b.reason)));
+    lines
+}
+
+/// Format a digest into a one-line human summary (prefixed with [`DIGEST_PREFIX`]).
+/// `None` when there's nothing to report. `window_label` is a human span like `"24h"`.
+pub fn format_digest(lines: &[DigestLine], window_label: &str) -> Option<String> {
+    if lines.is_empty() {
+        return None;
+    }
+    let total: u64 = lines.iter().map(|l| l.count).sum();
+    let mut s = format!("{DIGEST_PREFIX} — {total} in the last {window_label}:");
+    for l in lines {
+        s.push_str(&format!(" {}x {};", l.count, first_sentence(&l.reason)));
+    }
+    Some(s)
 }
 
 /// Per-reason de-dup bookkeeping.
@@ -183,12 +247,22 @@ impl Notifier {
             entry.last_sent_ms = esc.ts_ms;
             entry.suppressed = 0;
         }
-        let out = Escalation { reason, ts_ms: esc.ts_ms };
+        self.fan_out(&Escalation { reason, ts_ms: esc.ts_ms }).await;
+    }
+
+    /// Deliver to every channel, best-effort (a failing channel is logged and skipped).
+    async fn fan_out(&self, esc: &Escalation) {
         for ch in &self.channels {
-            if let Err(e) = ch.deliver(&out).await {
+            if let Err(e) = ch.deliver(esc).await {
                 tracing::warn!(channel = ch.name(), error = %e, "escalation notification failed");
             }
         }
+    }
+
+    /// Deliver a periodic digest / summary to all channels. No de-dup — digests are
+    /// already rate-limited by their schedule.
+    pub async fn deliver_summary(&self, text: String, ts_ms: u64) {
+        self.fan_out(&Escalation { reason: text, ts_ms }).await;
     }
 }
 
@@ -355,5 +429,44 @@ mod tests {
         notifier.notify(&Escalation { reason: "node lost".into(), ts_ms: 1_000 }).await;
         notifier.notify(&Escalation { reason: "battery critical".into(), ts_ms: 1_100 }).await;
         assert_eq!(rec.delivered.lock().unwrap().len(), 2, "distinct alerts both go out");
+    }
+
+    #[test]
+    fn digest_groups_windows_and_ranks_escalations() {
+        let recs = vec![
+            EscalationRecord { reason: "node lost".into(), ts_ms: 1_000 },
+            EscalationRecord { reason: "node lost".into(), ts_ms: 2_000 },
+            EscalationRecord { reason: "battery critical".into(), ts_ms: 2_500 },
+            EscalationRecord { reason: "stale".into(), ts_ms: 100 }, // outside the window
+        ];
+        let lines = build_digest(&recs, 5_000, 6_000); // cutoff = 1_000
+        assert_eq!(lines.len(), 2, "the stale record is excluded");
+        assert_eq!(lines[0].reason, "node lost", "most frequent first");
+        assert_eq!(lines[0].count, 2);
+        assert_eq!(lines[0].first_ms, 1_000);
+        assert_eq!(lines[0].last_ms, 2_000);
+
+        let s = format_digest(&lines, "24h").unwrap();
+        assert!(s.starts_with(DIGEST_PREFIX));
+        assert!(s.contains("3 in the last 24h"));
+        assert!(s.contains("2x node lost"));
+    }
+
+    #[test]
+    fn an_empty_digest_is_none() {
+        assert!(format_digest(&[], "24h").is_none());
+        assert!(build_digest(&[], 1_000, 10_000).is_empty());
+    }
+
+    #[tokio::test]
+    async fn deliver_summary_fans_out_without_dedup() {
+        let rec = Arc::new(Recorder { delivered: Mutex::new(vec![]), escalated: Mutex::new(vec![]) });
+        // Same window that would de-dup a repeated escalation …
+        let notifier = Notifier::new()
+            .with_dedup_window(10_000)
+            .with_channel(Arc::clone(&rec) as Arc<dyn NotificationChannel>);
+        notifier.deliver_summary("digest A".into(), 1_000).await;
+        notifier.deliver_summary("digest A".into(), 2_000).await; // … does not suppress digests
+        assert_eq!(rec.delivered.lock().unwrap().len(), 2);
     }
 }
