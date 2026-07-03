@@ -214,6 +214,26 @@ pub fn net_recovered_clear(opts: &SafingOptions) -> ReflexRule {
     )
 }
 
+/// `mesh.escalated_count >= 1` → escalate to System 2: the mesh supervisor has
+/// presumed a node lost over the LoRa mesh. Fires only when mesh escalation is
+/// configured and a node has actually been given up on (the count is absent/zero
+/// otherwise), so it's a safe default. This is the health-driven reflex that turns a
+/// presumed-lost node into a System 2 wake (which can then alert, re-plan, or dispatch).
+pub fn mesh_node_lost_escalate(opts: &SafingOptions) -> ReflexRule {
+    rule(
+        "safe-mesh-node-lost",
+        Condition::Sensor {
+            entity: "mesh.escalated_count".to_string(),
+            op: Cmp::Ge,
+            value: 1.0,
+        },
+        Action::Escalate {
+            reason: "a mesh node is presumed lost (LoRa escalation)".to_string(),
+        },
+        debounce(opts),
+    )
+}
+
 /// The standard safing rule set for the given options. Order is stable.
 pub fn standard_safing_rules(opts: &SafingOptions) -> Vec<ReflexRule> {
     let mut rules = vec![power_critical_escalate(opts)];
@@ -225,6 +245,7 @@ pub fn standard_safing_rules(opts: &SafingOptions) -> Vec<ReflexRule> {
     rules.push(net_degraded_safe(opts));
     rules.push(power_recovered_clear(opts));
     rules.push(net_recovered_clear(opts));
+    rules.push(mesh_node_lost_escalate(opts));
     for stream in &opts.alarm_streams {
         rules.push(audio_alarm_escalate(stream, opts));
     }
@@ -372,9 +393,9 @@ mod tests {
     #[test]
     fn standard_set_includes_stop_only_with_actuator() {
         // base: power-critical-escalate, power-low, net-offline, net-degraded,
-        // power-recovered, net-recovered = 6; +1 stop with an actuator = 7.
-        assert_eq!(standard_safing_rules(&SafingOptions::default()).len(), 6);
-        assert_eq!(standard_safing_rules(&opts_with_actuator()).len(), 7);
+        // power-recovered, net-recovered, mesh-node-lost = 7; +1 stop with an actuator = 8.
+        assert_eq!(standard_safing_rules(&SafingOptions::default()).len(), 7);
+        assert_eq!(standard_safing_rules(&opts_with_actuator()).len(), 8);
     }
 
     #[test]

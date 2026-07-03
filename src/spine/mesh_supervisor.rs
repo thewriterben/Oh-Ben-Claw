@@ -258,6 +258,35 @@ pub async fn tick(
             }
         }
     }
+
+    // Aggregate signal for the reflex engine (health-driven reflex): the number of
+    // nodes currently presumed lost. The standard `safe-mesh-node-lost` reflex rule
+    // watches `mesh.escalated_count` and escalates to System 2. Recomputed after the
+    // decisions above and written only on change (so a plain number, not churn).
+    if !views.is_empty() {
+        let escalated_count = views
+            .iter()
+            .filter(|v| {
+                world
+                    .current(&format!("mesh.{}.escalation", v.node))
+                    .ok()
+                    .flatten()
+                    .and_then(|f| f.value.get("status").and_then(|s| s.as_str()).map(|s| s == "escalated"))
+                    .unwrap_or(false)
+            })
+            .count() as u64;
+        let prev = world.current("mesh.escalated_count").ok().flatten().and_then(|f| f.value.as_u64());
+        if prev != Some(escalated_count) {
+            let _ = world.observe(
+                "mesh.escalated_count",
+                json!(escalated_count),
+                now_ms,
+                now_ms,
+                "mesh-supervisor",
+            );
+        }
+    }
+
     applied
 }
 
@@ -457,6 +486,37 @@ mod tests {
         assert_eq!(
             world.current("mesh.n.escalation").unwrap().unwrap().value["status"],
             json!("cleared")
+        );
+    }
+
+    #[tokio::test]
+    async fn escalation_raises_the_count_that_drives_a_reflex() {
+        use crate::agent::reflex::{Action, ReflexEngine};
+        use crate::agent::safing::{standard_safing_rules, SafingOptions};
+
+        let world = WorldMemory::open_in_memory().unwrap();
+        world.observe("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, "test").unwrap();
+        world
+            .observe("mesh.n.health", json!({ "status": "offline" }), 1_000, 1_000, "test")
+            .unwrap();
+        let mut c = esc_cfg();
+        c.recover = None; // observe-only; escalation is time-based and still fires
+
+        // Supervisor escalates the long-offline node → publishes the aggregate count.
+        tick(&world, None, &c, 30_000).await;
+        assert_eq!(
+            world.current("mesh.escalated_count").unwrap().unwrap().value.as_u64(),
+            Some(1)
+        );
+
+        // A standard safing engine reads world memory and fires the health-driven
+        // escalate — the mesh's presumed-lost node wakes System 2.
+        let engine = ReflexEngine::new(standard_safing_rules(&SafingOptions::default()));
+        let fired = engine.tick(&world, 40_000).unwrap();
+        assert!(
+            fired.iter().any(|f| f.rule_id == "safe-mesh-node-lost"
+                && matches!(f.action, Action::Escalate { .. })),
+            "mesh health drives a reflex escalation"
         );
     }
 }

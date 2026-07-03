@@ -848,6 +848,13 @@ carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runb
 - **`oh-ben-claw status`** now prints a **Mesh nodes** section — per-node health
   (online/degraded/offline), link RSSI, last message type + age, and a "(presumed lost)"
   flag for escalated nodes — read straight from world memory.
+- **Health-driven reflex**: the supervisor publishes `mesh.escalated_count` (a plain
+  number) and a new standard safing rule **`safe-mesh-node-lost`** (`mesh.escalated_count
+  >= 1 → Escalate`) fires when any node is presumed lost — waking System 2 to alert,
+  re-plan, or dispatch. This closes the mesh loop end to end: perception over LoRa →
+  world memory → System 1 reflex → System 2. Safe by default (the count is absent/zero
+  until escalation is configured *and* a node is actually given up on). Integration-tested
+  (escalate → count → reflex fires).
 
 ### Changed — `firmware/obc-esp32-s3` (XIAO node)
 

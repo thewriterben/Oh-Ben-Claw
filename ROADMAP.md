@@ -608,6 +608,7 @@ UART to a Heltec LoRa gateway, which carries it over the mesh. Runbook:
 - [x] Mesh → brain: **mesh supervisor** derives per-node health (online/degraded/offline) from mesh facts + auto-issues rate-limited recovery commands over the mesh (`src/spine/mesh_supervisor.rs`, unit-tested; `[mesh_supervisor]` config)
 - [x] Mesh supervisor **escalation**: a node offline past `escalate_after_ms` is presumed lost — pings stop, `mesh.<node>.escalation` raised, auto-cleared on return
 - [x] `oh-ben-claw status` shows a **Mesh nodes** section (health, RSSI, last-seen, presumed-lost flag) from world memory
+- [x] Health-driven reflex: supervisor publishes `mesh.escalated_count`; standard `safe-mesh-node-lost` rule escalates a presumed-lost node to System 2 (`src/agent/safing.rs`, integration-tested) — closes LoRa → world memory → reflex → System 2
 - [x] Base-station Heltec: USB console (UART0 stdin) → LoRa TX — background reader thread, no UART0 reconfigure (`firmware/heltec-lora-linktest`, *flash-pending*)
 - [ ] XIAO→Heltec **forward** jumper D6→GPIO2 (inbound; continuity check pending)
 - [ ] Heltec→XIAO **reverse** jumper GPIO4→D7 (outbound; new)
