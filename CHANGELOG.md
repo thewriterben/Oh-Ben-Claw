@@ -823,6 +823,24 @@ carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runb
   routing (`to`), identity (`cmd_result`/`node_id`), and correlation (`id`) contract the
   firmware realises. Runs on any machine (`cargo test --test mesh_spine_e2e`).
 
+### Added — mesh supervisor (fold the mesh into the brain)
+
+- **`src/spine/mesh_supervisor.rs`**: a host control loop that turns the mesh facts the
+  inbound bridge lands in world memory into *action*. Each tick it derives a per-node
+  health view — **online / degraded / offline** — from the `mesh.<node>` rollup and last
+  `cmd_result`, writes it back as a `mesh.<node>.health` fact (so reflexes, foresight, and
+  the agent can see it), and — when a node goes offline — autonomously issues a
+  **rate-limited recovery `mesh_command`** (e.g. a `capabilities` ping) through the same
+  mesh command sink the agent uses.
+- Perception → decision → action, fully on-host: the decision core (`decide`) is pure and
+  **unit-tested** (7 tests — online/offline/degraded classification, churn-free health
+  writes, per-node recovery rate-limiting, observe-only mode, and a `tick` integration
+  over an in-memory store + mock sink).
+- Config `[mesh_supervisor]` (`enabled`, `stale_ms`, `tick_ms`, `recover`,
+  `min_recovery_interval_ms`); `main.rs` spawns the loop when enabled and world memory is
+  on, sharing the LoRa gateway's command sink so recovery can actually reach a node.
+  Without a sink it runs observe-only (health facts, no sends).
+
 ### Changed — `firmware/obc-esp32-s3` (XIAO node)
 
 - **Spine mirror**: the node's autonomous `link_state` / `power_mode` / `reflex` JSON

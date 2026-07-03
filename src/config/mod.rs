@@ -1913,6 +1913,53 @@ pub struct LoraGatewayConfig {
     pub baud: u32,
 }
 
+/// Mesh supervisor (Phase B "fold mesh into brain"): a host control loop that turns the
+/// mesh facts in world memory into a derived per-node health view and optional
+/// autonomous recovery commands. Requires `[perception].world_memory`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeshSupervisorConfig {
+    /// Enable the supervisor loop.
+    #[serde(default)]
+    pub enabled: bool,
+    /// A node with no mesh message newer than this (ms) is considered offline.
+    #[serde(default = "default_mesh_stale_ms")]
+    pub stale_ms: u64,
+    /// Supervisor tick cadence (ms).
+    #[serde(default = "default_mesh_tick_ms")]
+    pub tick_ms: u64,
+    /// Command to auto-issue to a node that has gone offline (e.g. `"capabilities"` to
+    /// ping it). `None` = observe-only (record health, never send).
+    #[serde(default)]
+    pub recover: Option<String>,
+    /// Minimum interval (ms) between recovery commands to the same node.
+    #[serde(default = "default_mesh_recovery_interval_ms")]
+    pub min_recovery_interval_ms: u64,
+}
+
+impl Default for MeshSupervisorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            stale_ms: default_mesh_stale_ms(),
+            tick_ms: default_mesh_tick_ms(),
+            recover: None,
+            min_recovery_interval_ms: default_mesh_recovery_interval_ms(),
+        }
+    }
+}
+
+fn default_mesh_stale_ms() -> u64 {
+    60_000
+}
+
+fn default_mesh_tick_ms() -> u64 {
+    5_000
+}
+
+fn default_mesh_recovery_interval_ms() -> u64 {
+    30_000
+}
+
 fn default_relay_hops() -> u8 {
     3
 }
@@ -1930,6 +1977,10 @@ pub struct Config {
     /// console and ingests received node spine messages into world memory.
     #[serde(default)]
     pub lora_gateway: Option<LoraGatewayConfig>,
+    /// Phase B: mesh supervisor — derive per-node health from mesh facts and optionally
+    /// auto-recover offline nodes over the mesh.
+    #[serde(default)]
+    pub mesh_supervisor: MeshSupervisorConfig,
     #[serde(default)]
     pub peripherals: PeripheralsConfig,
     #[serde(default)]
