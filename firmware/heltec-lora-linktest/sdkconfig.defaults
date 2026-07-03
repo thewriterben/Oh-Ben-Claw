@@ -1,0 +1,7 @@
+# ESP-IDF default config.
+#
+# PSRAM is DISABLED — the Heltec WiFi LoRa 32 V3 base board has no PSRAM (same
+# default as the XIAO node crate).
+
+# A little more main-task stack (harmless).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

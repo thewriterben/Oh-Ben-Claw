@@ -1,0 +1,5 @@
+# Builds with the Espressif Xtensa Rust toolchain (installed via `espup install`),
+# which provides the `xtensa-esp32s3-espidf` target. Pinned so rustup doesn't walk
+# up to the workspace root's `stable` channel (which has no Xtensa target).
+[toolchain]
+channel = "esp"
