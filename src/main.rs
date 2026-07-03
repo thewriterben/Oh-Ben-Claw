@@ -1265,10 +1265,60 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     ));
                 }
                 info!(channels = notifier.channel_count(), "Escalation notifications wired");
-                Arc::new(oh_ben_claw::agent::notify::NotifyingActionSink::new(
-                    sink,
-                    Arc::new(notifier),
-                ))
+                let notifier = Arc::new(notifier);
+
+                // Periodic digest: roll the escalation log up by reason on a schedule and
+                // deliver a one-line summary through the same channels.
+                if config.notifications.digest_interval_ms > 0 {
+                    let interval = config.notifications.digest_interval_ms;
+                    let label = if interval % 86_400_000 == 0 {
+                        format!("{}d", interval / 86_400_000)
+                    } else if interval % 3_600_000 == 0 {
+                        format!("{}h", interval / 3_600_000)
+                    } else {
+                        format!("{}m", (interval / 60_000).max(1))
+                    };
+                    let notifier_d = Arc::clone(&notifier);
+                    let world_d = Arc::clone(world);
+                    info!(interval_ms = interval, "Escalation digest scheduled");
+                    tokio::spawn(async move {
+                        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(
+                            interval.max(1_000),
+                        ));
+                        ticker.tick().await; // consume the immediate first tick
+                        loop {
+                            ticker.tick().await;
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0);
+                            let records: Vec<_> = world_d
+                                .history("notifications.escalation")
+                                .unwrap_or_default()
+                                .into_iter()
+                                .filter_map(|f| {
+                                    f.value.get("reason").and_then(|r| r.as_str()).map(|reason| {
+                                        oh_ben_claw::agent::notify::EscalationRecord {
+                                            reason: reason.to_string(),
+                                            ts_ms: f.valid_from,
+                                        }
+                                    })
+                                })
+                                // Don't fold prior digests back into the next digest.
+                                .filter(|r| !r.reason.starts_with(oh_ben_claw::agent::notify::DIGEST_PREFIX))
+                                .collect();
+                            let lines =
+                                oh_ben_claw::agent::notify::build_digest(&records, interval, now);
+                            if let Some(text) =
+                                oh_ben_claw::agent::notify::format_digest(&lines, &label)
+                            {
+                                notifier_d.deliver_summary(text, now).await;
+                            }
+                        }
+                    });
+                }
+
+                Arc::new(oh_ben_claw::agent::notify::NotifyingActionSink::new(sink, notifier))
             } else {
                 sink
             };
