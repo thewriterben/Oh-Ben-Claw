@@ -1,0 +1,158 @@
+# Phase B — LoRa Mesh Spine (Heltec V3)
+
+Off-grid inter-node transport for Oh-Ben-Claw: OBC nodes exchange their
+newline-delimited JSON spine messages (link state, power mode, reflex/safing
+reports) over a **LoRa mesh** when there's no WiFi/MQTT backhaul. Validated on
+hardware (2× Heltec WiFi LoRa 32 V3, 1× Seeed XIAO ESP32-S3).
+
+## Architecture — serial-bridged compute
+
+The compute node and the radio are separate boards, bridged by a UART:
+
+```
+  XIAO ESP32-S3 (node)              Heltec V3 (LoRa gateway)         Heltec V3 (base / peer)
+  ┌──────────────────┐   UART1      ┌──────────────────────┐  LoRa  ┌────────────────────┐
+  │ sensors, reflexes│  D6(GPIO43)  │ SX1262 915 MHz radio │ 915MHz │ SX1262 radio       │
+  │ safing (System 1)│ ───TX──────► │ UART1 RX = GPIO2     │◄──────►│ spine frames +     │
+  │ mirrors JSON out │   GND ─ GND  │ frames + flood-relay │        │ flood-relay + dedup│
+  └──────────────────┘              └──────────────────────┘        └────────────────────┘
+```
+
+- The **XIAO** runs the full node firmware (`firmware/obc-esp32-s3`) and *mirrors*
+  its autonomous spine messages out a UART.
+- The **Heltec** runs the gateway firmware (`firmware/heltec-lora-linktest`): it
+  frames UART lines onto LoRa, forwards received frames back to the UART, and
+  flood-relays for the mesh. The XIAO has no LoRa; the Heltec has no sensors.
+
+## Hardware
+
+### Heltec WiFi LoRa 32 V3 (ESP32-S3 + SX1262)
+
+| Function | GPIO | Notes |
+|---|---|---|
+| SX1262 NSS (CS) | 8 | SPI2 |
+| SX1262 SCK | 9 | |
+| SX1262 MOSI | 10 | |
+| SX1262 MISO | 11 | |
+| SX1262 RST | 12 | |
+| SX1262 BUSY | 13 | command handshake |
+| SX1262 DIO1 | 14 | IRQ |
+| SX1262 TCXO | — | on the chip's DIO3, 1.8 V |
+| SX1262 RF switch | — | on the chip's DIO2 (chip-controlled) |
+| UART1 (compute uplink) TX | 4 | to node RX (future return path) |
+| UART1 (compute uplink) RX | 2 | ← node TX |
+| USB console (CP2102) | 43/44 | UART0 — **needs the Silicon Labs CP210x driver on Windows** |
+| LED | 35 | |
+
+### Seeed XIAO ESP32-S3 (node)
+
+| Function | GPIO / pad | Notes |
+|---|---|---|
+| Spine mirror TX | GPIO43 / **D6** | → Heltec GPIO2 |
+| USB console | native USB-Serial-JTAG (19/20) | shows as "USB Serial Device" |
+
+## Radio configuration
+
+- **Band:** 915 MHz (US ISM). Change `FREQ_HZ` for EU (868 MHz).
+- **Modulation:** SF7 / BW 125 kHz / CR 4-5.
+- **Sync word:** `0x1424` (private network — both nodes must match).
+- **TX power:** +22 dBm. **Attach an antenna before transmitting** — +22 dBm into
+  no antenna can damage the SX1262 PA.
+
+## Spine frame format
+
+Content-agnostic transport (`spine.rs`). Single frame:
+
+```
+[src:u8][seq:u8][ttl:u8][payload…]
+```
+
+- `src` — originating node id (low byte of its MAC).
+- `seq` — per-source sequence (wraps); with `src`, de-dups relays.
+- `ttl` — remaining hop count for flood-relay (`SPINE_TTL` = 2; 0 = don't relay).
+- `payload` — the OBC message bytes (≤ 240 B).
+
+**De-dup / flood-relay:** a `SeenSet` ring records recently-seen `(src, seq)`. A node
+that hears a *new* frame forwards it to its UART, then rebroadcasts it with `ttl-1`
+(preserving the original `src`/`seq`). Any node that has already seen `(src, seq)`
+drops it — that's what stops relay loops.
+
+## Build & flash
+
+Toolchain: the Espressif Xtensa Rust toolchain (`espup install`), same as the node
+firmware. Both firmware crates are their own workspaces (excluded from the host
+workspace).
+
+```powershell
+# Heltec gateway firmware
+cd firmware/heltec-lora-linktest
+$env:ESPFLASH_PORT="COM4"; cargo run --release   # set the port explicitly per board
+
+# XIAO node firmware (includes the spine mirror)
+cd firmware/obc-esp32-s3
+$env:ESPFLASH_PORT="COM3"; cargo run --release
+```
+
+> **`ESPFLASH_PORT` persists for the whole terminal session** — always set it to the
+> target board's port before each `cargo run`, or a flash can land on the wrong board.
+> Identify ports with `Get-CimInstance Win32_SerialPort | Select DeviceID,Description`:
+> CP210x = Heltec, "USB Serial Device" = XIAO.
+
+## Wiring (compute node → gateway)
+
+Two jumpers, one-directional (node transmits its JSON to the gateway):
+
+| XIAO | → | Heltec gateway |
+|---|---|---|
+| **D6** (GPIO43) | → | **GPIO2** |
+| **GND** | → | **GND** |
+
+A shared ground is mandatory — a missing common GND is the #1 UART failure and
+looks like "no data". Verify both connections with a multimeter on continuity.
+
+## Test procedure
+
+1. **Both Heltecs** — flash the gateway firmware, confirm each boots with
+   `SX1262 self-test: ... syncword readback=0x1424`. They exchange `gw_keepalive`
+   spine frames (`SPINE ◄ src=.. : {"type":"gw_keepalive",...}`), and each shows a
+   `SPINE ⇒ relay` line per received frame (flood-relay, capped one-per-node).
+2. **XIAO** — flash the node firmware; its boot logs `Spine uplink: UART1 ready`.
+3. **Wire** the XIAO to one Heltec (that one is the *gateway*; the other is the
+   *base station*).
+4. **Watch the base station** (`espflash monitor --port COMx`). Once the XIAO's link
+   goes offline (~30 s untethered), its `safe-link-offline` reflex fires every 10 s
+   and appears at the base station over LoRa:
+   ```
+   SPINE ◄ src=<gw> seq=N rssi=-X dBm : {"type":"reflex","node_id":"obc-esp32-s3-001",...}
+   ```
+   `node_id":"obc-esp32-s3-001"` = the XIAO's real on-MCU reflex, relayed over the mesh.
+
+## Status
+
+| Piece | State |
+|---|---|
+| SX1262 driver (hand-rolled) | ✅ validated first flash |
+| 2-node point-to-point LoRa link | ✅ RSSI/SNR confirmed |
+| Structured spine frames + de-dup | ✅ |
+| Heltec UART↔LoRa gateway bridge | ✅ |
+| XIAO spine mirror (firmware) | ✅ UART1 init confirmed |
+| Flood-relay (TTL + dedup) | ✅ no-loop confirmed |
+| XIAO→Heltec physical jumper | ⏳ deferred (continuity check pending) |
+| True 3-hop relay | ⏳ needs a 3rd radio out of direct range |
+
+## Troubleshooting
+
+- **`No serial ports detected` on a Heltec** → install the Silicon Labs CP210x VCP
+  driver; the Heltec's USB is a CP2102 bridge (unlike the XIAO's native USB).
+- **Flash lands on the wrong board** → `$env:ESPFLASH_PORT` is still set from a prior
+  command. Set it explicitly each time.
+- **COM numbers changed** → Windows renumbers on re-plug; re-run the `Get-CimInstance`
+  query and adjust.
+- **Base station sees only `gw_keepalive`, never the node's JSON** → the node→gateway
+  UART isn't delivering. Check the node's boot log for `Spine uplink: UART1 ready`
+  (rules out firmware), then the jumper: XIAO **D6** (not D7), landing on Heltec
+  **GPIO2**, and a **shared GND**.
+- **No RX between two radios** → confirm antennas are attached and, if the boards are
+  touching, separate them ~1 m (a +22 dBm signal can desense a very close receiver).
+- **Relay storm (same seq relayed repeatedly)** → would indicate the `SeenSet` isn't
+  catching dups; expected behaviour is exactly one `⇒ relay` per `(src, seq)`.
