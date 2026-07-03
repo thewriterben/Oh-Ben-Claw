@@ -860,6 +860,12 @@ carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runb
   the escalation wakes it, can see *which* node is in trouble and act on it (via
   `mesh_command`). Registered whenever mesh is configured; unit-tested. Completes the
   agent's mesh toolkit: perceive (`mesh_status`) → act (`mesh_command`).
+- **Mesh triage playbook**: the `safe-mesh-node-lost` escalation reason is now a concise
+  triage *directive* (`MESH_LOST_PLAYBOOK`) that names the exact tools — so the wake is
+  self-guiding: identify with `mesh_status`, confirm with a `mesh_command` `capabilities`
+  ping, then recover-or-alert, all Track-0 gated. Full procedure (with guardrails) in
+  `docs/playbooks/mesh-node-lost.md`. Unit-tested that the reason directs the agent to its
+  tools.
 
 ### Changed — `firmware/obc-esp32-s3` (XIAO node)
 
