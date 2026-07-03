@@ -855,6 +855,11 @@ carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runb
   world memory → System 1 reflex → System 2. Safe by default (the count is absent/zero
   until escalation is configured *and* a node is actually given up on). Integration-tested
   (escalate → count → reflex fires).
+- **`mesh_status` agent tool** (read-only): summarizes fleet health from world memory —
+  per-node status / escalation / RSSI / last-seen + fleet counts — so **System 2**, once
+  the escalation wakes it, can see *which* node is in trouble and act on it (via
+  `mesh_command`). Registered whenever mesh is configured; unit-tested. Completes the
+  agent's mesh toolkit: perceive (`mesh_status`) → act (`mesh_command`).
 
 ### Changed — `firmware/obc-esp32-s3` (XIAO node)
 

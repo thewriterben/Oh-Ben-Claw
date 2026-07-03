@@ -519,6 +519,15 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                         oh_ben_claw::tools::builtin::world::WorldMemoryTool::new(Arc::clone(&wm)),
                     ));
                     info!(path = %world_path, "Phase 18 world memory tool active");
+                    // System 2 mesh awareness: a read-only mesh_status tool so the agent
+                    // can see fleet health when a mesh escalation wakes it (paired with
+                    // mesh_command for action). Registered whenever mesh is in play.
+                    if config.mesh_supervisor.enabled || config.lora_gateway.is_some() {
+                        all_tools.push(Box::new(
+                            oh_ben_claw::tools::builtin::mesh::MeshStatusTool::new(Arc::clone(&wm)),
+                        ));
+                        info!("Mesh status tool active (System 2 mesh awareness)");
+                    }
                     Some(wm)
                 }
                 Err(e) => {
