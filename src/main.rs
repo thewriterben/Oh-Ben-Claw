@@ -2206,6 +2206,52 @@ async fn run_status(config: &Config) -> Result<()> {
             board.path.as_deref().unwrap_or("native")
         );
     }
+    // Mesh nodes (Phase B): per-node health derived by the mesh supervisor, read from
+    // world memory. Shows online/degraded/offline, link RSSI, last message, and age;
+    // flags any node the supervisor has escalated (presumed lost).
+    if config.perception.world_memory {
+        let world_path = config.perception.world_db_path.clone().unwrap_or_else(|| {
+            directories::ProjectDirs::from("com", "thewriterben", "oh-ben-claw")
+                .map(|d| d.data_dir().join("world.db").to_string_lossy().into_owned())
+                .unwrap_or_else(|| "world.db".to_string())
+        });
+        if let Ok(world) = oh_ben_claw::memory::world::WorldMemory::open(&world_path) {
+            let views = oh_ben_claw::spine::mesh_supervisor::snapshot(&world);
+            if !views.is_empty() {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                println!("\nMesh nodes ({}):", views.len());
+                for v in &views {
+                    let health = v.prev_health.map(|h| h.as_str()).unwrap_or("unknown");
+                    let rollup = world.current(&format!("mesh.{}", v.node)).ok().flatten();
+                    let rssi = rollup
+                        .as_ref()
+                        .and_then(|f| f.value.get("rssi_dbm").and_then(|r| r.as_i64()));
+                    let last_type = rollup
+                        .as_ref()
+                        .and_then(|f| f.value.get("last_type").and_then(|t| t.as_str()))
+                        .unwrap_or("-")
+                        .to_string();
+                    let escalated = world
+                        .current(&format!("mesh.{}.escalation", v.node))
+                        .ok()
+                        .flatten()
+                        .and_then(|f| f.value.get("status").and_then(|s| s.as_str()).map(|s| s == "escalated"))
+                        .unwrap_or(false);
+                    let tag = if escalated { " (presumed lost)" } else { "" };
+                    let rssi_s = rssi.map(|r| format!("{r} dBm")).unwrap_or_else(|| "-".to_string());
+                    let age_s = now.saturating_sub(v.last_seen_ms) / 1000;
+                    println!(
+                        "  {} | {}{} | rssi: {} | last: {} ({}s ago)",
+                        v.node, health, tag, rssi_s, last_type, age_s
+                    );
+                }
+            }
+        }
+    }
+
     println!();
     Ok(())
 }
