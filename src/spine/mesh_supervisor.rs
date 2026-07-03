@@ -62,8 +62,13 @@ pub struct MeshNodeView {
     pub last_cmd_ok: Option<bool>,
     /// Previously-recorded health (so we only write on change).
     pub prev_health: Option<MeshHealth>,
+    /// `valid_from` of the current `mesh.<node>.health` fact — marks when the current
+    /// health began, for measuring continuous-offline duration.
+    pub health_since_ms: Option<u64>,
     /// When we last sent a recovery command to this node (ms), if ever.
     pub last_recovery_ms: Option<u64>,
+    /// Whether the node is currently escalated (presumed lost).
+    pub escalated: bool,
 }
 
 /// A supervisor decision to apply.
@@ -73,6 +78,11 @@ pub enum MeshDecision {
     Health { node: String, status: &'static str, reason: String },
     /// Issue a recovery command to an offline node.
     Recover { node: String, cmd: NodeCommand },
+    /// Escalate: the node has been offline long enough to be presumed lost (recovery
+    /// stops).
+    Escalate { node: String, reason: String },
+    /// Clear a prior escalation: the node came back.
+    ClearEscalation { node: String },
 }
 
 /// Pure decision core: from per-node views + now + config, produce the actions to apply.
@@ -95,18 +105,42 @@ pub fn decide(views: &[MeshNodeView], now_ms: u64, cfg: &MeshSupervisorConfig) -
         }
 
         if status == MeshHealth::Offline {
-            if let Some(cmd_name) = &cfg.recover {
-                let due = v
-                    .last_recovery_ms
-                    .map_or(true, |t| now_ms.saturating_sub(t) >= cfg.min_recovery_interval_ms);
-                if due {
-                    let id = format!("sup-{}-{}", v.node, now_ms);
-                    out.push(MeshDecision::Recover {
-                        node: v.node.clone(),
-                        cmd: NodeCommand::new(&v.node, id, cmd_name, json!({})),
-                    });
+            // Continuous-offline duration: if it was already offline, the health fact's
+            // valid_from marks when it began; if it went offline this tick, that's ~now.
+            let offline_since = if v.prev_health == Some(MeshHealth::Offline) {
+                v.health_since_ms.unwrap_or(now_ms)
+            } else {
+                now_ms
+            };
+            let offline_for = now_ms.saturating_sub(offline_since);
+            let escalate_now =
+                cfg.escalate_after_ms > 0 && !v.escalated && offline_for >= cfg.escalate_after_ms;
+
+            if escalate_now {
+                out.push(MeshDecision::Escalate {
+                    node: v.node.clone(),
+                    reason: format!("offline for {offline_for} ms — presumed lost"),
+                });
+            }
+
+            // Keep pinging until we've given up (escalated, including this tick).
+            if !v.escalated && !escalate_now {
+                if let Some(cmd_name) = &cfg.recover {
+                    let due = v
+                        .last_recovery_ms
+                        .map_or(true, |t| now_ms.saturating_sub(t) >= cfg.min_recovery_interval_ms);
+                    if due {
+                        let id = format!("sup-{}-{}", v.node, now_ms);
+                        out.push(MeshDecision::Recover {
+                            node: v.node.clone(),
+                            cmd: NodeCommand::new(&v.node, id, cmd_name, json!({})),
+                        });
+                    }
                 }
             }
+        } else if v.escalated {
+            // The node returned after being presumed lost → clear the escalation.
+            out.push(MeshDecision::ClearEscalation { node: v.node.clone() });
         }
     }
     out
@@ -133,17 +167,31 @@ pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
             .ok()
             .flatten()
             .and_then(|f| f.value.get("ok").and_then(|v| v.as_bool()));
-        let prev_health = world
-            .current(&format!("mesh.{node}.health"))
-            .ok()
-            .flatten()
+        let health_fact = world.current(&format!("mesh.{node}.health")).ok().flatten();
+        let prev_health = health_fact
+            .as_ref()
             .and_then(|f| f.value.get("status").and_then(|v| v.as_str()).and_then(MeshHealth::parse));
+        let health_since_ms = health_fact.as_ref().map(|f| f.valid_from);
         let last_recovery_ms = world
             .current(&format!("mesh.{node}.recovery"))
             .ok()
             .flatten()
             .map(|f| f.valid_from);
-        views.push(MeshNodeView { node, last_seen_ms, last_cmd_ok, prev_health, last_recovery_ms });
+        let escalated = world
+            .current(&format!("mesh.{node}.escalation"))
+            .ok()
+            .flatten()
+            .and_then(|f| f.value.get("status").and_then(|v| v.as_str()).map(|s| s == "escalated"))
+            .unwrap_or(false);
+        views.push(MeshNodeView {
+            node,
+            last_seen_ms,
+            last_cmd_ok,
+            prev_health,
+            health_since_ms,
+            last_recovery_ms,
+            escalated,
+        });
     }
     views
 }
@@ -186,6 +234,28 @@ pub async fn tick(
                     }
                 }
             }
+            MeshDecision::Escalate { node, reason } => {
+                tracing::warn!(node = %node, "mesh supervisor: node presumed lost — {reason}");
+                let _ = world.observe(
+                    &format!("mesh.{node}.escalation"),
+                    json!({ "status": "escalated", "reason": reason, "ts_ms": now_ms }),
+                    now_ms,
+                    now_ms,
+                    "mesh-supervisor",
+                );
+                applied += 1;
+            }
+            MeshDecision::ClearEscalation { node } => {
+                tracing::info!(node = %node, "mesh supervisor: node returned — escalation cleared");
+                let _ = world.observe(
+                    &format!("mesh.{node}.escalation"),
+                    json!({ "status": "cleared", "ts_ms": now_ms }),
+                    now_ms,
+                    now_ms,
+                    "mesh-supervisor",
+                );
+                applied += 1;
+            }
         }
     }
     applied
@@ -203,6 +273,7 @@ mod tests {
             tick_ms: 5_000,
             recover: recover.map(str::to_string),
             min_recovery_interval_ms: 30_000,
+            escalate_after_ms: 0,
         }
     }
 
@@ -212,7 +283,9 @@ mod tests {
             last_seen_ms,
             last_cmd_ok: None,
             prev_health: None,
+            health_since_ms: None,
             last_recovery_ms: None,
+            escalated: false,
         }
     }
 
@@ -310,5 +383,80 @@ mod tests {
         let n2 = tick(&world, Some(&sink), &c, 11_500).await;
         assert_eq!(n2, 0, "no churn, no repeat recovery within the cooldown");
         assert_eq!(mock.sent.lock().unwrap().len(), 1);
+    }
+
+    fn esc_cfg() -> MeshSupervisorConfig {
+        let mut c = cfg(Some("capabilities"));
+        c.escalate_after_ms = 20_000;
+        c
+    }
+
+    fn offline_view(node: &str, offline_since: u64) -> MeshNodeView {
+        let mut v = view(node, offline_since);
+        v.prev_health = Some(MeshHealth::Offline);
+        v.health_since_ms = Some(offline_since);
+        v
+    }
+
+    #[test]
+    fn a_node_offline_past_the_threshold_is_escalated_and_stops_pinging() {
+        // offline since 1_000, now 30_000 → offline_for 29_000 >= 20_000.
+        let d = decide(&[offline_view("n", 1_000)], 30_000, &esc_cfg());
+        assert!(d.iter().any(|x| matches!(x, MeshDecision::Escalate { .. })), "escalates");
+        assert!(!d.iter().any(|x| matches!(x, MeshDecision::Recover { .. })), "gives up pinging");
+    }
+
+    #[test]
+    fn an_escalated_node_is_not_re_escalated_nor_pinged() {
+        let mut v = offline_view("n", 1_000);
+        v.escalated = true;
+        let d = decide(&[v], 30_000, &esc_cfg());
+        assert!(d.is_empty(), "no re-escalation, no recovery, no health churn");
+    }
+
+    #[test]
+    fn recovery_continues_before_the_escalation_threshold() {
+        // offline_for 9_000 < 20_000 → still recovering, not escalated.
+        let d = decide(&[offline_view("n", 1_000)], 10_000, &esc_cfg());
+        assert!(d.iter().any(|x| matches!(x, MeshDecision::Recover { .. })));
+        assert!(!d.iter().any(|x| matches!(x, MeshDecision::Escalate { .. })));
+    }
+
+    #[test]
+    fn a_returning_node_clears_its_escalation() {
+        // fresh (online) but previously escalated → clear.
+        let mut v = view("n", 29_500);
+        v.prev_health = Some(MeshHealth::Offline);
+        v.escalated = true;
+        let d = decide(&[v], 30_000, &esc_cfg());
+        assert!(d.iter().any(|x| matches!(x, MeshDecision::ClearEscalation { .. })));
+    }
+
+    #[tokio::test]
+    async fn tick_escalates_a_long_offline_node_then_clears_on_return() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        world.observe("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, "test").unwrap();
+        world
+            .observe("mesh.n.health", json!({ "status": "offline", "reason": "x" }), 1_000, 1_000, "test")
+            .unwrap();
+        let c = esc_cfg();
+        let mock = Arc::new(MockSink { sent: Mutex::new(Vec::new()) });
+        let sink: Arc<dyn CommandSink> = mock.clone();
+
+        // Offline for 29 s (>= 20 s threshold) → escalate, no recovery ping.
+        tick(&world, Some(&sink), &c, 30_000).await;
+        assert_eq!(
+            world.current("mesh.n.escalation").unwrap().unwrap().value["status"],
+            json!("escalated")
+        );
+        assert_eq!(mock.sent.lock().unwrap().len(), 0, "escalated → no ping");
+
+        // Node returns (fresh rollup) → escalation cleared.
+        world.observe("mesh.n", json!({ "last_type": "link_state" }), 30_500, 30_500, "test").unwrap();
+        tick(&world, Some(&sink), &c, 31_000).await;
+        assert_eq!(
+            world.current("mesh.n.escalation").unwrap().unwrap().value["status"],
+            json!("cleared")
+        );
     }
 }

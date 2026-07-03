@@ -1934,6 +1934,11 @@ pub struct MeshSupervisorConfig {
     /// Minimum interval (ms) between recovery commands to the same node.
     #[serde(default = "default_mesh_recovery_interval_ms")]
     pub min_recovery_interval_ms: u64,
+    /// A node continuously offline for at least this long (ms) is escalated (presumed
+    /// lost): recovery pings stop and a `mesh.<node>.escalation` fact is raised (cleared
+    /// automatically if the node returns). `0` disables escalation.
+    #[serde(default)]
+    pub escalate_after_ms: u64,
 }
 
 impl Default for MeshSupervisorConfig {
@@ -1944,6 +1949,7 @@ impl Default for MeshSupervisorConfig {
             tick_ms: default_mesh_tick_ms(),
             recover: None,
             min_recovery_interval_ms: default_mesh_recovery_interval_ms(),
+            escalate_after_ms: 0,
         }
     }
 }

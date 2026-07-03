@@ -840,6 +840,14 @@ carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runb
   `min_recovery_interval_ms`); `main.rs` spawns the loop when enabled and world memory is
   on, sharing the LoRa gateway's command sink so recovery can actually reach a node.
   Without a sink it runs observe-only (health facts, no sends).
+- **Escalation (presumed lost)**: a node continuously offline past `escalate_after_ms`
+  is escalated — recovery pings stop and a `mesh.<node>.escalation` fact is raised (and
+  auto-cleared if the node returns). Stops the mesh pinging a dead node forever and gives
+  other reflexes / the agent a "give up, raise the alarm" signal. Unit-tested (offline→
+  escalate→stop-pinging→return→clear).
+- **`oh-ben-claw status`** now prints a **Mesh nodes** section — per-node health
+  (online/degraded/offline), link RSSI, last message type + age, and a "(presumed lost)"
+  flag for escalated nodes — read straight from world memory.
 
 ### Changed — `firmware/obc-esp32-s3` (XIAO node)
 
