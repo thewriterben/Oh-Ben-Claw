@@ -814,6 +814,14 @@ carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runb
   a mesh command; a host types/pipes a JSON command line into its serial monitor. A
   USB-TTL-to-UART1 path is documented as a no-firmware fallback. *(Flash-pending; needs
   the reverse jumper Heltec GPIO4 → XIAO D7 to reach the node.)*
+- **Identifiable command replies**: the node stamps its command response with
+  `type:"cmd_result"` and its `node_id` before mirroring it back over the mesh, so a
+  reply lands in world memory as `mesh.<node_id>.cmd_result` (correlatable by the echoed
+  `id`) rather than a generic src-addressed fact.
+- **Host integration test** (`tests/mesh_spine_e2e.rs`): exercises the full outbound →
+  gated-execution → reply → world-memory loop on the host with no radio, asserting the
+  routing (`to`), identity (`cmd_result`/`node_id`), and correlation (`id`) contract the
+  firmware realises. Runs on any machine (`cargo test --test mesh_spine_e2e`).
 
 ### Changed — `firmware/obc-esp32-s3` (XIAO node)
 

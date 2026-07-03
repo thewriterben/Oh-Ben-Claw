@@ -515,7 +515,17 @@ fn main() -> anyhow::Result<()> {
                                 if let Ok(s) = std::str::from_utf8(&uart_line) {
                                     if command_targets_us(s) {
                                         if let Ok(resp) = handle_request(s, &mut agent_state) {
-                                            let out = serde_json::to_string(&resp).unwrap_or_default();
+                                            // Stamp the reply with identity so the host
+                                            // bridge keys it as `mesh.<node>.cmd_result`
+                                            // (correlatable by the echoed `id`), not a
+                                            // generic src-addressed fact.
+                                            let mut v = serde_json::to_value(&resp)
+                                                .unwrap_or(serde_json::Value::Null);
+                                            if let serde_json::Value::Object(ref mut m) = v {
+                                                m.insert("type".into(), serde_json::json!("cmd_result"));
+                                                m.insert("node_id".into(), serde_json::json!(NODE_ID));
+                                            }
+                                            let out = v.to_string();
                                             let _ = u.write(out.as_bytes());
                                             let _ = u.write(b"\n");
                                         }
