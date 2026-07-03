@@ -1966,6 +1966,41 @@ fn default_mesh_recovery_interval_ms() -> u64 {
     30_000
 }
 
+/// Escalation notifications (`[notifications]`): wire reflex escalations (mesh node
+/// lost, battery critical, alarm heard, …) to operator-facing channels — a durable
+/// log-of-record in world memory and/or a webhook (Slack/Discord/generic).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationsConfig {
+    /// Enable escalation notifications (wraps the reflex action sink).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Append each escalation to world memory as `notifications.escalation`.
+    #[serde(default = "default_notify_log")]
+    pub log_to_world_memory: bool,
+    /// Optional webhook URL to POST `{ "text": … }` on each escalation.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    /// Speak escalations aloud (headline only) through the audio speech sink (TTS,
+    /// speaker over the spine, or dry-run — same selection as `[audio_suite]`).
+    #[serde(default)]
+    pub speak_escalations: bool,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            log_to_world_memory: true,
+            webhook_url: None,
+            speak_escalations: false,
+        }
+    }
+}
+
+fn default_notify_log() -> bool {
+    true
+}
+
 fn default_relay_hops() -> u8 {
     3
 }
@@ -1987,6 +2022,10 @@ pub struct Config {
     /// auto-recover offline nodes over the mesh.
     #[serde(default)]
     pub mesh_supervisor: MeshSupervisorConfig,
+    /// Escalation notifications — fan reflex escalations out to a log-of-record and/or
+    /// a webhook.
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
     #[serde(default)]
     pub peripherals: PeripheralsConfig,
     #[serde(default)]

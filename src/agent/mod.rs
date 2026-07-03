@@ -8,6 +8,7 @@ pub mod delegation_tools;
 pub mod edge;
 pub mod handle;
 pub mod judge;
+pub mod notify;
 pub mod orchestrator;
 pub mod pool;
 pub mod reflex;
