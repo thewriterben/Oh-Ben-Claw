@@ -1,0 +1,24 @@
+# Standalone Heltec WiFi LoRa 32 V3 (ESP32-S3 + SX1262) firmware — its own
+# workspace/crate for the same reasons as obc-esp32-s3 (Espressif Xtensa toolchain,
+# older esp-idf crate generation, independent Cargo.lock).
+[workspace]
+
+[package]
+name = "heltec-lora-linktest"
+version = "0.1.0"
+edition = "2021"
+authors = ["thewriterben"]
+description = "Phase B step 1: Heltec WiFi LoRa 32 V3 board bring-up + (next) SX1262 LoRa link test."
+
+[dependencies]
+esp-idf-svc = { version = "0.52", features = ["std", "experimental"] }
+esp-idf-hal = "0.46"
+anyhow = "1.0"
+log = "0.4"
+
+[build-dependencies]
+embuild = "0.33"
+
+[[bin]]
+name = "heltec-lora-linktest"
+path = "src/main.rs"

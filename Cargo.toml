@@ -11,6 +11,9 @@ exclude = [
     # edition2024 `toml`/`winnow` generation, `filetime`, …) never leak onto the
     # chip build.
     "firmware/obc-esp32-s3",
+    # Heltec WiFi LoRa 32 V3 (ESP32-S3 + SX1262) — Phase B LoRa mesh node; its own
+    # workspace for the same Espressif-toolchain reasons as obc-esp32-s3.
+    "firmware/heltec-lora-linktest",
 ]
 resolver = "2"
 
