@@ -1993,6 +1993,16 @@ pub struct NotificationsConfig {
     /// ms, over the same trailing window. `0` disables it; e.g. `86400000` = daily.
     #[serde(default)]
     pub digest_interval_ms: u64,
+    /// Minimum severity (`"info"`/`"warning"`/`"critical"`) each channel receives; below
+    /// it, that channel is skipped. Default (`None`) = the channel receives everything.
+    /// E.g. set `webhook_min_severity = "critical"` and `speak_min_severity = "critical"`
+    /// to only push/speak the loud stuff while the log records all.
+    #[serde(default)]
+    pub log_min_severity: Option<String>,
+    #[serde(default)]
+    pub webhook_min_severity: Option<String>,
+    #[serde(default)]
+    pub speak_min_severity: Option<String>,
 }
 
 impl Default for NotificationsConfig {
@@ -2004,6 +2014,9 @@ impl Default for NotificationsConfig {
             speak_escalations: false,
             dedup_window_ms: 0,
             digest_interval_ms: 0,
+            log_min_severity: None,
+            webhook_min_severity: None,
+            speak_min_severity: None,
         }
     }
 }

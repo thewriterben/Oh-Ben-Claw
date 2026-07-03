@@ -1232,15 +1232,18 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             let sink: Arc<dyn ActionSink> = if config.notifications.enabled {
                 let mut notifier = oh_ben_claw::agent::notify::Notifier::new()
                     .with_dedup_window(config.notifications.dedup_window_ms);
+                use oh_ben_claw::agent::notify::Severity;
                 if config.notifications.log_to_world_memory {
-                    notifier = notifier.with_channel(Arc::new(
-                        oh_ben_claw::agent::notify::WorldMemoryChannel::new(Arc::clone(world)),
-                    ));
+                    notifier = notifier.with_channel_min(
+                        Arc::new(oh_ben_claw::agent::notify::WorldMemoryChannel::new(Arc::clone(world))),
+                        Severity::from_name(config.notifications.log_min_severity.as_deref()),
+                    );
                 }
                 if let Some(url) = &config.notifications.webhook_url {
-                    notifier = notifier.with_channel(Arc::new(
-                        oh_ben_claw::agent::notify::WebhookChannel::new(url.clone()),
-                    ));
+                    notifier = notifier.with_channel_min(
+                        Arc::new(oh_ben_claw::agent::notify::WebhookChannel::new(url.clone())),
+                        Severity::from_name(config.notifications.webhook_min_severity.as_deref()),
+                    );
                 }
                 if config.notifications.speak_escalations {
                     // Speak escalations aloud through a speech sink (same TTS / spine /
@@ -1260,9 +1263,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                         };
                     let voice =
                         config.audio_suite.voice.clone().unwrap_or_else(|| "nova".to_string());
-                    notifier = notifier.with_channel(Arc::new(
-                        oh_ben_claw::agent::notify::SpeechChannel::new(speech).with_voice(voice),
-                    ));
+                    notifier = notifier.with_channel_min(
+                        Arc::new(oh_ben_claw::agent::notify::SpeechChannel::new(speech).with_voice(voice)),
+                        Severity::from_name(config.notifications.speak_min_severity.as_deref()),
+                    );
                 }
                 info!(channels = notifier.channel_count(), "Escalation notifications wired");
                 let notifier = Arc::new(notifier);
@@ -2352,6 +2356,33 @@ async fn run_status(config: &Config) -> Result<()> {
                         "  {} | {}{} | rssi: {} | last: {} ({}s ago)",
                         v.node, health, tag, rssi_s, last_type, age_s
                     );
+                }
+            }
+
+            // Recent escalations (notifications log-of-record), newest first.
+            let escalations: Vec<(u64, String)> = world
+                .history("notifications.escalation")
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|f| {
+                    f.value
+                        .get("reason")
+                        .and_then(|r| r.as_str())
+                        .map(|r| (f.valid_from, r.to_string()))
+                })
+                .filter(|(_, r)| !r.starts_with(oh_ben_claw::agent::notify::DIGEST_PREFIX))
+                .collect();
+            if !escalations.is_empty() {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                println!("\nRecent escalations ({}):", escalations.len());
+                for (ts, reason) in escalations.iter().rev().take(5) {
+                    let sev = oh_ben_claw::agent::notify::Severity::classify(reason);
+                    let head = reason.split_once(". ").map(|(h, _)| h).unwrap_or(reason);
+                    let age_s = now.saturating_sub(*ts) / 1000;
+                    println!("  [{}] {} ({}s ago)", sev.as_str(), head, age_s);
                 }
             }
         }

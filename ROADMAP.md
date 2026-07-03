@@ -615,6 +615,8 @@ UART to a Heltec LoRa gateway, which carries it over the mesh. Runbook:
 - [x] Speech notification channel: escalations spoken aloud (headline only) via the audio speech sink when `speak_escalations` is set — the robot announces the alarm
 - [x] Notification digest: identical escalations de-duped within `dedup_window_ms` (collapsed into a `[+N repeats suppressed]` digest, not dropped); distinct reasons and the System 2 wake unaffected
 - [x] Periodic digest: scheduled roll-up of the escalation log by reason (`digest_interval_ms`, e.g. daily), delivered through the same channels; prior digests excluded from the next
+- [x] Severity routing: escalations classified (warning/critical) and routed per-channel by a configurable minimum (`log/webhook/speak_min_severity`) — log all, push/speak only the loud stuff
+- [x] Status surface: `oh-ben-claw status` shows recent escalations (severity + age) from the log-of-record, alongside mesh health
 - [x] Base-station Heltec: USB console (UART0 stdin) → LoRa TX — background reader thread, no UART0 reconfigure (`firmware/heltec-lora-linktest`, *flash-pending*)
 - [ ] XIAO→Heltec **forward** jumper D6→GPIO2 (inbound; continuity check pending)
 - [ ] Heltec→XIAO **reverse** jumper GPIO4→D7 (outbound; new)
