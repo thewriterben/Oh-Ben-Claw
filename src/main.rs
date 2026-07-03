@@ -536,42 +536,53 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // lines and observed into the brain's world model, exactly as if the node were
     // on the wired MQTT spine. Read-only; needs the `hardware` feature (serial I/O).
     if let Some(gw) = &config.lora_gateway {
-        match &world_mem {
-            Some(world) => {
-                info!(port = %gw.port, baud = gw.baud, "Phase B: LoRa gateway bridge → world memory");
-                #[cfg(feature = "hardware")]
-                {
-                    let world_rx = Arc::clone(world);
-                    let (port, baud) = (gw.port.clone(), gw.baud);
-                    tokio::spawn(async move {
-                        let now_ms = || {
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis() as u64)
-                                .unwrap_or(0)
-                        };
-                        if let Err(e) = oh_ben_claw::spine::lora_gateway::run_gateway_rx(
-                            port, baud, world_rx, now_ms,
-                        )
-                        .await
-                        {
-                            tracing::warn!("LoRa gateway bridge exited: {e}");
+        info!(port = %gw.port, baud = gw.baud, "Phase B: LoRa gateway bridge (mesh <-> host)");
+        #[cfg(feature = "hardware")]
+        {
+            match oh_ben_claw::spine::lora_gateway::open_split(&gw.port, gw.baud) {
+                Ok((rd, wr)) => {
+                    // Inbound: mesh node messages -> world memory (needs a store).
+                    match &world_mem {
+                        Some(world) => {
+                            let world_rx = Arc::clone(world);
+                            tokio::spawn(async move {
+                                let now_ms = || {
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_millis() as u64)
+                                        .unwrap_or(0)
+                                };
+                                oh_ben_claw::spine::lora_gateway::run_gateway_rx(rd, world_rx, now_ms)
+                                    .await;
+                                tracing::warn!("LoRa gateway RX loop ended (serial link closed)");
+                            });
+                            info!("LoRa gateway: inbound mesh -> world memory active");
                         }
-                    });
+                        None => {
+                            drop(rd);
+                            tracing::warn!(
+                                "[lora_gateway] inbound disabled ([perception].world_memory is \
+                                 off); outbound mesh_command still active"
+                            );
+                        }
+                    }
+                    // Outbound: expose `mesh_command` so the agent can command a node
+                    // over LoRa. The node gates execution on its own Track 0.
+                    let sink: Arc<dyn oh_ben_claw::spine::lora_gateway::CommandSink> =
+                        Arc::new(oh_ben_claw::spine::lora_gateway::SerialCommandSink::new(wr));
+                    all_tools
+                        .push(Box::new(oh_ben_claw::tools::builtin::mesh::MeshCommandTool::new(sink)));
+                    info!("LoRa gateway: outbound mesh_command tool active");
                 }
-                #[cfg(not(feature = "hardware"))]
-                {
-                    let _ = world;
-                    tracing::warn!(
-                        "[lora_gateway] configured but this build lacks the `hardware` \
-                         feature (serial I/O); the bridge will not start"
-                    );
-                }
+                Err(e) => tracing::warn!("[lora_gateway] failed to open {}: {e}", gw.port),
             }
-            None => tracing::warn!(
-                "[lora_gateway] configured but [perception].world_memory is off — \
-                 there is nowhere to ingest mesh messages; ignoring"
-            ),
+        }
+        #[cfg(not(feature = "hardware"))]
+        {
+            tracing::warn!(
+                "[lora_gateway] configured but this build lacks the `hardware` feature \
+                 (serial I/O); the bridge will not start"
+            );
         }
     }
 

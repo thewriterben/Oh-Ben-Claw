@@ -176,9 +176,52 @@ Without `--features hardware` the config is accepted but the bridge logs a warni
 doesn't start (parse/ingest still compile and are unit-tested). The parse + ingest core
 is hardware-free — `cargo test spine::lora_gateway` covers it on any machine.
 
-> This is the **inbound** half (mesh → host world memory). The outbound return path
-> (host assignments/commands → LoRa → node) is future work; the gateway firmware already
-> forwards LoRa→UART, so it's a node-side UART-command-intake job.
+## Host ⇄ mesh (outbound return path)
+
+The inverse direction: a command originated on the host reaches a node over LoRa. This
+turns the mesh into a genuine two-way link.
+
+```
+  host (mesh_command tool)          base Heltec (USB)      gateway Heltec        XIAO node
+  ┌──────────────────────┐  serial  ┌────────────────┐ LoRa ┌──────────────┐ UART ┌────────────┐
+  │ NodeCommand{to,cmd,…} │ ───────► │ console → LoRa │ ───► │ LoRa → UART1 │ ───► │ D7 (GPIO44)│
+  │ SerialCommandSink     │  115200  │  (firmware*)   │      │  TX = GPIO4  │      │ handle_req │
+  └──────────────────────┘          └────────────────┘      └──────────────┘      │  (gated)   │
+                                                              GPIO4 → XIAO D7      └────────────┘
+```
+
+- The agent calls **`mesh_command`** `{ node_id, command, args }`. It encodes a
+  `NodeCommand` to the node's own request line (`{"id","to","cmd","args"}`) and writes it
+  to the base-station Heltec over the *same* serial port the inbound bridge reads
+  (`open_split` shares it).
+- The **node** drains its spine UART RX (GPIO44 / **D7**), checks the `to` field matches
+  its `NODE_ID` (or is absent = broadcast), and dispatches through the **same Track 0–gated
+  `handle_request`** as a USB command. So a `gpio_write` over the air actuates only within
+  the node's on-MCU allow-list / range / rate limits — the node is the authoritative gate.
+  Its reply is written back out the UART to ride LoRa home.
+
+### Remaining to run outbound end-to-end
+
+| Piece | State |
+|---|---|
+| Host `mesh_command` + `NodeCommand` + sink | ✅ unit-tested |
+| Node UART1-RX intake → gated dispatch | ✅ firmware written (*flash-pending*) |
+| Base-station Heltec: USB console → LoRa TX | ✅ firmware written (*flash-pending*) |
+| **Reverse** jumper: gateway **GPIO4** → XIAO **D7** (GPIO44), GND↔GND | ⏳ new wire |
+
+The base-station origin is a background thread that reads the Heltec's USB console
+(UART0 `stdin`) and frames each line onto LoRa. It only *reads* stdin — it never installs
+a UART0 driver, so the console/log output is untouched. To send a command, type or pipe a
+JSON line into the base-station Heltec's serial monitor:
+
+```json
+{"to":"obc-esp32-s3-001","id":"h1","cmd":"gpio_write","args":{"pin":3,"value":1}}
+```
+
+> Fallback if a particular console setup won't deliver stdin: drive the base station's
+> **UART1 RX (GPIO2)** from a USB-TTL adapter instead — the existing UART1→LoRa path
+> needs no firmware change. Either way, the `mesh_command` agent tool writes the same
+> line to whichever serial port the host has open.
 
 ## Status
 

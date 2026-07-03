@@ -603,9 +603,12 @@ UART to a Heltec LoRa gateway, which carries it over the mesh. Runbook:
 - [x] XIAO spine mirror — autonomous JSON out UART1/GPIO43 (D6) (`firmware/obc-esp32-s3`)
 - [x] Flood-relay (TTL + dedup, no-loop confirmed)
 - [x] Host ⇄ mesh (inbound): base-station Heltec console → host **world memory** — parses `SPINE ◄ … : {json}` and observes each node message (`src/spine/lora_gateway.rs`, unit-tested; serial loop under `--features hardware`)
-- [ ] XIAO→Heltec physical jumper (continuity check pending)
+- [x] Host ⇄ mesh (outbound), host side: `mesh_command` agent tool → `NodeCommand` → serial → base-station Heltec (`lora_gateway.rs` `CommandSink`/`SerialCommandSink` + `tools/builtin/mesh.rs`, unit-tested; physical risk class)
+- [x] Host ⇄ mesh (outbound), node side: XIAO drains UART1 RX (D7) → routes on `to` → **gated `handle_request`** → reply back over the mesh (`firmware/obc-esp32-s3`, *flash-pending*)
+- [x] Base-station Heltec: USB console (UART0 stdin) → LoRa TX — background reader thread, no UART0 reconfigure (`firmware/heltec-lora-linktest`, *flash-pending*)
+- [ ] XIAO→Heltec **forward** jumper D6→GPIO2 (inbound; continuity check pending)
+- [ ] Heltec→XIAO **reverse** jumper GPIO4→D7 (outbound; new)
 - [ ] True 3-hop relay (needs a 3rd radio out of direct range)
-- [ ] Host ⇄ mesh (outbound): host assignments/commands → LoRa → node (return path)
 
 ---
 

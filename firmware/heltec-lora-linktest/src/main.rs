@@ -85,7 +85,42 @@ fn main() -> anyhow::Result<()> {
     unsafe { esp_idf_svc::sys::esp_efuse_mac_get_default(mac.as_mut_ptr()); }
     let node = mac[5];
     info!("Gateway {node:02X} — UART1(TX=4,RX=2) ⇄ LoRa. Wire compute TX→GPIO2, GND↔GND.");
+    info!("Console origin: type/send a JSON command line here to transmit it over the mesh.");
     info!("──────────────────────────────────────────────");
+
+    // Host-command origin (Phase B outbound). A background thread reads newline/CR-
+    // delimited lines from the USB console (UART0 stdin) and hands each to the radio
+    // loop, which frames it onto LoRa. It only *reads* stdin — it never installs a
+    // UART0 driver or reconfigures the console, so EspLogger output is untouched. This
+    // lets a host originate node commands with no extra wiring on this board.
+    let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<String>();
+    std::thread::Builder::new()
+        .stack_size(4096)
+        .spawn(move || {
+            let stdin = std::io::stdin();
+            let mut lock = stdin.lock();
+            let mut b = [0u8; 1];
+            let mut cline: Vec<u8> = Vec::new();
+            loop {
+                match std::io::Read::read(&mut lock, &mut b) {
+                    Ok(0) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                    Ok(_) => {
+                        if b[0] == b'\n' || b[0] == b'\r' {
+                            if !cline.is_empty() {
+                                if let Ok(s) = std::str::from_utf8(&cline) {
+                                    let _ = cmd_tx.send(s.trim().to_string());
+                                }
+                                cline.clear();
+                            }
+                        } else if cline.len() < spine::MAX_PAYLOAD {
+                            cline.push(b[0]);
+                        }
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                }
+            }
+        })
+        .ok();
 
     let mut seen = SeenSet::new();
     let mut seq: u8 = 0;
@@ -125,6 +160,19 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 _ => break, // timeout / no more bytes ready
+            }
+        }
+
+        // ── 1b. Drain host console commands → LoRa (base-station origin). ──
+        // Each JSON line the console thread captured is framed onto the mesh, so a host
+        // plugged into this Heltec can command a node reachable only over LoRa.
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            if cmd.is_empty() {
+                continue;
+            }
+            match send_spine!(radio, seen, seq, buf, cmd.as_bytes()) {
+                Ok(()) => info!("SPINE ► (console) seq={seq} ({} B) {cmd}", buf.len()),
+                Err(e) => info!("SPINE TX error: {e:#}"),
             }
         }
 
