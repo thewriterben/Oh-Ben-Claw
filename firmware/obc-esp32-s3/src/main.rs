@@ -96,6 +96,7 @@ use esp_idf_svc::hal::peripherals::Peripherals;
 // Command I/O runs over the native USB-Serial-JTAG (the XIAO ESP32-S3's only USB
 // interface), not UART0 — UART0's GPIO43/44 aren't wired to the XIAO's USB port.
 use esp_idf_svc::hal::usb_serial::{UsbSerialConfig, UsbSerialDriver};
+use esp_idf_svc::hal::uart::UartDriver;
 use log::info;
 use serde::{Deserialize, Serialize};
 
@@ -344,6 +345,25 @@ fn main() -> anyhow::Result<()> {
         &UsbSerialConfig::new().tx_buffer_size(4096),
     )?;
 
+    // Optional spine uplink (Phase B): mirror autonomous status/reflex JSON out
+    // UART1 (TX=GPIO43 / the D6 pad) to a LoRa gateway (a Heltec V3), so the node's
+    // messages ride the mesh. Best-effort — `.ok()` means the node still runs if the
+    // UART can't init or nothing is wired. Wire D6(GPIO43) → gateway RX, GND↔GND.
+    let mut spine_uart: Option<UartDriver<'static>> = UartDriver::new(
+        peripherals.uart1,
+        pins.gpio43,
+        pins.gpio44,
+        Option::<esp_idf_svc::hal::gpio::AnyIOPin>::None,
+        Option::<esp_idf_svc::hal::gpio::AnyIOPin>::None,
+        &esp_idf_svc::hal::uart::config::Config::new()
+            .baudrate(esp_idf_svc::hal::units::Hertz(115_200)),
+    )
+    .ok();
+    match &spine_uart {
+        Some(_) => info!("Spine uplink: UART1 ready — mirroring status/reflex out D6 (GPIO43) @115200."),
+        None => log::warn!("Spine uplink: UART1 init FAILED — no LoRa mirror (check pin/peripheral)."),
+    }
+
     // Configure output pins via raw ESP-IDF sys API.
     unsafe {
         use esp_idf_svc::sys::*;
@@ -511,7 +531,9 @@ fn main() -> anyhow::Result<()> {
                     "silence_ms": silence_ms,
                     "ts_ms": now,
                 });
-                send_line(&mut usb, &link_report.to_string());
+                let spine_msg = link_report.to_string();
+                send_line(&mut usb, &spine_msg);
+                mirror_spine(&mut spine_uart, &spine_msg);
             }
             // Self-report the derived power mode when a battery reading is present —
             // only when the mode changes, so a steady battery is silent.
@@ -531,7 +553,9 @@ fn main() -> anyhow::Result<()> {
                         "soc_pct": soc,
                         "ts_ms": now,
                     });
-                    send_line(&mut usb, &report.to_string());
+                    let spine_msg = report.to_string();
+                    send_line(&mut usb, &spine_msg);
+                    mirror_spine(&mut spine_uart, &spine_msg);
                 }
             }
             for fired in agent_state.reflex.evaluate(&snapshot, now) {
@@ -553,7 +577,9 @@ fn main() -> anyhow::Result<()> {
                     "error": error,
                     "ts_ms": now,
                 });
-                send_line(&mut usb, &report.to_string());
+                let spine_msg = report.to_string();
+                send_line(&mut usb, &spine_msg);
+                mirror_spine(&mut spine_uart, &spine_msg);
             }
         }
     }
@@ -925,6 +951,15 @@ fn sensor_read_stub(sensor: &str, field: &str) -> anyhow::Result<f64> {
 /// writes so a long response (e.g. `capabilities`) goes out whole. Each chunk uses
 /// a short timeout, so if the host isn't reading the node doesn't block — it drops
 /// the remainder and carries on (System 1 keeps ticking).
+/// Mirror an autonomous spine message to the LoRa-gateway UART, if one initialised.
+/// Best-effort: an absent/full UART is silently ignored so it never blocks System 1.
+fn mirror_spine(uart: &mut Option<UartDriver<'static>>, line: &str) {
+    if let Some(u) = uart {
+        let _ = u.write(line.as_bytes());
+        let _ = u.write(b"\n");
+    }
+}
+
 fn send_line(usb: &mut UsbSerialDriver, line: &str) {
     let payload = format!("{line}\n");
     let bytes = payload.as_bytes();
