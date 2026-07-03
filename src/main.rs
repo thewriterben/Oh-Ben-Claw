@@ -1226,6 +1226,51 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 Arc::clone(&safing_state),
                 move_sink,
             ));
+            // Wire escalations to notification channels (durable log-of-record in world
+            // memory + optional webhook), best-effort — the wake-System-2 path is
+            // unchanged; a down webhook never stalls System 1.
+            let sink: Arc<dyn ActionSink> = if config.notifications.enabled {
+                let mut notifier = oh_ben_claw::agent::notify::Notifier::new();
+                if config.notifications.log_to_world_memory {
+                    notifier = notifier.with_channel(Arc::new(
+                        oh_ben_claw::agent::notify::WorldMemoryChannel::new(Arc::clone(world)),
+                    ));
+                }
+                if let Some(url) = &config.notifications.webhook_url {
+                    notifier = notifier.with_channel(Arc::new(
+                        oh_ben_claw::agent::notify::WebhookChannel::new(url.clone()),
+                    ));
+                }
+                if config.notifications.speak_escalations {
+                    // Speak escalations aloud through a speech sink (same TTS / spine /
+                    // dry-run selection as the audio suite). Best-effort, headline only.
+                    let speech: Arc<dyn oh_ben_claw::audio::suite::SpeechSink> =
+                        if config.audio_suite.render_tts {
+                            let dir = config
+                                .audio_suite
+                                .tts_out_dir
+                                .clone()
+                                .unwrap_or_else(|| "/tmp".to_string());
+                            Arc::new(oh_ben_claw::audio::suite::TtsSpeechSink::new(dir))
+                        } else if let Some(spine) = &reflex_spine {
+                            Arc::new(oh_ben_claw::audio::suite::SpineSpeechSink::new(Arc::clone(spine)))
+                        } else {
+                            Arc::new(oh_ben_claw::audio::suite::LoggingSpeechSink)
+                        };
+                    let voice =
+                        config.audio_suite.voice.clone().unwrap_or_else(|| "nova".to_string());
+                    notifier = notifier.with_channel(Arc::new(
+                        oh_ben_claw::agent::notify::SpeechChannel::new(speech).with_voice(voice),
+                    ));
+                }
+                info!(channels = notifier.channel_count(), "Escalation notifications wired");
+                Arc::new(oh_ben_claw::agent::notify::NotifyingActionSink::new(
+                    sink,
+                    Arc::new(notifier),
+                ))
+            } else {
+                sink
+            };
             let mut controller = ReflexController::new(engine, Arc::clone(world), sink)
                 .with_metrics(Arc::clone(&obs.metrics));
             if let Some(max) = config.reflex.max_escalations_per_min {

@@ -867,6 +867,23 @@ carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runb
   `docs/playbooks/mesh-node-lost.md`. Unit-tested that the reason directs the agent to its
   tools.
 
+### Added — escalation notifications (`src/agent/notify.rs`)
+
+- **Escalations now reach humans.** Every reflex `Action::Escalate` (mesh node lost,
+  battery critical, alarm heard, …) is fanned out to operator-facing channels via a
+  `NotifyingActionSink` **decorator** that notifies, then delegates to the inner sink — so
+  the wake-System-2 path is unchanged and notification is additive + best-effort (a down
+  webhook never stalls System 1).
+- Channels: a **world-memory log-of-record** (`notifications.escalation` — durable and
+  queryable via `history`) and an optional **webhook** (`{ "text": … }`, Slack/Discord-
+  compatible). Config `[notifications]` (`enabled`, `log_to_world_memory`, `webhook_url`).
+- **Speech channel**: with `speak_escalations = true`, escalations are also spoken aloud —
+  **headline only** (`speech_headline` takes the first sentence, so a full triage directive
+  isn't read out) — through the audio speech sink (TTS / speaker-over-spine / dry-run, same
+  selection as `[audio_suite]`). The robot can now *announce* an alarm.
+- Unit-tested: the log-of-record write, the Slack-shaped payload, the speech headlining, and
+  that the decorator notifies *and* still delegates the escalate downstream.
+
 ### Changed — `firmware/obc-esp32-s3` (XIAO node)
 
 - **Spine mirror**: the node's autonomous `link_state` / `power_mode` / `reflex` JSON
