@@ -10,6 +10,7 @@ pub mod foresight;
 pub mod http;
 pub mod learn;
 pub mod memory;
+pub mod mesh;
 pub mod mission;
 pub mod movement;
 pub mod navigation;

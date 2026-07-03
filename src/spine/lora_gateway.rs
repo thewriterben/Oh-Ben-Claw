@@ -20,6 +20,7 @@
 //! the rest of the peripheral I/O.
 
 use crate::memory::world::WorldMemory;
+use async_trait::async_trait;
 use serde_json::{json, Value};
 
 /// One received frame as reported by a gateway `SPINE ◄` console line.
@@ -143,6 +144,56 @@ pub fn ingest_gateway_line(line: &str, world: &WorldMemory, now_ms: u64) -> Opti
     Some(GatewayIngest { node_id, msg_type, rssi_dbm: frame.rssi_dbm })
 }
 
+// ── Outbound: host → node commands over the mesh (return path) ───────────────────
+//
+// The inverse direction of the bridge. A command originated on the host travels out
+// the base-station Heltec, over LoRa, off the gateway Heltec's UART to the node, and
+// into the node's *existing gated command dispatcher* — so a mesh command actuates
+// only under the node's on-MCU Track 0 gate, exactly like a wired serial command.
+
+/// A command addressed to a specific node, carried over the mesh. Encodes to the
+/// node's own request line (`id`/`cmd`/`args`) plus a `to` routing field the node
+/// firmware matches against its id (ignored by the node's request parser itself, so
+/// no firmware request-format change is needed).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeCommand {
+    /// Target node id — the node executes only if this matches its own id.
+    pub to: String,
+    /// Correlation id; the node echoes it in its response so replies can be matched.
+    pub id: String,
+    /// The node command, e.g. `"gpio_write"`, `"sensor_read"`, `"capabilities"`.
+    pub cmd: String,
+    /// Command arguments (any JSON object the node's handler understands).
+    pub args: Value,
+}
+
+impl NodeCommand {
+    /// Build a command for `to`, tagged with correlation `id`.
+    pub fn new(
+        to: impl Into<String>,
+        id: impl Into<String>,
+        cmd: impl Into<String>,
+        args: Value,
+    ) -> Self {
+        Self { to: to.into(), id: id.into(), cmd: cmd.into(), args }
+    }
+
+    /// Encode to the single newline-free line the gateway will carry over LoRa and
+    /// the node will feed to its request dispatcher.
+    pub fn encode(&self) -> String {
+        json!({ "id": self.id, "to": self.to, "cmd": self.cmd, "args": self.args }).to_string()
+    }
+}
+
+/// A transport that delivers a [`NodeCommand`] toward the mesh. The serial
+/// implementation writes the encoded line to the base-station Heltec's console; tests
+/// use an in-memory mock. Lets the `mesh_command` tool stay transport-blind.
+#[async_trait]
+pub trait CommandSink: Send + Sync {
+    /// Deliver `cmd` toward the mesh (the node still gates execution on-MCU).
+    async fn send_command(&self, cmd: &NodeCommand) -> anyhow::Result<()>;
+}
+
 // ── Serial console reader (real hardware; `--features hardware`) ─────────────────
 //
 // Opens the base-station Heltec's USB console and drives [`ingest_gateway_line`]
@@ -150,28 +201,34 @@ pub fn ingest_gateway_line(line: &str, world: &WorldMemory, now_ms: u64) -> Opti
 // keepalives on its own). tokio-serial is feature-gated like the other drivers.
 #[cfg(feature = "hardware")]
 mod serial {
-    use super::ingest_gateway_line;
+    use super::{ingest_gateway_line, CommandSink, NodeCommand};
     use crate::memory::world::WorldMemory;
     use anyhow::Context;
     use std::sync::Arc;
-    use tokio::io::{AsyncBufReadExt, BufReader};
-    use tokio_serial::SerialPortBuilderExt;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
+    use tokio::sync::Mutex;
+    use tokio_serial::{SerialPortBuilderExt, SerialStream};
+
+    /// Open the base-station Heltec console and split it into (read, write) halves so
+    /// the inbound RX ingest loop and the outbound command sink can share the one
+    /// exclusive serial port.
+    pub fn open_split(
+        port: &str,
+        baud: u32,
+    ) -> anyhow::Result<(ReadHalf<SerialStream>, WriteHalf<SerialStream>)> {
+        let serial = tokio_serial::new(port, baud)
+            .open_native_async()
+            .with_context(|| format!("failed to open LoRa gateway console {port}"))?;
+        Ok(tokio::io::split(serial))
+    }
 
     /// RX loop: read newline-framed console lines from the base-station Heltec and
     /// bridge each node message into world memory. Runs until the port closes.
-    pub async fn run_gateway_rx<F>(
-        port: String,
-        baud: u32,
-        world: Arc<WorldMemory>,
-        now_ms: F,
-    ) -> anyhow::Result<()>
+    pub async fn run_gateway_rx<F>(read: ReadHalf<SerialStream>, world: Arc<WorldMemory>, now_ms: F)
     where
         F: Fn() -> u64 + Send,
     {
-        let serial = tokio_serial::new(&port, baud)
-            .open_native_async()
-            .with_context(|| format!("failed to open LoRa gateway console {port}"))?;
-        let mut lines = BufReader::new(serial).lines();
+        let mut lines = BufReader::new(read).lines();
         loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
@@ -191,12 +248,36 @@ mod serial {
                 }
             }
         }
-        Ok(())
+    }
+
+    /// Outbound [`CommandSink`] over the base-station Heltec's serial write half:
+    /// writes each command as a newline-framed line onto the console, which the
+    /// station transmits over LoRa.
+    pub struct SerialCommandSink {
+        writer: Mutex<WriteHalf<SerialStream>>,
+    }
+
+    impl SerialCommandSink {
+        pub fn new(writer: WriteHalf<SerialStream>) -> Self {
+            Self { writer: Mutex::new(writer) }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CommandSink for SerialCommandSink {
+        async fn send_command(&self, cmd: &NodeCommand) -> anyhow::Result<()> {
+            let line = cmd.encode();
+            let mut w = self.writer.lock().await;
+            w.write_all(line.as_bytes()).await?;
+            w.write_all(b"\n").await?;
+            w.flush().await?;
+            Ok(())
+        }
     }
 }
 
 #[cfg(feature = "hardware")]
-pub use serial::run_gateway_rx;
+pub use serial::{open_split, run_gateway_rx, SerialCommandSink};
 
 #[cfg(test)]
 mod tests {
@@ -273,5 +354,45 @@ mod tests {
     fn a_non_json_payload_is_not_ingested() {
         let world = WorldMemory::open_in_memory().unwrap();
         assert!(ingest_gateway_line("SPINE ◄ src=28 seq=1 rssi=-5 dBm : not json", &world, 1).is_none());
+    }
+
+    #[test]
+    fn a_command_encodes_to_the_node_request_line() {
+        let cmd = NodeCommand::new(
+            "obc-esp32-s3-001",
+            "req-7",
+            "gpio_write",
+            json!({ "pin": 3, "value": 1 }),
+        );
+        let line = cmd.encode();
+        assert!(!line.contains('\n'), "must be a single line for the mesh");
+        let v: Value = serde_json::from_str(&line).unwrap();
+        // The node's request parser reads id/cmd/args; `to` is the routing field.
+        assert_eq!(v.get("id").and_then(Value::as_str), Some("req-7"));
+        assert_eq!(v.get("to").and_then(Value::as_str), Some("obc-esp32-s3-001"));
+        assert_eq!(v.get("cmd").and_then(Value::as_str), Some("gpio_write"));
+        assert_eq!(v.get("args").and_then(|a| a.get("pin")).and_then(Value::as_i64), Some(3));
+    }
+
+    /// In-memory sink that records every command it's asked to send (for tests).
+    struct MockSink {
+        sent: std::sync::Mutex<Vec<String>>,
+    }
+    #[async_trait]
+    impl CommandSink for MockSink {
+        async fn send_command(&self, cmd: &NodeCommand) -> anyhow::Result<()> {
+            self.sent.lock().unwrap().push(cmd.encode());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sink_forwards_the_encoded_command() {
+        let sink = MockSink { sent: std::sync::Mutex::new(Vec::new()) };
+        let cmd = NodeCommand::new("node-a", "id-1", "sensor_read", json!({ "kind": "dht22" }));
+        sink.send_command(&cmd).await.unwrap();
+        let sent = sink.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0], cmd.encode());
     }
 }

@@ -465,6 +465,8 @@ fn main() -> anyhow::Result<()> {
     // behaviour for a real node reporting to a host.
     let mut last_link_offline: Option<bool> = None;
     let mut last_power_mode: Option<safing::PowerMode> = None;
+    // Line buffer for commands arriving over the spine UART (LoRa return path).
+    let mut uart_line: Vec<u8> = Vec::new();
 
     loop {
         // `Ok(0)` is a read timeout (no host data) — fall through to the reflex
@@ -493,6 +495,41 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             Err(_) => {}
+        }
+
+        // ── Command intake over the spine UART (LoRa return path, Phase B) ─────
+        // Drain UART1 RX (GPIO44 / the D7 pad) for host commands relayed over the
+        // mesh (gateway Heltec GPIO4 → XIAO D7). Each complete line is routed by an
+        // optional `to` field (must match our NODE_ID, or be absent = broadcast) and
+        // dispatched through the SAME Track 0-gated `handle_request` as USB — so a
+        // mesh command actuates only within the node's on-MCU limits. The reply is
+        // written back out the UART so it rides LoRa home to the host.
+        if let Some(u) = &mut spine_uart {
+            let mut ub = [0u8; 1];
+            for _ in 0..256 {
+                match u.read(&mut ub, 0) {
+                    Ok(1) => {
+                        let b = ub[0];
+                        if b == b'\n' || b == b'\r' {
+                            if !uart_line.is_empty() {
+                                if let Ok(s) = std::str::from_utf8(&uart_line) {
+                                    if command_targets_us(s) {
+                                        if let Ok(resp) = handle_request(s, &mut agent_state) {
+                                            let out = serde_json::to_string(&resp).unwrap_or_default();
+                                            let _ = u.write(out.as_bytes());
+                                            let _ = u.write(b"\n");
+                                        }
+                                    }
+                                }
+                                uart_line.clear();
+                            }
+                        } else if uart_line.len() < MAX_LINE_LEN {
+                            uart_line.push(b);
+                        }
+                    }
+                    _ => break,
+                }
+            }
         }
 
         // ── Autonomous reflex tick (System 1) ─────────────────────────────────
@@ -951,6 +988,19 @@ fn sensor_read_stub(sensor: &str, field: &str) -> anyhow::Result<f64> {
 /// writes so a long response (e.g. `capabilities`) goes out whole. Each chunk uses
 /// a short timeout, so if the host isn't reading the node doesn't block — it drops
 /// the remainder and carries on (System 1 keeps ticking).
+/// Whether a mesh-delivered command line targets this node: `true` if its optional
+/// `to` field equals our `NODE_ID`, or is absent (broadcast). Malformed JSON is not
+/// ours (`false`) — the autonomous loop and USB command path are unaffected.
+fn command_targets_us(line: &str) -> bool {
+    match serde_json::from_str::<serde_json::Value>(line.trim()) {
+        Ok(v) => match v.get("to").and_then(|t| t.as_str()) {
+            Some(to) => to == NODE_ID,
+            None => true,
+        },
+        Err(_) => false,
+    }
+}
+
 /// Mirror an autonomous spine message to the LoRa-gateway UART, if one initialised.
 /// Best-effort: an absent/full UART is silently ignored so it never blocks System 1.
 fn mirror_spine(uart: &mut Option<UartDriver<'static>>, line: &str) {

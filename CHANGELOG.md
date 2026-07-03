@@ -788,6 +788,33 @@ carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runb
   bridge when it's set, world memory is on, and the build has the `hardware` feature
   (clear warnings otherwise).
 
+### Added — host ⇄ mesh (outbound return path)
+
+- **`mesh_command` agent tool** (`src/tools/builtin/mesh.rs`): the inverse of the
+  inbound bridge — the agent (System 2) addresses a command to a node over LoRa.
+  `NodeCommand` (`lora_gateway.rs`) encodes to the node's own request line (`id`/`cmd`/
+  `args`) plus a `to` routing field, delivered through a `CommandSink`
+  (`SerialCommandSink` writes it to the base-station Heltec's console). The tool
+  declares a **physical, high-blast `RiskClass`** so the host approval layer gates it
+  per-call. Encode + sink covered by unit tests (mock sink).
+- **One shared port, both directions**: `open_split` opens the base-station console
+  once and splits it — the RX ingest loop and the outbound writer share the single
+  exclusive serial port. `run_gateway_rx` now takes the read half; `main.rs` spawns RX
+  (when world memory is on) and registers `mesh_command` from the write half.
+- **Node-side intake** (`firmware/obc-esp32-s3`): the XIAO drains its spine UART (UART1
+  RX = GPIO44 / D7) for command lines, routes on `to` (its `NODE_ID` or broadcast), and
+  dispatches through the **same Track 0-gated `handle_request`** as a wired USB command
+  — so a `gpio_write` arriving over the air actuates only within the node's on-MCU
+  allow-list/range/rate limits. The reply is written back out the UART to ride LoRa
+  home. *(Flash-pending.)*
+- **Base-station command origin** (`firmware/heltec-lora-linktest`): a background thread
+  reads newline/CR-delimited lines from the Heltec's USB console (UART0 `stdin`) and the
+  radio loop frames each onto LoRa. It only *reads* stdin — no UART0 driver install, so
+  `EspLogger` console output is untouched. Any Heltec running this firmware can originate
+  a mesh command; a host types/pipes a JSON command line into its serial monitor. A
+  USB-TTL-to-UART1 path is documented as a no-firmware fallback. *(Flash-pending; needs
+  the reverse jumper Heltec GPIO4 → XIAO D7 to reach the node.)*
+
 ### Changed — `firmware/obc-esp32-s3` (XIAO node)
 
 - **Spine mirror**: the node's autonomous `link_state` / `power_mode` / `reflex` JSON
