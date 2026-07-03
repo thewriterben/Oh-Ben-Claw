@@ -13,7 +13,8 @@ use super::reflex::ActionSink;
 use crate::movement::MovementCommand;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// A single escalation to notify about.
 #[derive(Debug, Clone, PartialEq)]
@@ -127,10 +128,23 @@ impl NotificationChannel for SpeechChannel {
     }
 }
 
-/// Fans an escalation out to every configured channel, best-effort.
+/// Per-reason de-dup bookkeeping.
+#[derive(Default)]
+struct DedupEntry {
+    last_sent_ms: u64,
+    suppressed: u64,
+}
+
+/// Fans an escalation out to every configured channel, best-effort, with optional
+/// **de-duplication**: identical escalations (same reason) within `dedup_window_ms` are
+/// suppressed and counted, so a flapping condition doesn't spam every channel each tick.
+/// The next alert *after* the window carries a `[+N repeats suppressed]` note, so nothing
+/// is silently lost — repeats are collapsed into a digest, not dropped.
 #[derive(Default)]
 pub struct Notifier {
     channels: Vec<Arc<dyn NotificationChannel>>,
+    dedup_window_ms: u64,
+    seen: Mutex<HashMap<String, DedupEntry>>,
 }
 
 impl Notifier {
@@ -141,14 +155,37 @@ impl Notifier {
         self.channels.push(ch);
         self
     }
+    /// Suppress identical escalations within this window (ms). `0` disables de-dup.
+    pub fn with_dedup_window(mut self, window_ms: u64) -> Self {
+        self.dedup_window_ms = window_ms;
+        self
+    }
     pub fn channel_count(&self) -> usize {
         self.channels.len()
     }
     /// Deliver to all channels; a failing channel is logged and skipped so one bad
-    /// destination never blocks the others (or the escalate that follows).
+    /// destination never blocks the others (or the escalate that follows). Identical
+    /// recent escalations are de-duplicated when a `dedup_window_ms` is set.
     pub async fn notify(&self, esc: &Escalation) {
+        let mut reason = esc.reason.clone();
+        if self.dedup_window_ms > 0 {
+            let mut seen = self.seen.lock().unwrap_or_else(|p| p.into_inner());
+            let entry = seen.entry(esc.reason.clone()).or_default();
+            if entry.last_sent_ms != 0
+                && esc.ts_ms.saturating_sub(entry.last_sent_ms) < self.dedup_window_ms
+            {
+                entry.suppressed += 1;
+                return; // identical + within the window → don't fan out
+            }
+            if entry.suppressed > 0 {
+                reason = format!("{} [+{} repeats suppressed]", esc.reason, entry.suppressed);
+            }
+            entry.last_sent_ms = esc.ts_ms;
+            entry.suppressed = 0;
+        }
+        let out = Escalation { reason, ts_ms: esc.ts_ms };
         for ch in &self.channels {
-            if let Err(e) = ch.deliver(esc).await {
+            if let Err(e) = ch.deliver(&out).await {
                 tracing::warn!(channel = ch.name(), error = %e, "escalation notification failed");
             }
         }
@@ -286,5 +323,37 @@ mod tests {
         assert_eq!(spoken.len(), 1);
         assert!(spoken[0].contains("presumed lost"), "speaks the headline");
         assert!(!spoken[0].contains("Triage"), "does not read the full directive aloud");
+    }
+
+    #[tokio::test]
+    async fn dedup_suppresses_repeats_within_the_window_then_reports_the_count() {
+        let rec = Arc::new(Recorder { delivered: Mutex::new(vec![]), escalated: Mutex::new(vec![]) });
+        let notifier = Notifier::new()
+            .with_dedup_window(10_000)
+            .with_channel(Arc::clone(&rec) as Arc<dyn NotificationChannel>);
+
+        // First alert goes out.
+        notifier.notify(&Escalation { reason: "node lost".into(), ts_ms: 1_000 }).await;
+        // Two identical repeats within the 10 s window are suppressed (and counted).
+        notifier.notify(&Escalation { reason: "node lost".into(), ts_ms: 3_000 }).await;
+        notifier.notify(&Escalation { reason: "node lost".into(), ts_ms: 5_000 }).await;
+        // After the window it fires again, carrying the suppressed count as a digest.
+        notifier.notify(&Escalation { reason: "node lost".into(), ts_ms: 12_000 }).await;
+
+        let d = rec.delivered.lock().unwrap();
+        assert_eq!(d.len(), 2, "only two alerts left the channel");
+        assert_eq!(d[0], "node lost");
+        assert!(d[1].contains("node lost") && d[1].contains("+2"), "digest reports repeats: {}", d[1]);
+    }
+
+    #[tokio::test]
+    async fn different_reasons_are_not_deduped_against_each_other() {
+        let rec = Arc::new(Recorder { delivered: Mutex::new(vec![]), escalated: Mutex::new(vec![]) });
+        let notifier = Notifier::new()
+            .with_dedup_window(10_000)
+            .with_channel(Arc::clone(&rec) as Arc<dyn NotificationChannel>);
+        notifier.notify(&Escalation { reason: "node lost".into(), ts_ms: 1_000 }).await;
+        notifier.notify(&Escalation { reason: "battery critical".into(), ts_ms: 1_100 }).await;
+        assert_eq!(rec.delivered.lock().unwrap().len(), 2, "distinct alerts both go out");
     }
 }

@@ -1984,6 +1984,11 @@ pub struct NotificationsConfig {
     /// speaker over the spine, or dry-run — same selection as `[audio_suite]`).
     #[serde(default)]
     pub speak_escalations: bool,
+    /// De-duplicate identical escalations within this window (ms) across all channels;
+    /// the next alert after the window notes how many repeats were collapsed. `0`
+    /// disables de-dup (every escalation notifies).
+    #[serde(default)]
+    pub dedup_window_ms: u64,
 }
 
 impl Default for NotificationsConfig {
@@ -1993,6 +1998,7 @@ impl Default for NotificationsConfig {
             log_to_world_memory: true,
             webhook_url: None,
             speak_escalations: false,
+            dedup_window_ms: 0,
         }
     }
 }
