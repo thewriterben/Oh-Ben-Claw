@@ -689,6 +689,27 @@ Track 0 (the gate now sees the real actuator call instead of a skill wrapper).
 
 ---
 
+## Unreleased — Practical temperature + humidity safing rules (2026-07-02)
+
+Extended the built-in on-MCU safing library with environmental self-protection,
+now that the DHT22 feeds real `sensor.temperature` / `sensor.humidity` into the
+reflex snapshot. These load at boot — a node self-protects with no host push.
+
+### Added — `firmware/obc-esp32-s3/src/safing.rs`
+
+- Three built-in safing rules (built-in safing count is now 6):
+  - `safe-overtemp-critical` — `sensor.temperature ≥ 75 °C` → cut the actuator-enable
+    pin (shed heat-producing loads); same protective action as critical battery.
+  - `safe-overtemp-warn` — `≥ 60 °C` → escalate a shed-load / cooling advisory.
+  - `safe-humidity-high` — `sensor.humidity ≥ 90 %RH` → escalate a condensation-risk
+    warning.
+- Thresholds exposed as `DEFAULT_OVERTEMP_CRITICAL_C` (75), `DEFAULT_OVERTEMP_WARN_C`
+  (60), `DEFAULT_HUMIDITY_HIGH_PCT` (90); new `TEMPERATURE_ENTITY` / `HUMIDITY_ENTITY`
+  constants. Unit test `overtemp_and_humidity_safing` covers all three firing plus
+  comfortable-room dormancy.
+
+---
+
 ## Unreleased — DHT22/AM2302 temperature + humidity driver (2026-07-02)
 
 Added a real single-wire environmental sensor driver, since the MPU6050 on the

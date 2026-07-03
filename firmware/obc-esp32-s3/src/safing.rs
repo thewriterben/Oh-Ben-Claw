@@ -36,6 +36,22 @@ pub const DEFAULT_LINK_TIMEOUT_MS: u64 = 30_000;
 /// Entity carrying ms since last host contact (fed by the main loop watchdog).
 pub const LINK_SILENCE_ENTITY: &str = "sensor.link_silence_ms";
 
+/// Ambient/enclosure temperature entity (°C), fed by an environmental sensor
+/// (e.g. the DHT22) into the reflex snapshot.
+pub const TEMPERATURE_ENTITY: &str = "sensor.temperature";
+/// Relative-humidity entity (%RH), same source.
+pub const HUMIDITY_ENTITY: &str = "sensor.humidity";
+
+/// Temperature (°C) at/above which the node sheds heat-producing loads (cuts the
+/// actuator-enable pin) — hardware-protective over-temperature.
+pub const DEFAULT_OVERTEMP_CRITICAL_C: f64 = 75.0;
+/// Temperature (°C) at/above which the node escalates an over-temperature warning
+/// (advise shed-load / more cooling before it becomes critical).
+pub const DEFAULT_OVERTEMP_WARN_C: f64 = 60.0;
+/// Relative humidity (%RH) at/above which condensation risk on the electronics is
+/// escalated upward.
+pub const DEFAULT_HUMIDITY_HIGH_PCT: f64 = 90.0;
+
 /// Whether the host link is offline given the current silence vs. the timeout.
 pub fn link_offline(silence_ms: f64, timeout_ms: f64) -> bool {
     silence_ms >= timeout_ms
@@ -122,6 +138,52 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             debounce_ms: 10_000,
             max_rate_hz: None,
         },
+        // Over-temperature critical: shed heat-producing loads by cutting the
+        // actuator-enable pin (same protective action as critical battery).
+        ReflexRule {
+            id: "safe-overtemp-critical".to_string(),
+            when: Condition::Sensor {
+                entity: TEMPERATURE_ENTITY.to_string(),
+                op: Cmp::Ge,
+                value: DEFAULT_OVERTEMP_CRITICAL_C,
+            },
+            then: Action::GpioWrite {
+                node_id: "self".to_string(),
+                pin: DEFAULT_SAFE_PIN,
+                value: 0,
+            },
+            debounce_ms: 5_000,
+            max_rate_hz: None,
+        },
+        // Over-temperature warning: escalate a shed-load / cooling advisory before
+        // it reaches the critical cut-off.
+        ReflexRule {
+            id: "safe-overtemp-warn".to_string(),
+            when: Condition::Sensor {
+                entity: TEMPERATURE_ENTITY.to_string(),
+                op: Cmp::Ge,
+                value: DEFAULT_OVERTEMP_WARN_C,
+            },
+            then: Action::Escalate {
+                reason: "over-temperature — shed load / increase cooling".to_string(),
+            },
+            debounce_ms: 5_000,
+            max_rate_hz: None,
+        },
+        // High humidity: condensation risk on the electronics — escalate upward.
+        ReflexRule {
+            id: "safe-humidity-high".to_string(),
+            when: Condition::Sensor {
+                entity: HUMIDITY_ENTITY.to_string(),
+                op: Cmp::Ge,
+                value: DEFAULT_HUMIDITY_HIGH_PCT,
+            },
+            then: Action::Escalate {
+                reason: "high humidity — condensation risk".to_string(),
+            },
+            debounce_ms: 10_000,
+            max_rate_hz: None,
+        },
     ]
 }
 
@@ -189,6 +251,30 @@ mod tests {
         // No fuel gauge → no battery_soc in the snapshot → safing stays dormant.
         let mut eng = ReflexEngine::new(default_safing_rules());
         assert!(eng.evaluate(&snap(&[("sensor.temperature", 22.0)]), 1_000).is_empty());
+    }
+
+    #[test]
+    fn overtemp_and_humidity_safing() {
+        // Critical over-temp fires both the cut (gpio) and the warn escalate.
+        let mut eng = ReflexEngine::new(default_safing_rules());
+        let fired = eng.evaluate(&snap(&[(TEMPERATURE_ENTITY, 78.0)]), 1_000);
+        assert!(fired.iter().any(|f| f.rule_id == "safe-overtemp-critical"
+            && matches!(f.action, Action::GpioWrite { pin: DEFAULT_SAFE_PIN, value: 0, .. })));
+        assert!(fired.iter().any(|f| f.rule_id == "safe-overtemp-warn"));
+
+        // High humidity escalates a condensation warning.
+        let mut eng2 = ReflexEngine::new(default_safing_rules());
+        let fired2 = eng2.evaluate(&snap(&[(HUMIDITY_ENTITY, 95.0)]), 1_000);
+        assert!(fired2.iter().any(|f| f.rule_id == "safe-humidity-high"));
+
+        // Comfortable room conditions fire nothing.
+        let mut eng3 = ReflexEngine::new(default_safing_rules());
+        assert!(eng3
+            .evaluate(
+                &snap(&[(TEMPERATURE_ENTITY, 22.0), (HUMIDITY_ENTITY, 45.0)]),
+                1_000,
+            )
+            .is_empty());
     }
 
     #[test]
