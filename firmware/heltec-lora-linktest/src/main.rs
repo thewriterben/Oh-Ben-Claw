@@ -35,6 +35,11 @@ const PIN_RST: i32 = 12;
 const PIN_BUSY: i32 = 13;
 const PIN_DIO1: i32 = 14;
 const KEEPALIVE_MS: u64 = 5_000;
+/// Hop budget for flood-relay. A node that hears a *new* frame rebroadcasts it with
+/// ttl-1 until it reaches 0; the `SeenSet` de-dup stops it looping. 2 lets a frame
+/// reach nodes two hops out. (With two radios you'll see the rebroadcast and the
+/// echo being dropped as a dup; a true 3rd hop needs a node out of direct range.)
+const SPINE_TTL: u8 = 2;
 
 fn now_ms() -> u64 {
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000) as u64
@@ -94,7 +99,7 @@ fn main() -> anyhow::Result<()> {
         ($radio:expr, $seen:expr, $seq:expr, $buf:expr, $payload:expr) => {{
             $seq = $seq.wrapping_add(1);
             $seen.seen_or_insert(node, $seq);
-            SpineFrame { src: node, seq: $seq, ttl: 0, payload: $payload }.encode(&mut $buf);
+            SpineFrame { src: node, seq: $seq, ttl: SPINE_TTL, payload: $payload }.encode(&mut $buf);
             $radio.transmit(&$buf)
         }};
     }
@@ -145,6 +150,16 @@ fn main() -> anyhow::Result<()> {
                         // Forward the payload to the wired compute node.
                         let _ = uart.write(f.payload);
                         let _ = uart.write(b"\n");
+                        // Flood-relay onward if hops remain. Keep the ORIGINAL src/seq
+                        // so every node de-dups it identically — that's what stops loops.
+                        if f.ttl > 0 {
+                            SpineFrame { src: f.src, seq: f.seq, ttl: f.ttl - 1, payload: f.payload }
+                                .encode(&mut buf);
+                            match radio.transmit(&buf) {
+                                Ok(()) => info!("SPINE ⇒ relay src={:02X} seq={} ttl={}", f.src, f.seq, f.ttl - 1),
+                                Err(e) => info!("relay TX error: {e:#}"),
+                            }
+                        }
                     }
                 }
                 None => info!("SPINE ◄ malformed frame ({} B)", rx.data.len()),
