@@ -23,6 +23,11 @@ You should receive an acknowledgement within 48 hours. If the issue is confirmed
 
 ## Security Architecture
 
+> For the **physical-action safety argument** in functional-safety standards
+> language (ISO/IEC TR 5469, IEC 61508 / ISO 13849, NIST AI 100-2e2025), see
+> [`docs/SAFETY-CASE.md`](docs/SAFETY-CASE.md): the LLM proposes, a
+> deterministic gate the model cannot override disposes.
+
 Oh-Ben-Claw applies defence in depth across multiple layers:
 
 ### API Key Protection
