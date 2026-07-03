@@ -5,6 +5,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — `judge-calibrate` CLI (operator-run calibration) (2026-07-02)
+
+Follow-up to the LLM-judge calibration API: an operator can now measure
+calibration directly instead of only through a `cargo test` eval.
+
+- New `oh-ben-claw judge-calibrate [--gold PATH] [--threshold F]` — builds the
+  judge from `OBC_JUDGE_*`, loads the gold set (`--gold`, else `OBC_JUDGE_GOLD`,
+  else the built-in balanced seed set), runs `LlmJudge::calibrate`, and prints
+  the full `CalibrationReport` (JSON) plus a human-readable κ verdict.
+- **Scriptable as a deployment gate**: exits non-zero when the judge isn't
+  configured (clean error) or isn't calibrated (κ < 0.6), so
+  `judge-calibrate && deploy` works. It gates nothing inside the running
+  agent — Track 0 owns actuation safety; this is a standalone operator check.
+- Verified end-to-end: unconfigured → exit 1 with guidance; configured →
+  full calibrate loop, graceful per-case error handling, report + verdict.
+  Build + clippy clean; workspace **38 evals** green.
+
+---
+
 ## Unreleased — LLM-judge calibration (Cohen's κ against gold labels) (2026-07-02)
 
 The judge stays advisory until it *agrees with humans*. 2026 practice (see

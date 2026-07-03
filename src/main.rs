@@ -107,6 +107,19 @@ enum Commands {
         mode: String,
     },
 
+    /// Measure LLM-judge calibration against a gold label set (Cohen's κ).
+    /// The judge is configured via `OBC_JUDGE_PROVIDER`/`OBC_JUDGE_MODEL`
+    /// (+ optional `OBC_JUDGE_API_KEY`/`OBC_JUDGE_BASE_URL`).
+    JudgeCalibrate {
+        /// Path to a JSON gold set (array of {task, response, human}). When
+        /// omitted, falls back to `OBC_JUDGE_GOLD`, then the built-in seed set.
+        #[arg(long)]
+        gold: Option<String>,
+        /// Accept/reject binarization threshold for the judge's 0–1 score.
+        #[arg(long, default_value = "0.5")]
+        threshold: f32,
+    },
+
     /// Run system diagnostics to check configuration and connectivity.
     Doctor,
 }
@@ -222,6 +235,9 @@ async fn main() -> Result<()> {
         }
         Commands::McpServe { transport, port, mode } => {
             run_mcp_serve(&transport, port, &mode).await?;
+        }
+        Commands::JudgeCalibrate { gold, threshold } => {
+            run_judge_calibrate(gold.as_deref(), threshold).await?;
         }
         Commands::Doctor => {
             oh_ben_claw::doctor::run(&config)?;
@@ -2185,6 +2201,60 @@ async fn run_mcp_serve(transport: &str, port: u16, mode: &str) -> Result<()> {
         }
         other => anyhow::bail!("unknown transport '{other}' (stdio | http)"),
     }
+}
+
+/// `oh-ben-claw judge-calibrate` — measure whether the configured LLM judge
+/// agrees with a human gold set (Cohen's κ) before it is trusted for anything
+/// beyond advice. Prints the calibration report and exits non-zero when the
+/// judge is not configured (so it's scriptable in CI).
+async fn run_judge_calibrate(gold: Option<&str>, threshold: f32) -> Result<()> {
+    use oh_ben_claw::agent::judge::{CalibrationCase, LlmJudge};
+
+    let Some(judge) = LlmJudge::from_env() else {
+        anyhow::bail!(
+            "no judge configured — set OBC_JUDGE_PROVIDER and OBC_JUDGE_MODEL \
+             (optionally OBC_JUDGE_API_KEY / OBC_JUDGE_BASE_URL)"
+        );
+    };
+
+    // Gold set: explicit --gold, else OBC_JUDGE_GOLD, else the built-in seed set.
+    let gold_path = gold
+        .map(String::from)
+        .or_else(|| std::env::var("OBC_JUDGE_GOLD").ok());
+    let (cases, source) = match &gold_path {
+        Some(path) => (CalibrationCase::load(path)?, path.as_str()),
+        None => (CalibrationCase::seed_set(), "built-in seed set"),
+    };
+
+    info!(
+        model = judge.model(),
+        cases = cases.len(),
+        gold = source,
+        "running judge calibration"
+    );
+    let report = judge.calibrate(&cases, threshold).await;
+
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    println!(
+        "\nJudge '{}' (rubric v{}): κ = {:.3} over {} case(s) ({} error(s)) → {}",
+        report.judge_model,
+        report.rubric_version,
+        report.kappa,
+        report.n,
+        report.errors,
+        if report.calibrated {
+            "CALIBRATED (κ ≥ 0.6 — trustworthy as an advisory signal)"
+        } else {
+            "NOT CALIBRATED (κ < 0.6 — treat scores with caution; never gate on them)"
+        }
+    );
+    // Exit non-zero when not calibrated so this is usable as a deployment gate
+    // (`judge-calibrate && …`). This is a standalone operator command — it gates
+    // nothing inside the running agent; Track 0 owns actuation safety.
+    if !report.calibrated {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 /// `oh-ben-claw skill …` — learned-skill management + Track 0 staged rollout.
