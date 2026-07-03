@@ -588,6 +588,26 @@ resilient offline — deepening the embodied moat. Builds on `agent/edge`,
 - [ ] **Edge model management** — provision/update local models per node role from the deployment planner
 - [ ] Eval: defined reflex tasks complete fully offline; correct, audited fallback to cloud when required
 
+## Phase B: LoRa Mesh Spine (Hardware) 🔄 In Progress *(bench-validated)*
+
+Off-grid inter-node transport over LoRa, validated on 2× Heltec WiFi LoRa 32 V3 +
+1× XIAO ESP32-S3. Serial-bridged compute: the XIAO node mirrors its spine JSON out a
+UART to a Heltec LoRa gateway, which carries it over the mesh. Runbook:
+`docs/PHASE-B-LORA-MESH.md`.
+
+- [x] Heltec V3 board bring-up (boot + LED, Rust/ESP-IDF toolchain) (`firmware/heltec-lora-linktest`)
+- [x] Hand-rolled SX1262 driver — SPI, TCXO, calibration, TX/RX + RSSI (`sx1262.rs`) — correct on first flash
+- [x] 2-node point-to-point LoRa link (915 MHz, SF7/BW125/CR4-5, sync 0x1424)
+- [x] Spine frame transport `[src][seq][ttl][payload]` + de-dup ring (`spine.rs`)
+- [x] Heltec UART↔LoRa gateway bridge (UART1 TX=4 / RX=2)
+- [x] XIAO spine mirror — autonomous JSON out UART1/GPIO43 (D6) (`firmware/obc-esp32-s3`)
+- [x] Flood-relay (TTL + dedup, no-loop confirmed)
+- [ ] XIAO→Heltec physical jumper (continuity check pending)
+- [ ] True 3-hop relay (needs a 3rd radio out of direct range)
+- [ ] Host ⇄ mesh: pipe the base-station Heltec into the host spine (bidirectional)
+
+---
+
 ## Hardware Ecosystem Expansion 📋 Planned *(standing track)*
 
 Maximize supported hardware breadth — ESP32 boards & ESP32-based electronics,

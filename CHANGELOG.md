@@ -743,6 +743,42 @@ Track 0 (the gate now sees the real actuator call instead of a skill wrapper).
 
 ---
 
+## Unreleased — Phase B: LoRa mesh spine (Heltec V3) (2026-07-03)
+
+Off-grid inter-node transport: OBC nodes exchange their spine messages over a LoRa
+mesh when there's no WiFi/MQTT backhaul. Two-tier "serial-bridged compute" design —
+the XIAO runs the node firmware and mirrors its JSON out a UART to a Heltec V3, which
+carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runbook:
+`docs/PHASE-B-LORA-MESH.md`.
+
+### Added — `firmware/heltec-lora-linktest` (new crate, Heltec WiFi LoRa 32 V3)
+
+- **Hand-rolled SX1262 driver** (`sx1262.rs`) over ESP-IDF SPI: reset/standby,
+  TCXO(DIO3, 1.8 V), calibration, LoRa modulation/packet params, PA/TX config, TX and
+  RX with RSSI/SNR, and a bounded BUSY handshake (a dead radio errors, never hangs).
+  915 MHz, SF7/BW125/CR4-5, private sync word 0x1424, +22 dBm. Came up correct on the
+  **first flash**; two boards exchange packets at real RSSI.
+- **Spine transport** (`spine.rs`): `[src][seq][ttl][payload]` frame + a `SeenSet`
+  de-dup ring. Content-agnostic — carries the node's opaque JSON.
+- **UART↔LoRa gateway bridge** (`main.rs`): frames newline lines from UART1
+  (TX=GPIO4, RX=GPIO2) onto LoRa; forwards received frames to UART1 + console; emits a
+  keepalive so the link stays observable.
+- **Flood-relay**: a newly-seen frame is rebroadcast with `ttl-1` (`SPINE_TTL`=2),
+  original `src`/`seq` preserved so the de-dup stops loops. Verified one-relay-per-node,
+  no storm.
+
+### Changed — `firmware/obc-esp32-s3` (XIAO node)
+
+- **Spine mirror**: the node's autonomous `link_state` / `power_mode` / `reflex` JSON
+  is mirrored out UART1 (TX=GPIO43 / D6 pad) to a LoRa gateway — best-effort (`.ok()`
+  plus a boot log reporting whether the uplink UART initialised), so the node still
+  runs untethered. Its real on-MCU reflexes can ride the mesh to another node.
+
+Remaining: the XIAO→Heltec physical jumper (continuity check pending) and a true
+3-hop relay test (needs a 3rd radio placed out of direct range).
+
+---
+
 ## Unreleased — Practical temperature + humidity safing rules (2026-07-02)
 
 Extended the built-in on-MCU safing library with environmental self-protection,
