@@ -20,6 +20,7 @@
 //!     +-- command    # Brain publishes a command to all nodes
 //! ```
 
+pub mod lora_gateway;
 pub mod lora_mesh;
 pub mod p2p;
 

@@ -127,6 +127,59 @@ looks like "no data". Verify both connections with a multimeter on continuity.
    ```
    `node_id":"obc-esp32-s3-001"` = the XIAO's real on-MCU reflex, relayed over the mesh.
 
+## Host ⇄ mesh (inbound bridge)
+
+The far end of the spine: a **base-station Heltec** plugged into the host machine's USB
+becomes the host brain's window onto the mesh. `src/spine/lora_gateway.rs` reads that
+Heltec's console and ingests every node spine message it hears over the air into
+**world memory** — so a reflex or link-state report that travelled node → gateway →
+LoRa → base station lands in the brain's world model, exactly as if the node were on the
+wired MQTT spine.
+
+```
+  base-station Heltec (USB)          host (oh-ben-claw)
+  ┌────────────────────┐  console   ┌───────────────────────────────┐
+  │ SPINE ◄ src=.. : {} │ ─────────► │ lora_gateway::run_gateway_rx  │
+  │ (every RX frame)    │  115200    │  parse → observe() → world.db │
+  └────────────────────┘            └───────────────────────────────┘
+```
+
+Each received line writes two facts (valid *now*, source `lora-gateway`):
+
+| Entity | Value |
+|---|---|
+| `mesh.<node_id>.<type>` | the node payload + a `_mesh` envelope (`src`, `seq`, `rssi_dbm`) |
+| `mesh.<node_id>` | liveness/link rollup — `rssi_dbm`, `seq`, `src`, `last_type` |
+
+So `current("mesh.obc-esp32-s3-001")` answers *"is this node alive, and how strong is
+the mesh link?"*, and `history("mesh.obc-esp32-s3-001.reflex")` gives the reflex trail.
+
+### Config
+
+```toml
+[perception]
+world_memory = true          # the bridge needs somewhere to write
+
+[lora_gateway]
+port = "COM6"                # the base-station Heltec's USB console
+baud = 115200
+```
+
+The serial loop is gated behind the `hardware` feature (tokio-serial), like the other
+peripheral drivers. Run the host with it enabled:
+
+```powershell
+cargo run --features hardware
+```
+
+Without `--features hardware` the config is accepted but the bridge logs a warning and
+doesn't start (parse/ingest still compile and are unit-tested). The parse + ingest core
+is hardware-free — `cargo test spine::lora_gateway` covers it on any machine.
+
+> This is the **inbound** half (mesh → host world memory). The outbound return path
+> (host assignments/commands → LoRa → node) is future work; the gateway firmware already
+> forwards LoRa→UART, so it's a node-side UART-command-intake job.
+
 ## Status
 
 | Piece | State |

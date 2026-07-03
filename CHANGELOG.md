@@ -767,6 +767,27 @@ carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runb
   original `src`/`seq` preserved so the de-dup stops loops. Verified one-relay-per-node,
   no storm.
 
+### Added — host `src/spine/lora_gateway.rs` (host ⇄ mesh bridge, inbound)
+
+- **LoRa mesh gateway bridge**: the far end of the Phase B spine. Reads a
+  base-station Heltec's USB console and ingests the node spine messages it hears over
+  the air into **world memory** — so link state, power mode, and reflex/safing reports
+  that arrive over LoRa land in the brain's world model, exactly as if the node were on
+  the wired MQTT spine.
+- `parse_gateway_line` anchors on the gateway's `SPINE ◄ src=.. seq=.. rssi=.. dBm :
+  {json}` format (tolerating an ESP-IDF log prefix), and returns only **received**
+  frames — TX (`►`), relay (`⇒`), malformed-frame, and boot lines are ignored.
+- `ingest_gateway_line` writes two facts per message: `mesh.<node_id>.<type>` (the node
+  payload + a `_mesh` envelope carrying `src`/`seq`/`rssi_dbm`) and a `mesh.<node_id>`
+  liveness/link rollup (rssi, seq, last type) — so `current("mesh.<node_id>")` answers
+  "is this node alive, and how strong is the mesh link?".
+- The parse + ingest core is **hardware-free and unit-tested** (6 tests); only the
+  serial read loop (`run_gateway_rx`) is gated behind `--features hardware` (tokio-serial),
+  matching the other peripheral drivers.
+- Config: `[lora_gateway]` (`port`, `baud`) on the root config; `main.rs` spawns the
+  bridge when it's set, world memory is on, and the build has the `hardware` feature
+  (clear warnings otherwise).
+
 ### Changed — `firmware/obc-esp32-s3` (XIAO node)
 
 - **Spine mirror**: the node's autonomous `link_state` / `power_mode` / `reflex` JSON
