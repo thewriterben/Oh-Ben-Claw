@@ -881,8 +881,15 @@ carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runb
   **headline only** (`speech_headline` takes the first sentence, so a full triage directive
   isn't read out) — through the audio speech sink (TTS / speaker-over-spine / dry-run, same
   selection as `[audio_suite]`). The robot can now *announce* an alarm.
-- Unit-tested: the log-of-record write, the Slack-shaped payload, the speech headlining, and
-  that the decorator notifies *and* still delegates the escalate downstream.
+- **Digest / de-dup**: identical escalations within `dedup_window_ms` are suppressed and
+  counted across all channels — so a flapping node doesn't spam the log/webhook/speaker every
+  tick — and the next alert after the window carries a `[+N repeats suppressed]` note, so
+  repeats are collapsed into a digest, never silently dropped. Scoped to notifications: the
+  System 2 wake still fires each time (governed by the reflex's own escalation budget), and
+  distinct reasons are never deduped against each other.
+- Unit-tested: the log-of-record write, the Slack-shaped payload, the speech headlining, the
+  de-dup window + suppressed-count digest, and that the decorator notifies *and* still
+  delegates the escalate downstream.
 
 ### Changed — `firmware/obc-esp32-s3` (XIAO node)
 

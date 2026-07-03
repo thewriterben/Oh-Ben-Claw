@@ -1230,7 +1230,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             // memory + optional webhook), best-effort — the wake-System-2 path is
             // unchanged; a down webhook never stalls System 1.
             let sink: Arc<dyn ActionSink> = if config.notifications.enabled {
-                let mut notifier = oh_ben_claw::agent::notify::Notifier::new();
+                let mut notifier = oh_ben_claw::agent::notify::Notifier::new()
+                    .with_dedup_window(config.notifications.dedup_window_ms);
                 if config.notifications.log_to_world_memory {
                     notifier = notifier.with_channel(Arc::new(
                         oh_ben_claw::agent::notify::WorldMemoryChannel::new(Arc::clone(world)),

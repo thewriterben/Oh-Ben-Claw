@@ -613,6 +613,7 @@ UART to a Heltec LoRa gateway, which carries it over the mesh. Runbook:
 - [x] Mesh triage playbook: `safe-mesh-node-lost` escalation carries a tool-naming triage directive; full procedure + guardrails in `docs/playbooks/mesh-node-lost.md`
 - [x] Escalation notifications: all reflex escalations fan out to a world-memory log-of-record + optional webhook (`src/agent/notify.rs`, `[notifications]` config) — the wake now reaches a human, best-effort, without touching the System 2 path
 - [x] Speech notification channel: escalations spoken aloud (headline only) via the audio speech sink when `speak_escalations` is set — the robot announces the alarm
+- [x] Notification digest: identical escalations de-duped within `dedup_window_ms` (collapsed into a `[+N repeats suppressed]` digest, not dropped); distinct reasons and the System 2 wake unaffected
 - [x] Base-station Heltec: USB console (UART0 stdin) → LoRa TX — background reader thread, no UART0 reconfigure (`firmware/heltec-lora-linktest`, *flash-pending*)
 - [ ] XIAO→Heltec **forward** jumper D6→GPIO2 (inbound; continuity check pending)
 - [ ] Heltec→XIAO **reverse** jumper GPIO4→D7 (outbound; new)
