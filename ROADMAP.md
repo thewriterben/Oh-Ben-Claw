@@ -469,7 +469,7 @@ Phase 14's A2A implementation predates the stable v1.0 spec (Linux Foundation).
 - [x] Golden task set for the agent loop (`tests/evals.rs`): direct answer, single-tool route with exact args, multi-step ordering, tool-failure recovery, unknown-tool degradation — driven by a deterministic `ScriptedProvider` mock
 - [x] Wire-shape goldens: MCP (initialize/discover/tools-list/error) and A2A (task lifecycle, ErrorInfo, agent card) + approval policy matrix golden
 - [x] CI gate: evals run as integration tests under the existing `cargo test --workspace` job — no release while evals regress (cargo run pending on Windows)
-- [x] LLM-as-judge advisory scoring (`src/agent/judge.rs` + `eval_llm_judge_advisory_scoring`): env-configured judge (`OBC_JUDGE_PROVIDER`/`OBC_JUDGE_MODEL`) scores golden transcripts and prints results; skips cleanly when unconfigured — gates stay deterministic
+- [x] LLM-as-judge advisory scoring (`src/agent/judge.rs` + `eval_llm_judge_advisory_scoring`): env-configured judge (`OBC_JUDGE_PROVIDER`/`OBC_JUDGE_MODEL`) scores golden transcripts and prints results; skips cleanly when unconfigured — gates stay deterministic. **Calibration (2026-07-02):** Cohen's κ against a labeled gold set (`CalibrationCase`/`calibrate`/`cohens_kappa`, κ ≥ 0.6 bar, pinned model + `RUBRIC_VERSION`, prompt bias mitigations); advisory `eval_llm_judge_calibration_advisory`
 
 ### Observability / AgentOps
 

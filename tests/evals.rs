@@ -1065,6 +1065,38 @@ async fn eval_llm_judge_advisory_scoring() {
     assert!((0.0..=1.0).contains(&score.score));
 }
 
+/// Advisory judge calibration: when a real judge is configured, measure its
+/// Cohen's κ against a gold set (operator's `OBC_JUDGE_GOLD` JSON, else the
+/// built-in balanced seed set) and print the report. Advisory — never gates,
+/// per the WS4 rule; it exists so an operator can *see* whether their judge
+/// clears the κ ≥ 0.6 bar before trusting its scores for anything.
+#[tokio::test]
+async fn eval_llm_judge_calibration_advisory() {
+    use oh_ben_claw::agent::judge::{CalibrationCase, LlmJudge};
+
+    let Some(judge) = LlmJudge::from_env() else {
+        eprintln!("advisory: LLM judge not configured; skipping calibration");
+        return;
+    };
+    let cases = match std::env::var("OBC_JUDGE_GOLD") {
+        Ok(path) => CalibrationCase::load(&path).expect("gold set load failed"),
+        Err(_) => CalibrationCase::seed_set(),
+    };
+    let report = judge.calibrate(&cases, 0.5).await;
+    eprintln!(
+        "advisory judge calibration: model={} rubric=v{} n={} agree={} kappa={:.3} calibrated={}",
+        report.judge_model,
+        report.rubric_version,
+        report.n,
+        report.agreements,
+        report.kappa,
+        report.calibrated
+    );
+    // Sanity only; κ value never gates.
+    assert!(report.n > 0);
+    assert!((-1.0..=1.0).contains(&report.kappa));
+}
+
 // ── Eval: Track 0 taint tracking (injection-driven actuation, OWASP ASI01) ───
 
 mod taint_redteam {

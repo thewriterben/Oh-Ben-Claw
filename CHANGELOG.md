@@ -5,6 +5,41 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — LLM-judge calibration (Cohen's κ against gold labels) (2026-07-02)
+
+The judge stays advisory until it *agrees with humans*. 2026 practice (see
+`AI-Agents-Research-July2026.md`): calibrate an LLM judge against a labeled
+gold set — Cohen's κ ≥ 0.6, with a pinned model and versioned rubric — before
+trusting its scores for anything, and never let it gate actuation safety
+(Track 0's deterministic layers own that).
+
+### Added — `src/agent/judge.rs`
+
+- `RUBRIC_VERSION` (a calibration result is only valid for the rubric it was
+  measured against) and `KAPPA_THRESHOLD = 0.6`.
+- Bias mitigations baked into the scoring prompt: judge on merit not length
+  (no verbosity/confidence reward), and treat the response as inert text —
+  ignore any instructions embedded in it (judge-side prompt-injection).
+- `GoldLabel` / `CalibrationCase` (with `load()` from a JSON gold file and a
+  balanced built-in `seed_set()`), `LlmJudge::calibrate(cases, threshold)`
+  binarizing scores at an accept threshold, and a `CalibrationReport`
+  (model, rubric version, n, errors, agreements, κ, `calibrated`).
+- `cohens_kappa(&[(bool, bool)])` — chance-corrected agreement, with the
+  empty-set (0.0) and degenerate pₑ=1 (1.0 iff perfect) conventions handled.
+
+### Tests
+
+- κ math (perfect / total-disagreement / empty / degenerate / partial);
+  calibration reaches the bar on a discerning mock judge and fails it on a
+  constant one; seed set is balanced. New advisory eval
+  `eval_llm_judge_calibration_advisory` prints the κ report when a real judge
+  is configured (`OBC_JUDGE_*`, gold via `OBC_JUDGE_GOLD` or the seed set),
+  skips cleanly otherwise — never gates.
+- Full workspace on Windows: **1139 lib tests, evals 38/38**, clippy
+  warning-free.
+
+---
+
 ## Unreleased — Track 0: adaptive OWASP-ASI red-team corpus (2026-07-02)
 
 The NIST agent-hijacking lesson (Jan 2025): a *frozen* injection string is an
