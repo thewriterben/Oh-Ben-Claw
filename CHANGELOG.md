@@ -892,6 +892,15 @@ carries it over LoRa. Validated on hardware (2× Heltec V3, 1× XIAO). Full runb
   frequent first, over the same trailing window — and delivers a one-line summary through the
   same channels. A low-noise companion to per-event alerts; prior digests are excluded from
   the next one (no compounding).
+- **Severity routing**: escalations are classified (`Severity::classify` — keyword-based;
+  danger words → `Critical`, otherwise `Warning`) and each channel carries a **minimum**
+  severity (`log_min_severity` / `webhook_min_severity` / `speak_min_severity`; default =
+  receive everything). So you can log *all* escalations but only push/speak the critical
+  ones. Severity lives entirely in the notification layer — no change to the reflex `Action`
+  enum.
+- **`oh-ben-claw status`** now also prints a **Recent escalations** section — the last 5 from
+  the log-of-record, newest first, each with `[severity]` and age — so mesh health and
+  escalations are both visible at a glance.
 - Unit-tested: the log-of-record write, the Slack-shaped payload, the speech headlining, the
   de-dup window + suppressed-count rollup, the digest grouping/windowing/formatting, digest
   delivery bypassing de-dup, and that the decorator notifies *and* still delegates the
