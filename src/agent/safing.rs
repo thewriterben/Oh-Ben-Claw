@@ -214,11 +214,21 @@ pub fn net_recovered_clear(opts: &SafingOptions) -> ReflexRule {
     )
 }
 
+/// Triage directive handed to System 2 when the mesh presumes a node lost. It names
+/// the exact tools so the woken agent knows what to do without guessing; the full
+/// procedure lives in `docs/playbooks/mesh-node-lost.md`.
+pub const MESH_LOST_PLAYBOOK: &str = "A mesh node is presumed lost (LoRa escalation). \
+Triage: (1) call `mesh_status` to identify the offline/escalated node and its last state \
+(RSSI, last-seen, last command); (2) `mesh_command` it a `capabilities` ping to confirm \
+reachability; (3) if it answers, the link recovered — note it and move on; if not, record \
+the loss to world memory and alert an operator. Every node action stays Track-0 gated. \
+Full playbook: docs/playbooks/mesh-node-lost.md.";
+
 /// `mesh.escalated_count >= 1` → escalate to System 2: the mesh supervisor has
 /// presumed a node lost over the LoRa mesh. Fires only when mesh escalation is
 /// configured and a node has actually been given up on (the count is absent/zero
-/// otherwise), so it's a safe default. This is the health-driven reflex that turns a
-/// presumed-lost node into a System 2 wake (which can then alert, re-plan, or dispatch).
+/// otherwise), so it's a safe default. The escalate reason is the [`MESH_LOST_PLAYBOOK`]
+/// triage directive, so the wake is immediately actionable.
 pub fn mesh_node_lost_escalate(opts: &SafingOptions) -> ReflexRule {
     rule(
         "safe-mesh-node-lost",
@@ -228,7 +238,7 @@ pub fn mesh_node_lost_escalate(opts: &SafingOptions) -> ReflexRule {
             value: 1.0,
         },
         Action::Escalate {
-            reason: "a mesh node is presumed lost (LoRa escalation)".to_string(),
+            reason: MESH_LOST_PLAYBOOK.to_string(),
         },
         debounce(opts),
     )
@@ -396,6 +406,19 @@ mod tests {
         // power-recovered, net-recovered, mesh-node-lost = 7; +1 stop with an actuator = 8.
         assert_eq!(standard_safing_rules(&SafingOptions::default()).len(), 7);
         assert_eq!(standard_safing_rules(&opts_with_actuator()).len(), 8);
+    }
+
+    #[test]
+    fn mesh_lost_rule_directs_the_agent_to_its_tools() {
+        let r = mesh_node_lost_escalate(&SafingOptions::default());
+        match &r.then {
+            Action::Escalate { reason } => {
+                assert!(reason.contains("mesh_status"), "names the perceive tool");
+                assert!(reason.contains("mesh_command"), "names the act tool");
+                assert!(reason.contains("Track-0"), "reaffirms the safety gate");
+            }
+            _ => panic!("expected an escalate action"),
+        }
     }
 
     #[test]
