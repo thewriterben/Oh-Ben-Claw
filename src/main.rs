@@ -530,6 +530,11 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             None
         };
 
+    // Handle to the mesh command sink (set when the LoRa gateway opens), shared with
+    // the mesh supervisor below so it can auto-issue recovery commands over the mesh.
+    #[allow(unused_mut)]
+    let mut mesh_sink: Option<Arc<dyn oh_ben_claw::spine::lora_gateway::CommandSink>> = None;
+
     // Phase B: LoRa mesh gateway bridge — pipe a base-station Heltec's USB console
     // into world memory. Node spine messages heard over the air (link state, power
     // mode, reflex/safing reports) are parsed from the gateway's `SPINE ◄ … : {json}`
@@ -570,6 +575,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     // over LoRa. The node gates execution on its own Track 0.
                     let sink: Arc<dyn oh_ben_claw::spine::lora_gateway::CommandSink> =
                         Arc::new(oh_ben_claw::spine::lora_gateway::SerialCommandSink::new(wr));
+                    mesh_sink = Some(Arc::clone(&sink));
                     all_tools
                         .push(Box::new(oh_ben_claw::tools::builtin::mesh::MeshCommandTool::new(sink)));
                     info!("LoRa gateway: outbound mesh_command tool active");
@@ -583,6 +589,46 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 "[lora_gateway] configured but this build lacks the `hardware` feature \
                  (serial I/O); the bridge will not start"
             );
+        }
+    }
+
+    // Phase B: mesh supervisor — fold the mesh into the brain. Each tick it derives a
+    // per-node health view from the mesh facts in world memory and, when a node goes
+    // offline, can autonomously issue a rate-limited recovery command over the mesh.
+    if config.mesh_supervisor.enabled {
+        match &world_mem {
+            Some(world) => {
+                let world_sup = Arc::clone(world);
+                let sink_sup = mesh_sink.clone();
+                let cfg = config.mesh_supervisor.clone();
+                info!(
+                    stale_ms = cfg.stale_ms,
+                    recover = ?cfg.recover,
+                    "Mesh supervisor active (mesh -> brain)"
+                );
+                tokio::spawn(async move {
+                    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(
+                        cfg.tick_ms.max(500),
+                    ));
+                    loop {
+                        ticker.tick().await;
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        let _ = oh_ben_claw::spine::mesh_supervisor::tick(
+                            &world_sup,
+                            sink_sup.as_ref(),
+                            &cfg,
+                            now,
+                        )
+                        .await;
+                    }
+                });
+            }
+            None => tracing::warn!(
+                "[mesh_supervisor] enabled but [perception].world_memory is off; nothing to supervise"
+            ),
         }
     }
 

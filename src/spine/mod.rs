@@ -22,6 +22,7 @@
 
 pub mod lora_gateway;
 pub mod lora_mesh;
+pub mod mesh_supervisor;
 pub mod p2p;
 
 use crate::config::SpineConfig; // SpineConfig is defined in config::mod
