@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Oh-Ben-Claw — LoRa Mesh Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel-2: #1c2230; --border: #2a3140;
+    --text: #e6edf3; --muted: #8b96a5; --accent: #6ea8fe;
+    --online: #3fb950; --degraded: #d29922; --offline: #f85149;
+    --escalated: #db61a2; --unknown: #6e7681;
+    --shadow: 0 1px 3px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  header .claw { color: var(--accent); }
+  .spacer { flex: 1; }
+  .conn { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  input, button, select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font-size: 13px;
+  }
+  input::placeholder { color: var(--muted); }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #06101f; border-color: var(--accent); font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--unknown); }
+  .dot.ok { background: var(--online); box-shadow: 0 0 6px var(--online); }
+  .dot.err { background: var(--offline); box-shadow: 0 0 6px var(--offline); }
+  main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+  .banner {
+    display: none; margin-bottom: 16px; padding: 10px 14px; border-radius: 8px;
+    border: 1px solid var(--degraded); background: rgba(210,153,34,.12); color: #f0d9a0;
+  }
+  .banner.show { display: block; }
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 22px; }
+  @media (max-width: 640px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; box-shadow: var(--shadow);
+  }
+  .stat .num { font-size: 28px; font-weight: 700; line-height: 1; }
+  .stat .lbl { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; margin-top: 6px; }
+  .stat.online .num { color: var(--online); }
+  .stat.degraded .num { color: var(--degraded); }
+  .stat.offline .num { color: var(--offline); }
+  .stat.escalated .num { color: var(--escalated); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--unknown);
+    border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow);
+  }
+  .card.online { border-left-color: var(--online); }
+  .card.degraded { border-left-color: var(--degraded); }
+  .card.offline { border-left-color: var(--offline); }
+  .card .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .card .node { font-weight: 700; font-size: 15px; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
+  .pill.online { background: rgba(63,185,80,.15); color: var(--online); }
+  .pill.degraded { background: rgba(210,153,34,.15); color: var(--degraded); }
+  .pill.offline { background: rgba(248,81,73,.15); color: var(--offline); }
+  .pill.unknown { background: rgba(110,118,129,.18); color: var(--muted); }
+  .badge-esc { background: rgba(219,97,162,.18); color: var(--escalated); margin-left: 6px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+  .kv .v { text-align: right; font-variant-numeric: tabular-nums; }
+  .v.bad { color: var(--offline); }
+  .v.good { color: var(--online); }
+  footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px; }
+  .empty { color: var(--muted); text-align: center; padding: 40px; border: 1px dashed var(--border); border-radius: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="connDot"></span>
+  <h1>Oh-Ben-<span class="claw">Claw</span> · LoRa Mesh</h1>
+  <div class="spacer"></div>
+  <div class="conn">
+    <input id="url" size="24" placeholder="http://127.0.0.1:8080" />
+    <input id="token" size="14" type="password" placeholder="API token (optional)" />
+    <select id="interval" title="Auto-refresh interval">
+      <option value="0">Manual</option>
+      <option value="3000">3s</option>
+      <option value="5000" selected>5s</option>
+      <option value="10000">10s</option>
+      <option value="30000">30s</option>
+    </select>
+    <button id="refresh" class="primary">Refresh</button>
+  </div>
+</header>
+
+<main>
+  <div class="banner" id="banner"></div>
+
+  <div class="stats">
+    <div class="stat"><div class="num" id="s-nodes">–</div><div class="lbl">Nodes</div></div>
+    <div class="stat online"><div class="num" id="s-online">–</div><div class="lbl">Online</div></div>
+    <div class="stat degraded"><div class="num" id="s-degraded">–</div><div class="lbl">Degraded</div></div>
+    <div class="stat offline"><div class="num" id="s-offline">–</div><div class="lbl">Offline</div></div>
+    <div class="stat escalated"><div class="num" id="s-escalated">–</div><div class="lbl">Escalated</div></div>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">No mesh nodes reported yet.</div>
+</main>
+
+<footer id="foot">Not yet connected — set your gateway URL and hit Refresh.</footer>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const LS = "obc.mesh.dashboard";
+
+  // ── Persist connection settings ──────────────────────────────────────────
+  function loadCfg() {
+    try { return JSON.parse(localStorage.getItem(LS)) || {}; } catch { return {}; }
+  }
+  function saveCfg() {
+    localStorage.setItem(LS, JSON.stringify({
+      url: $("url").value.trim(), token: $("token").value, interval: $("interval").value,
+    }));
+  }
+  const cfg = loadCfg();
+  $("url").value = cfg.url || "http://127.0.0.1:8080";
+  $("token").value = cfg.token || "";
+  if (cfg.interval != null) $("interval").value = cfg.interval;
+
+  // ── Fetch mesh status ────────────────────────────────────────────────────
+  // Prefer the dedicated GET route (no agent, no POST body); fall back to the
+  // read-only mesh_status tool endpoint for gateways without the route.
+  async function fetchStatus() {
+    const base = $("url").value.trim().replace(/\/+$/, "");
+    const headers = {};
+    const token = $("token").value;
+    if (token) headers["Authorization"] = "Bearer " + token;
+
+    // 1) Dedicated route: GET /api/v1/mesh/status → payload directly.
+    const g = await fetch(base + "/api/v1/mesh/status", { method: "GET", headers });
+    if (g.ok) return await g.json();
+    // 404/405 → route not present on this build; anything else is a real error
+    // unless we can still fall back.
+    if (g.status !== 404 && g.status !== 405 && g.status !== 503) {
+      throw new Error("HTTP " + g.status + " " + g.statusText);
+    }
+
+    // 2) Fallback: POST /api/v1/tools/mesh_status → { success, output:"<json>" }.
+    const p = await fetch(base + "/api/v1/tools/mesh_status", {
+      method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: "{}",
+    });
+    if (!p.ok) throw new Error("HTTP " + p.status + " " + p.statusText);
+    const env = await p.json();
+    if (env.success === false) throw new Error(env.output || "tool reported failure");
+    return typeof env.output === "string" ? JSON.parse(env.output) : (env.output || env);
+  }
+
+  // ── Rendering ────────────────────────────────────────────────────────────
+  const HEALTHS = ["online", "degraded", "offline"];
+  function healthClass(h) { return HEALTHS.includes(h) ? h : "unknown"; }
+  function ageStr(s) {
+    s = Number(s) || 0;
+    if (s < 60) return s + "s";
+    if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s";
+    return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
+  }
+
+  function render(data) {
+    const sum = data.summary || {};
+    $("s-nodes").textContent = sum.nodes ?? 0;
+    $("s-online").textContent = sum.online ?? 0;
+    $("s-degraded").textContent = sum.degraded ?? 0;
+    $("s-offline").textContent = sum.offline ?? 0;
+    $("s-escalated").textContent = sum.escalated ?? 0;
+
+    const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+    // Sort: escalated first, then offline > degraded > online, then by name.
+    const rank = { offline: 0, degraded: 1, online: 2, unknown: 3 };
+    nodes.sort((a, b) =>
+      (b.escalated - a.escalated) ||
+      ((rank[healthClass(a.health)] ?? 3) - (rank[healthClass(b.health)] ?? 3)) ||
+      String(a.node).localeCompare(String(b.node))
+    );
+
+    const grid = $("grid");
+    grid.innerHTML = "";
+    $("empty").style.display = nodes.length ? "none" : "block";
+
+    for (const n of nodes) {
+      const hc = healthClass(n.health);
+      const rssi = (n.rssi_dbm === null || n.rssi_dbm === undefined) ? "–" : n.rssi_dbm + " dBm";
+      const cmdOk = n.last_cmd_ok;
+      const cmdCls = cmdOk === true ? "good" : cmdOk === false ? "bad" : "";
+      const cmdTxt = cmdOk === true ? "ok" : cmdOk === false ? "failed" : "–";
+      const el = document.createElement("div");
+      el.className = "card " + hc;
+      el.innerHTML =
+        '<div class="top">' +
+          '<span class="node">' + escapeHtml(String(n.node)) + '</span>' +
+          '<span>' +
+            '<span class="pill ' + hc + '">' + hc + '</span>' +
+            (n.escalated ? '<span class="pill badge-esc">escalated</span>' : '') +
+          '</span>' +
+        '</div>' +
+        '<div class="kv">' +
+          '<span class="k">RSSI</span><span class="v">' + rssi + '</span>' +
+          '<span class="k">Last msg</span><span class="v">' + escapeHtml(String(n.last_type ?? "-")) + '</span>' +
+          '<span class="k">Last heard</span><span class="v">' + ageStr(n.age_s) + ' ago</span>' +
+          '<span class="k">Last command</span><span class="v ' + cmdCls + '">' + cmdTxt + '</span>' +
+        '</div>';
+      grid.appendChild(el);
+    }
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  // ── Connection state / loop ──────────────────────────────────────────────
+  function setConn(ok, msg) {
+    $("connDot").className = "dot " + (ok ? "ok" : "err");
+    const banner = $("banner");
+    if (ok) { banner.className = "banner"; }
+    else { banner.className = "banner show"; banner.textContent = msg; }
+  }
+
+  let timer = null;
+  async function tick() {
+    saveCfg();
+    try {
+      const data = await fetchStatus();
+      render(data);
+      setConn(true, "");
+      $("foot").textContent = "Connected · updated " + new Date().toLocaleTimeString();
+    } catch (e) {
+      setConn(false,
+        "Could not reach the gateway (" + e.message + "). Is `oh-ben-claw` running with " +
+        "the gateway enabled at this URL? If opening this file directly, the gateway must " +
+        "allow CORS for your origin.");
+      $("foot").textContent = "Disconnected · last try " + new Date().toLocaleTimeString();
+    }
+  }
+
+  function schedule() {
+    if (timer) { clearInterval(timer); timer = null; }
+    const ms = Number($("interval").value) || 0;
+    if (ms > 0) timer = setInterval(tick, ms);
+  }
+
+  $("refresh").addEventListener("click", tick);
+  $("interval").addEventListener("change", () => { saveCfg(); schedule(); });
+  $("url").addEventListener("keydown", (e) => { if (e.key === "Enter") tick(); });
+  $("token").addEventListener("keydown", (e) => { if (e.key === "Enter") tick(); });
+
+  // First load
+  tick();
+  schedule();
+})();
+</script>
+</body>
+</html>

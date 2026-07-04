@@ -154,7 +154,11 @@ pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
     let mut views = Vec::new();
     for e in entities {
         let parts: Vec<&str> = e.split('.').collect();
-        if parts.len() != 2 || parts[0] != "mesh" {
+        // A mesh node rollup is `mesh.<node>` (exactly two dot-parts). Skip the
+        // supervisor's own aggregate `mesh.escalated_count`, which also has two parts
+        // but is a bare counter, not a node — otherwise it is mis-parsed as a phantom
+        // node (appearing from the tick *after* it is first written).
+        if parts.len() != 2 || parts[0] != "mesh" || parts[1] == "escalated_count" {
             continue;
         }
         let node = parts[1].to_string();
@@ -194,6 +198,64 @@ pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
         });
     }
     views
+}
+
+/// Build the read-only mesh status JSON — the single source of truth shared by the
+/// `mesh_status` agent tool and the `GET /api/v1/mesh/status` gateway route.
+///
+/// Returns `{ summary: { nodes, online, degraded, offline, escalated }, nodes: [ … ] }`,
+/// where each node carries `health`, `escalated`, `rssi_dbm`, `last_type`, `age_s`
+/// (seconds since last heard), and `last_cmd_ok`.
+pub fn status_json(world: &WorldMemory) -> serde_json::Value {
+    let views = snapshot(world);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let (mut online, mut degraded, mut offline, mut escalated) = (0u64, 0u64, 0u64, 0u64);
+    let mut nodes = Vec::with_capacity(views.len());
+    for v in &views {
+        let health = v.prev_health.map(|h| h.as_str()).unwrap_or("unknown");
+        match health {
+            "online" => online += 1,
+            "degraded" => degraded += 1,
+            "offline" => offline += 1,
+            _ => {}
+        }
+        if v.escalated {
+            escalated += 1;
+        }
+        let rollup = world.current(&format!("mesh.{}", v.node)).ok().flatten();
+        let rssi = rollup
+            .as_ref()
+            .and_then(|f| f.value.get("rssi_dbm").and_then(|r| r.as_i64()));
+        let last_type = rollup
+            .as_ref()
+            .and_then(|f| f.value.get("last_type").and_then(|t| t.as_str()))
+            .unwrap_or("-")
+            .to_string();
+        nodes.push(json!({
+            "node": v.node,
+            "health": health,
+            "escalated": v.escalated,
+            "rssi_dbm": rssi,
+            "last_type": last_type,
+            "age_s": now.saturating_sub(v.last_seen_ms) / 1000,
+            "last_cmd_ok": v.last_cmd_ok,
+        }));
+    }
+
+    json!({
+        "summary": {
+            "nodes": views.len(),
+            "online": online,
+            "degraded": degraded,
+            "offline": offline,
+            "escalated": escalated,
+        },
+        "nodes": nodes,
+    })
 }
 
 /// One supervisor tick: snapshot → decide → apply. Health decisions are observed into
@@ -518,5 +580,55 @@ mod tests {
                 && matches!(f.action, Action::Escalate { .. })),
             "mesh health drives a reflex escalation"
         );
+    }
+
+    #[test]
+    fn snapshot_ignores_the_escalated_count_aggregate() {
+        // Regression: `mesh.escalated_count` is a bare counter with two dot-parts, so it
+        // must NOT be mistaken for a `mesh.<node>` rollup (which would appear as a
+        // phantom "online" node from the tick after it is first written).
+        let world = WorldMemory::open_in_memory().unwrap();
+        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, "t").unwrap();
+        world.observe("mesh.escalated_count", json!(0), 1_000, 1_000, "t").unwrap();
+
+        let views = snapshot(&world);
+        assert_eq!(views.len(), 1, "only the real node is a node");
+        assert_eq!(views[0].node, "n1");
+        // And the status JSON shows exactly one node, not the aggregate.
+        let v = status_json(&world);
+        assert_eq!(v["summary"]["nodes"], json!(1));
+    }
+
+    #[test]
+    fn status_json_matches_the_mesh_status_shape() {
+        // The gateway route and the mesh_status tool both call status_json — one SSOT.
+        let world = WorldMemory::open_in_memory().unwrap();
+        world
+            .observe("mesh.n1", json!({ "last_type": "reflex", "rssi_dbm": -72 }), 1_000, 1_000, "t")
+            .unwrap();
+        world.observe("mesh.n1.health", json!({ "status": "online" }), 1_000, 1_000, "t").unwrap();
+        // A second node that is offline and escalated.
+        world.observe("mesh.n2", json!({ "last_type": "-" }), 1_000, 1_000, "t").unwrap();
+        world.observe("mesh.n2.health", json!({ "status": "offline" }), 1_000, 1_000, "t").unwrap();
+        world
+            .observe("mesh.n2.escalation", json!({ "status": "escalated" }), 1_000, 1_000, "t")
+            .unwrap();
+
+        let v = status_json(&world);
+        assert_eq!(v["summary"]["nodes"], json!(2));
+        assert_eq!(v["summary"]["online"], json!(1));
+        assert_eq!(v["summary"]["offline"], json!(1));
+        assert_eq!(v["summary"]["escalated"], json!(1));
+
+        let nodes = v["nodes"].as_array().unwrap();
+        let n1 = nodes.iter().find(|n| n["node"] == json!("n1")).unwrap();
+        assert_eq!(n1["health"], json!("online"));
+        assert_eq!(n1["rssi_dbm"], json!(-72));
+        assert_eq!(n1["last_type"], json!("reflex"));
+        assert_eq!(n1["escalated"], json!(false));
+        let n2 = nodes.iter().find(|n| n["node"] == json!("n2")).unwrap();
+        assert_eq!(n2["health"], json!("offline"));
+        assert_eq!(n2["escalated"], json!(true));
+        assert!(n2["rssi_dbm"].is_null());
     }
 }
