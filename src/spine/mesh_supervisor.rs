@@ -200,6 +200,23 @@ pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
     views
 }
 
+/// The last `limit` RSSI readings for a node, oldest→newest, for a sparkline.
+///
+/// Reads the node's `mesh.<node>` rollup history and pulls each fact's `rssi_dbm`
+/// (skipping facts that carried no RSSI). Returns at most `limit` values.
+pub fn rssi_series(world: &WorldMemory, node: &str, limit: usize) -> Vec<i64> {
+    let mut series: Vec<i64> = world
+        .history(&format!("mesh.{node}"))
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|f| f.value.get("rssi_dbm").and_then(|r| r.as_i64()))
+        .collect();
+    if series.len() > limit {
+        series = series.split_off(series.len() - limit); // keep the newest `limit`
+    }
+    series
+}
+
 /// Recent mesh-relevant escalations from the notifications log-of-record, newest first.
 ///
 /// Reads the `notifications.escalation` history (the durable channel written by the
@@ -279,6 +296,7 @@ pub fn status_json(world: &WorldMemory) -> serde_json::Value {
             "health": health,
             "escalated": v.escalated,
             "rssi_dbm": rssi,
+            "rssi_history": rssi_series(world, &v.node, 24),
             "last_type": last_type,
             "age_s": now.saturating_sub(v.last_seen_ms) / 1000,
             "last_cmd_ok": v.last_cmd_ok,
@@ -672,6 +690,27 @@ mod tests {
         assert!(n2["rssi_dbm"].is_null());
         // Escalations feed is present (empty here — no notifications logged).
         assert_eq!(v["escalations"], json!([]));
+    }
+
+    #[test]
+    fn rssi_series_keeps_the_newest_readings_oldest_first() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        // Four rollups for n1; one carries no rssi and is skipped.
+        world.observe("mesh.n1", json!({ "rssi_dbm": -60 }), 1_000, 1_000, "t").unwrap();
+        world.observe("mesh.n1", json!({ "rssi_dbm": -70 }), 2_000, 2_000, "t").unwrap();
+        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 3_000, 3_000, "t").unwrap();
+        world.observe("mesh.n1", json!({ "rssi_dbm": -80 }), 4_000, 4_000, "t").unwrap();
+
+        let full = rssi_series(&world, "n1", 24);
+        assert_eq!(full, vec![-60, -70, -80], "oldest→newest, rssi-less fact skipped");
+        // Limit keeps the newest N.
+        let last2 = rssi_series(&world, "n1", 2);
+        assert_eq!(last2, vec![-70, -80]);
+
+        // Surfaced per-node in status_json.
+        let v = status_json(&world);
+        let n1 = v["nodes"].as_array().unwrap().iter().find(|n| n["node"] == json!("n1")).unwrap();
+        assert_eq!(n1["rssi_history"], json!([-60, -70, -80]));
     }
 
     #[test]
