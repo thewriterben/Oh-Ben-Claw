@@ -122,6 +122,8 @@ pub struct GatewayState {
     pub skills: Option<SkillOps>,
     /// Cost tracker (Phase 15/9) — `None` if cost tracking is disabled.
     pub cost: Option<Arc<crate::cost::CostTracker>>,
+    /// World memory — powers `GET /api/v1/mesh/status`. `None` if not wired.
+    pub world: Option<Arc<crate::memory::world::WorldMemory>>,
 }
 
 /// What the gateway needs to serve the skill endpoints: the forge directory,
@@ -160,6 +162,7 @@ impl GatewayState {
             agent_pool: None,
             skills: None,
             cost: None,
+            world: None,
         }
     }
 
@@ -205,6 +208,12 @@ impl GatewayState {
         self
     }
 
+    /// Attach world memory so `GET /api/v1/mesh/status` can serve live mesh health.
+    pub fn with_world(mut self, world: Arc<crate::memory::world::WorldMemory>) -> Self {
+        self.world = Some(world);
+        self
+    }
+
     /// Broadcast an event to all connected SSE subscribers.
     pub fn broadcast(&self, event: GatewayEvent) {
         let _ = self.event_tx.send(event);
@@ -227,6 +236,7 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .route("/skills/{name}/promote", post(routes::promote_skill))
         .route("/skills/{name}/demote", post(routes::demote_skill))
         .route("/nodes", get(routes::list_nodes))
+        .route("/mesh/status", get(routes::get_mesh_status))
         .route("/tunnel", get(routes::get_tunnel_status))
         .route("/scheduler/tasks", get(routes::list_tasks))
         .route("/scheduler/tasks", post(routes::create_task))

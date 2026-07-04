@@ -610,6 +610,26 @@ pub async fn list_nodes(State(state): State<Arc<GatewayState>>) -> impl IntoResp
     }))
 }
 
+// ── Mesh ──────────────────────────────────────────────────────────────────────
+
+/// `GET /api/v1/mesh/status` — Read-only LoRa mesh health snapshot.
+///
+/// Serves the same payload as the `mesh_status` agent tool (both call
+/// [`crate::spine::mesh_supervisor::status_json`]), so a dashboard can poll it directly
+/// with a plain GET — no agent attached, no POST body. Returns
+/// `{ summary: { nodes, online, degraded, offline, escalated }, nodes: [ … ] }`, or a
+/// `503` when world memory is not wired.
+pub async fn get_mesh_status(State(state): State<Arc<GatewayState>>) -> impl IntoResponse {
+    match &state.world {
+        Some(world) => Json(crate::spine::mesh_supervisor::status_json(world)).into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "World memory not available" })),
+        )
+            .into_response(),
+    }
+}
+
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]

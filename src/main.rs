@@ -2107,6 +2107,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         if let Some(pool) = maybe_pool.clone() {
             gs = gs.with_agent_pool(pool);
         }
+        if let Some(world) = &world_mem {
+            gs = gs.with_world(Arc::clone(world));
+        }
         let state = Arc::new(gs);
         let router = gateway::build_router(state.clone());
         let bind_addr = format!("{}:{}", config.gateway.host, config.gateway.port);
