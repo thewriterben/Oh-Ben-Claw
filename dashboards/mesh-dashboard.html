@@ -73,6 +73,9 @@
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
   .kv .k { color: var(--muted); }
   .kv .v { text-align: right; font-variant-numeric: tabular-nums; }
+  .spark { margin-top: 10px; display: flex; align-items: center; gap: 8px; }
+  .spark .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
+  .spark svg { display: block; flex: 1; }
   .v.bad { color: var(--offline); }
   .v.good { color: var(--online); }
   footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px; }
@@ -221,6 +224,7 @@
       const cmdOk = n.last_cmd_ok;
       const cmdCls = cmdOk === true ? "good" : cmdOk === false ? "bad" : "";
       const cmdTxt = cmdOk === true ? "ok" : cmdOk === false ? "failed" : "–";
+      const spark = sparkline(n.rssi_history, 120, 26);
       const el = document.createElement("div");
       el.className = "card " + hc;
       el.innerHTML =
@@ -236,7 +240,8 @@
           '<span class="k">Last msg</span><span class="v">' + escapeHtml(String(n.last_type ?? "-")) + '</span>' +
           '<span class="k">Last heard</span><span class="v">' + ageStr(n.age_s) + ' ago</span>' +
           '<span class="k">Last command</span><span class="v ' + cmdCls + '">' + cmdTxt + '</span>' +
-        '</div>';
+        '</div>' +
+        (spark ? '<div class="spark"><span class="lbl">RSSI</span>' + spark + '</div>' : '');
       grid.appendChild(el);
     }
 
@@ -266,6 +271,29 @@
   function escapeHtml(s) {
     return s.replace(/[&<>"']/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  // Inline RSSI sparkline. Values are negative dBm; higher (closer to 0) = better,
+  // so it maps the max value to the top of the band.
+  function sparkline(values, w, h) {
+    const vals = (values || []).filter((v) => typeof v === "number");
+    if (vals.length < 2) return "";
+    w = w || 120; h = h || 26;
+    const min = Math.min(...vals), max = Math.max(...vals);
+    const span = max - min || 1;
+    const dx = w / (vals.length - 1);
+    const pts = vals.map((v, i) => {
+      const x = (i * dx).toFixed(1);
+      const y = (h - 2 - ((v - min) / span) * (h - 4)).toFixed(1); // higher dBm → higher
+      return x + "," + y;
+    }).join(" ");
+    const cx = ((vals.length - 1) * dx).toFixed(1);
+    const cy = (h - 2 - ((vals[vals.length - 1] - min) / span) * (h - 4)).toFixed(1);
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" width="' + w + '" height="' + h + '" ' +
+      'preserveAspectRatio="none" aria-hidden="true">' +
+      '<polyline fill="none" stroke="var(--accent)" stroke-width="1.5" ' +
+      'stroke-linejoin="round" stroke-linecap="round" points="' + pts + '"/>' +
+      '<circle cx="' + cx + '" cy="' + cy + '" r="2" fill="var(--accent)"/></svg>';
   }
 
   // ── Connection state / loop ──────────────────────────────────────────────
