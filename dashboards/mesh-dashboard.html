@@ -77,6 +77,22 @@
   .v.good { color: var(--online); }
   footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px; }
   .empty { color: var(--muted); text-align: center; padding: 40px; border: 1px dashed var(--border); border-radius: 10px; }
+  .section-title { font-size: 13px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 26px 0 12px; }
+  .esc-list { display: flex; flex-direction: column; gap: 8px; }
+  .esc {
+    display: flex; align-items: center; gap: 12px; background: var(--panel);
+    border: 1px solid var(--border); border-left: 4px solid var(--unknown);
+    border-radius: 8px; padding: 10px 14px; box-shadow: var(--shadow);
+  }
+  .esc.info { border-left-color: var(--accent); }
+  .esc.warning { border-left-color: var(--degraded); }
+  .esc.critical { border-left-color: var(--offline); }
+  .esc .sev { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; min-width: 62px; }
+  .esc.info .sev { color: var(--accent); }
+  .esc.warning .sev { color: var(--degraded); }
+  .esc.critical .sev { color: var(--offline); }
+  .esc .reason { flex: 1; }
+  .esc .when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -111,6 +127,11 @@
 
   <div class="grid" id="grid"></div>
   <div class="empty" id="empty" style="display:none">No mesh nodes reported yet.</div>
+
+  <div id="escSection" style="display:none">
+    <div class="section-title">Recent escalations</div>
+    <div class="esc-list" id="escList"></div>
+  </div>
 </main>
 
 <footer id="foot">Not yet connected — set your gateway URL and hit Refresh.</footer>
@@ -217,6 +238,28 @@
           '<span class="k">Last command</span><span class="v ' + cmdCls + '">' + cmdTxt + '</span>' +
         '</div>';
       grid.appendChild(el);
+    }
+
+    renderEscalations(Array.isArray(data.escalations) ? data.escalations : []);
+  }
+
+  const SEVS = ["info", "warning", "critical"];
+  function sevClass(s) { return SEVS.includes(s) ? s : "info"; }
+
+  function renderEscalations(items) {
+    const sec = $("escSection");
+    const list = $("escList");
+    sec.style.display = items.length ? "block" : "none";
+    list.innerHTML = "";
+    for (const e of items) {
+      const sc = sevClass(e.severity);
+      const el = document.createElement("div");
+      el.className = "esc " + sc;
+      el.innerHTML =
+        '<span class="sev">' + sc + '</span>' +
+        '<span class="reason">' + escapeHtml(String(e.reason ?? "")) + '</span>' +
+        '<span class="when">' + ageStr(e.age_s) + ' ago</span>';
+      list.appendChild(el);
     }
   }
 

@@ -200,12 +200,51 @@ pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
     views
 }
 
+/// Recent mesh-relevant escalations from the notifications log-of-record, newest first.
+///
+/// Reads the `notifications.escalation` history (the durable channel written by the
+/// notifier), drops periodic digest entries, classifies each by severity, and returns up
+/// to `limit` entries as `{ ts_ms, age_s, severity, reason }` (reason trimmed to its
+/// first sentence). Shared by the `mesh_status` tool and the gateway route.
+pub fn recent_escalations(world: &WorldMemory, limit: usize) -> Vec<serde_json::Value> {
+    use crate::agent::notify::{Severity, DIGEST_PREFIX};
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let mut out: Vec<serde_json::Value> = world
+        .history("notifications.escalation")
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|f| {
+            f.value
+                .get("reason")
+                .and_then(|r| r.as_str())
+                .map(|r| (f.valid_from, r.to_string()))
+        })
+        .filter(|(_, r)| !r.starts_with(DIGEST_PREFIX))
+        .map(|(ts, reason)| {
+            let head = reason.split_once(". ").map(|(h, _)| h).unwrap_or(&reason).to_string();
+            json!({
+                "ts_ms": ts,
+                "age_s": now.saturating_sub(ts) / 1000,
+                "severity": Severity::classify(&reason).as_str(),
+                "reason": head,
+            })
+        })
+        .collect();
+    out.reverse(); // history is oldest-first; surface newest first
+    out.truncate(limit);
+    out
+}
+
 /// Build the read-only mesh status JSON — the single source of truth shared by the
 /// `mesh_status` agent tool and the `GET /api/v1/mesh/status` gateway route.
 ///
-/// Returns `{ summary: { nodes, online, degraded, offline, escalated }, nodes: [ … ] }`,
-/// where each node carries `health`, `escalated`, `rssi_dbm`, `last_type`, `age_s`
-/// (seconds since last heard), and `last_cmd_ok`.
+/// Returns `{ summary: { nodes, online, degraded, offline, escalated }, nodes: [ … ],
+/// escalations: [ … ] }`, where each node carries `health`, `escalated`, `rssi_dbm`,
+/// `last_type`, `age_s` (seconds since last heard), and `last_cmd_ok`, and each
+/// escalation carries `ts_ms`, `age_s`, `severity`, and `reason`.
 pub fn status_json(world: &WorldMemory) -> serde_json::Value {
     let views = snapshot(world);
     let now = std::time::SystemTime::now()
@@ -255,6 +294,7 @@ pub fn status_json(world: &WorldMemory) -> serde_json::Value {
             "escalated": escalated,
         },
         "nodes": nodes,
+        "escalations": recent_escalations(world, 10),
     })
 }
 
@@ -630,5 +670,47 @@ mod tests {
         assert_eq!(n2["health"], json!("offline"));
         assert_eq!(n2["escalated"], json!(true));
         assert!(n2["rssi_dbm"].is_null());
+        // Escalations feed is present (empty here — no notifications logged).
+        assert_eq!(v["escalations"], json!([]));
+    }
+
+    #[test]
+    fn recent_escalations_are_newest_first_and_skip_digests() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        // Two real escalations + one periodic digest that must be filtered out.
+        world
+            .observe(
+                "notifications.escalation",
+                json!({ "reason": "node n1 offline. run mesh_status" }),
+                1_000, 1_000, "notify",
+            )
+            .unwrap();
+        world
+            .observe(
+                "notifications.escalation",
+                json!({ "reason": "node n2 presumed lost. escalate" }),
+                2_000, 2_000, "notify",
+            )
+            .unwrap();
+        world
+            .observe(
+                "notifications.escalation",
+                json!({ "reason": format!("{} 3 events", crate::agent::notify::DIGEST_PREFIX) }),
+                3_000, 3_000, "notify",
+            )
+            .unwrap();
+
+        let esc = recent_escalations(&world, 10);
+        assert_eq!(esc.len(), 2, "digest is filtered out");
+        // Newest first: the presumed-lost (ts 2_000) leads and is critical.
+        assert_eq!(esc[0]["ts_ms"], json!(2_000));
+        assert_eq!(esc[0]["severity"], json!("critical"));
+        assert_eq!(esc[0]["reason"], json!("node n2 presumed lost"));
+        assert_eq!(esc[1]["ts_ms"], json!(1_000));
+
+        // status_json surfaces the same feed.
+        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, "t").unwrap();
+        let v = status_json(&world);
+        assert_eq!(v["escalations"].as_array().unwrap().len(), 2);
     }
 }
