@@ -27,6 +27,9 @@ use std::time::Duration;
 
 /// ClawCam detections + health/audio/state → bitemporal world memory (S1 "Remember").
 pub mod clawcam_ingest;
+/// ClawCam analytics reports (anomaly/encounters/calibration) → `clawcam.analytics.*`
+/// facts on a slow cadence, so reflexes can act on "today is weird".
+pub mod clawcam_analytics;
 /// Vision-driven reflex + foresight rules keyed on ClawCam detections.
 pub mod clawcam_rules;
 /// Close the loop — command ClawCam (capture/arm/alert) over MCP from reflexes.

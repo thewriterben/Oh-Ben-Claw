@@ -1177,6 +1177,20 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             info!(count = vrules.len(), "vision-driven reflex rules appended");
             rules.extend(vrules);
         }
+        // ClawCam analytics reflexes ("today is weird"): only meaningful when
+        // the analytics poll is feeding `clawcam.analytics.*` facts.
+        if let Some(cp) = &config.perception.clawcam_poll {
+            if cp.enabled && cp.poll_analytics {
+                let aopts = oh_ben_claw::vision::clawcam_rules::AnalyticsRuleOptions {
+                    z_alert: cp.anomaly_z_alert,
+                    debounce_ms: cp.analytics_debounce_ms,
+                };
+                let arules =
+                    oh_ben_claw::vision::clawcam_rules::vision_analytics_rules(&aopts);
+                info!(count = arules.len(), "ClawCam analytics reflex rules appended");
+                rules.extend(arules);
+            }
+        }
         rules
     };
     if config.reflex.enabled && !reflex_rules.is_empty() {
@@ -1275,9 +1289,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 // deliver a one-line summary through the same channels.
                 if config.notifications.digest_interval_ms > 0 {
                     let interval = config.notifications.digest_interval_ms;
-                    let label = if interval % 86_400_000 == 0 {
+                    let label = if interval.is_multiple_of(86_400_000) {
                         format!("{}d", interval / 86_400_000)
-                    } else if interval % 3_600_000 == 0 {
+                    } else if interval.is_multiple_of(3_600_000) {
                         format!("{}h", interval / 3_600_000)
                     } else {
                         format!("{}m", (interval / 60_000).max(1))
@@ -1730,6 +1744,57 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                     }
                                 }
                             }
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    // ClawCam analytics reports → `clawcam.analytics.*` facts on their own slow
+    // cadence (the reports are daily aggregates), so the analytics reflexes can
+    // act on "today is weird": an unusually quiet day reads as a possible
+    // knocked-over/obstructed camera, a spike as a surge worth System 2's
+    // attention, and calibration drift as a threshold-retune prompt.
+    if let (Some(world), Some(client)) = (&world_mem, &clawcam_client) {
+        if let Some(cfg) = config.perception.clawcam_poll.clone() {
+            if cfg.enabled && cfg.poll_analytics {
+                let world = Arc::clone(world);
+                let client = Arc::clone(client);
+                let poll_safing = Arc::clone(&safing_state);
+                let interval =
+                    std::time::Duration::from_millis(cfg.analytics_interval_ms.max(60_000));
+                info!(
+                    interval_ms = cfg.analytics_interval_ms,
+                    z_alert = cfg.anomaly_z_alert,
+                    "ClawCam analytics → world memory poll spawned"
+                );
+                tokio::spawn(async move {
+                    let mut ticker = tokio::time::interval(interval);
+                    loop {
+                        ticker.tick().await;
+                        // Same load-shedding contract as the detection poll.
+                        if poll_safing.shed_load() {
+                            continue;
+                        }
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        match oh_ben_claw::vision::clawcam_analytics::poll_clawcam_analytics(
+                            Arc::clone(&client),
+                            &world,
+                            now,
+                            &cfg.source,
+                        )
+                        .await
+                        {
+                            Ok(entities) if !entities.is_empty() => info!(
+                                count = entities.len(),
+                                "ClawCam analytics folded into world memory"
+                            ),
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!("ClawCam analytics poll failed: {e}"),
                         }
                     }
                 });
