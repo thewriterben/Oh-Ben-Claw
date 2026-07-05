@@ -5,6 +5,64 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — ClawCam analytics → world memory → "today is weird" reflexes (2026-07-05)
+
+Detections told the brain *what* a camera saw; now the gateway's aggregate
+analytics tell it whether today is **abnormal** — and the reflex layer acts on
+it. Companion to ClawCam's same-day orchestrator-fusion change (fused rows mean
+the reports these polls consume no longer double-count detector chains).
+
+### Added — `src/vision/clawcam_analytics.rs` (new)
+
+- Slow-cadence ingestion of three read-only gateway reports into bitemporal
+  world memory: `get_anomaly_report` → `clawcam.analytics.anomaly` (the
+  **latest day's** signed z-score + spike/drop/none kind), `get_encounter_report`
+  → `clawcam.analytics.encounters` (independent visits, dominant subject),
+  `get_calibration_report` → `clawcam.analytics.calibration` (suggested accept
+  threshold; `well_calibrated` rides as the **string** `"true"`/`"false"` so a
+  `Condition::State` reflex can match it).
+- Honest-absence contract: an empty series, a zero-detection encounter report,
+  or a nothing-reviewed calibration report records **no fact** — absence of
+  data is not a calm day. Numeric facts use the `{"value": …}` shape the reflex
+  snapshot already reads (`fact_to_f64`), so `Condition::Sensor` thresholds
+  work unchanged.
+- `poll_clawcam_analytics()` — polls all three tools over the shared ClawCam
+  MCP client; per-tool failures log and skip, all-three-failing surfaces as one
+  error.
+
+### Added — `src/vision/clawcam_rules.rs`
+
+- `AnalyticsRuleOptions` (z_alert 2.0, debounce 6 h) +
+  `vision_analytics_rules()` — three escalating reflexes: **drop** (`z ≤ −z_alert`
+  — the signature of a knocked-over/obstructed camera or dead PIR), **spike**
+  (`z ≥ z_alert` — an activity surge worth System 2), and **calibration drift**
+  (`well_calibrated == "false"` — retune thresholds before they mislead).
+  Escalate-only by design: analytics are daily aggregates, so no direct
+  actuation rides on them.
+
+### Added — config + `main.rs`
+
+- `[perception.clawcam_poll]` gains `poll_analytics` (default off),
+  `analytics_interval_ms` (default 1 h, clamped ≥ 60 s), `anomaly_z_alert`
+  (default 2.0), `analytics_debounce_ms` (default 6 h).
+- `main.rs`: a second, slower poll loop on the shared ClawCam client (same
+  load-shedding contract as the detection poll — safing `shed_load()` skips the
+  tick), and the analytics rules merge into the live `ReflexEngine` alongside
+  safing + vision-security rules when the poll is enabled.
+
+### Tests
+
+- 10 module tests: anomaly latest-day fact (signed z, kind, date), kind `none`
+  on a non-anomalous day, empty-series/error/zero-data record nothing,
+  encounters dominant-subject selection, calibration string-bool contract +
+  unreviewed skip, bare-report unwrap tolerance; rules tests assert the exact
+  Sensor/State conditions, thresholds (symmetric even for a negative configured
+  z), and Escalate actions. NOTE: authored without a local Rust toolchain this
+  session — run `cargo test vision:: config` and `cargo clippy --workspace
+  --all-targets` to verify.
+
+---
+
 ## Unreleased — LILYGO T-Deck full integration (handheld fleet console) (2026-07-05)
 
 The T-Deck family becomes a first-class OBC citizen: a fleet radio, a mobile

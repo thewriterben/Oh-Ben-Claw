@@ -711,6 +711,7 @@ Generalize ClawCam's "capability suite plugged into the brain" pattern into a re
 - [ ] **S2 Learn (→ Phase 16):** active-learning loop — low-confidence/novel detections → review queue → human/brain correction (ground-truth signal) → improve thresholds/heads + synthesize skills
 - [ ] **S3 Accelerate (→ Phase 20/18):** register real models (MegaDetector/BirdNET weights, SpeciesNet) + accelerator detectors (Hailo/Coral/Jetson; ESP-DL/LiteRT-Micro on ESP32-S3-EYE); dual-system fast-trigger/slow-inference split
 - [ ] **S4 Safe:** assign `RiskClass` to every world-changing vision tool; route through Track 0 signed audit + staged rollout; use ClawCam's cron engine as a Phase 17 autonomy-loop instance
+- [x] **S1b Analytics consumption (2026-07-05):** ClawCam's aggregate reports feed the brain — `get_anomaly_report` / `get_encounter_report` / `get_calibration_report` poll on a slow cadence into `clawcam.analytics.*` world-memory facts (`vision/clawcam_analytics`), with reflex rules (`vision_analytics_rules`) that escalate an unusually quiet day (possible knocked-over/obstructed camera), an activity surge, or model-calibration drift (`[perception.clawcam_poll] poll_analytics`)
 
 ### Sensing Suite
 - [ ] Instantiate the contract: read sensors/fusion → world memory as time-valid facts; on-node reflex rules (Phase 18 System 1); learned thresholds; edge-accelerated fusion

@@ -111,6 +111,85 @@ pub fn vision_foresight_rules(opts: &VisionRuleOptions) -> Vec<ForesightRule> {
         .collect()
 }
 
+// ── Analytics-driven reflexes ("today is weird") ─────────────────────────────
+
+/// How to turn the `clawcam.analytics.*` facts (folded in by
+/// [`super::clawcam_analytics`]) into behavior.
+#[derive(Debug, Clone)]
+pub struct AnalyticsRuleOptions {
+    /// |z| at/above which the latest day's detection count escalates: a drop
+    /// (`z <= -z_alert`) reads as a possibly knocked-over/obstructed camera or
+    /// dead PIR; a spike (`z >= z_alert`) as a surge worth System 2's attention.
+    pub z_alert: f64,
+    /// Minimum ms between re-fires. Analytics facts change on a daily scale, so
+    /// this defaults to hours, not seconds.
+    pub debounce_ms: u64,
+}
+
+impl Default for AnalyticsRuleOptions {
+    fn default() -> Self {
+        Self {
+            z_alert: 2.0,
+            debounce_ms: 21_600_000, // 6 h
+        }
+    }
+}
+
+/// Reflex rules keyed on the analytics facts: an unusually **quiet** day and an
+/// unusually **busy** day both escalate (with drop framed as a possible camera
+/// fault — the actionable reading), and a **miscalibrated** model escalates so
+/// alert thresholds get retuned before they mislead. Merge into the live
+/// `ReflexEngine` alongside the safing and vision-security rules.
+pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
+    let z = opts.z_alert.abs();
+    vec![
+        ReflexRule {
+            id: "vision-anomaly-drop".to_string(),
+            when: Condition::Sensor {
+                entity: super::clawcam_analytics::ANOMALY_ENTITY.to_string(),
+                op: Cmp::Le,
+                value: -z,
+            },
+            then: Action::Escalate {
+                reason: format!(
+                    "unusually quiet day on the cameras (z <= -{z}): possible \
+                     obstruction, knock-over, or dead sensor — investigate"
+                ),
+            },
+            debounce_ms: opts.debounce_ms,
+            max_rate_hz: None,
+        },
+        ReflexRule {
+            id: "vision-anomaly-spike".to_string(),
+            when: Condition::Sensor {
+                entity: super::clawcam_analytics::ANOMALY_ENTITY.to_string(),
+                op: Cmp::Ge,
+                value: z,
+            },
+            then: Action::Escalate {
+                reason: format!("unusually busy day on the cameras (z >= {z}): activity surge"),
+            },
+            debounce_ms: opts.debounce_ms,
+            max_rate_hz: None,
+        },
+        ReflexRule {
+            id: "vision-calibration-drift".to_string(),
+            when: Condition::State {
+                entity: super::clawcam_analytics::CALIBRATION_ENTITY.to_string(),
+                field: Some("well_calibrated".to_string()),
+                equals: "false".to_string(),
+            },
+            then: Action::Escalate {
+                reason: "camera model confidence disagrees with human review \
+                         (miscalibrated) — retune detection/alert thresholds"
+                    .to_string(),
+            },
+            debounce_ms: opts.debounce_ms,
+            max_rate_hz: None,
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +244,61 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].entity, "vision.count.vehicle");
         assert!(matches!(rules[0].op, Cmp::Ge));
+    }
+
+    #[test]
+    fn analytics_rules_cover_drop_spike_and_calibration() {
+        let rules = vision_analytics_rules(&AnalyticsRuleOptions::default());
+        assert_eq!(rules.len(), 3);
+        // Drop rule: z <= -2.0 on the anomaly fact, escalating.
+        let drop = rules.iter().find(|r| r.id == "vision-anomaly-drop").unwrap();
+        match &drop.when {
+            Condition::Sensor { entity, op, value } => {
+                assert_eq!(entity, super::super::clawcam_analytics::ANOMALY_ENTITY);
+                assert!(matches!(op, Cmp::Le));
+                assert!((value + 2.0).abs() < 1e-9);
+            }
+            other => panic!("expected a Sensor condition, got {other:?}"),
+        }
+        assert!(matches!(drop.then, Action::Escalate { .. }));
+        // Spike rule mirrors it at +z.
+        let spike = rules.iter().find(|r| r.id == "vision-anomaly-spike").unwrap();
+        match &spike.when {
+            Condition::Sensor { op, value, .. } => {
+                assert!(matches!(op, Cmp::Ge));
+                assert!((value - 2.0).abs() < 1e-9);
+            }
+            other => panic!("expected a Sensor condition, got {other:?}"),
+        }
+        // Calibration rule matches the string "false" (the State contract).
+        let cal = rules.iter().find(|r| r.id == "vision-calibration-drift").unwrap();
+        match &cal.when {
+            Condition::State { entity, field, equals } => {
+                assert_eq!(entity, super::super::clawcam_analytics::CALIBRATION_ENTITY);
+                assert_eq!(field.as_deref(), Some("well_calibrated"));
+                assert_eq!(equals, "false");
+            }
+            other => panic!("expected a State condition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn analytics_z_alert_is_symmetric_even_if_negative_configured() {
+        let rules = vision_analytics_rules(&AnalyticsRuleOptions {
+            z_alert: -3.0,
+            ..Default::default()
+        });
+        let drop = rules.iter().find(|r| r.id == "vision-anomaly-drop").unwrap();
+        let spike = rules.iter().find(|r| r.id == "vision-anomaly-spike").unwrap();
+        match (&drop.when, &spike.when) {
+            (
+                Condition::Sensor { value: d, .. },
+                Condition::Sensor { value: s, .. },
+            ) => {
+                assert!((d + 3.0).abs() < 1e-9);
+                assert!((s - 3.0).abs() < 1e-9);
+            }
+            other => panic!("expected Sensor conditions, got {other:?}"),
+        }
     }
 }

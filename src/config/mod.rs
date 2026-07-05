@@ -1344,6 +1344,36 @@ pub struct ClawCamPollConfig {
     /// (`audio.clawcam:{node}`), so a glassbreak is classifiable by safing.
     #[serde(default)]
     pub poll_audio: bool,
+    /// Also poll the gateway's analytics reports (`get_anomaly_report`,
+    /// `get_encounter_report`, `get_calibration_report`) on their own slower
+    /// cadence → `clawcam.analytics.*` facts, and (with `[reflex]` enabled)
+    /// append the analytics reflex rules — so an unusually quiet day (possible
+    /// knocked-over/obstructed camera), an activity surge, or a miscalibrated
+    /// model *escalates* instead of sitting unread in a report.
+    #[serde(default)]
+    pub poll_analytics: bool,
+    /// Analytics poll cadence in ms (the reports are daily aggregates — hourly
+    /// is plenty). Default 3 600 000 (1 h); clamped to ≥ 60 000 at spawn.
+    #[serde(default = "default_clawcam_analytics_interval_ms")]
+    pub analytics_interval_ms: u64,
+    /// |z| at/above which the latest day's detection count escalates
+    /// (drop ⇒ possible camera fault, spike ⇒ surge). Default 2.0.
+    #[serde(default = "default_clawcam_anomaly_z_alert")]
+    pub anomaly_z_alert: f64,
+    /// Debounce for the analytics reflex rules in ms. Default 21 600 000 (6 h) —
+    /// these facts change on a daily scale.
+    #[serde(default = "default_clawcam_analytics_debounce_ms")]
+    pub analytics_debounce_ms: u64,
+}
+
+fn default_clawcam_analytics_interval_ms() -> u64 {
+    3_600_000
+}
+fn default_clawcam_anomaly_z_alert() -> f64 {
+    2.0
+}
+fn default_clawcam_analytics_debounce_ms() -> u64 {
+    21_600_000
 }
 
 fn default_clawcam_tool() -> String {

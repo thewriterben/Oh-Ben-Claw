@@ -128,7 +128,7 @@ pub fn decide(views: &[MeshNodeView], now_ms: u64, cfg: &MeshSupervisorConfig) -
                 if let Some(cmd_name) = &cfg.recover {
                     let due = v
                         .last_recovery_ms
-                        .map_or(true, |t| now_ms.saturating_sub(t) >= cfg.min_recovery_interval_ms);
+                        .is_none_or(|t| now_ms.saturating_sub(t) >= cfg.min_recovery_interval_ms);
                     if due {
                         let id = format!("sup-{}-{}", v.node, now_ms);
                         out.push(MeshDecision::Recover {
