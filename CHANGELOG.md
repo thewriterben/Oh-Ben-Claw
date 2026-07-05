@@ -5,6 +5,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — LILYGO T-Deck full integration (handheld fleet console) (2026-07-05)
+
+The T-Deck family becomes a first-class OBC citizen: a fleet radio, a mobile
+GPS node, and — new capability class — a **human-carried operator console** on
+the LoRa spine. Hardware facts were deep-research-verified against lilygo.cc,
+Xinyuan-LilyGO/T-Deck and Meshtastic docs (see `T-DECK-RESEARCH.md` in the
+T-Deck repo); the pin map comes from the vendor `utilities.h`.
+
+- **Registry** — upgraded `lilygo-t-deck` (adds `keyboard`, `trackball`,
+  `microsd`, `psram`, `battery` tokens + the free Grove UART connector) and
+  added `lilygo-t-deck-plus` (onboard GNSS — u-blox M10Q or Quectel L76K by
+  SKU — + 2000 mAh; the GPS consumes the Grove pins). New `keyboard` /
+  `trackball` capability tokens in `VALID_CAPABILITIES`. `registry.json`
+  regenerated to match (hand-mirrored; re-run `emit-registry` to confirm).
+- **`firmware/t-deck-terminal` (new)** — Arduino reference firmware that makes
+  a T-Deck an interactive spine member: live frame scrollback on the 2.8"
+  screen, QWERTY chat + `/cmd` NodeCommands (execution still gated by the
+  target node's on-MCU Track 0 mirror — the console has no authority of its
+  own), trackball scrollback, GPS+battery heartbeats, flood relay with
+  (src,seq) de-dup, runtime-switchable spine/fleet nets, and a USB gateway
+  mode that prints the exact `SPINE ◄ …` console format `lora_gateway.rs`
+  parses — a drop-in base-station replacement, zero host changes.
+- **`firmware/lora-node`** — new `BOARD_TDECK_SX1262` preset in
+  `obc_lora_bridge.ino` (shared-SPI pins SCK40/MISO38/MOSI41, NSS9/DIO1 45/
+  RST17/BUSY13) including the `BOARD_POWERON` (GPIO10) gate raise; README
+  covers T-Deck flashing (trackball-BOOT, OPI PSRAM, antenna warning).
+- **Deployment generator** — new `FeatureDesire::OperatorConsole` (keys off
+  `keyboard`) and `ItemRole::Console`, so the advisor can plan an in-field
+  human console and suggest a T-Deck when one is missing.
+- Docs: README firmware + supported-hardware sections, ROADMAP vendor row.
+- Tests: registry (base + Plus + lora-capability), inventory
+  (`operator_console_desire_and_role`). NOTE: authored without a local Rust
+  toolchain this session — run `cargo test peripherals::registry deployment`
+  and `cargo run --bin emit-registry -- registry/registry.json` to verify.
+
+---
+
 ## Unreleased — `judge-calibrate` CLI (operator-run calibration) (2026-07-02)
 
 Follow-up to the LLM-judge calibration API: an operator can now measure

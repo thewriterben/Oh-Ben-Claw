@@ -647,7 +647,7 @@ new transports/drivers/accelerator-inference touch firmware.
 - [ ] **Espressif** — ESP32 / -S2 / -S3 / -C3 / -C6 / -H2 / -P4 devkits, ESP-EYE, ESP32-S3-BOX
 - [ ] **Seeed Studio** — XIAO (C3/C6/S3/RP2350), Grove sensor family, Grove Vision AI v2, reComputer Jetson + Hailo-8L
 - [ ] **M5Stack** — Core2/CoreS3, StickC PLUS2, AtomS3, M5 Units, LLM Module (AX630C)
-- [ ] **LILYGO** — T-Display-S3, T-Watch-S3, T-Beam (LoRa+GPS), T-Deck, T-Echo
+- [ ] **LILYGO** — T-Display-S3 ✅, T-Watch-S3, T-Beam (LoRa+GPS) ✅, **T-Deck ✅ / T-Deck Plus ✅** (full integration 2026-07: registry entries with `keyboard`/`trackball` tokens, `obc_lora_bridge` preset, `firmware/t-deck-terminal` handheld fleet console, `OperatorConsole` desire + `Console` role), T-Echo
 - [ ] **Adafruit** — Feather ESP32-S3, QT Py, RP2040/RP2350, STEMMA QT sensor catalog
 - [ ] **SparkFun** — Thing Plus, Qwiic sensor catalog, MicroMod
 - [ ] **Raspberry Pi** — Pico 2 / 2 W, RPi 5 + AI HAT+ (Hailo), AI Camera (IMX500), Sense HAT

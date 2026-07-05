@@ -44,6 +44,10 @@ pub enum FeatureDesire {
     AcceleratedInference,
     /// Agent communicates over long-range radio — requires `lora` hardware.
     LongRangeRadio,
+    /// A human operator can command the fleet in the field from a handheld
+    /// device — requires `keyboard` hardware (satisfied by e.g. the LILYGO
+    /// T-Deck / T-Deck Plus running `firmware/t-deck-terminal`).
+    OperatorConsole,
     /// Agent knows its position — requires `gps` hardware.
     Localization,
     /// Agent drives physical actuators (servos/motors) — requires `actuate`.
@@ -76,6 +80,7 @@ impl FeatureDesire {
                 "nn_accel",
             ],
             Self::LongRangeRadio => &["lora"],
+            Self::OperatorConsole => &["keyboard"],
             Self::Localization => &["gps"],
             Self::Actuation => &["actuate"],
             Self::Custom(_) => &[],
@@ -100,6 +105,10 @@ impl FeatureDesire {
                 "hardware-accelerated on-device inference (NPU/TPU/VPU/GPU)".to_string()
             }
             Self::LongRangeRadio => "long-range radio link (LoRa/LoRaWAN)".to_string(),
+            Self::OperatorConsole => {
+                "handheld operator console (keyboard + display, in-field fleet control)"
+                    .to_string()
+            }
             Self::Localization => "geospatial localization via GNSS/GPS".to_string(),
             Self::Actuation => "physical actuation (servos, motors)".to_string(),
             Self::Custom(s) => s.clone(),
@@ -125,6 +134,9 @@ pub enum ItemRole {
     Sensing,
     /// General-purpose peripheral — GPIO expansion, actuator control, etc.
     Peripheral,
+    /// Handheld operator console — a keyboard+display device (e.g. LILYGO
+    /// T-Deck) a human uses to observe and command the fleet in the field.
+    Console,
     /// Unassigned — role will be inferred by the planner.
     #[default]
     Unassigned,
@@ -139,6 +151,7 @@ impl std::fmt::Display for ItemRole {
             Self::Listening => write!(f, "listening"),
             Self::Sensing => write!(f, "sensing"),
             Self::Peripheral => write!(f, "peripheral"),
+            Self::Console => write!(f, "console"),
             Self::Unassigned => write!(f, "unassigned"),
         }
     }
@@ -479,6 +492,19 @@ mod tests {
         assert!(FeatureDesire::EdgeInference
             .required_capabilities()
             .is_empty());
+    }
+
+    #[test]
+    fn operator_console_desire_and_role() {
+        // The desire keys off the `keyboard` capability token (T-Deck family).
+        assert_eq!(
+            FeatureDesire::OperatorConsole.required_capabilities(),
+            &["keyboard"]
+        );
+        // A T-Deck Plus item can carry the Console role.
+        let item = HardwareItem::new("field-console", "lilygo-t-deck-plus", "serial")
+            .with_role(ItemRole::Console);
+        assert_eq!(item.role.to_string(), "console");
     }
 
     #[test]

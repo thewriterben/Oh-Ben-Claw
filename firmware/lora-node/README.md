@@ -1,8 +1,13 @@
 # OBC LoRa-mesh node firmware
 
-Reference firmware that turns a LoRa dev board (LilyGO **T-Beam**, **Heltec WiFi
-LoRa 32 v2**, or **RAK4631**) into a transparent **USB-serial ⇄ LoRa** bridge for
-the Oh-Ben-Claw fleet mesh.
+Reference firmware that turns a LoRa dev board (LilyGO **T-Beam**, **T-Deck /
+T-Deck Plus**, **Heltec WiFi LoRa 32 v2**, or **RAK4631**) into a transparent
+**USB-serial ⇄ LoRa** bridge for the Oh-Ben-Claw fleet mesh.
+
+> **T-Deck note:** this sketch uses the T-Deck as a dumb radio only (screen and
+> keyboard stay dark). To use the T-Deck as an interactive handheld fleet
+> console — display, keyboard, GPS on the Plus — flash
+> [`firmware/t-deck-terminal`](../t-deck-terminal/) instead.
 
 ## The split
 
@@ -33,15 +38,19 @@ the auction/exploration logic — unchanged.
 
 ## Flash it
 
-1. Arduino IDE (or `arduino-cli`) with the ESP32 (T-Beam/Heltec) or nRF52
+1. Arduino IDE (or `arduino-cli`) with the ESP32 (T-Beam/Heltec/T-Deck) or nRF52
    (RAK4631) board package installed.
 2. Library Manager → install **RadioLib** by Jan Gromes (6.x).
 3. Open `obc_lora_bridge/obc_lora_bridge.ino`.
 4. At the top of the sketch, **uncomment your board** (`BOARD_TBEAM_SX1276`,
-   `BOARD_HELTEC_V2_SX1276`, `BOARD_HELTEC_V3_SX1262`, or `BOARD_RAK4631_SX1262`)
-   and comment the others. The **Heltec V3** (ESP32-S3 + SX1262) is the budget
-   two-node pick; note it uses the SX1262 on a dedicated SPI bus (handled by the
-   preset), *not* the SX1276 of the older V2.
+   `BOARD_HELTEC_V2_SX1276`, `BOARD_HELTEC_V3_SX1262`, `BOARD_RAK4631_SX1262`, or
+   `BOARD_TDECK_SX1262`) and comment the others. The **Heltec V3** (ESP32-S3 +
+   SX1262) is the budget two-node pick; note it uses the SX1262 on a dedicated SPI
+   bus (handled by the preset), *not* the SX1276 of the older V2. The **T-Deck**
+   preset covers both T-Deck and T-Deck Plus (same pins) and raises the board's
+   `BOARD_POWERON` gate (GPIO10) automatically; to flash, hold the trackball
+   center-press (BOOT) while powering on. Board settings: ESP32S3 Dev Module,
+   OPI PSRAM, USB CDC on boot enabled. **Never TX without an antenna attached.**
 5. Set `RADIO_FREQ_MHZ` for your **region** (US ISM `915.0`, EU868 `868.0`). Every
    node in the mesh must share frequency **and** `RADIO_BW_KHZ` / `RADIO_SF` /
    `RADIO_CR` / `RADIO_SYNCWORD`, or they won't hear each other.

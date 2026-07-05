@@ -208,6 +208,8 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 | Seeed XIAO ESP32S3-Sense | Serial / MQTT | Camera (OV2640), Microphone (PDM), GPIO, Wi-Fi, BLE |
 | Sipeed 6+1 Mic Array | USB (UAC1) / Serial | Far-field 6+1 MEMS microphone array |
 | ESP32-S3 (generic) | Serial / MQTT | GPIO, Camera, Microphone, Sensors |
+| LILYGO T-Deck | Serial / LoRa | LoRa (SX1262), Touch Display, Keyboard, Trackball, Mic, Speaker, microSD |
+| LILYGO T-Deck Plus | Serial / LoRa | T-Deck + GPS (u-blox/L76K) + 2000 mAh — handheld fleet console (`firmware/t-deck-terminal`) |
 | ESP32-C3 | Serial / MQTT | GPIO, I2C, SPI, Wi-Fi, BLE |
 | NanoPi Neo3 | Native (sysfs) / MQTT | GPIO (sysfs), I2C, SPI |
 | Raspberry Pi (all models) | Native (rppal) / MQTT | GPIO, Camera (libcamera), Microphone |
@@ -482,6 +484,21 @@ cargo espflash flash --monitor
 ```
 
 Works with the Waveshare ESP32-S3 Touch LCD 2.1, Seeed XIAO ESP32S3-Sense, and generic ESP32-S3 boards.
+
+### LoRa mesh nodes (`firmware/lora-node`, `firmware/heltec-lora-linktest`)
+
+Radios for the off-grid spine: `lora-node` is a dumb USB-serial ⇄ LoRa bridge
+(T-Beam, Heltec V2/V3, RAK4631, **T-Deck**) speaking the host's fleet codec, and
+`heltec-lora-linktest` is the Rust base-station gateway for the spine net.
+
+### T-Deck handheld fleet console (`firmware/t-deck-terminal`)
+
+Turns a **LILYGO T-Deck / T-Deck Plus** into a human-carried console on the LoRa
+spine: live frame scrollback on the 2.8" screen, QWERTY chat and `/cmd` node
+commands (still gated by the target node's on-MCU Track 0 mirror), GPS + battery
+heartbeats on the Plus, flood relay, and — tethered over USB — a drop-in
+replacement for the Heltec base-station gateway. See
+[`firmware/t-deck-terminal/README.md`](firmware/t-deck-terminal/README.md).
 
 ### NanoPi Neo3 / Raspberry Pi
 

@@ -221,6 +221,8 @@ pub static VALID_CAPABILITIES: &[&str] = &[
     // I/O form / actuation / power
     "display",
     "touch",
+    "keyboard",
+    "trackball",
     "microsd",
     "psram",
     "actuate",
@@ -1019,17 +1021,49 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         connectors: &[Connector::Bare],
     },
     // ── LILYGO T-Deck ─────────────────────────────────────────────────────────
-    // ESP32-S3 + SX1262 LoRa, 2.8" touch LCD, keyboard, trackball, mic, speaker.
+    // ESP32-S3FN16R8 + SX1262 LoRa (+22 dBm), 2.8" ST7789 touch LCD (GT911),
+    // QWERTY keyboard (separate ESP32-C3 as I2C slave @ 0x55), trackball, mic
+    // (ES7210) + speaker (MAX98357A), microSD on the shared SPI bus. The Grove
+    // HY2.0-4P UART port (GPIO 43/44) is free on this base model. No battery in
+    // the box (JST connector + ADC on IO04; charging via TP4065B). Peripherals
+    // are gated behind BOARD_POWERON (GPIO10) — must be driven HIGH first.
+    // Facts verified in T-DECK-RESEARCH.md (T-Deck repo) against lilygo.cc and
+    // Xinyuan-LilyGO/T-Deck, 2026-07.
     BoardInfo {
         vid: 0x303a,
         pid: 0x1001,
         name: "lilygo-t-deck",
         architecture: Some(
-            "ESP32-S3 LX7 dual-core @ 240 MHz + SX1262 LoRa, 2.8\" IPS touch, keyboard/trackball (native USB; shared VID/PID)",
+            "ESP32-S3 LX7 dual-core @ 240 MHz + SX1262 LoRa, 2.8\" IPS touch, keyboard/trackball, 16 MB flash / 8 MB PSRAM (native USB; shared VID/PID)",
         ),
         transport: "serial",
         capabilities: &[
-            "gpio", "i2c", "spi", "wifi", "ble", "lora", "display", "touch", "audio_sample",
+            "gpio", "i2c", "spi", "wifi", "ble", "lora", "display", "touch", "keyboard",
+            "trackball", "microsd", "psram", "battery", "audio_sample", "audio_output",
+        ],
+        vendor: "LILYGO",
+        ecosystem: "T-Deck",
+        connectors: &[Connector::Grove, Connector::Bare],
+    },
+    // ── LILYGO T-Deck Plus ────────────────────────────────────────────────────
+    // The T-Deck board in a finished handheld: adds onboard GNSS (u-blox MIA-M10Q
+    // @ 38400 baud or Quectel L76K @ 9600 baud, SKU-dependent) on UART GPIO 43/44
+    // and a built-in 2000 mAh battery. Electrically identical to the base board
+    // otherwise (same pins, same firmware). The GPS consumes the Grove UART pins,
+    // so the Grove port is NOT usable on the Plus. Natural OBC roles: handheld
+    // fleet terminal (firmware/t-deck-terminal), LoRa mesh bridge, or mobile
+    // GPS-reporting node.
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "lilygo-t-deck-plus",
+        architecture: Some(
+            "ESP32-S3 LX7 dual-core @ 240 MHz + SX1262 LoRa + GNSS, 2.8\" IPS touch, keyboard/trackball, 2000 mAh (native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "i2c", "spi", "wifi", "ble", "lora", "gps", "display", "touch",
+            "keyboard", "trackball", "microsd", "psram", "battery", "audio_sample",
             "audio_output",
         ],
         vendor: "LILYGO",
@@ -2092,6 +2126,8 @@ mod tests {
         let names: Vec<_> = boards.iter().map(|b| b.name).collect();
         assert!(names.contains(&"lilygo-t-beam"));
         assert!(names.contains(&"heltec-wifi-lora-32-v3"));
+        assert!(names.contains(&"lilygo-t-deck"));
+        assert!(names.contains(&"lilygo-t-deck-plus"));
     }
 
     #[test]
@@ -2297,6 +2333,25 @@ mod tests {
         assert!(b.capabilities.contains(&"lora"));
         assert!(b.capabilities.contains(&"display"));
         assert!(b.capabilities.contains(&"touch"));
+        assert!(b.capabilities.contains(&"keyboard"));
+        assert!(b.capabilities.contains(&"trackball"));
+        // Base model: Grove UART port is free; no GPS onboard.
+        assert!(b.connectors.contains(&Connector::Grove));
+        assert!(!b.capabilities.contains(&"gps"));
+    }
+
+    #[test]
+    fn t_deck_plus_adds_gps_and_loses_grove() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "lilygo-t-deck-plus")
+            .unwrap();
+        assert!(b.capabilities.contains(&"gps"));
+        assert!(b.capabilities.contains(&"lora"));
+        assert!(b.capabilities.contains(&"battery"));
+        assert!(b.capabilities.contains(&"keyboard"));
+        // The onboard GPS consumes the Grove UART pins (GPIO 43/44).
+        assert!(!b.connectors.contains(&Connector::Grove));
     }
 
     #[test]
