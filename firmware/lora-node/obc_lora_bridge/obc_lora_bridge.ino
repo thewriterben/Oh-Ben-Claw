@@ -39,6 +39,7 @@
 // #define BOARD_HELTEC_V2_SX1276  // Heltec WiFi LoRa 32 v2 (SX1276)
 // #define BOARD_HELTEC_V3_SX1262  // Heltec WiFi LoRa 32 v3 (SX1262, ESP32-S3)
 // #define BOARD_RAK4631_SX1262    // RAK4631 / WisBlock (SX1262)
+// #define BOARD_TDECK_SX1262      // LilyGO T-Deck / T-Deck Plus (SX1262, ESP32-S3)
 
 // ─── Radio parameters ───────────────────────────────────────────────────────────
 // FREQUENCY MUST MATCH your host LoraMeshConfig.freq_mhz AND your region's rules.
@@ -85,8 +86,21 @@ static const unsigned long SELFTEST_PERIOD_MS = 5000;
 #elif defined(BOARD_RAK4631_SX1262)
   // RAK4631 WisBlock: NSS=42 DIO1=47 RST=38 BUSY=46
   SX1262 radio = new Module(42, 47, 38, 46);
+#elif defined(BOARD_TDECK_SX1262)
+  // LilyGO T-Deck / T-Deck Plus (ESP32-S3): SX1262 on the board's *shared* SPI bus
+  // (display + SD card live there too — fine for this dumb-modem sketch, which
+  // never touches them). NSS=9 DIO1=45 RST=17 BUSY=13 ; SPI SCK=40 MISO=38 MOSI=41.
+  // Pin map verified against Xinyuan-LilyGO/T-Deck examples/UnitTest/utilities.h.
+  SX1262 radio = new Module(9, 45, 17, 13);
+  #define LORA_SPI_SCK  40
+  #define LORA_SPI_MISO 38
+  #define LORA_SPI_MOSI 41
+  #define LORA_SPI_NSS  9
+  // T-Deck gotcha: every peripheral (radio included) is behind a power-gate pin.
+  // BOARD_POWERON (GPIO10) must be driven HIGH before radio.begin() will talk.
+  #define TDECK_POWERON 10
 #else
-  #error "Select a board: define one of BOARD_TBEAM_SX1276 / BOARD_HELTEC_V2_SX1276 / BOARD_HELTEC_V3_SX1262 / BOARD_RAK4631_SX1262"
+  #error "Select a board: define one of BOARD_TBEAM_SX1276 / BOARD_HELTEC_V2_SX1276 / BOARD_HELTEC_V3_SX1262 / BOARD_RAK4631_SX1262 / BOARD_TDECK_SX1262"
 #endif
 
 // ─── RX interrupt plumbing ──────────────────────────────────────────────────────
@@ -109,6 +123,13 @@ static bool   lineOverflow = false;
 void setup() {
   Serial.begin(SERIAL_BAUD);
   while (!Serial && millis() < 3000) { /* wait for USB CDC on native-USB boards */ }
+
+  // T-Deck: release the board-wide peripheral power gate before touching the radio.
+#ifdef TDECK_POWERON
+  pinMode(TDECK_POWERON, OUTPUT);
+  digitalWrite(TDECK_POWERON, HIGH);
+  delay(100);  // let the gated rail settle before SPI traffic
+#endif
 
   // Boards that put the LoRa radio on a non-default SPI bus (e.g. Heltec V3) must
   // configure those pins before RadioLib touches the chip.
