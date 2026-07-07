@@ -158,7 +158,7 @@ pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
                      drop; (2) `get_node_health` — a camera offline or on low battery \
                      explains a silent feed; (3) `get_site_report` to see if it's \
                      site-wide or one subject. Read-only tools; any node action stays \
-                     Track-0 gated."
+                     Track-0 gated. Full playbook: docs/playbooks/vision-analytics.md."
                 ),
             },
             debounce_ms: opts.debounce_ms,
@@ -177,7 +177,8 @@ pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
                      Triage: (1) `get_anomaly_report` for the day and its magnitude; (2) \
                      `get_site_report` for which species and whether it's rising; (3) a \
                      genuine surge may warrant an operator alert. Read-only tools; any \
-                     node action stays Track-0 gated."
+                     node action stays Track-0 gated. Full playbook: \
+                     docs/playbooks/vision-analytics.md."
                 ),
             },
             debounce_ms: opts.debounce_ms,
@@ -197,7 +198,8 @@ pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
                          detection / alert thresholds toward that threshold so alerts \
                          stop misleading; (3) `get_review_queue` to clear the ambiguous \
                          backlog driving the disagreement. Read-only tools; any threshold \
-                         change stays operator-gated."
+                         change stays operator-gated. Full playbook: \
+                         docs/playbooks/vision-analytics.md."
                     .to_string(),
             },
             debounce_ms: opts.debounce_ms,
