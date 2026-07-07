@@ -663,12 +663,14 @@ new transports/drivers/accelerator-inference touch firmware.
 - [x] **Weekly hardware scout** — scheduled task `obc-hardware-scout` (Mondays 09:00 local) scans the vendor list, proposes ranked additions with ready-to-paste registry entries + a "needs verification" list, writes a dated report to `Knowledge Base/hardware-scout-YYYY-MM-DD.md`; does not edit `registry.rs` directly
 - [ ] Triage + merge rubric applied (new capability / new ecosystem / popularity > clone/out-of-scope); merge requires verified VID/PID (or explicit bridge note) + a passing registry test
 - [ ] Per addition: registry entry with connector/vendor/ecosystem, valid/new capability tokens, a resolve test, and a linked firmware item if a new transport/driver/accelerator is implied
+- [x] **2026-07-06 scout merge** — 10 boards (OAK-D Lite [`vpu`, first Luxonis], ESP32-C5 + XIAO ESP32-C5 [first dual-band Wi-Fi 6], M5Stack Tab5 + Cardputer, LILYGO T-Lora Pager, Pimoroni Presto [first Pimoroni], Pico 2 W, Adafruit Feather ESP32-S3 TFT [first Feather], Arduino Nano ESP32 [first wireless Arduino]) + 2 accessories (AI HAT+ 2 / Hailo-10H GenAI-class, AI Camera IMX500); `vpu` token added, completing the accelerator taxonomy. Held for VID/PID verification: Feather RP2350, reCamera 2002w, BeagleY-AI, SenseCAP Watcher, plain Feather ESP32-S3, MaixCAM (see `Knowledge Base/hardware-scout-2026-07-06.md` §4)
 
 ### Firmware (only where an addition needs on-device execution)
 
 - [ ] New transport adapters as needed (CAN/RS-485 nodes, Ethernet SBCs, radio gateways)
 - [ ] New on-device sensor/peripheral drivers (reuse existing `sensor_read` dispatch where the bus exists)
 - [ ] AI-accelerator nodes (Coral/Hailo/Jetson/K230) run as edge-inference nodes via `EdgeAgent`, advertising their accelerator token and exposing local inference as a spine tool
+- [ ] **OAK VPU node (from 2026-07-06 scout):** DepthAI host runtime wiring so `oak-d-lite` (`vpu`) runs as an edge-inference node — depth + NN pipelines exposed as spine tools; IMX500 AI Camera model loading via the rpicam/imx500 stack on RPi hosts
 
 ## Ecosystem Integration 📋 Planned *(standing track)*
 
@@ -719,6 +721,25 @@ Generalize ClawCam's "capability suite plugged into the brain" pattern into a re
 ### Movement Suite *(highest-risk — Track 0 must be mature first)*
 - [ ] Instantiate the contract for actuators (GPIO/relay/motor/servo/pan-tilt): deterministic on-MCU safety limits, physical risk class, staged rollout, signed audit
 - [ ] Closed-loop composition: Vision detects → world memory → brain/reflex commands Movement to track (vision-driven actuation); learned movement skills gated by Track 0
+
+## Conservation Grid 📋 Planned *(standing track)*
+
+Turn the ecosystem into a next-generation wildlife-conservation data-acquisition platform: multi-camera mesh networks deployed on a grid overlaid on physical topography, with positioning, weather metering, satellite backhaul/imagery, drone-fleet integration, and federated learning. Full gap analysis, target architecture, and the G0–G9 phasing: `docs/CONSERVATION-GRID-STRATEGY.md`. **Thesis:** the mesh (`src/spine`, `src/fleet`) and ClawCam's data pipeline are already strong; ~7 of the requested capabilities are all blocked on one absent primitive — a geospatial coordinate backbone. G0–G1 below are that unlock; do them first.
+
+### G0 — Geospatial foundation *(unlock; do first)*
+
+- [ ] **Site-model contract (land first):** define a shared `site` schema — boundary polygon, origin `(lat, lon)`, DEM reference, node positions — as a fixed contract both OBC and ClawCam build against (parallel-author coordination surface)
+- [ ] **Geodetic frame in world memory:** add earth-referenced coordinates with a single ENU⇄`(lat, lon)` conversion anchored at a site origin; **wrap, don't replace** `src/navigation/` — the existing 2D metric occupancy/SE2 math keeps operating in the local tangent plane, converting only at the edges
+- [ ] **One geometry, not two:** the ENU⇄geodetic conversion is defined once here in OBC; ClawCam consumes it (guard against forked coordinate conventions)
+- [ ] **ClawCam-side geo columns** (tracked in ClawCam `docs/ROADMAP.md` Phase 15): promote `latitude`/`longitude`/`altitude_m` to queryable columns on devices/events; `sites` table; geo in CSV export
+- [ ] Exit: a detection is queryable "within this polygon"; a node has a real earth position
+
+### G1 — Grid deployment + coverage optimizer *(the named capability)*
+
+- [ ] **Coverage optimizer:** extend `src/deployment/` (or new `src/siteplan/`) — given a site polygon, terrain, and node budget, generate candidate grid/lattice positions and optimize for detection coverage **and** mesh connectivity (greedy max-coverage first, then simulated annealing); reuse `src/fleet/` conflict-avoidance geometry for minimum node spacing
+- [ ] **Feed the codegen:** optimized positions flow into the existing scheme/firmware output (`src/deployment/scheme.rs`, `src/deployment/firmware_scaffold.rs`) so each placed node gets its config
+- [ ] **Map UI (cross-repo, Ecosystem Integration track):** OBC-deployment-generator adds a map step rendering the optimized layout and feeding positions into its TOML/firmware codegen; a quick win is rendering the *existing* (unoptimized) deployment output on a map before the optimizer lands
+- [ ] Exit: "here's a 40-hectare reserve and 12 nodes" → an optimized, connectivity-checked placement with per-node config
 
 ---
 
