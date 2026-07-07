@@ -152,8 +152,13 @@ pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
             },
             then: Action::Escalate {
                 reason: format!(
-                    "unusually quiet day on the cameras (z <= -{z}): possible \
-                     obstruction, knock-over, or dead sensor — investigate"
+                    "Unusually quiet day on the cameras (z <= -{z}) — a drop is the \
+                     signature of a knocked-over / obstructed camera or a dead PIR. \
+                     Triage: (1) `get_anomaly_report` to confirm the day and how deep the \
+                     drop; (2) `get_node_health` — a camera offline or on low battery \
+                     explains a silent feed; (3) `get_site_report` to see if it's \
+                     site-wide or one subject. Read-only tools; any node action stays \
+                     Track-0 gated."
                 ),
             },
             debounce_ms: opts.debounce_ms,
@@ -167,7 +172,13 @@ pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
                 value: z,
             },
             then: Action::Escalate {
-                reason: format!("unusually busy day on the cameras (z >= {z}): activity surge"),
+                reason: format!(
+                    "Unusually busy day on the cameras (z >= {z}) — an activity surge. \
+                     Triage: (1) `get_anomaly_report` for the day and its magnitude; (2) \
+                     `get_site_report` for which species and whether it's rising; (3) a \
+                     genuine surge may warrant an operator alert. Read-only tools; any \
+                     node action stays Track-0 gated."
+                ),
             },
             debounce_ms: opts.debounce_ms,
             max_rate_hz: None,
@@ -180,8 +191,13 @@ pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
                 equals: "false".to_string(),
             },
             then: Action::Escalate {
-                reason: "camera model confidence disagrees with human review \
-                         (miscalibrated) — retune detection/alert thresholds"
+                reason: "Camera model confidence disagrees with human review \
+                         (miscalibrated). Triage: (1) `get_calibration_report` for the \
+                         suggested accept threshold and current precision; (2) retune \
+                         detection / alert thresholds toward that threshold so alerts \
+                         stop misleading; (3) `get_review_queue` to clear the ambiguous \
+                         backlog driving the disagreement. Read-only tools; any threshold \
+                         change stays operator-gated."
                     .to_string(),
             },
             debounce_ms: opts.debounce_ms,
@@ -280,6 +296,31 @@ mod tests {
             }
             other => panic!("expected a State condition, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn analytics_reasons_are_self_guiding_triage_directives() {
+        // Every analytics wake should name the read-only tools the agent runs next and
+        // reaffirm the safety gate — the mesh-playbook standard, so a wake is actionable.
+        let rules = vision_analytics_rules(&AnalyticsRuleOptions::default());
+        let reason = |id: &str| match &rules.iter().find(|r| r.id == id).unwrap().then {
+            Action::Escalate { reason } => reason.clone(),
+            other => panic!("expected an escalate action, got {other:?}"),
+        };
+
+        let drop = reason("vision-anomaly-drop");
+        assert!(drop.contains("get_anomaly_report"), "drop names the anomaly tool");
+        assert!(drop.contains("get_node_health"), "drop points at camera health");
+        assert!(drop.contains("Track-0"), "drop reaffirms the safety gate");
+
+        let spike = reason("vision-anomaly-spike");
+        assert!(spike.contains("get_anomaly_report"), "spike names the anomaly tool");
+        assert!(spike.contains("get_site_report"), "spike points at the fuller picture");
+
+        let cal = reason("vision-calibration-drift");
+        assert!(cal.contains("get_calibration_report"), "calibration names its report");
+        assert!(cal.contains("get_review_queue"), "calibration points at the review backlog");
+        assert!(cal.contains("operator-gated"), "calibration keeps threshold changes gated");
     }
 
     #[test]
