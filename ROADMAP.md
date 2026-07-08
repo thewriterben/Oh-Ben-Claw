@@ -728,11 +728,11 @@ Turn the ecosystem into a next-generation wildlife-conservation data-acquisition
 
 ### G0 — Geospatial foundation *(unlock; do first)*
 
-- [ ] **Site-model contract (land first):** define a shared `site` schema — boundary polygon, origin `(lat, lon)`, DEM reference, node positions — as a fixed contract both OBC and ClawCam build against (parallel-author coordination surface)
-- [ ] **Geodetic frame in world memory:** add earth-referenced coordinates with a single ENU⇄`(lat, lon)` conversion anchored at a site origin; **wrap, don't replace** `src/navigation/` — the existing 2D metric occupancy/SE2 math keeps operating in the local tangent plane, converting only at the edges
-- [ ] **One geometry, not two:** the ENU⇄geodetic conversion is defined once here in OBC; ClawCam consumes it (guard against forked coordinate conventions)
-- [ ] **ClawCam-side geo columns** (tracked in ClawCam `docs/ROADMAP.md` Phase 15): promote `latitude`/`longitude`/`altitude_m` to queryable columns on devices/events; `sites` table; geo in CSV export
-- [ ] Exit: a detection is queryable "within this polygon"; a node has a real earth position
+- [x] **Site-model contract:** shared `site` shape — `GeoPoint` origin, boundary polygon, DEM ref — landed in `src/geo/mod.rs` (`Site`), mirroring the ClawCam `sites` table so both sides build against one contract
+- [x] **ENU⇄geodetic conversion:** `src/geo::GeoFrame` — equirectangular local-tangent-plane, exactly invertible, anchored at a site origin; **wraps, doesn't replace** `src/navigation/` (ENU `(e, n)` *is* the metric plane the nav stack already uses). Unit-tested (1° N ≈ 111.19 km, cos-lat East scaling, stable round-trip). *Next sub-step: anchor a live `GeoFrame` in world memory so node poses carry an earth position.*
+- [x] **One geometry, not two:** the conversion + point-in-polygon (`Site::contains`, same ray-casting convention as ClawCam's `events_in_site`) are defined once in `src/geo`; ClawCam consumes the same convention
+- [x] **ClawCam-side geo columns** (ClawCam `docs/ROADMAP.md` Phase 15): geo/env columns + backfill, `sites` table, point-in-polygon `events_in_site`, geo CSV export, and site REST/MCP surface — **done**
+- [ ] Exit: world-memory-anchored `GeoFrame` so a node pose ↔ `(lat, lon)`; then G1 builds on it
 
 ### G1 — Grid deployment + coverage optimizer *(the named capability)*
 
