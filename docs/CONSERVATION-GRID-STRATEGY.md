@@ -60,6 +60,34 @@ Skip it and every feature reinvents its own geometry and can never be joined.
 | Federated learning | **Partial** (codegen + skill-sharing) | Accelerapp + OBC |
 | Conservation data acquisition | **Have** (strongest) | ClawCam |
 
+*(The table above is the **starting-point** assessment. Delivery progress since is tracked
+below.)*
+
+---
+
+## 1b. Delivered since the assessment (2026-07-07)
+
+The geospatial backbone and the first frontier phases have shipped. Phase status against
+the G0–G9 plan in §5:
+
+| Phase | Status | What landed |
+|---|---|---|
+| **G0** — Geospatial foundation | ✅ **Delivered** | OBC `src/geo` (`GeoPoint`, `GeoFrame` ENU⇄lat/lon, `Site`, point-in-polygon; unit-tested). ClawCam: geo columns on `events` + device positions + environment columns (populated, backfilled, indexed); `sites` table + `events_in_site`/`devices_in_site` point-in-polygon; site + device geo surface over REST **and** MCP (`list_sites`, `get_site_events`, `list_device_positions`, `get_site_devices`). |
+| **G1** — Grid coverage optimizer | ✅ **Delivered** | OBC `src/siteplan` — greedy max-coverage placement (min-spacing + mesh-connectivity), ENU-frame, emits ENU+geodetic positions, coverage fraction, `to_toml` deployment block. Agent-callable via the `plan_site` tool. |
+| **G2** — Camera-onto-mesh bridge | 🔲 Planned | — |
+| **G3** — Positioning (real GNSS) | 🔲 Planned | — |
+| **G4** — Weather as analytics | ✅ **Delivered** | ClawCam **environment report** (temp/humidity/pressure stats + trend + daily series) and **weather–activity correlation** (exposure-normalized rate vs conditions + Pearson r), both wired through the tool-catalog SSOT + REST. |
+| **G5** — Terrain / line-of-sight | ✅ **Delivered** | OBC `siteplan::plan_site_on` + `Heightfield` — coverage respects terrain occlusion (node mast height, ray-vs-ground line-of-sight); flat/`None` reproduces the original exactly. |
+| **G6** — Satellite connectivity | 🔲 Planned | — |
+| **G7** — Orbital imagery | 🔲 Planned | — |
+| **G8** — Drone / aerial tier | 🔲 Planned | — |
+| **G9** — Federated learning | 🔲 Planned | — |
+
+Net effect: the **geospatial coordinate backbone** that §3 identifies as the unlock now
+exists on both sides of the wire, the named **grid-optimization** capability is real and
+terrain-aware, and **weather** is first-class analytics with a correlation. The remaining
+work (G2–G3, G6–G9) is the set of integrations that this foundation makes tractable.
+
 ---
 
 ## 2. Current-state assessment (with evidence)
