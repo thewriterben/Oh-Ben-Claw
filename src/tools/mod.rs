@@ -43,6 +43,7 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
         Box::new(TextToSpeechTool::default()),
         Box::new(OtaUpdateTool),
         Box::new(DeviceHealthTool),
+        Box::new(builtin::siteplan::SitePlanTool::new()),
     ];
 
     // Vision tool requires an API key; only add if one is available
