@@ -80,7 +80,7 @@ the G0–G9 plan in §5:
 | **G5** — Terrain / line-of-sight | ✅ **Delivered** | OBC `siteplan::plan_site_on` + `Heightfield` — coverage respects terrain occlusion (node mast height, ray-vs-ground line-of-sight); flat/`None` reproduces the original exactly. |
 | **G6** — Satellite connectivity | 🔲 Planned | — |
 | **G7** — Orbital imagery | 🔲 Planned | — |
-| **G8** — Drone / aerial tier | 🔲 Planned | — |
+| **G8** — Drone / aerial tier | 🟡 **Adapter done** | OBC `src/aerial` — maps a drone's geodetic telemetry into a fleet `NodeState` via `geo::GeoFrame`, so a UAV joins the existing auction/exploration as a body-agnostic node; plus `flight_safe` (battery + `Site` geofence) as the aerial Track-0 gate. *Remaining: a real MAVLink/PX4 link feeding `AerialTelemetry`, and a `report_aerial` fleet path.* |
 | **G9** — Federated learning | 🔲 Planned | — |
 
 Net effect: the **geospatial coordinate backbone** that §3 identifies as the unlock now

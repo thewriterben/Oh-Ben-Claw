@@ -26,6 +26,7 @@
 // because the library intentionally exposes a broader surface than the binary uses.
 
 pub mod a2a;
+pub mod aerial;
 pub mod agent;
 pub mod approval;
 pub mod audio;
