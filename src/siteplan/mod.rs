@@ -44,6 +44,9 @@ pub struct PlacementSpec {
     pub demand_step_m: f64,
     /// Require each node (after the first) to be within `mesh_range_m` of the placed set.
     pub require_mesh_connectivity: bool,
+    /// Mast/antenna height of a node above the terrain, used for line-of-sight when a
+    /// terrain heightfield is supplied (ignored on flat/None terrain).
+    pub node_height_m: f64,
 }
 
 impl Default for PlacementSpec {
@@ -56,8 +59,77 @@ impl Default for PlacementSpec {
             lattice_step_m: 10.0,
             demand_step_m: 10.0,
             require_mesh_connectivity: true,
+            node_height_m: 3.0,
         }
     }
+}
+
+/// A terrain surface sampled on a regular ENU grid, for line-of-sight occlusion.
+///
+/// ``data`` is row-major (`data[r * cols + c]`) giving the elevation at ENU
+/// `(origin_e + c*step, origin_n + r*step)`. Sampling is bilinear, clamped at the edges.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Heightfield {
+    pub origin_e: f64,
+    pub origin_n: f64,
+    pub step: f64,
+    pub cols: usize,
+    pub rows: usize,
+    pub data: Vec<f64>,
+}
+
+impl Heightfield {
+    /// Build from row-major elevation rows (`rows[r][c]`); each row must have the same
+    /// length. Empty input yields a 0×0 field (elevation always 0).
+    pub fn from_rows(origin_e: f64, origin_n: f64, step: f64, rows: Vec<Vec<f64>>) -> Self {
+        let r = rows.len();
+        let c = rows.first().map_or(0, |row| row.len());
+        let mut data = Vec::with_capacity(r * c);
+        for row in &rows {
+            data.extend_from_slice(row);
+        }
+        Self { origin_e, origin_n, step: if step > 0.0 { step } else { 1.0 }, cols: c, rows: r, data }
+    }
+
+    /// Bilinearly-interpolated elevation at ENU `(e, n)`, clamped to the grid edges.
+    pub fn elevation(&self, e: f64, n: f64) -> f64 {
+        if self.cols == 0 || self.rows == 0 {
+            return 0.0;
+        }
+        let fc = (e - self.origin_e) / self.step;
+        let fr = (n - self.origin_n) / self.step;
+        let c0 = (fc.floor() as isize).clamp(0, self.cols as isize - 1) as usize;
+        let r0 = (fr.floor() as isize).clamp(0, self.rows as isize - 1) as usize;
+        let c1 = (c0 + 1).min(self.cols - 1);
+        let r1 = (r0 + 1).min(self.rows - 1);
+        let tc = (fc - c0 as f64).clamp(0.0, 1.0);
+        let tr = (fr - r0 as f64).clamp(0.0, 1.0);
+        let at = |r: usize, c: usize| self.data[r * self.cols + c];
+        let top = at(r0, c0) + (at(r0, c1) - at(r0, c0)) * tc;
+        let bot = at(r1, c0) + (at(r1, c1) - at(r1, c0)) * tc;
+        top + (bot - top) * tr
+    }
+}
+
+/// Whether the straight line from `(ax, ay, az)` to `(bx, by, bz)` clears the terrain —
+/// true if no interior sample of the ground rises above the sight ray.
+fn los_clear(
+    hf: &Heightfield,
+    ax: f64, ay: f64, az: f64,
+    bx: f64, by: f64, bz: f64,
+    samples: usize,
+) -> bool {
+    let n = samples.max(2);
+    for k in 1..n {
+        let t = k as f64 / n as f64;
+        let x = ax + (bx - ax) * t;
+        let y = ay + (by - ay) * t;
+        let ray_h = az + (bz - az) * t;
+        if hf.elevation(x, y) > ray_h + 1e-6 {
+            return false;
+        }
+    }
+    true
 }
 
 /// A single placed node with both local and geodetic coordinates.
@@ -180,8 +252,16 @@ fn mesh_connected(nodes: &[(f64, f64)], range: f64) -> bool {
     count == nodes.len()
 }
 
-/// Optimize node placement over a site. See the module docs for the method.
+/// Optimize node placement over a site (flat terrain). See the module docs for the method.
 pub fn plan_site(site: &Site, spec: &PlacementSpec) -> SitePlan {
+    plan_site_on(site, spec, None)
+}
+
+/// Optimize node placement, optionally honoring a terrain heightfield: a node covers a
+/// demand point only when it's within range **and** the ground doesn't occlude the sight
+/// line (the node's mast sits `spec.node_height_m` above the terrain). `terrain = None`
+/// reproduces the flat-plane behaviour exactly.
+pub fn plan_site_on(site: &Site, spec: &PlacementSpec, terrain: Option<&Heightfield>) -> SitePlan {
     let frame = site.frame();
     let poly: Vec<(f64, f64)> = site
         .boundary
@@ -214,15 +294,27 @@ pub fn plan_site(site: &Site, spec: &PlacementSpec) -> SitePlan {
         return empty;
     }
 
-    // Precompute the demand indices each candidate covers.
+    // Precompute the demand indices each candidate covers (within range, and — with
+    // terrain — not occluded by the ground along the sight line).
     let r2 = spec.detection_radius_m * spec.detection_radius_m;
     let covers: Vec<Vec<usize>> = cands
         .iter()
         .map(|c| {
+            let node_z = terrain.map_or(0.0, |hf| hf.elevation(c.0, c.1)) + spec.node_height_m;
             demand
                 .iter()
                 .enumerate()
-                .filter(|(_, d)| (c.0 - d.0).powi(2) + (c.1 - d.1).powi(2) <= r2)
+                .filter(|(_, d)| {
+                    if (c.0 - d.0).powi(2) + (c.1 - d.1).powi(2) > r2 {
+                        return false;
+                    }
+                    match terrain {
+                        None => true,
+                        Some(hf) => {
+                            los_clear(hf, c.0, c.1, node_z, d.0, d.1, hf.elevation(d.0, d.1), 32)
+                        }
+                    }
+                })
                 .map(|(i, _)| i)
                 .collect()
         })
@@ -403,5 +495,65 @@ mod tests {
     #[test]
     fn summary_mentions_coverage() {
         assert!(plan_site(&square_site(), &spec(4)).summary().contains("coverage"));
+    }
+
+    fn approx(a: f64, b: f64, tol: f64) -> bool {
+        (a - b).abs() <= tol
+    }
+
+    #[test]
+    fn heightfield_bilinear_and_clamp() {
+        let hf = Heightfield::from_rows(0.0, 0.0, 10.0, vec![vec![0.0, 10.0], vec![0.0, 10.0]]);
+        assert!(approx(hf.elevation(0.0, 0.0), 0.0, 1e-9));
+        assert!(approx(hf.elevation(10.0, 0.0), 10.0, 1e-9)); // east edge
+        assert!(approx(hf.elevation(5.0, 0.0), 5.0, 1e-9)); // interpolated midpoint
+        assert!(approx(hf.elevation(-100.0, 0.0), 0.0, 1e-9)); // clamped west
+    }
+
+    #[test]
+    fn line_of_sight_ridge_blocks_low_clears() {
+        // Tall ridge (20 m) at the middle column blocks a 3 m mast → ground sightline.
+        let tall = Heightfield::from_rows(
+            -10.0, -10.0, 10.0,
+            vec![vec![0.0, 0.0, 0.0], vec![0.0, 20.0, 0.0], vec![0.0, 0.0, 0.0]],
+        );
+        assert!(!los_clear(&tall, -10.0, 0.0, 3.0, 10.0, 0.0, 0.0, 32));
+        // A 1 m bump sits below the ~1.5 m sight ray at the midpoint → clear.
+        let low = Heightfield::from_rows(
+            -10.0, -10.0, 10.0,
+            vec![vec![0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0]],
+        );
+        assert!(los_clear(&low, -10.0, 0.0, 3.0, 10.0, 0.0, 0.0, 32));
+    }
+
+    #[test]
+    fn no_terrain_matches_flat_plan() {
+        let site = square_site();
+        let a = plan_site(&site, &spec(4));
+        let b = plan_site_on(&site, &spec(4), None);
+        let ax: Vec<_> = a.nodes.iter().map(|n| (n.enu.e, n.enu.n)).collect();
+        let bx: Vec<_> = b.nodes.iter().map(|n| (n.enu.e, n.enu.n)).collect();
+        assert_eq!(ax, bx);
+        assert_eq!(a.coverage_fraction, b.coverage_fraction);
+    }
+
+    #[test]
+    fn terrain_occlusion_reduces_coverage() {
+        // Corrugated terrain: sharp 40 m ridges every 20 m in N, so any node's disc
+        // straddles a ridge and loses the demand behind it.
+        let dim = 25;
+        let origin = -60.0;
+        let step = 5.0;
+        let mut rows = Vec::new();
+        for r in 0..dim {
+            let n = origin + r as f64 * step;
+            let hv = if (n.round() as i64) % 20 == 0 { 40.0 } else { 0.0 };
+            rows.push(vec![hv; dim]);
+        }
+        let hf = Heightfield::from_rows(origin, origin, step, rows);
+        let site = square_site();
+        let flat = plan_site(&site, &spec(4)).coverage_fraction;
+        let terr = plan_site_on(&site, &spec(4), Some(&hf)).coverage_fraction;
+        assert!(terr < flat, "terrain should occlude: terr={} flat={}", terr, flat);
     }
 }

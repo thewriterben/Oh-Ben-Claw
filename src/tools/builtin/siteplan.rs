@@ -102,6 +102,7 @@ impl Tool for SitePlanTool {
                 .get("require_mesh_connectivity")
                 .and_then(Value::as_bool)
                 .unwrap_or(d.require_mesh_connectivity),
+            node_height_m: args.get("node_height_m").and_then(Value::as_f64).unwrap_or(d.node_height_m),
         };
 
         let plan = plan_site(&site, &spec);
