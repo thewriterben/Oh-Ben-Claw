@@ -91,6 +91,61 @@ pub fn parse_gateway_line(line: &str) -> Option<GatewayFrame> {
     Some(GatewayFrame { src, seq, rssi_dbm: rssi, payload })
 }
 
+/// A decoded ClawCam field summary — the compact camera-on-mesh payload (see the ClawCam
+/// `mesh.field_summary` codec). Rides the same spine as node JSON but in a pipe-delimited
+/// wire form (`CC|dev=…|det=…|sp=…|tc=…|bat=…`) small enough for a LoRa frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClawCamSummary {
+    pub device_id: String,
+    pub ts: Option<i64>,
+    pub total: u32,
+    pub species: Vec<(String, u32)>,
+    pub temperature_c: Option<f64>,
+    pub battery_percent: Option<f64>,
+    /// The node's own reported uplink RSSI (distinct from the gateway link RSSI).
+    pub rssi: Option<f64>,
+}
+
+/// Parse a ClawCam field-summary payload (`CC|…`). Returns `None` unless the magic prefix
+/// is present and a `dev=` field is found. Inverse of the ClawCam `encode_summary`.
+pub fn parse_clawcam_summary(payload: &str) -> Option<ClawCamSummary> {
+    let mut it = payload.trim().split('|');
+    if it.next() != Some("CC") {
+        return None;
+    }
+    let mut s = ClawCamSummary {
+        device_id: String::new(), ts: None, total: 0, species: Vec::new(),
+        temperature_c: None, battery_percent: None, rssi: None,
+    };
+    let mut have_dev = false;
+    for kv in it {
+        let Some((k, v)) = kv.split_once('=') else { continue };
+        match k {
+            "dev" => { s.device_id = v.to_string(); have_dev = true; }
+            "ts" => s.ts = v.parse().ok(),
+            "det" => s.total = v.parse().unwrap_or(0),
+            "sp" => {
+                for item in v.split(',') {
+                    if let Some((name, cnt)) = item.rsplit_once(':') {
+                        if let Ok(c) = cnt.parse::<u32>() {
+                            s.species.push((name.to_string(), c));
+                        }
+                    }
+                }
+            }
+            "tc" => s.temperature_c = v.parse().ok(),
+            "bat" => s.battery_percent = v.parse().ok(),
+            "rssi" => s.rssi = v.parse().ok(),
+            _ => {}
+        }
+    }
+    if have_dev {
+        Some(s)
+    } else {
+        None
+    }
+}
+
 /// Source tag stamped on every fact this bridge writes.
 pub const SOURCE: &str = "lora-gateway";
 
@@ -106,8 +161,21 @@ pub const SOURCE: &str = "lora-gateway";
 /// Returns a [`GatewayIngest`] summary, or `None` for non-`◄` or non-JSON lines.
 pub fn ingest_gateway_line(line: &str, world: &WorldMemory, now_ms: u64) -> Option<GatewayIngest> {
     let frame = parse_gateway_line(line)?;
-    let payload: Value = serde_json::from_str(&frame.payload).ok()?;
+    // Node JSON (`{"type":…}`) is the common case; a ClawCam `CC|…` field summary is the
+    // camera-on-mesh case (G2). Anything else is ignored.
+    if let Ok(payload) = serde_json::from_str::<Value>(&frame.payload) {
+        return Some(ingest_node_json(&frame, payload, world, now_ms));
+    }
+    if let Some(summary) = parse_clawcam_summary(&frame.payload) {
+        return Some(ingest_clawcam_summary(&frame, summary, world, now_ms));
+    }
+    None
+}
 
+/// Ingest a node's own JSON payload as `mesh.<node_id>.<type>` + a `mesh.<node_id>` rollup.
+fn ingest_node_json(
+    frame: &GatewayFrame, payload: Value, world: &WorldMemory, now_ms: u64,
+) -> GatewayIngest {
     let node_id = payload
         .get("node_id")
         .and_then(Value::as_str)
@@ -141,7 +209,49 @@ pub fn ingest_gateway_line(line: &str, world: &WorldMemory, now_ms: u64) -> Opti
     });
     let _ = world.observe(&format!("mesh.{node_id}"), link, now_ms, now_ms, SOURCE);
 
-    Some(GatewayIngest { node_id, msg_type, rssi_dbm: frame.rssi_dbm })
+    GatewayIngest { node_id, msg_type, rssi_dbm: frame.rssi_dbm }
+}
+
+/// Ingest a ClawCam field summary heard over the mesh (G2) as `clawcam.<device>.field`
+/// (the full summary + mesh envelope) plus a compact `clawcam.<device>` rollup — so an
+/// off-grid camera's counts/conditions land in the brain's world model.
+fn ingest_clawcam_summary(
+    frame: &GatewayFrame, s: ClawCamSummary, world: &WorldMemory, now_ms: u64,
+) -> GatewayIngest {
+    let dev = s.device_id.clone();
+    let species: Vec<Value> = s
+        .species
+        .iter()
+        .map(|(name, count)| json!({ "subject": name, "count": count }))
+        .collect();
+    let top = species.first().cloned();
+
+    let field = json!({
+        "device_id": dev,
+        "total": s.total,
+        "species": species,
+        "temperature_c": s.temperature_c,
+        "battery_percent": s.battery_percent,
+        "node_rssi": s.rssi,
+        "ts": s.ts,
+        "_mesh": {
+            "src": format!("{:02X}", frame.src),
+            "seq": frame.seq,
+            "rssi_dbm": frame.rssi_dbm,
+        },
+    });
+    let _ = world.observe(&format!("clawcam.{dev}.field"), field, now_ms, now_ms, SOURCE);
+
+    let rollup = json!({
+        "total": s.total,
+        "top_species": top,
+        "temperature_c": s.temperature_c,
+        "battery_percent": s.battery_percent,
+        "rssi_dbm": frame.rssi_dbm,
+    });
+    let _ = world.observe(&format!("clawcam.{dev}"), rollup, now_ms, now_ms, SOURCE);
+
+    GatewayIngest { node_id: dev, msg_type: "clawcam_field".to_string(), rssi_dbm: frame.rssi_dbm }
 }
 
 // ── Outbound: host → node commands over the mesh (return path) ───────────────────
@@ -394,5 +504,62 @@ mod tests {
         let sent = sink.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0], cmd.encode());
+    }
+
+    // ── ClawCam camera-on-mesh field summaries (G2) ──────────────────────────────
+
+    const CC_LINE: &str = "SPINE ◄ src=1A seq=5 rssi=-95 dBm : CC|dev=north-ridge-01|ts=1720000000|det=40|sp=deer:20,fox:12,turkey:8|tc=14.5|bat=78|rssi=-97";
+
+    #[test]
+    fn parses_a_clawcam_summary_payload() {
+        let s = parse_clawcam_summary(
+            "CC|dev=n1|ts=1000|det=32|sp=deer:20,fox:12|tc=14.5|bat=78|rssi=-97",
+        )
+        .expect("CC payload parses");
+        assert_eq!(s.device_id, "n1");
+        assert_eq!(s.total, 32);
+        assert_eq!(s.species, vec![("deer".into(), 20), ("fox".into(), 12)]);
+        assert_eq!(s.temperature_c, Some(14.5));
+        assert_eq!(s.battery_percent, Some(78.0));
+        assert_eq!(s.rssi, Some(-97.0));
+    }
+
+    #[test]
+    fn non_cc_and_missing_dev_do_not_parse() {
+        assert!(parse_clawcam_summary("XX|dev=n1|det=1").is_none());
+        assert!(parse_clawcam_summary("CC|det=1|tc=5").is_none()); // no dev
+    }
+
+    #[test]
+    fn ingests_a_clawcam_summary_into_world_memory() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let ing = ingest_gateway_line(CC_LINE, &world, 2_000).expect("ingested");
+        assert_eq!(ing.node_id, "north-ridge-01");
+        assert_eq!(ing.msg_type, "clawcam_field");
+        assert_eq!(ing.rssi_dbm, -95); // gateway link rssi, not the node's own -97
+
+        // Full field fact carries totals, species, conditions + mesh envelope.
+        let f = world
+            .current("clawcam.north-ridge-01.field")
+            .unwrap()
+            .expect("field fact exists");
+        assert_eq!(f.value.get("total").and_then(|v| v.as_u64()), Some(40));
+        assert_eq!(f.value.get("temperature_c").and_then(|v| v.as_f64()), Some(14.5));
+        assert_eq!(f.value.get("node_rssi").and_then(|v| v.as_f64()), Some(-97.0));
+        assert_eq!(
+            f.value.get("_mesh").and_then(|m| m.get("rssi_dbm")).and_then(|v| v.as_i64()),
+            Some(-95)
+        );
+        let sp = f.value.get("species").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(sp[0].get("subject").and_then(|v| v.as_str()), Some("deer"));
+        assert_eq!(sp[0].get("count").and_then(|v| v.as_u64()), Some(20));
+
+        // Rollup answers "how much activity, and is the camera OK?".
+        let r = world.current("clawcam.north-ridge-01").unwrap().expect("rollup");
+        assert_eq!(r.value.get("total").and_then(|v| v.as_u64()), Some(40));
+        assert_eq!(
+            r.value.get("top_species").and_then(|t| t.get("subject")).and_then(|v| v.as_str()),
+            Some("deer")
+        );
     }
 }
