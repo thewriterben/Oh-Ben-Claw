@@ -81,6 +81,43 @@ pub struct SitePlan {
     pub mesh_connected: bool,
 }
 
+impl SitePlan {
+    /// A one-line human summary for logs / operator display.
+    pub fn summary(&self) -> String {
+        format!(
+            "{} node(s), coverage {:.0}%, {} ({} demand pts)",
+            self.nodes.len(),
+            self.coverage_fraction * 100.0,
+            if self.mesh_connected { "mesh-connected" } else { "MESH SPLIT" },
+            self.demand_points,
+        )
+    }
+
+    /// Render the placement as paste-ready TOML that slots alongside a deployment
+    /// config: a `[site]` header plus one `[[site.node]]` per placed node carrying its
+    /// id, geodetic `(lat, lon, alt)` and site-local ENU. The `deployment` codegen (or the
+    /// generator UI) can merge this so each placed node is provisioned at its position.
+    pub fn to_toml(&self, site_id: &str) -> String {
+        let mut s = String::new();
+        s.push_str("[site]\n");
+        s.push_str(&format!("id = {:?}\n", site_id));
+        s.push_str(&format!("nodes = {}\n", self.nodes.len()));
+        s.push_str(&format!("coverage_fraction = {:.4}\n", self.coverage_fraction));
+        s.push_str(&format!("mesh_connected = {}\n", self.mesh_connected));
+        for (i, n) in self.nodes.iter().enumerate() {
+            s.push_str("\n[[site.node]]\n");
+            s.push_str(&format!("id = {:?}\n", format!("{}-n{:02}", site_id, i + 1)));
+            s.push_str(&format!("lat = {:.6}\n", n.geo.lat));
+            s.push_str(&format!("lon = {:.6}\n", n.geo.lon));
+            s.push_str(&format!("alt = {:.2}\n", n.geo.alt));
+            s.push_str(&format!("enu_e = {:.2}\n", n.enu.e));
+            s.push_str(&format!("enu_n = {:.2}\n", n.enu.n));
+            s.push_str(&format!("covers = {}\n", n.covers));
+        }
+        s
+    }
+}
+
 fn point_in_polygon(x: f64, y: f64, poly: &[(f64, f64)]) -> bool {
     let n = poly.len();
     if n < 3 {
@@ -343,5 +380,28 @@ mod tests {
             assert!((node.geo.lat - 45.5).abs() < 0.01);
             assert!((node.geo.lon + 122.6).abs() < 0.01);
         }
+    }
+
+    #[test]
+    fn toml_has_one_table_per_node() {
+        let plan = plan_site(&square_site(), &spec(3));
+        let toml = plan.to_toml("s1");
+        assert_eq!(toml.matches("[[site.node]]").count(), plan.nodes.len());
+        assert!(toml.contains("id = \"s1\""));
+        assert!(toml.contains("id = \"s1-n01\""));
+        assert!(toml.contains("mesh_connected = true"));
+        assert!(toml.contains("lat = 45."));
+    }
+
+    #[test]
+    fn empty_plan_toml_has_no_node_tables() {
+        let toml = plan_site(&Site::new("e", "", vec![]), &spec(3)).to_toml("e");
+        assert!(toml.contains("nodes = 0"));
+        assert_eq!(toml.matches("[[site.node]]").count(), 0);
+    }
+
+    #[test]
+    fn summary_mentions_coverage() {
+        assert!(plan_site(&square_site(), &spec(4)).summary().contains("coverage"));
     }
 }
