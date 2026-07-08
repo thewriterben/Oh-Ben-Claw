@@ -58,6 +58,7 @@ pub mod runtime;
 pub mod scheduler;
 pub mod security;
 pub mod sensing;
+pub mod siteplan;
 pub mod skill_forge;
 pub mod spine;
 pub mod tools;

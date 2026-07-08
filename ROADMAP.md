@@ -736,7 +736,7 @@ Turn the ecosystem into a next-generation wildlife-conservation data-acquisition
 
 ### G1 — Grid deployment + coverage optimizer *(the named capability)*
 
-- [ ] **Coverage optimizer:** extend `src/deployment/` (or new `src/siteplan/`) — given a site polygon, terrain, and node budget, generate candidate grid/lattice positions and optimize for detection coverage **and** mesh connectivity (greedy max-coverage first, then simulated annealing); reuse `src/fleet/` conflict-avoidance geometry for minimum node spacing
+- [x] **Coverage optimizer:** `src/siteplan/` — `plan_site(&Site, &PlacementSpec)` places nodes on a lattice by **greedy maximum-coverage** over demand points, honoring `min_spacing_m` and `require_mesh_connectivity` (within `mesh_range_m`); runs in the site's ENU frame, outputs ENU+geodetic positions with coverage fraction and a connectivity check. Unit-tested (budget/spacing respected, coverage monotonic in budget, deterministic, mesh-connected). *Next: terrain/line-of-sight cost (G5) and simulated-annealing refinement.*
 - [ ] **Feed the codegen:** optimized positions flow into the existing scheme/firmware output (`src/deployment/scheme.rs`, `src/deployment/firmware_scaffold.rs`) so each placed node gets its config
 - [ ] **Map UI (cross-repo, Ecosystem Integration track):** OBC-deployment-generator adds a map step rendering the optimized layout and feeding positions into its TOML/firmware codegen; a quick win is rendering the *existing* (unoptimized) deployment output on a map before the optimizer lands
 - [ ] Exit: "here's a 40-hectare reserve and 12 nodes" → an optimized, connectivity-checked placement with per-node config
