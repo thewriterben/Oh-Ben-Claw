@@ -81,7 +81,7 @@ the G0–G9 plan in §5:
 | **G6** — Satellite connectivity | 🔲 Planned | — |
 | **G7** — Orbital imagery | 🔲 Planned | — |
 | **G8** — Drone / aerial tier | 🟡 **Adapter done** | OBC `src/aerial` — maps a drone's geodetic telemetry into a fleet `NodeState` via `geo::GeoFrame`, so a UAV joins the existing auction/exploration as a body-agnostic node; plus `flight_safe` (battery + `Site` geofence) as the aerial Track-0 gate. *Remaining: a real MAVLink/PX4 link feeding `AerialTelemetry`, and a `report_aerial` fleet path.* |
-| **G9** — Federated learning | 🔲 Planned | — |
+| **G9** — Federated learning | 🟡 **Aggregation core done** | ClawCam `federated.fedavg` — sample- and trust-weighted FedAvg combining per-node model updates into a global model (only weights leave a node, never imagery); trust multiplier down-weights a drifting node. *Remaining: the round loop (collect local updates from review labels → aggregate → distribute via the OBC model registry) and Accelerapp's on-device FL codegen for the node side.* |
 
 Net effect: the **geospatial coordinate backbone** that §3 identifies as the unlock now
 exists on both sides of the wire, the named **grid-optimization** capability is real and
