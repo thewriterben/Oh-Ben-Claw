@@ -8,6 +8,7 @@ pub mod comms;
 pub mod file;
 pub mod fleet;
 pub mod foresight;
+pub mod gnss;
 pub mod http;
 pub mod learn;
 pub mod memory;
