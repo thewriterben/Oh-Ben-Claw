@@ -120,11 +120,20 @@ pub struct VisionTool {
 
 impl VisionTool {
     pub fn new(api_key: impl Into<String>) -> Self {
+        // Local-first overrides: point vision at any OpenAI-compatible endpoint
+        // (e.g. Ollama's `http://localhost:11434/v1` with a vision-capable model
+        // like gemma4:12b-it-qat). Deliberately separate from `OPENAI_API_BASE`,
+        // which the audio tools use for a TTS/STT server (e.g. Kokoro-FastAPI)
+        // that has no /chat/completions route.
+        let model = std::env::var("OBC_VISION_MODEL").unwrap_or_else(|_| "gpt-5.4".to_string());
+        let base_url = std::env::var("OBC_VISION_API_BASE")
+            .map(|b| format!("{}/chat/completions", b.trim_end_matches('/')))
+            .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string());
         Self {
             client: reqwest::Client::new(),
             api_key: api_key.into(),
-            model: "gpt-5.4".to_string(),
-            base_url: "https://api.openai.com/v1/chat/completions".to_string(),
+            model,
+            base_url,
         }
     }
 
