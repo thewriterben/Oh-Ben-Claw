@@ -44,6 +44,7 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
         Box::new(OtaUpdateTool),
         Box::new(DeviceHealthTool),
         Box::new(builtin::siteplan::SitePlanTool::new()),
+        Box::new(builtin::aerial::AerialStatusTool::new()),
     ];
 
     // Vision tool requires an API key; only add if one is available
