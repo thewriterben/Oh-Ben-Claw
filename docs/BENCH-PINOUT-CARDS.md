@@ -1,0 +1,148 @@
+# Bench Pinout Cards — MVB Boards
+
+One card per Minimum-Viable-Bench board, focused on the pins **this project's firmware
+actually drives** (for soldering/probing the bench), plus power/USB/boot and which pins are
+free vs reserved. Companion to `BENCH-TEST-HARDWARE.md` and `BENCH-MVB-WIRING.svg`.
+
+**Source tags:** `[fw]` = assigned in our firmware (file cited) · `[board]` = vendor board
+reference (fixed by the board, not our code). **Always confirm against the vendor pinout /
+silkscreen before soldering** — GPIO↔header mapping and safe pins vary by board revision.
+
+---
+
+## Card 1 — Heltec WiFi LoRa 32 V3  (ESP32-S3 + SX1262)
+
+Role: **LoRa base station + field node** (Station B). `firmware/heltec-lora-linktest`.
+
+**SX1262 radio (SPI)** — `[fw]` `src/sx1262.rs`
+| Signal | GPIO | | Signal | GPIO |
+|---|---|---|---|---|
+| NSS (CS) | 8 | | RST | 12 |
+| SCK | 9 | | BUSY | 13 |
+| MOSI | 10 | | DIO1 (IRQ) | 14 |
+| MISO | 11 | | TCXO | via **DIO3** (1.8 V) |
+| | | | RF switch | via **DIO2** |
+
+**Phase-B UART bridge to the XIAO node** — `[fw]` `docs/PHASE-B-LORA-MESH.md`
+| Signal | Heltec GPIO | Direction |
+|---|---|---|
+| RX (from XIAO TX) | **GPIO2** | XIAO GPIO43 → here |
+| TX (to XIAO RX) | **GPIO4** | here → XIAO GPIO44 |
+| GND | GND | common ground (verify with meter) |
+
+**Board reference** — `[board]`
+| Function | GPIO |
+|---|---|
+| OLED I2C SDA / SCL / RST | 17 / 18 / 21 |
+| Vext power control (active-LOW, powers OLED) | 36 |
+| User LED | 35 |
+| ADC battery divider (VBAT) | 1 (via on-board divider, board rev dependent) |
+| USB-C (CP210x on some clones / native S3 on V3) + BOOT(GPIO0) + RST | — |
+
+⚠ **Attach the 915/868 MHz antenna before any TX.** Radio config: SF7 / BW125 / CR4-5 /
+syncword 0x1424 / +22 dBm. Free GPIO for probing: avoid the SX1262 + OLED + Vext pins above.
+
+---
+
+## Card 2 — Seeed XIAO ESP32-S3 Sense
+
+Role: **mesh sensor/camera node** behind the field Heltec (Station B). Runs `obc-esp32-s3`.
+
+**UART bridge to Heltec** — `[fw]` `docs/PHASE-B-LORA-MESH.md`
+| Silk | GPIO | Function |
+|---|---|---|
+| **D6** | **43** | TX → Heltec GPIO2 |
+| **D7** | **44** | RX ← Heltec GPIO4 |
+| GND | GND | common ground |
+
+**Board reference** — `[board]` (14-pin, both sides; 3V3 / GND / 5V on the power end)
+| Silk | GPIO | | Silk | GPIO |
+|---|---|---|---|---|
+| D0 | 1 | | D6 | 43 (UART0 TX) |
+| D1 | 2 | | D7 | 44 (UART0 RX) |
+| D2 | 3 | | D8 | 7 (SCK) |
+| D3 | 4 | | D9 | 8 (MISO) |
+| D4 | 5 (SDA) | | D10 | 9 (MOSI) |
+| D5 | 6 (SCL) | | 3V3 / 5V / GND | power |
+
+**Sense expansion board** `[board]`: OV2640 camera + PDM mic are wired to the S3 via the
+Sense daughterboard (DVP + PDM), plus a microSD slot — not broken out to the 14-pin header.
+Free header pins for probing: D0–D5, D8–D10 (mind D4/D5 = I2C, D8–D10 = SPI if used).
+
+---
+
+## Card 3 — Waveshare ESP32-S3-Touch-LCD-2.1
+
+Role: **primary control / reflex-safing + sensing node** (Station A). Runs `obc-esp32-s3`.
+
+**Firmware-assigned** — `[fw]` `firmware/obc-esp32-s3/BRINGUP.md`, `CAMERA.md`
+| Subsystem | Pins (GPIO) |
+|---|---|
+| UART0 console | TX **43** · RX **44** |
+| I2C bus (sensors) | SDA **4** · SCL **5** |
+| I2S microphone | SCK **0** · WS **1** · SD **2** |
+| OV2640 camera | XCLK **15** · SIOD **4** · SIOC **5** · D0–D7 **39,40,41,42,16,17,18,19** · VSYNC **21** · HREF **38** · PCLK **13** |
+| **Safe output pins** (Track-0 GPIO writes) | **3, 14, 26, 33, 46** |
+
+**Station-A sensor hookups** (use the pins above)
+| Peripheral | Wiring |
+|---|---|
+| BME280 @0x76 / MPU-6050 @0x68 | I2C SDA=4, SCL=5 (share the bus) |
+| DHT22 | one data GPIO (1-wire) — pick a free pin, not a camera/I2C/I2S pin |
+| LED + 330 Ω | a **safe output pin**, e.g. **GPIO14** |
+
+**Board reference** — `[board]` datasheet (`docs/datasheets/waveshare-esp32-s3-touch-lcd-2.1.md`):
+2.1" round LCD, **GT911** capacitive touch (I2C), **IP5306** power management, I2S audio.
+⚠ Camera SIOD/SIOC **share** I2C GPIO4/5 with the sensor bus — don't drive both a camera and
+I2C sensors on the same pins simultaneously without planning. Reserve the I2S (0/1/2) and
+camera pins if using those subsystems.
+
+---
+
+## Card 4 — Espressif ESP32-S3-EYE v2.2
+
+Role: **ClawCam camera-trap node** (Station C). `firmware/clawcam_node_espidf`,
+`boards/esp32_s3_eye_v22.json`. *Pinmap unverified until bench tests pass.*
+
+**Camera (OV2640, DVP)** — `[fw]` `esp32_s3_eye_v22.json`
+| Signal | GPIO | | Signal | GPIO |
+|---|---|---|---|---|
+| XCLK | 15 (16 MHz) | | D0–D7 | 11, 9, 8, 10, 12, 18, 17, 16 |
+| SIOD (SDA) | 4 | | VSYNC | 6 |
+| SIOC (SCL) | 5 | | HREF | 7 |
+| | | | PCLK | 13 |
+
+**Storage (microSD, SDMMC 1-bit)** — `[fw]`
+| Signal | GPIO | Mount |
+|---|---|---|
+| D0 | 40 | `/sdcard` |
+| CMD | 38 | (FATFS) |
+| CLK | 39 | |
+
+**Motion / power** — `[fw]`
+| Function | Value |
+|---|---|
+| PIR wake (EXT0) | **unassigned** (`pir_gpio = -1`) → **wire an HC-SR501/AM312 to a free RTC-capable GPIO** |
+| Battery ADC | `battery_adc_channel = -1` (battery pads only; no on-board gauge) |
+| Low-battery threshold | 3.55 V |
+
+⚠ The S3-EYE has **no built-in PIR** — the camera-trap wake path needs an external PIR on an
+EXT0-capable pin. Confirm the pinmap on first bench flash (status: `unverified`).
+
+---
+
+## Probing quick-tips
+- **Common ground first.** Every cross-board link (UART bridge, PIR, sensors) needs a shared
+  GND — meter it before powering.
+- **Don't probe LoRa RF pins live**; keep the antenna on.
+- **Boot/flash:** ESP32-S3 boards enter download mode via BOOT(GPIO0)+RST; native-USB S3
+  boards usually auto-reset with `espflash`.
+- **Safe outputs only** for the Waveshare GPIO smoke test — 3/14/26/33/46 (Track-0 allow-list).
+- When in doubt, cross-check the vendor pinout — these cards cover the *project-used* pins,
+  not every header pin.
+
+*Sources: `Oh-Ben-Claw/firmware/heltec-lora-linktest/src/sx1262.rs`,
+`Oh-Ben-Claw/firmware/obc-esp32-s3/{BRINGUP.md,CAMERA.md}`,
+`Oh-Ben-Claw/docs/{PHASE-B-LORA-MESH.md, datasheets/waveshare-esp32-s3-touch-lcd-2.1.md}`,
+`ClawCam/firmware/clawcam_node_espidf/boards/esp32_s3_eye_v22.json`. Board-reference rows
+are vendor pinouts — verify against current silkscreen/datasheet.*
