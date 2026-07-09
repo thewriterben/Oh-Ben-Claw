@@ -5,6 +5,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Hardware registry: 2026-07-06 scout merge (`vpu` + 12 entries) (2026-07-07)
+
+Merged the rubric-passing proposals from `Knowledge Base/hardware-scout-2026-07-06.md`
+into `src/peripherals/registry.rs`. Proposals without a verified VID/PID were
+held back (Feather RP2350, reCamera 2002w, BeagleY-AI, SenseCAP Watcher, plain
+Feather ESP32-S3, MaixCAM — tracked in the report's §4).
+
+### Added — capability taxonomy
+
+- `vpu` token (Intel Movidius Myriad-class vision processing unit) — the last
+  accelerator class in `docs/V2-HARDWARE-ECOSYSTEM.md` §2.1 with no registry
+  coverage; added to the doc-comment table + `VALID_CAPABILITIES`.
+
+### Added — boards (10)
+
+- **oak-d-lite** (Luxonis, `03e7:2485` verified) — first `vpu` device; stereo
+  depth + NN camera. First Luxonis entry.
+- **esp32-c5** + **xiao-esp32c5** — first dual-band 2.4/5 GHz Wi-Fi 6 MCU
+  (devkit + Seeed XIAO form; shared `303a:1001`, select-by-name).
+- **m5stack-tab5** — flagship ESP32-P4 HMI (5" 720p MIPI-DSI touch, camera,
+  audio, M-Bus + Grove) and **m5stack-cardputer** (keyboard + IR pocket terminal).
+- **lilygo-t-lora-pager** — LoRa + mesh + GPS + NFC + keyboard Meshtastic handheld.
+- **pimoroni-presto** — first Pimoroni entry (RP2350 + RM2, 4" touch, Qw/ST ≡ Qwiic).
+- **raspberry-pi-pico2-w** — RP2350 wireless Pico (SDK CDC id shared with pico-w).
+- **adafruit-feather-esp32s3-tft** (`239a:811d` verified) — first true
+  Feather-format host (FeatherWing + STEMMA QT).
+- **arduino-nano-esp32** (`2341:0070` verified) — first wireless-era Arduino.
+
+### Added — accessories (2)
+
+- **rpi-ai-hat-plus-2** — Hailo-10H, 40 TOPS INT4; GenAI-class `hailo` on RPi 5.
+- **rpi-ai-camera-imx500** — Sony IMX500 on-sensor inference (`npu`), CSI bus.
+
+### Added — tests + roadmap
+
+- 12 new registry tests (lookups, `vpu` coverage, shared-id conventions,
+  Qwiic mating on Presto, accessory checks) per the intake definition-of-done.
+- ROADMAP: scout-merge log entry + firmware item for the OAK VPU edge-inference
+  node (DepthAI runtime via `EdgeAgent`) and IMX500 model loading.
+
 ## Unreleased — ClawCam analytics → world memory → "today is weird" reflexes (2026-07-05)
 
 Detections told the brain *what* a camera saw; now the gateway's aggregate

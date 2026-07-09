@@ -42,6 +42,7 @@
 //! | `nn_accel` | MCU-class NN acceleration (Arm Ethos-U / Helium, ESP32 vector ops) |
 //! | `kpu` | Kendryte / Sipeed KPU (K210 / K230) |
 //! | `tensor_rt` | NVIDIA TensorRT-capable accelerator (Orin / Thor); complements `cuda` |
+//! | `vpu` | Vision processing unit (Intel Movidius Myriad X; Luxonis OAK) |
 //! | `ethernet` | Wired networking interface |
 //! | `thread` | 802.15.4 Thread stack |
 //! | `zigbee` | 802.15.4 Zigbee stack |
@@ -218,6 +219,7 @@ pub static VALID_CAPABILITIES: &[&str] = &[
     "nn_accel",
     "kpu",
     "tensor_rt",
+    "vpu",
     // I/O form / actuation / power
     "display",
     "touch",
@@ -254,6 +256,7 @@ pub fn is_valid_capability(capability: &str) -> bool {
 /// - `0x2886` = Seeed Studio
 /// - `0x2b04` = Sipeed
 /// - `0x239a` = Adafruit (nRF52840 UF2 bootloader; shared by RAK/Nordic boards)
+/// - `0x03e7` = Intel Movidius (Myriad X; Luxonis OAK cameras)
 pub static KNOWN_BOARDS: &[BoardInfo] = &[
     // ── STM32 Nucleo ──────────────────────────────────────────────────────────
     BoardInfo {
@@ -1157,6 +1160,196 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         ecosystem: "Coral",
         connectors: &[Connector::HatPi],
     },
+    // ── Hardware-scout 2026-07-06 additions ───────────────────────────────────
+    // Merged from Knowledge Base/hardware-scout-2026-07-06.md. Entries held back
+    // pending VID/PID verification: Adafruit Feather RP2350, Seeed reCamera
+    // 2002w, BeagleY-AI, SenseCAP Watcher, plain Feather ESP32-S3, MaixCAM.
+    //
+    // ── Luxonis OAK-D Lite (Movidius Myriad X VPU) ────────────────────────────
+    // USB3 AI stereo-depth camera. VID/PID VERIFIED: enumerates 0x03e7:0x2485
+    // (Intel Movidius MyriadX) unbooted; the DepthAI runtime loads firmware over
+    // USB at start. First `vpu` device and first Luxonis entry.
+    BoardInfo {
+        vid: 0x03e7,
+        pid: 0x2485,
+        name: "oak-d-lite",
+        architecture: Some(
+            "Intel Movidius Myriad X VPU, 1.4 TOPS; 12.3MP RGB + 2x 480p stereo depth (USB 3)",
+        ),
+        transport: "serial",
+        capabilities: &["vpu", "camera_capture"],
+        vendor: "Luxonis",
+        ecosystem: "OAK",
+        connectors: &[Connector::Bare],
+    },
+    // ── Espressif ESP32-C5-DevKitC-1 ──────────────────────────────────────────
+    // First dual-band (2.4/5 GHz) Wi-Fi 6 MCU; mass production Apr 2025.
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "esp32-c5",
+        architecture: Some(
+            "ESP32-C5 RISC-V single-core @ 240 MHz (dual-band 2.4/5 GHz Wi-Fi 6, BLE 5, 802.15.4; native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "analog_read", "i2c", "spi", "wifi", "ble", "thread", "zigbee",
+        ],
+        vendor: "Espressif",
+        ecosystem: "ESP32-C5",
+        connectors: &[Connector::Bare],
+    },
+    // ── Seeed XIAO ESP32-C5 ───────────────────────────────────────────────────
+    // Thumb-size dual-band Wi-Fi 6 node (Jan 2026); XIAO battery-charge circuit.
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "xiao-esp32c5",
+        architecture: Some(
+            "ESP32-C5 RISC-V @ 240 MHz, dual-band 2.4/5 GHz Wi-Fi 6, BLE 5, 802.15.4 (native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "analog_read", "i2c", "spi", "wifi", "ble", "thread", "zigbee",
+            "battery",
+        ],
+        vendor: "Seeed Studio",
+        ecosystem: "XIAO",
+        connectors: &[Connector::Bare],
+    },
+    // ── M5Stack Tab5 (ESP32-P4 + ESP32-C6 radio co-processor) ─────────────────
+    // 5" 1280x720 MIPI-DSI multi-touch (GT911), SC2356 2MP MIPI-CSI camera,
+    // dual-mic ES7210 + NS4150B speaker, RS-485, microSD, M-Bus + Grove.
+    // Wi-Fi 6 / BLE via the C6 co-processor; P4 native USB (shared VID/PID).
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "m5stack-tab5",
+        architecture: Some(
+            "ESP32-P4 dual RISC-V @ 400 MHz + ESP32-C6 radio co-proc; 5\" 1280x720 MIPI-DSI touch, 2MP camera (native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "i2c", "spi", "wifi", "ble", "display", "touch", "camera_capture",
+            "audio_sample", "audio_output", "microsd", "psram", "battery", "nn_accel",
+        ],
+        vendor: "M5Stack",
+        ecosystem: "Tab",
+        connectors: &[Connector::MBus, Connector::Grove],
+    },
+    // ── M5Stack Cardputer (v1.1, StampS3) ─────────────────────────────────────
+    // Pocket terminal: 56-key keyboard, 1.14" ST7789 135x240, SPM1423 mic,
+    // NS4168 speaker, IR transmitter, microSD, battery, Grove port.
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "m5stack-cardputer",
+        architecture: Some(
+            "M5StampS3 (ESP32-S3) @ 240 MHz, 56-key keyboard, 1.14\" ST7789, mic + speaker, IR TX (native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "i2c", "spi", "wifi", "ble", "display", "keyboard", "audio_sample",
+            "audio_output", "infrared", "microsd", "battery",
+        ],
+        vendor: "M5Stack",
+        ecosystem: "Cardputer",
+        connectors: &[Connector::Grove],
+    },
+    // ── LILYGO T-Lora Pager ───────────────────────────────────────────────────
+    // Newest LILYGO Meshtastic handheld: ESP32-S3 + SX1262 LoRa, keyboard +
+    // rotary encoder, GPS, NFC, IMU, audio, microSD. Display controller, GPS
+    // module, and NFC chip SKUs pending confirmation (scout report §4).
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "lilygo-t-lora-pager",
+        architecture: Some(
+            "ESP32-S3 @ 240 MHz + SX1262 LoRa, keyboard + rotary encoder, GPS, NFC, IMU (native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "i2c", "spi", "wifi", "ble", "lora", "mesh", "gps", "nfc", "imu",
+            "display", "keyboard", "audio_output", "battery", "microsd",
+        ],
+        vendor: "LILYGO",
+        ecosystem: "T-Lora",
+        connectors: &[Connector::Bare],
+    },
+    // ── Pimoroni Presto ───────────────────────────────────────────────────────
+    // First Pimoroni entry. RP2350 + RM2 (CYW43439) Wi-Fi/BLE; 4" 480x480 IPS
+    // touch, piezo, microSD, battery connector, 2x Qw/ST ports (electrically
+    // Qwiic/STEMMA QT). Ships MicroPython, so enumerates as the generic
+    // MicroPython id 0x2e8a:0x0005 (shared — selected by name).
+    BoardInfo {
+        vid: 0x2e8a,
+        pid: 0x0005,
+        name: "pimoroni-presto",
+        architecture: Some(
+            "RP2350 dual Cortex-M33 @ 150 MHz + RM2 Wi-Fi/BLE, 4\" 480x480 IPS touch (MicroPython VID/PID; shared)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "i2c", "spi", "wifi", "ble", "display", "touch", "microsd",
+            "battery", "audio_output",
+        ],
+        vendor: "Pimoroni",
+        ecosystem: "Presto",
+        connectors: &[Connector::Qwiic],
+    },
+    // ── Raspberry Pi Pico 2 W ─────────────────────────────────────────────────
+    // RP2350 + CYW43439 (Wi-Fi 4, BLE 5.2). Pico SDK CDC enumerates as the
+    // generic 0x2e8a:0x000a — the SAME id as the existing pico-w entry, so
+    // lookup_board resolves to pico-w first; selected by name (per convention).
+    BoardInfo {
+        vid: 0x2e8a,
+        pid: 0x000a,
+        name: "raspberry-pi-pico2-w",
+        architecture: Some(
+            "RP2350 dual-core ARM Cortex-M33 @ 150 MHz + CYW43439 (Wi-Fi 4, BLE 5.2; SDK CDC id shared with pico-w)",
+        ),
+        transport: "serial",
+        capabilities: &["gpio", "analog_read", "i2c", "spi", "pwm", "wifi", "ble"],
+        vendor: "Raspberry Pi",
+        ecosystem: "Pico",
+        connectors: &[Connector::Bare],
+    },
+    // ── Adafruit Feather ESP32-S3 TFT ─────────────────────────────────────────
+    // First true Feather-format host (FeatherWing + STEMMA QT). 1.14" ST7789
+    // 240x135 TFT, LiPo charge. VID/PID VERIFIED 0x239a:0x811d (CircuitPython /
+    // PlatformIO hwids; bootloader 0x239a:0x011d; Arduino mode = 0x303a:0x1001).
+    BoardInfo {
+        vid: 0x239a,
+        pid: 0x811d,
+        name: "adafruit-feather-esp32s3-tft",
+        architecture: Some(
+            "ESP32-S3 Xtensa LX7 dual-core @ 240 MHz, 1.14\" ST7789 240x135 TFT, LiPo charge (CircuitPython VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "analog_read", "i2c", "spi", "wifi", "ble", "display", "battery",
+        ],
+        vendor: "Adafruit",
+        ecosystem: "Feather",
+        connectors: &[Connector::FeatherWing, Connector::StemmaQt],
+    },
+    // ── Arduino Nano ESP32 ────────────────────────────────────────────────────
+    // First wireless-era Arduino in the registry: ESP32-S3 in a u-blox
+    // NORA-W106 module, Nano footprint. VID/PID VERIFIED 0x2341:0x0070
+    // (arduino-esp32 boards.txt / dfu-util device id).
+    BoardInfo {
+        vid: 0x2341,
+        pid: 0x0070,
+        name: "arduino-nano-esp32",
+        architecture: Some(
+            "ESP32-S3 (u-blox NORA-W106) Xtensa LX7 dual-core @ 240 MHz, Nano form factor",
+        ),
+        transport: "serial",
+        capabilities: &["gpio", "analog_read", "i2c", "spi", "wifi", "ble"],
+        vendor: "Arduino",
+        ecosystem: "Nano",
+        connectors: &[Connector::Bare],
+    },
 ];
 
 /// Look up a board by USB VID and PID.
@@ -1540,6 +1733,25 @@ pub static KNOWN_ACCESSORIES: &[AccessoryInfo] = &[
         capabilities: &["nn_accel", "camera_capture"],
         compatible_boards: &[],
         connector: Connector::Grove,
+    },
+    // ── Hardware-scout 2026-07-06: AI-accelerator add-ons ─────────────────────
+    AccessoryInfo {
+        name: "rpi-ai-hat-plus-2",
+        description: "Raspberry Pi AI HAT+ 2 — Hailo-10H NPU, 40 TOPS INT4 / 20 TOPS INT8, GenAI-capable (RPi 5, PCIe)",
+        bus: "pcie",
+        default_i2c_addr: None,
+        capabilities: &["hailo"],
+        compatible_boards: &["raspberry-pi-5"],
+        connector: Connector::HatPi,
+    },
+    AccessoryInfo {
+        name: "rpi-ai-camera-imx500",
+        description: "Raspberry Pi AI Camera — Sony IMX500 12.3MP sensor with on-sensor NN inference accelerator (CSI)",
+        bus: "csi",
+        default_i2c_addr: None,
+        capabilities: &["npu", "camera_capture"],
+        compatible_boards: &["raspberry-pi-4", "raspberry-pi-5"],
+        connector: Connector::Bare,
     },
 ];
 
@@ -2437,5 +2649,151 @@ mod tests {
         let grove = lookup_accessory("grove-vision-ai-v2").unwrap();
         assert!(grove.capabilities.contains(&"nn_accel"));
         assert_eq!(grove.connector, Connector::Grove);
+    }
+
+    // ── Hardware-scout 2026-07-06 additions ───────────────────────────────────
+
+    #[test]
+    fn lookup_oak_d_lite() {
+        let b = lookup_board(0x03e7, 0x2485).unwrap();
+        assert_eq!(b.name, "oak-d-lite");
+        assert_eq!(b.vendor, "Luxonis");
+        assert!(b.capabilities.contains(&"vpu"));
+        assert!(b.capabilities.contains(&"camera_capture"));
+    }
+
+    #[test]
+    fn vpu_token_is_valid_and_covered() {
+        // `vpu` was the last accelerator class in the taxonomy with no hardware.
+        assert!(is_valid_capability("vpu"));
+        assert!(!boards_with_capability("vpu").is_empty());
+    }
+
+    #[test]
+    fn lookup_arduino_nano_esp32() {
+        let b = lookup_board(0x2341, 0x0070).unwrap();
+        assert_eq!(b.name, "arduino-nano-esp32");
+        assert_eq!(b.vendor, "Arduino");
+        assert!(b.capabilities.contains(&"wifi"));
+        assert!(b.capabilities.contains(&"ble"));
+    }
+
+    #[test]
+    fn lookup_feather_esp32s3_tft() {
+        let b = lookup_board(0x239a, 0x811d).unwrap();
+        assert_eq!(b.name, "adafruit-feather-esp32s3-tft");
+        assert!(b.connectors.contains(&Connector::FeatherWing));
+        assert!(b.connectors.contains(&Connector::StemmaQt));
+        assert!(b.capabilities.contains(&"display"));
+        assert!(b.capabilities.contains(&"battery"));
+    }
+
+    #[test]
+    fn esp32_c5_is_dual_band_with_802154() {
+        let b = KNOWN_BOARDS.iter().find(|b| b.name == "esp32-c5").unwrap();
+        assert_eq!(b.vendor, "Espressif");
+        assert!(b.capabilities.contains(&"wifi"));
+        assert!(b.capabilities.contains(&"thread"));
+        assert!(b.capabilities.contains(&"zigbee"));
+    }
+
+    #[test]
+    fn scout_2026_07_06_boards_present_by_name() {
+        let names: Vec<_> = KNOWN_BOARDS.iter().map(|b| b.name).collect();
+        for n in [
+            "oak-d-lite",
+            "esp32-c5",
+            "xiao-esp32c5",
+            "m5stack-tab5",
+            "m5stack-cardputer",
+            "lilygo-t-lora-pager",
+            "pimoroni-presto",
+            "raspberry-pi-pico2-w",
+            "adafruit-feather-esp32s3-tft",
+            "arduino-nano-esp32",
+        ] {
+            assert!(names.contains(&n), "missing scout board {n}");
+        }
+    }
+
+    #[test]
+    fn cardputer_is_a_keyboard_ir_node() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "m5stack-cardputer")
+            .unwrap();
+        assert!(b.capabilities.contains(&"keyboard"));
+        assert!(b.capabilities.contains(&"infrared"));
+        assert!(b.capabilities.contains(&"display"));
+        assert!(b.connectors.contains(&Connector::Grove));
+    }
+
+    #[test]
+    fn t_lora_pager_combines_lora_gps_nfc() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "lilygo-t-lora-pager")
+            .unwrap();
+        assert!(b.capabilities.contains(&"lora"));
+        assert!(b.capabilities.contains(&"mesh"));
+        assert!(b.capabilities.contains(&"gps"));
+        assert!(b.capabilities.contains(&"nfc"));
+        assert!(b.capabilities.contains(&"keyboard"));
+    }
+
+    #[test]
+    fn tab5_is_a_full_hmi_node() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "m5stack-tab5")
+            .unwrap();
+        assert!(b.capabilities.contains(&"display"));
+        assert!(b.capabilities.contains(&"touch"));
+        assert!(b.capabilities.contains(&"camera_capture"));
+        assert!(b.capabilities.contains(&"nn_accel"));
+        assert!(b.connectors.contains(&Connector::MBus));
+    }
+
+    #[test]
+    fn pico2_w_shares_sdk_cdc_id_with_pico_w() {
+        // 0x2e8a:0x000a is the generic Pico SDK CDC id; lookup_board resolves
+        // to the first match (pico-w). The Pico 2 W is selected by name.
+        assert_eq!(
+            lookup_board(0x2e8a, 0x000a).unwrap().name,
+            "raspberry-pi-pico-w"
+        );
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "raspberry-pi-pico2-w")
+            .unwrap();
+        assert!(b.capabilities.contains(&"wifi"));
+        assert!(b.capabilities.contains(&"ble"));
+        assert!(b.architecture.unwrap().contains("RP2350"));
+    }
+
+    #[test]
+    fn pimoroni_presto_exposes_qwiic() {
+        let b = KNOWN_BOARDS
+            .iter()
+            .find(|b| b.name == "pimoroni-presto")
+            .unwrap();
+        assert_eq!(b.vendor, "Pimoroni");
+        assert!(b.connectors.contains(&Connector::Qwiic));
+        assert!(b.capabilities.contains(&"touch"));
+        // A Qwiic/STEMMA QT module plugs straight into the Presto's Qw/ST port.
+        let scd = lookup_accessory("scd41").unwrap();
+        assert!(board_accepts_accessory(b, scd));
+    }
+
+    #[test]
+    fn genai_accessories_present() {
+        let hat2 = lookup_accessory("rpi-ai-hat-plus-2").unwrap();
+        assert_eq!(hat2.bus, "pcie");
+        assert!(hat2.capabilities.contains(&"hailo"));
+        assert!(hat2.compatible_boards.contains(&"raspberry-pi-5"));
+        let cam = lookup_accessory("rpi-ai-camera-imx500").unwrap();
+        assert_eq!(cam.bus, "csi");
+        assert!(cam.capabilities.contains(&"npu"));
+        assert!(cam.capabilities.contains(&"camera_capture"));
     }
 }
