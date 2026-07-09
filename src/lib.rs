@@ -57,6 +57,7 @@ pub mod power;
 pub mod providers;
 pub mod rag;
 pub mod runtime;
+pub mod satcom;
 pub mod scheduler;
 pub mod security;
 pub mod sensing;
