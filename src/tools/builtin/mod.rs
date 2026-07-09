@@ -1,5 +1,6 @@
 //! Built-in tools for the Oh-Ben-Claw agent.
 
+pub mod aerial;
 pub mod audio;
 pub mod audio_suite;
 pub mod browser;
