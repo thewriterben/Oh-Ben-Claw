@@ -396,12 +396,16 @@ mod tests {
             .build()
             .unwrap();
         let result = rt
-            .block_on(orch.handle.agent_arc().execute_tool_direct(
-                "shell",
-                serde_json::json!({"command": "echo parity"}),
-            ))
+            .block_on(
+                orch.handle
+                    .agent_arc()
+                    .execute_tool_direct("shell", serde_json::json!({"command": "echo parity"})),
+            )
             .unwrap();
-        assert!(!result.success, "supervised autonomy must gate the inner agent");
+        assert!(
+            !result.success,
+            "supervised autonomy must gate the inner agent"
+        );
         assert!(
             result.error.as_deref().unwrap_or("").contains("approval"),
             "{:?}",

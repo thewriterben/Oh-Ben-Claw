@@ -1251,6 +1251,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
         rules
     };
+    // Phase 18 System 2: when armed, the reflex sink chain hands escalation
+    // wakes to the slow reasoner through this channel (spawned once the agent
+    // handle exists, further below).
+    let mut system2_rx: Option<
+        tokio::sync::mpsc::Receiver<oh_ben_claw::agent::system2::WakeEvent>,
+    > = None;
     if config.reflex.enabled && !reflex_rules.is_empty() {
         if let Some(world) = &world_mem {
             use oh_ben_claw::agent::reflex::{
@@ -1416,6 +1422,18 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 Arc::new(oh_ben_claw::agent::notify::NotifyingActionSink::new(
                     sink, notifier,
                 ))
+            } else {
+                sink
+            };
+            // Phase 18 System 2: top of the chain — escalations additionally
+            // wake the slow reasoner (novelty-gated, budget-capped, never
+            // blocking System 1).
+            let sink: Arc<dyn ActionSink> = if config.system2.enabled {
+                let cap = config.system2.queue_capacity.unwrap_or(8);
+                let (s2_sink, rx) = oh_ben_claw::agent::system2::System2Sink::new(sink, cap);
+                system2_rx = Some(rx);
+                info!("Phase 18 System 2 wake channel armed (escalation → slow reasoner)");
+                Arc::new(s2_sink)
             } else {
                 sink
             };
@@ -2070,6 +2088,46 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         );
         (handle, None)
     };
+
+    // Phase 18 System 2: spawn the slow reasoner over the live agent. Wakes
+    // arrive from the reflex chain (System 1), pass the novelty gate + hourly
+    // budget, and run one agent turn on a dedicated session; the outcome lands
+    // in world memory (`system2.last_wake`).
+    if let Some(rx) = system2_rx.take() {
+        use oh_ben_claw::agent::system2::{NoveltyGate, Reasoner, System2Reasoner};
+
+        struct AgentReasoner {
+            handle: oh_ben_claw::agent::AgentHandle,
+        }
+        #[async_trait::async_trait]
+        impl Reasoner for AgentReasoner {
+            async fn reason(&self, objective: &str) -> anyhow::Result<String> {
+                let resp = self.handle.process("system2", objective).await?;
+                Ok(resp.message)
+            }
+        }
+
+        let gate = NoveltyGate::new(
+            config.system2.novelty_window_ms.unwrap_or(600_000),
+            config.system2.max_wakes_per_hour.unwrap_or(6),
+        );
+        let mut reasoner = System2Reasoner::new(
+            gate,
+            Arc::new(AgentReasoner {
+                handle: handle.clone(),
+            }),
+        )
+        .with_obs(Arc::clone(&obs));
+        if let Some(world) = &world_mem {
+            reasoner = reasoner.with_world(Arc::clone(world));
+        }
+        info!(
+            novelty_window_ms = config.system2.novelty_window_ms.unwrap_or(600_000),
+            max_wakes_per_hour = config.system2.max_wakes_per_hour.unwrap_or(6),
+            "Phase 18 System 2 slow reasoner spawned"
+        );
+        tokio::spawn(reasoner.run(rx));
+    }
 
     // Phase 16: spawn the autonomous self-improvement loop when enabled. It
     // periodically synthesizes + verifies skills from successful trajectories;

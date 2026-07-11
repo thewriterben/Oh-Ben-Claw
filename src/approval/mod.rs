@@ -36,6 +36,83 @@ pub struct ApprovalRequest {
     pub tool_name: String,
     /// The arguments that will be passed to the tool.
     pub arguments: serde_json::Value,
+    /// The tool's declared risk class, when known. Physical-aware prompts
+    /// (Track 0) surface it so the operator sees *what kind* of action they
+    /// are approving, not just its name.
+    pub risk: Option<RiskClass>,
+}
+
+/// Render the operator-facing approval prompt (Track 0 physical-aware: risk
+/// class + concrete effect line when derivable). Extracted from the stdin
+/// flow so its content is testable.
+pub fn format_approval_prompt(req: &ApprovalRequest, args_summary: &str) -> String {
+    let mut out = format!(
+        "\n\u{26a0}\u{fe0f}  Tool approval required\n   Tool  : {}\n",
+        req.tool_name
+    );
+    if let Some(risk) = &req.risk {
+        out.push_str(&format!("   Risk  : {}\n", risk_summary(risk)));
+    }
+    if let Some(effect) = describe_effect(&req.tool_name, &req.arguments) {
+        out.push_str(&format!("   Effect: {effect}\n"));
+    }
+    out.push_str(&format!("   Args  : {args_summary}\n"));
+    out
+}
+
+/// One-line human summary of a risk class for approval prompts
+/// (e.g. `"PHYSICAL / irreversible / high blast - defaults to per-call approval"`).
+pub fn risk_summary(risk: &RiskClass) -> String {
+    if !risk.physical {
+        return "software-only".to_string();
+    }
+    let rev = if risk.reversible {
+        "reversible"
+    } else {
+        "irreversible"
+    };
+    let blast = match risk.blast {
+        crate::tools::traits::BlastRadius::None => "no blast radius",
+        crate::tools::traits::BlastRadius::Low => "low blast radius",
+        crate::tools::traits::BlastRadius::High => "high blast radius",
+    };
+    let tail = if risk.requires_per_call_approval() {
+        " - defaults to per-call approval"
+    } else {
+        ""
+    };
+    format!("PHYSICAL / {rev} / {blast}{tail}")
+}
+
+/// Best-effort concrete-effect description for a physical tool call, for
+/// approval prompts (Track 0: "open GPIO 17 -> unlock front door" class of
+/// clarity). Returns `None` when no meaningful description can be derived -
+/// callers fall back to showing the raw arguments.
+pub fn describe_effect(tool_name: &str, args: &serde_json::Value) -> Option<String> {
+    let s = |k: &str| args.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    let n = |k: &str| args.get(k).and_then(serde_json::Value::as_i64);
+    match tool_name {
+        "gpio_write" => {
+            let pin = n("pin")?;
+            let value = n("value")?;
+            let device = s("node_id").unwrap_or_else(|| "local".to_string());
+            Some(format!(
+                "drive {device} GPIO {pin} -> {} ({})",
+                value,
+                if value == 0 { "LOW" } else { "HIGH" }
+            ))
+        }
+        "move_actuator" => {
+            let name = s("actuator").or_else(|| s("name"))?;
+            Some(format!("actuate '{name}' with {args}"))
+        }
+        "mesh_command" => {
+            let node = s("node").or_else(|| s("node_id"))?;
+            let cmd = s("command").unwrap_or_else(|| "command".to_string());
+            Some(format!("send '{cmd}' to mesh node {node} over LoRa"))
+        }
+        _ => None,
+    }
 }
 
 /// How long an approval lasts.
@@ -499,6 +576,17 @@ impl ApprovalManager {
                 }
             }
         }
+        // Track 0: irreversible / high-blast physical actions default to
+        // **per-call approval**. Only an explicit `auto_approve` listing or a
+        // session grant the operator made *this session* exempts them —
+        // persisted forever grants and `Full` autonomy deliberately do not
+        // (such tools are never auto-grantable across sessions).
+        if risk.requires_per_call_approval()
+            && !self.config.auto_approve.iter().any(|t| t == tool_name)
+            && !self.session_allowlist.lock().contains(tool_name)
+        {
+            return Decision::NeedsApproval;
+        }
         if self.needs_approval(tool_name) {
             Decision::NeedsApproval
         } else {
@@ -522,10 +610,7 @@ impl ApprovalManager {
         let decision = if self.non_interactive {
             ApprovalResponse::No
         } else {
-            println!(
-                "\n⚠️  Tool approval required\n   Tool : {}\n   Args : {}\n",
-                req.tool_name, args_summary
-            );
+            println!("{}", format_approval_prompt(req, &args_summary));
             println!("Allow? [y]es (this call) / [n]o / [a] session / [f]orever: ");
             let _ = io::stdout().flush();
             let mut input = String::new();
@@ -736,6 +821,121 @@ mod tests {
         RiskClass::physical(true, crate::tools::traits::BlastRadius::Low)
     }
 
+    fn phys_critical() -> RiskClass {
+        // Irreversible + high blast: the "unlock the front door" class.
+        RiskClass::physical(false, crate::tools::traits::BlastRadius::High)
+    }
+
+    // ── Track 0: risk-driven approval defaults ────────────────────────────────
+
+    #[test]
+    fn critical_physical_defaults_to_per_call_even_under_full_autonomy() {
+        let mgr = manager(&config_full(), false);
+        assert_eq!(
+            mgr.decide("door_lock", Some("rover"), phys_critical()),
+            Decision::NeedsApproval,
+            "irreversible/high-blast must ask, Full autonomy notwithstanding"
+        );
+        // Reversible low-blast physical is unchanged under Full.
+        assert_eq!(
+            mgr.decide("move", Some("rover"), phys_low()),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn critical_physical_is_never_exempted_by_forever_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let grants = ForeverGrants::load(dir.path().join("grants.json"));
+        grants.grant("door_lock");
+        let mgr = ApprovalManager::with_grants(&config_full(), grants, false);
+        assert_eq!(
+            mgr.decide("door_lock", Some("rover"), phys_critical()),
+            Decision::NeedsApproval,
+            "a persisted forever grant must not auto-run an irreversible/high-blast tool"
+        );
+    }
+
+    #[test]
+    fn critical_physical_session_grant_and_auto_approve_do_exempt() {
+        // Session grant: the operator explicitly allowed it *this session*.
+        let mgr = manager(&config_full(), false);
+        mgr.record_external_decision(
+            &ApprovalRequest {
+                tool_name: "door_lock".to_string(),
+                arguments: json!({}),
+                risk: Some(phys_critical()),
+            },
+            ApprovalResponse::Always,
+        );
+        assert_eq!(
+            mgr.decide("door_lock", Some("rover"), phys_critical()),
+            Decision::Allow
+        );
+
+        // Explicit auto_approve config listing is likewise an operator decision.
+        let cfg = AutonomyConfig {
+            level: AutonomyLevel::Full,
+            auto_approve: vec!["door_lock".into()],
+            always_ask: vec![],
+        };
+        assert_eq!(
+            manager(&cfg, false).decide("door_lock", Some("rover"), phys_critical()),
+            Decision::Allow
+        );
+    }
+
+    // ── Track 0: physical-aware prompts ───────────────────────────────────────
+
+    #[test]
+    fn prompt_surfaces_risk_class_and_concrete_effect() {
+        let req = ApprovalRequest {
+            tool_name: "gpio_write".to_string(),
+            arguments: json!({"node_id": "node-3", "pin": 17, "value": 1}),
+            risk: Some(phys_critical()),
+        };
+        let prompt = format_approval_prompt(&req, "{...}");
+        assert!(prompt.contains("gpio_write"));
+        assert!(prompt.contains("PHYSICAL / irreversible / high blast"));
+        assert!(prompt.contains("defaults to per-call approval"));
+        assert!(prompt.contains("drive node-3 GPIO 17 -> 1 (HIGH)"));
+    }
+
+    #[test]
+    fn prompt_without_risk_or_effect_still_shows_tool_and_args() {
+        let req = ApprovalRequest {
+            tool_name: "shell".to_string(),
+            arguments: json!({"cmd": "ls"}),
+            risk: None,
+        };
+        let prompt = format_approval_prompt(&req, "{\"cmd\":\"ls\"}");
+        assert!(prompt.contains("shell"));
+        assert!(prompt.contains("{\"cmd\":\"ls\"}"));
+        assert!(!prompt.contains("Risk"));
+        assert!(!prompt.contains("Effect"));
+    }
+
+    #[test]
+    fn describe_effect_covers_known_actuators_and_falls_back_to_none() {
+        assert_eq!(
+            describe_effect("gpio_write", &json!({"pin": 4, "value": 0})).unwrap(),
+            "drive local GPIO 4 -> 0 (LOW)"
+        );
+        assert!(
+            describe_effect("mesh_command", &json!({"node": "n2", "command": "reboot"}))
+                .unwrap()
+                .contains("send 'reboot' to mesh node n2")
+        );
+        assert!(describe_effect("http_get", &json!({"url": "x"})).is_none());
+    }
+
+    #[test]
+    fn risk_summary_reads_naturally() {
+        assert_eq!(risk_summary(&RiskClass::safe()), "software-only");
+        assert!(risk_summary(&phys_low()).contains("PHYSICAL / reversible / low blast"));
+        assert!(!risk_summary(&phys_low()).contains("per-call"));
+    }
+
     #[test]
     fn decide_without_trust_falls_through_to_needs_approval() {
         // No scorer attached ⇒ trust never tightens; decide mirrors needs_approval.
@@ -834,6 +1034,7 @@ mod tests {
         let req = ApprovalRequest {
             tool_name: "shell".to_string(),
             arguments: json!({"cmd": "ls"}),
+            risk: None,
         };
         assert_eq!(mgr.request_approval(&req), ApprovalResponse::No);
     }
@@ -851,6 +1052,7 @@ mod tests {
         let req = ApprovalRequest {
             tool_name: "shell".to_string(),
             arguments: json!({}),
+            risk: None,
         };
         mgr.request_approval(&req);
         let log = mgr.audit_log();
@@ -891,6 +1093,7 @@ mod tests {
         let req = ApprovalRequest {
             tool_name: "backup_tool".to_string(),
             arguments: json!({}),
+            risk: None,
         };
         mgr.record_external_decision(&req, ApprovalResponse::Forever);
         assert!(!mgr.needs_approval("backup_tool"));
@@ -930,6 +1133,7 @@ mod tests {
         let req = ApprovalRequest {
             tool_name: "delete_file".to_string(),
             arguments: json!({}),
+            risk: None,
         };
         mgr.record_external_decision(&req, ApprovalResponse::Forever);
         // Even with a forever grant, always_ask wins.
@@ -1075,6 +1279,7 @@ mod tests {
         let req = ApprovalRequest {
             tool_name: "shell".to_string(),
             arguments: json!({}),
+            risk: None,
         };
         mgr.request_approval(&req); // non-interactive → denied
         mgr.record_external_decision(&req, ApprovalResponse::Yes);

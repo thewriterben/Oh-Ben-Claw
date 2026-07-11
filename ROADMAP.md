@@ -500,18 +500,18 @@ and the safety floor that makes shipping autonomy responsible). Phases 17–18 b
 the autonomy and architectural substrate; 19–20 are the user-facing payoff. Track 0
 runs underneath all of it.
 
-## Track 0: Physical-Action Safety & Trust 📋 Planned *(cross-cutting)*
+## Track 0: Physical-Action Safety & Trust ✅ Complete *(cross-cutting — remains the standing bar for every new physical capability)*
 
 Physical actions are irreversible and have a real-world blast radius, so the safety
 bar sits far above software-only agents. This track lands incrementally alongside
 every phase below. Aligns Oh-Ben-Claw with the OWASP Top 10 for Agentic Applications
 (Dec 2025) and the NIST AI Agent Standards direction (Feb 2026).
 
-- [ ] **Physical-risk classification** for every tool — `reversible`/`irreversible` × `low`/`high` blast radius; drives approval defaults (e.g., actuator/lock/relay tools default to per-call approval)
-- [ ] **Deterministic, model-independent safety limits** at the actuator boundary — rate limits, value ranges, and interlocks enforced in code the LLM cannot override (`src/security/` + `src/peripherals/`)
-- [ ] **Pre-action authorization** at the tool-call boundary with cryptographically signed audit records for every physical action (extends `src/approval/` + `src/observability/`)
-- [ ] **Staged rollout** for new/synthesized physical skills: `simulate` → `supervised` → `autonomous`, promotion gated on a clean record
-- [ ] **Physical-aware approval prompts** — surface risk class, device, and concrete effect ("open GPIO 17 → unlock front door") in the approval UI
+- [x] **Physical-risk classification** for every tool — `RiskClass { reversible × blast × physical }` on the `Tool` trait (default safe; actuator tools override), and as of 2026-07-11 it **actually drives approval defaults**: `ApprovalManager::decide` enforces `requires_per_call_approval()` (irreversible OR high-blast physical) — such tools ask per-call even under `Full` autonomy, and persisted forever grants deliberately do **not** exempt them (never auto-grantable across sessions); only an explicit `auto_approve` listing or a same-session grant does. 3 new enforcement tests *(audit note: the classification + helper existed; the decide-time enforcement was the missing wire)*
+- [x] **Deterministic, model-independent safety limits** at the actuator boundary — `src/security/limits.rs` `SafetyGate` (pin allowlist, value ranges, rate limits) enforced in the agent chokepoint (`track0_authorize`) and mirrored **on-MCU** (`firmware/obc-esp32-s3` `SafetyGate::with_output_pins(OUTPUT_PINS)`, host-pushed limits via `apply_pushed`); generated firmware carries `SAFETY_OUTPUT_PINS` (I6) *(audit: already landed via Phases 15–17 work; verified, box was stale)*
+- [x] **Pre-action authorization** at the tool-call boundary with cryptographically signed audit records — `approval_authorize` + `track0_authorize` gate every call in the chokepoint; `ActionAuditor` (`src/security/audit.rs`) hash-chains + HMACs every physical-action decision, with **Ed25519 detached signatures** (`audit_sign.rs`, ed25519-dalek); remote operate actions join the same chain (I4) *(audit: landed previously; box was stale)*
+- [x] **Staged rollout** for new/synthesized physical skills: `simulate` → `supervised` → `autonomous`, promotion gated on a clean record — Phase 16 P3 (`RolloutTracker`, `skill promote` CLI + gateway endpoints, auto-demotion, red-team evals) *(audit: landed with Phase 16; box was stale)*
+- [x] **Physical-aware approval prompts** (2026-07-11) — `ApprovalRequest.risk` + `format_approval_prompt` surface the risk class ("PHYSICAL / irreversible / high blast - defaults to per-call approval") and a concrete effect line via `describe_effect` ("drive node-3 GPIO 17 -> 1 (HIGH)", mesh commands, actuators) in the CLI prompt; `GET /api/v1/approvals` annotates every tool row with `{physical, reversible, blast, requires_per_call}` (via `AgentHandle::tool_risk`), and the Fleet app's Operate section shows a PHYSICAL badge + risk line on approval rows. 4 new prompt/effect tests
 - [x] **Argument provenance ("taint") tracking** — CaMeL-style data-flow guard: `External`-trust tool output (web/browser/remote-MCP) is pooled per run, and a privileged (physical/irreversible/blast) call whose argument values echo that untrusted content is refused (`enforce`) or flagged (`warn`), unless explicitly operator-granted (`src/security/taint.rs`; `[safety].taint_mode`; OWASP ASI01/02). *(2026-07-02)*
 - [x] Embodied red-team evals: injected-malicious-skill and injected-prompt tests must not be able to drive an out-of-limit actuator command (extends Phase 15 eval harness) — *injected-prompt→actuation covered by `taint_redteam` + the **adaptive OWASP-ASI corpus** (`security/redteam.rs` seed-sampled generator → `asi_redteam` evals: safety invariant holds across the whole generated family, per the NIST "static suites understate" finding); injected-malicious-skill by the Phase 16 P3 red-team evals; mapped to OWASP ASI01/02/04/06*
 
@@ -548,7 +548,7 @@ Design: `docs/PHASE17-PLAN.md`. Implementation: `src/harness/`.
 - [x] **Resume smoke test** — on restart, re-establish context cheaply (current device states, outstanding objectives) before acting — *compact resume-context block (tally + statuses + world facts) prefixes every worker prompt*
 - [x] Long-horizon eval: an unattended fleet completes a defined multi-hour routine across an induced crash/reboot with correct resume and no duplicated physical actions — *`tests/harness_long_horizon.rs`: fresh harness per "boot", crash induced mid-objective, actuator fires exactly once across the whole mission; fail-closed and reopen-then-complete scenarios pinned*
 
-## Phase 18: Dual-System Perception-Action + World Memory 📋 Planned
+## Phase 18: Dual-System Perception-Action + World Memory ✅ Complete *(host-side; on-MCU reflex mirror + as-of-transaction-time queries remain firmware/follow-up items)*
 
 Adopt the architecture every 2026 robotics stack converged on — slow reasoner +
 fast reflex — backed by a persistent, temporally-aware model of the physical
@@ -556,11 +556,11 @@ environment. The most architecturally novel, most embodied-native phase. Builds 
 `agent/edge`, `vision`, `peripherals/fusion`, and `memory`.
 
 - [x] **System 1 (fast reflex loop)** — host-side `ReflexEngine` (`src/agent/reflex.rs`): conditions (sensor/gpio/and/or), actions (gpio_write/publish/escalate), debounce + rate limit, serde wire format for pushing to nodes; 8 tests. (On-MCU mirror of the evaluator: firmware follow-up.)
-- [ ] **System 2 (slow reasoner)** — cloud/host LLM invoked for planning and novelty, not every event; System 1 escalates to System 2 on uncertainty
+- [x] **System 2 (slow reasoner)** — `src/agent/system2.rs` (2026-07-11): the escalation wake that was previously only a spine publish + operator notification now actually invokes the LLM. `System2Sink` tops the reflex sink chain (`try_send` onto a bounded queue — System 1 never blocks); `NoveltyGate` fingerprints reasons (numeric tokens stripped: `offline 120s` ≡ `offline 240s`, but `node-3` ≢ `node-4`) so repeats within the novelty window are suppressed, with a hard hourly wake budget on top; `System2Reasoner` builds a compact world-memory context and runs one agent turn on a dedicated `system2` session, recording the outcome to `system2.last_wake` + counters (`system2_wakes_total` / `system2_suppressed_*`). `[system2]` config (opt-in; `novelty_window_ms` 10 min, `max_wakes_per_hour` 6 defaults). 7 unit tests
 - [x] **Bitemporal world memory** — persistent, queryable model of rooms/devices/states over time with validity intervals (valid time + transaction time), so stale facts are invalidated rather than lost; `src/memory/world.rs` (`observe`/`current`/`at`/`history`/`entities`), non-destructive, 5 tests. (Full as-of-transaction-time queries: follow-up.)
 - [x] **Perception→memory→action wiring** — sensor-fusion outputs update world memory (`FusionRegistry::observe_into` → `sensor.{quantity}` facts); planning queries via the `world_memory` tool. (Vision→world-memory lands with the ClawCam vision suite.)
 - [x] **Escalation policy + budget** — `EscalationBudget` (sliding-window, `[reflex].max_escalations_per_min`) caps System 1 → System 2 hand-offs; reflex actions dispatch via `SpineActionSink` (GPIO over the spine, bounded by node Track 0) or the dry-run logging sink. (On-MCU reflex mirror: firmware follow-up.)
-- [ ] Eval: System 1 reflex latency budget met offline; System 2 invoked only on novelty; world-memory queries return temporally-correct device state
+- [x] Eval: System 1 reflex latency budget met offline; System 2 invoked only on novelty; world-memory queries return temporally-correct device state — `tests/system2_eval.rs` (2026-07-11): 1000 evaluations of 64 rules complete in <100 ms with no LLM/network in the path; an 11-escalation storm through the real chain (dispatch → `System2Sink` → `System2Reasoner`) produces exactly 2 LLM wakes for 2 novel situations (plus a budget-cap check); device-state `at()` queries answer correctly across lock/pump state transitions, boundaries included
 
 ## Phase 19: Real-Time Multimodal Interaction 📋 Planned
 

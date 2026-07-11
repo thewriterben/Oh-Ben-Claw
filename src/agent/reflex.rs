@@ -124,15 +124,17 @@ impl Condition {
                 .nums
                 .get(entity)
                 .is_some_and(|v| Cmp::Eq.test(*v, *value as f64)),
-            Condition::State { entity, field, equals } => {
-                snap.vals.get(entity).is_some_and(|v| {
-                    let s = match field {
-                        Some(f) => v.get(f).and_then(|x| x.as_str()),
-                        None => v.as_str(),
-                    };
-                    s == Some(equals.as_str())
-                })
-            }
+            Condition::State {
+                entity,
+                field,
+                equals,
+            } => snap.vals.get(entity).is_some_and(|v| {
+                let s = match field {
+                    Some(f) => v.get(f).and_then(|x| x.as_str()),
+                    None => v.as_str(),
+                };
+                s == Some(equals.as_str())
+            }),
             Condition::And { all } => all.iter().all(|c| c.eval(snap)),
             Condition::Or { any } => any.iter().any(|c| c.eval(snap)),
         }
@@ -157,7 +159,11 @@ impl Condition {
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum Action {
     /// Drive a node's GPIO pin (still bounded by the node's Track 0 `SafetyGate`).
-    GpioWrite { node_id: String, pin: i64, value: i64 },
+    GpioWrite {
+        node_id: String,
+        pin: i64,
+        value: i64,
+    },
     /// Publish a payload to a spine topic.
     Publish { topic: String, payload: Value },
     /// Hand control up to System 2 (wake the LLM agent) with a reason.
@@ -232,10 +238,7 @@ impl ReflexEngine {
     /// Evaluate all rules against `snapshot` at `now_ms`; returns the actions to
     /// perform (respecting debounce/rate), and records fire times.
     pub fn evaluate(&self, snapshot: &Snapshot, now_ms: u64) -> Vec<FiredReflex> {
-        let mut guard = self
-            .last_fire
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut guard = self.last_fire.lock().unwrap_or_else(|p| p.into_inner());
         let mut fired = Vec::new();
         for rule in &self.rules {
             if !rule.when.eval(snapshot) {
@@ -319,9 +322,11 @@ pub trait ActionSink: Send + Sync {
 pub async fn dispatch(actions: &[FiredReflex], sink: &dyn ActionSink) -> anyhow::Result<()> {
     for f in actions {
         match &f.action {
-            Action::GpioWrite { node_id, pin, value } => {
-                sink.gpio_write(node_id, *pin, *value).await?
-            }
+            Action::GpioWrite {
+                node_id,
+                pin,
+                value,
+            } => sink.gpio_write(node_id, *pin, *value).await?,
             Action::Publish { topic, payload } => sink.publish(topic, payload).await?,
             Action::Escalate { reason } => sink.escalate(reason).await?,
             Action::Move { command } => sink.move_actuator(command).await?,
@@ -557,9 +562,11 @@ impl ReflexController {
         for f in &fired {
             self.record_fire(f);
             match &f.action {
-                Action::GpioWrite { node_id, pin, value } => {
-                    self.sink.gpio_write(node_id, *pin, *value).await?
-                }
+                Action::GpioWrite {
+                    node_id,
+                    pin,
+                    value,
+                } => self.sink.gpio_write(node_id, *pin, *value).await?,
                 Action::Publish { topic, payload } => self.sink.publish(topic, payload).await?,
                 Action::Escalate { reason } => {
                     let allowed = self
@@ -600,9 +607,16 @@ mod tests {
             id: "r".into(),
             when: Condition::And {
                 all: vec![
-                    Condition::Sensor { entity: "t".into(), op: Cmp::Gt, value: 1.0 },
+                    Condition::Sensor {
+                        entity: "t".into(),
+                        op: Cmp::Gt,
+                        value: 1.0,
+                    },
                     Condition::Or {
-                        any: vec![Condition::GpioEq { entity: "armed".into(), value: 1 }],
+                        any: vec![Condition::GpioEq {
+                            entity: "armed".into(),
+                            value: 1,
+                        }],
                     },
                 ],
             },
@@ -620,7 +634,13 @@ mod tests {
         let world = WorldMemory::open_in_memory().unwrap();
         // sensor-fusion shape: {value, std_dev, n}
         world
-            .observe("sensor.temperature", json!({"value": 30.0, "n": 2}), 1_000, 1_000, "fusion")
+            .observe(
+                "sensor.temperature",
+                json!({"value": 30.0, "n": 2}),
+                1_000,
+                1_000,
+                "fusion",
+            )
             .unwrap();
         let e = ReflexEngine::new(vec![fan_rule()]);
         let fired = e.tick(&world, 2_000).unwrap();
@@ -629,7 +649,13 @@ mod tests {
 
         // when the world cools below threshold, the reflex stops firing
         world
-            .observe("sensor.temperature", json!({"value": 20.0, "n": 2}), 3_000, 3_000, "fusion")
+            .observe(
+                "sensor.temperature",
+                json!({"value": 20.0, "n": 2}),
+                3_000,
+                3_000,
+                "fusion",
+            )
             .unwrap();
         assert!(e.tick(&world, 4_000).unwrap().is_empty());
     }
@@ -663,7 +689,10 @@ mod tests {
             field: Some("mode".into()),
             equals: "critical".into(),
         };
-        assert!(nested.eval(&snap_vals(&[("power.mode", json!({"mode": "critical", "soc_pct": 8.0}))])));
+        assert!(nested.eval(&snap_vals(&[(
+            "power.mode",
+            json!({"mode": "critical", "soc_pct": 8.0})
+        )])));
         assert!(!nested.eval(&snap_vals(&[("power.mode", json!({"mode": "normal"}))])));
         // missing entity ⇒ false
         assert!(!nested.eval(&snap_vals(&[])));
@@ -685,7 +714,13 @@ mod tests {
     fn tick_fires_state_rule_from_world_memory() {
         let world = WorldMemory::open_in_memory().unwrap();
         world
-            .observe("power.mode", json!({"mode": "critical", "soc_pct": 5.0}), 1_000, 1_000, "power")
+            .observe(
+                "power.mode",
+                json!({"mode": "critical", "soc_pct": 5.0}),
+                1_000,
+                1_000,
+                "power",
+            )
             .unwrap();
         let rule = ReflexRule {
             id: "safe-power-critical".into(),
@@ -694,7 +729,9 @@ mod tests {
                 field: Some("mode".into()),
                 equals: "critical".into(),
             },
-            then: Action::Escalate { reason: "battery critical".into() },
+            then: Action::Escalate {
+                reason: "battery critical".into(),
+            },
             debounce_ms: 0,
             max_rate_hz: None,
         };
@@ -731,7 +768,9 @@ mod tests {
     #[test]
     fn does_not_fire_when_condition_false_or_entity_missing() {
         let e = ReflexEngine::new(vec![fan_rule()]);
-        assert!(e.evaluate(&snap(&[("sensor.temperature", 20.0)]), 1_000).is_empty());
+        assert!(e
+            .evaluate(&snap(&[("sensor.temperature", 20.0)]), 1_000)
+            .is_empty());
         assert!(e.evaluate(&snap(&[("other", 99.0)]), 2_000).is_empty());
     }
 
@@ -760,11 +799,22 @@ mod tests {
     fn and_or_conditions() {
         let cond = Condition::And {
             all: vec![
-                Condition::Sensor { entity: "t".into(), op: Cmp::Gt, value: 28.0 },
+                Condition::Sensor {
+                    entity: "t".into(),
+                    op: Cmp::Gt,
+                    value: 28.0,
+                },
                 Condition::Or {
                     any: vec![
-                        Condition::GpioEq { entity: "armed".into(), value: 1 },
-                        Condition::Sensor { entity: "h".into(), op: Cmp::Ge, value: 80.0 },
+                        Condition::GpioEq {
+                            entity: "armed".into(),
+                            value: 1,
+                        },
+                        Condition::Sensor {
+                            entity: "h".into(),
+                            op: Cmp::Ge,
+                            value: 80.0,
+                        },
                     ],
                 },
             ],
@@ -779,8 +829,14 @@ mod tests {
     fn escalate_action_fires() {
         let rule = ReflexRule {
             id: "novelty".to_string(),
-            when: Condition::Sensor { entity: "motion".into(), op: Cmp::Eq, value: 1.0 },
-            then: Action::Escalate { reason: "unexpected motion".to_string() },
+            when: Condition::Sensor {
+                entity: "motion".into(),
+                op: Cmp::Eq,
+                value: 1.0,
+            },
+            then: Action::Escalate {
+                reason: "unexpected motion".to_string(),
+            },
             debounce_ms: 0,
             max_rate_hz: None,
         };
@@ -814,7 +870,11 @@ mod tests {
     #[test]
     fn move_action_roundtrips() {
         let a = Action::Move {
-            command: MovementCommand::ServoAngle { name: "arm".into(), channel: 0, degrees: 45.0 },
+            command: MovementCommand::ServoAngle {
+                name: "arm".into(),
+                channel: 0,
+                degrees: 45.0,
+            },
         };
         let js = serde_json::to_string(&a).unwrap();
         assert!(js.contains("\"type\":\"move\""));
@@ -868,7 +928,10 @@ mod tests {
     #[async_trait::async_trait]
     impl ActionSink for MockSink {
         async fn gpio_write(&self, node_id: &str, pin: i64, value: i64) -> anyhow::Result<()> {
-            self.calls.lock().unwrap().push(format!("gpio:{node_id}:{pin}:{value}"));
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("gpio:{node_id}:{pin}:{value}"));
             Ok(())
         }
         async fn publish(&self, topic: &str, _payload: &Value) -> anyhow::Result<()> {
@@ -885,27 +948,50 @@ mod tests {
     async fn controller_ticks_and_dispatches_gpio() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         world
-            .observe("sensor.temperature", json!({"value": 30.0}), 1_000, 1_000, "f")
+            .observe(
+                "sensor.temperature",
+                json!({"value": 30.0}),
+                1_000,
+                1_000,
+                "f",
+            )
             .unwrap();
         let sink = Arc::new(MockSink::default());
         let sink_dyn: Arc<dyn ActionSink> = sink.clone();
-        let ctl = ReflexController::new(ReflexEngine::new(vec![fan_rule()]), Arc::clone(&world), sink_dyn);
+        let ctl = ReflexController::new(
+            ReflexEngine::new(vec![fan_rule()]),
+            Arc::clone(&world),
+            sink_dyn,
+        );
 
         let fired = ctl.tick_and_dispatch(2_000).await.unwrap();
         assert_eq!(fired.len(), 1);
-        assert_eq!(sink.calls.lock().unwrap().as_slice(), &["gpio:node-1:18:1".to_string()]);
+        assert_eq!(
+            sink.calls.lock().unwrap().as_slice(),
+            &["gpio:node-1:18:1".to_string()]
+        );
     }
 
     #[tokio::test]
     async fn controller_records_fire_metrics() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         world
-            .observe("sensor.temperature", json!({"value": 30.0}), 1_000, 1_000, "f")
+            .observe(
+                "sensor.temperature",
+                json!({"value": 30.0}),
+                1_000,
+                1_000,
+                "f",
+            )
             .unwrap();
         let metrics = Arc::new(crate::observability::MetricsRegistry::new());
         let sink: Arc<dyn ActionSink> = Arc::new(LoggingActionSink);
-        let ctl = ReflexController::new(ReflexEngine::new(vec![fan_rule()]), Arc::clone(&world), sink)
-            .with_metrics(Arc::clone(&metrics));
+        let ctl = ReflexController::new(
+            ReflexEngine::new(vec![fan_rule()]),
+            Arc::clone(&world),
+            sink,
+        )
+        .with_metrics(Arc::clone(&metrics));
         ctl.tick_and_dispatch(2_000).await.unwrap();
         assert_eq!(metrics.counter("reflex.fired_total").get(), 1);
         assert_eq!(metrics.counter("reflex.rule.fan-on-hot").get(), 1);
@@ -918,11 +1004,16 @@ mod tests {
         let fired = vec![
             FiredReflex {
                 rule_id: "a".into(),
-                action: Action::Publish { topic: "t".into(), payload: json!(1) },
+                action: Action::Publish {
+                    topic: "t".into(),
+                    payload: json!(1),
+                },
             },
             FiredReflex {
                 rule_id: "b".into(),
-                action: Action::Escalate { reason: "why".into() },
+                action: Action::Escalate {
+                    reason: "why".into(),
+                },
             },
         ];
         dispatch(&fired, &sink).await.unwrap();
@@ -955,28 +1046,38 @@ mod tests {
         world.observe("motion", json!(1.0), 0, 0, "pir").unwrap();
         let rule = ReflexRule {
             id: "e".into(),
-            when: Condition::Sensor { entity: "motion".into(), op: Cmp::Eq, value: 1.0 },
-            then: Action::Escalate { reason: "motion".into() },
+            when: Condition::Sensor {
+                entity: "motion".into(),
+                op: Cmp::Eq,
+                value: 1.0,
+            },
+            then: Action::Escalate {
+                reason: "motion".into(),
+            },
             debounce_ms: 0,
             max_rate_hz: None,
         };
         let sink = Arc::new(MockSink::default());
         let sink_dyn: Arc<dyn ActionSink> = sink.clone();
-        let ctl = ReflexController::new(ReflexEngine::new(vec![rule]), Arc::clone(&world), sink_dyn)
-            .with_escalation_budget(EscalationBudget::per_minute(1));
+        let ctl =
+            ReflexController::new(ReflexEngine::new(vec![rule]), Arc::clone(&world), sink_dyn)
+                .with_escalation_budget(EscalationBudget::per_minute(1));
 
         let f1 = ctl.tick_and_dispatch(1_000).await.unwrap();
         let f2 = ctl.tick_and_dispatch(2_000).await.unwrap();
         assert_eq!(f1.len(), 1);
         assert_eq!(f2.len(), 1); // the reflex still fires both ticks
-        // but only one escalation was actually dispatched (budget = 1/min)
+                                 // but only one escalation was actually dispatched (budget = 1/min)
         assert_eq!(sink.calls.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
     async fn spine_sink_is_best_effort_when_disconnected() {
         use crate::config::SpineConfig;
-        let spine = Arc::new(crate::spine::SpineClient::new(SpineConfig::default(), "test"));
+        let spine = Arc::new(crate::spine::SpineClient::new(
+            SpineConfig::default(),
+            "test",
+        ));
         let sink = SpineActionSink::new(spine);
         // An unconnected spine makes the underlying calls fail, but the sink logs
         // and returns Ok so a reflex tick is never broken by a transient outage.

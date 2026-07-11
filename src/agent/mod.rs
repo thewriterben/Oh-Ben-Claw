@@ -15,6 +15,7 @@ pub mod reflex;
 pub mod reflexion;
 pub mod safing;
 pub mod streaming;
+pub mod system2;
 pub use edge::{EdgeAgent, EdgeAgentBuilder};
 pub use handle::{AgentEvent, AgentHandle};
 #[allow(unused_imports)]
@@ -22,15 +23,15 @@ pub use orchestrator::{OrchestratorAgent, OrchestratorConfig, RoutingStrategy};
 #[allow(unused_imports)]
 pub use pool::{AgentPool, SubAgentInfo, SubAgentSpec, SubAgentStatus};
 
+use crate::approval::ApprovalManager;
 use crate::config::AgentConfig;
 use crate::memory::trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};
 use crate::memory::MemoryStore;
 use crate::providers::{ChatMessage, ChatRole, Provider};
 use crate::security::audit::{ActionAuditor, Decision};
 use crate::security::limits::SafetyGate;
-use crate::security::PolicyEngine;
-use crate::approval::ApprovalManager;
 use crate::security::trust::{self, TrustGate, TrustScorer};
+use crate::security::PolicyEngine;
 use crate::skill_forge::rollout::RolloutTracker;
 use crate::skill_forge::{SkillForge, SkillTool};
 use crate::tools::traits::{RiskClass, RolloutStage, Tool};
@@ -346,7 +347,9 @@ impl Agent {
         if let Some(k) = self.experience_k {
             if let Some(block) = self.experience_block(user_message, k) {
                 if let Some(obs) = &self.obs {
-                    obs.metrics.counter("experience_blocks_injected_total").inc();
+                    obs.metrics
+                        .counter("experience_blocks_injected_total")
+                        .inc();
                 }
                 messages.insert(
                     1.min(messages.len()),
@@ -525,12 +528,18 @@ impl Agent {
         // final response.
         let input_est = {
             let chars = user_message.len()
-                + tool_calls_made.iter().map(|tc| tc.result.len()).sum::<usize>();
+                + tool_calls_made
+                    .iter()
+                    .map(|tc| tc.result.len())
+                    .sum::<usize>();
             (chars / 4) as u64
         };
         let output_est = {
             let chars = final_response.len()
-                + tool_calls_made.iter().map(|tc| tc.args.len()).sum::<usize>();
+                + tool_calls_made
+                    .iter()
+                    .map(|tc| tc.args.len())
+                    .sum::<usize>();
             (chars / 4) as u64
         };
 
@@ -551,8 +560,7 @@ impl Agent {
                 .iter()
                 .map(|tc| EpisodeStep {
                     tool: tc.name.clone(),
-                    args: serde_json::from_str(&tc.args)
-                        .unwrap_or_else(|_| serde_json::json!({})),
+                    args: serde_json::from_str(&tc.args).unwrap_or_else(|_| serde_json::json!({})),
                     result: tc.result.clone(),
                     ok: !tc.result.starts_with("Tool error:")
                         && !tc.result.starts_with("Tool execution failed:")
@@ -599,12 +607,9 @@ impl Agent {
                 .filter(|t| t.name().starts_with("learned_"))
                 .filter_map(|t| {
                     // Match on the skill name (de-slugged) + description.
-                    let haystack =
-                        format!("{} {}", t.name().replace('_', " "), t.description());
+                    let haystack = format!("{} {}", t.name().replace('_', " "), t.description());
                     let s = lexical_score(objective, &haystack);
-                    (s >= MIN_SCORE).then(|| {
-                        (s, t.name().to_string(), t.description().to_string())
-                    })
+                    (s >= MIN_SCORE).then(|| (s, t.name().to_string(), t.description().to_string()))
                 })
                 .collect()
         };
@@ -826,11 +831,9 @@ impl Agent {
             }
             let mut outputs = Vec::with_capacity(steps.len());
             for (i, (step_tool, template)) in steps.iter().enumerate() {
-                let step_args =
-                    crate::skill_forge::substitute_args(template, &args).to_string();
+                let step_args = crate::skill_forge::substitute_args(template, &args).to_string();
                 let result =
-                    Box::pin(self.execute_tool_inner(step_tool, &step_args, true, taint))
-                        .await;
+                    Box::pin(self.execute_tool_inner(step_tool, &step_args, true, taint)).await;
                 match result {
                     Ok(r) if r.success => {
                         outputs.push(format!("[step {} {}] {}", i + 1, step_tool, r.output));
@@ -970,9 +973,7 @@ impl Agent {
         // so later privileged calls this run can be checked against it.
         if self.taint_mode != TaintMode::Off {
             if let (Some(pool), Ok(r)) = (taint, &result) {
-                if r.success
-                    && tool.output_trust() == crate::tools::traits::OutputTrust::External
-                {
+                if r.success && tool.output_trust() == crate::tools::traits::OutputTrust::External {
                     pool.add(name, &r.output);
                 }
             }
@@ -1103,7 +1104,11 @@ fn describe_simulation(tool: &Arc<dyn Tool>, args: &Value) -> String {
                 format!("step {} → {}({})", i + 1, t, concrete)
             })
             .collect();
-        format!("would run {} steps: {}", rendered.len(), rendered.join("; "))
+        format!(
+            "would run {} steps: {}",
+            rendered.len(),
+            rendered.join("; ")
+        )
     } else {
         format!("would execute with args {}", args)
     }
@@ -1211,13 +1216,24 @@ mod tests {
         assert!(r.is_ok());
     }
 
-    fn autonomy(level: crate::config::AutonomyLevel, auto_approve: Vec<String>) -> crate::config::AutonomyConfig {
-        crate::config::AutonomyConfig { level, auto_approve, always_ask: vec![] }
+    fn autonomy(
+        level: crate::config::AutonomyLevel,
+        auto_approve: Vec<String>,
+    ) -> crate::config::AutonomyConfig {
+        crate::config::AutonomyConfig {
+            level,
+            auto_approve,
+            always_ask: vec![],
+        }
     }
     fn approval_mgr(cfg: &crate::config::AutonomyConfig) -> ApprovalManager {
-        let path = std::env::temp_dir()
-            .join(format!("obc_agent_grants_{}.json", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let path = std::env::temp_dir().join(format!(
+            "obc_agent_grants_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         ApprovalManager::with_grants(cfg, crate::approval::ForeverGrants::load(path), false)
     }
 
