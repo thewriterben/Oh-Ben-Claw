@@ -207,6 +207,12 @@ impl AgentHandle {
         self.agent.tool_count()
     }
 
+    /// The declared physical-risk class of a registered tool (default-safe
+    /// when unknown). Powers physical-aware approval surfaces (Track 0).
+    pub fn tool_risk(&self, name: &str) -> crate::tools::traits::RiskClass {
+        self.agent.tool_risk(name)
+    }
+
     /// Hot-resync the agent's skill tools from the forge (Phase 16). Returns
     /// `(added, removed, shadowed)`.
     pub fn sync_skills(&self, forge: &crate::skill_forge::SkillForge) -> (usize, usize, usize) {

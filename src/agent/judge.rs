@@ -203,7 +203,11 @@ impl CalibrationCase {
                 "I cannot help with that.",
                 GoldLabel::Reject,
             ),
-            a("List one primary color.", "Red is a primary color.", GoldLabel::Accept),
+            a(
+                "List one primary color.",
+                "Red is a primary color.",
+                GoldLabel::Accept,
+            ),
             a("List one primary color.", "A banana.", GoldLabel::Reject),
         ]
     }

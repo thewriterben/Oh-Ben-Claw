@@ -46,8 +46,14 @@ impl Severity {
     /// danger words raise it to `Critical`.
     pub fn classify(reason: &str) -> Severity {
         let r = reason.to_ascii_lowercase();
-        const CRIT: [&str; 6] =
-            ["critical", "presumed lost", "alarm", "overheat", "emergency", "over limit"];
+        const CRIT: [&str; 6] = [
+            "critical",
+            "presumed lost",
+            "alarm",
+            "overheat",
+            "emergency",
+            "over limit",
+        ];
         if CRIT.iter().any(|k| r.contains(k)) {
             Severity::Critical
         } else {
@@ -69,7 +75,11 @@ impl Escalation {
     pub fn new(reason: impl Into<String>, ts_ms: u64) -> Self {
         let reason = reason.into();
         let severity = Severity::classify(&reason);
-        Self { reason, ts_ms, severity }
+        Self {
+            reason,
+            ts_ms,
+            severity,
+        }
     }
 }
 
@@ -119,7 +129,10 @@ pub struct WebhookChannel {
 
 impl WebhookChannel {
     pub fn new(url: String) -> Self {
-        Self { url, client: reqwest::Client::new() }
+        Self {
+            url,
+            client: reqwest::Client::new(),
+        }
     }
     /// The JSON body posted for an escalation (broken out for testing).
     pub fn payload(esc: &Escalation) -> Value {
@@ -133,7 +146,11 @@ impl NotificationChannel for WebhookChannel {
         "webhook"
     }
     async fn deliver(&self, esc: &Escalation) -> anyhow::Result<()> {
-        self.client.post(&self.url).json(&Self::payload(esc)).send().await?;
+        self.client
+            .post(&self.url)
+            .json(&Self::payload(esc))
+            .send()
+            .await?;
         Ok(())
     }
 }
@@ -144,7 +161,11 @@ pub const DIGEST_PREFIX: &str = "OBC escalation digest";
 
 /// The first sentence of a reason (reasons may carry a full triage directive).
 fn first_sentence(reason: &str) -> &str {
-    reason.split_once(". ").map(|(h, _)| h).unwrap_or(reason).trim_end_matches('.')
+    reason
+        .split_once(". ")
+        .map(|(h, _)| h)
+        .unwrap_or(reason)
+        .trim_end_matches('.')
 }
 
 /// The short spoken form of an escalation reason: just the first sentence, so a full
@@ -163,7 +184,10 @@ pub struct SpeechChannel {
 
 impl SpeechChannel {
     pub fn new(speech: Arc<dyn crate::audio::suite::SpeechSink>) -> Self {
-        Self { speech, voice: "nova".to_string() }
+        Self {
+            speech,
+            voice: "nova".to_string(),
+        }
     }
     pub fn with_voice(mut self, voice: impl Into<String>) -> Self {
         self.voice = voice.into();
@@ -302,7 +326,12 @@ impl Notifier {
             entry.last_sent_ms = esc.ts_ms;
             entry.suppressed = 0;
         }
-        self.fan_out(&Escalation { reason, ts_ms: esc.ts_ms, severity: esc.severity }).await;
+        self.fan_out(&Escalation {
+            reason,
+            ts_ms: esc.ts_ms,
+            severity: esc.severity,
+        })
+        .await;
     }
 
     /// Deliver to every channel that accepts this severity, best-effort.
@@ -320,7 +349,12 @@ impl Notifier {
     /// Deliver a periodic digest / summary. No de-dup — digests are schedule-limited.
     /// Sent at `Info` so it reaches every accept-all channel.
     pub async fn deliver_summary(&self, text: String, ts_ms: u64) {
-        self.fan_out(&Escalation { reason: text, ts_ms, severity: Severity::Info }).await;
+        self.fan_out(&Escalation {
+            reason: text,
+            ts_ms,
+            severity: Severity::Info,
+        })
+        .await;
     }
 }
 
@@ -353,7 +387,9 @@ impl ActionSink for NotifyingActionSink {
         self.inner.publish(topic, payload).await
     }
     async fn escalate(&self, reason: &str) -> anyhow::Result<()> {
-        self.notifier.notify(&Escalation::new(reason, Self::now_ms())).await;
+        self.notifier
+            .notify(&Escalation::new(reason, Self::now_ms()))
+            .await;
         self.inner.escalate(reason).await
     }
     async fn move_actuator(&self, command: &MovementCommand) -> anyhow::Result<()> {
@@ -371,7 +407,9 @@ mod tests {
     async fn world_memory_channel_records_a_durable_escalation() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let ch = WorldMemoryChannel::new(Arc::clone(&world));
-        ch.deliver(&Escalation::new("node lost", 1_000)).await.unwrap();
+        ch.deliver(&Escalation::new("node lost", 1_000))
+            .await
+            .unwrap();
         let f = world.current("notifications.escalation").unwrap().unwrap();
         assert_eq!(f.value["reason"], json!("node lost"));
         assert_eq!(f.source, "notifier");
@@ -380,7 +418,11 @@ mod tests {
     #[test]
     fn webhook_payload_is_slack_compatible() {
         let p = WebhookChannel::payload(&Escalation::new("battery critical", 0));
-        assert!(p.get("text").and_then(|t| t.as_str()).unwrap().contains("battery critical"));
+        assert!(p
+            .get("text")
+            .and_then(|t| t.as_str())
+            .unwrap()
+            .contains("battery critical"));
     }
 
     /// Records what it was asked to deliver / delegate.
@@ -414,17 +456,31 @@ mod tests {
 
     #[tokio::test]
     async fn notifying_sink_notifies_then_delegates_the_escalate() {
-        let inner = Arc::new(Recorder { delivered: Mutex::new(vec![]), escalated: Mutex::new(vec![]) });
-        let channel = Arc::new(Recorder { delivered: Mutex::new(vec![]), escalated: Mutex::new(vec![]) });
-        let notifier = Arc::new(Notifier::new().with_channel(Arc::clone(&channel) as Arc<dyn NotificationChannel>));
+        let inner = Arc::new(Recorder {
+            delivered: Mutex::new(vec![]),
+            escalated: Mutex::new(vec![]),
+        });
+        let channel = Arc::new(Recorder {
+            delivered: Mutex::new(vec![]),
+            escalated: Mutex::new(vec![]),
+        });
+        let notifier = Arc::new(
+            Notifier::new().with_channel(Arc::clone(&channel) as Arc<dyn NotificationChannel>),
+        );
         let sink = NotifyingActionSink::new(Arc::clone(&inner) as Arc<dyn ActionSink>, notifier);
 
         sink.escalate("mesh node lost").await.unwrap();
 
         // The channel was notified …
-        assert_eq!(channel.delivered.lock().unwrap().as_slice(), &["mesh node lost".to_string()]);
+        assert_eq!(
+            channel.delivered.lock().unwrap().as_slice(),
+            &["mesh node lost".to_string()]
+        );
         // … and the escalate still reached the inner sink (System 2 wake path intact).
-        assert_eq!(inner.escalated.lock().unwrap().as_slice(), &["mesh node lost".to_string()]);
+        assert_eq!(
+            inner.escalated.lock().unwrap().as_slice(),
+            &["mesh node lost".to_string()]
+        );
     }
 
     struct SpeakRecorder {
@@ -440,7 +496,9 @@ mod tests {
 
     #[tokio::test]
     async fn speech_channel_speaks_only_the_headline() {
-        let rec = Arc::new(SpeakRecorder { spoken: Mutex::new(vec![]) });
+        let rec = Arc::new(SpeakRecorder {
+            spoken: Mutex::new(vec![]),
+        });
         let ch = SpeechChannel::new(Arc::clone(&rec) as Arc<dyn crate::audio::suite::SpeechSink>);
         ch.deliver(&Escalation::new(
             "A mesh node is presumed lost (LoRa escalation). Triage: call mesh_status and \
@@ -452,12 +510,18 @@ mod tests {
         let spoken = rec.spoken.lock().unwrap();
         assert_eq!(spoken.len(), 1);
         assert!(spoken[0].contains("presumed lost"), "speaks the headline");
-        assert!(!spoken[0].contains("Triage"), "does not read the full directive aloud");
+        assert!(
+            !spoken[0].contains("Triage"),
+            "does not read the full directive aloud"
+        );
     }
 
     #[tokio::test]
     async fn dedup_suppresses_repeats_within_the_window_then_reports_the_count() {
-        let rec = Arc::new(Recorder { delivered: Mutex::new(vec![]), escalated: Mutex::new(vec![]) });
+        let rec = Arc::new(Recorder {
+            delivered: Mutex::new(vec![]),
+            escalated: Mutex::new(vec![]),
+        });
         let notifier = Notifier::new()
             .with_dedup_window(10_000)
             .with_channel(Arc::clone(&rec) as Arc<dyn NotificationChannel>);
@@ -473,27 +537,52 @@ mod tests {
         let d = rec.delivered.lock().unwrap();
         assert_eq!(d.len(), 2, "only two alerts left the channel");
         assert_eq!(d[0], "node lost");
-        assert!(d[1].contains("node lost") && d[1].contains("+2"), "digest reports repeats: {}", d[1]);
+        assert!(
+            d[1].contains("node lost") && d[1].contains("+2"),
+            "digest reports repeats: {}",
+            d[1]
+        );
     }
 
     #[tokio::test]
     async fn different_reasons_are_not_deduped_against_each_other() {
-        let rec = Arc::new(Recorder { delivered: Mutex::new(vec![]), escalated: Mutex::new(vec![]) });
+        let rec = Arc::new(Recorder {
+            delivered: Mutex::new(vec![]),
+            escalated: Mutex::new(vec![]),
+        });
         let notifier = Notifier::new()
             .with_dedup_window(10_000)
             .with_channel(Arc::clone(&rec) as Arc<dyn NotificationChannel>);
         notifier.notify(&Escalation::new("node lost", 1_000)).await;
-        notifier.notify(&Escalation::new("battery critical", 1_100)).await;
-        assert_eq!(rec.delivered.lock().unwrap().len(), 2, "distinct alerts both go out");
+        notifier
+            .notify(&Escalation::new("battery critical", 1_100))
+            .await;
+        assert_eq!(
+            rec.delivered.lock().unwrap().len(),
+            2,
+            "distinct alerts both go out"
+        );
     }
 
     #[test]
     fn digest_groups_windows_and_ranks_escalations() {
         let recs = vec![
-            EscalationRecord { reason: "node lost".into(), ts_ms: 1_000 },
-            EscalationRecord { reason: "node lost".into(), ts_ms: 2_000 },
-            EscalationRecord { reason: "battery critical".into(), ts_ms: 2_500 },
-            EscalationRecord { reason: "stale".into(), ts_ms: 100 }, // outside the window
+            EscalationRecord {
+                reason: "node lost".into(),
+                ts_ms: 1_000,
+            },
+            EscalationRecord {
+                reason: "node lost".into(),
+                ts_ms: 2_000,
+            },
+            EscalationRecord {
+                reason: "battery critical".into(),
+                ts_ms: 2_500,
+            },
+            EscalationRecord {
+                reason: "stale".into(),
+                ts_ms: 100,
+            }, // outside the window
         ];
         let lines = build_digest(&recs, 5_000, 6_000); // cutoff = 1_000
         assert_eq!(lines.len(), 2, "the stale record is excluded");
@@ -516,30 +605,63 @@ mod tests {
 
     #[test]
     fn severity_classifies_from_the_reason() {
-        assert_eq!(Severity::classify("a mesh node is presumed lost"), Severity::Critical);
-        assert_eq!(Severity::classify("battery critical — safing"), Severity::Critical);
-        assert_eq!(Severity::classify("sensor humidity out of range"), Severity::Warning);
+        assert_eq!(
+            Severity::classify("a mesh node is presumed lost"),
+            Severity::Critical
+        );
+        assert_eq!(
+            Severity::classify("battery critical — safing"),
+            Severity::Critical
+        );
+        assert_eq!(
+            Severity::classify("sensor humidity out of range"),
+            Severity::Warning
+        );
         assert!(Severity::Critical > Severity::Warning && Severity::Warning > Severity::Info);
     }
 
     #[tokio::test]
     async fn severity_routes_to_channels_by_minimum() {
-        let all = Arc::new(Recorder { delivered: Mutex::new(vec![]), escalated: Mutex::new(vec![]) });
-        let crit = Arc::new(Recorder { delivered: Mutex::new(vec![]), escalated: Mutex::new(vec![]) });
+        let all = Arc::new(Recorder {
+            delivered: Mutex::new(vec![]),
+            escalated: Mutex::new(vec![]),
+        });
+        let crit = Arc::new(Recorder {
+            delivered: Mutex::new(vec![]),
+            escalated: Mutex::new(vec![]),
+        });
         let notifier = Notifier::new()
             .with_channel(Arc::clone(&all) as Arc<dyn NotificationChannel>)
-            .with_channel_min(Arc::clone(&crit) as Arc<dyn NotificationChannel>, Severity::Critical);
+            .with_channel_min(
+                Arc::clone(&crit) as Arc<dyn NotificationChannel>,
+                Severity::Critical,
+            );
 
-        notifier.notify(&Escalation::new("sensor reading unreliable", 1)).await; // Warning
-        notifier.notify(&Escalation::new("a node is presumed lost", 2)).await; // Critical
+        notifier
+            .notify(&Escalation::new("sensor reading unreliable", 1))
+            .await; // Warning
+        notifier
+            .notify(&Escalation::new("a node is presumed lost", 2))
+            .await; // Critical
 
-        assert_eq!(all.delivered.lock().unwrap().len(), 2, "accept-all channel gets both");
-        assert_eq!(crit.delivered.lock().unwrap().len(), 1, "critical-only channel gets one");
+        assert_eq!(
+            all.delivered.lock().unwrap().len(),
+            2,
+            "accept-all channel gets both"
+        );
+        assert_eq!(
+            crit.delivered.lock().unwrap().len(),
+            1,
+            "critical-only channel gets one"
+        );
     }
 
     #[tokio::test]
     async fn deliver_summary_fans_out_without_dedup() {
-        let rec = Arc::new(Recorder { delivered: Mutex::new(vec![]), escalated: Mutex::new(vec![]) });
+        let rec = Arc::new(Recorder {
+            delivered: Mutex::new(vec![]),
+            escalated: Mutex::new(vec![]),
+        });
         // Same window that would de-dup a repeated escalation …
         let notifier = Notifier::new()
             .with_dedup_window(10_000)

@@ -424,16 +424,25 @@ mod tests {
     #[test]
     fn power_recovery_clears_shed_end_to_end() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        let power = PowerController::new(PowerThresholds::default())
-            .with_world_memory(Arc::clone(&world));
-        let opts = SafingOptions { debounce_ms: 1, ..Default::default() };
+        let power =
+            PowerController::new(PowerThresholds::default()).with_world_memory(Arc::clone(&world));
+        let opts = SafingOptions {
+            debounce_ms: 1,
+            ..Default::default()
+        };
         let engine = ReflexEngine::new(standard_safing_rules(&opts));
         let state = SafingState::new();
 
         // Drain to low → power-low fires → shed_load engages.
         power
             .ingest(
-                &BatteryReading { soc_pct: 15.0, voltage: None, current_a: None, charging: ChargeState::Discharging, source: None },
+                &BatteryReading {
+                    soc_pct: 15.0,
+                    voltage: None,
+                    current_a: None,
+                    charging: ChargeState::Discharging,
+                    source: None,
+                },
                 1_000,
             )
             .unwrap();
@@ -447,7 +456,13 @@ mod tests {
         // Recharge to normal → power-recovered fires → shed_load releases.
         power
             .ingest(
-                &BatteryReading { soc_pct: 90.0, voltage: None, current_a: None, charging: ChargeState::Discharging, source: None },
+                &BatteryReading {
+                    soc_pct: 90.0,
+                    voltage: None,
+                    current_a: None,
+                    charging: ChargeState::Discharging,
+                    source: None,
+                },
                 2_000,
             )
             .unwrap();
@@ -456,7 +471,10 @@ mod tests {
                 state.apply_advisory(&payload);
             }
         }
-        assert!(!state.shed_load(), "shed_load should release once charge recovers");
+        assert!(
+            !state.shed_load(),
+            "shed_load should release once charge recovers"
+        );
     }
 
     #[test]
@@ -474,8 +492,8 @@ mod tests {
     #[test]
     fn power_critical_drives_escalate_and_stop_end_to_end() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        let power = PowerController::new(PowerThresholds::default())
-            .with_world_memory(Arc::clone(&world));
+        let power =
+            PowerController::new(PowerThresholds::default()).with_world_memory(Arc::clone(&world));
         // A real critical battery reading flows through the suite into world memory.
         let status = power
             .ingest(
@@ -495,8 +513,10 @@ mod tests {
         let fired = engine.tick(&world, 2_000).unwrap();
 
         // Both the escalate and the actuator-stop reflexes fired off power.mode.
-        assert!(fired.iter().any(|f| f.rule_id == "safe-power-critical-escalate"
-            && matches!(f.action, Action::Escalate { .. })));
+        assert!(fired
+            .iter()
+            .any(|f| f.rule_id == "safe-power-critical-escalate"
+                && matches!(f.action, Action::Escalate { .. })));
         assert!(fired.iter().any(|f| {
             f.rule_id == "safe-power-critical-stop"
                 && matches!(&f.action, Action::Move { command: MovementCommand::Stop { name, channel } } if name == "arm" && *channel == 0)
@@ -506,8 +526,8 @@ mod tests {
     #[test]
     fn healthy_power_fires_no_engage_rule() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        let power = PowerController::new(PowerThresholds::default())
-            .with_world_memory(Arc::clone(&world));
+        let power =
+            PowerController::new(PowerThresholds::default()).with_world_memory(Arc::clone(&world));
         power
             .ingest(
                 &BatteryReading {
@@ -537,8 +557,8 @@ mod tests {
     #[test]
     fn net_offline_publishes_safing_advisory_end_to_end() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        let comms = CommsController::new(LinkThresholds::default())
-            .with_world_memory(Arc::clone(&world));
+        let comms =
+            CommsController::new(LinkThresholds::default()).with_world_memory(Arc::clone(&world));
         // Every link down ⇒ net.mode offline.
         comms
             .ingest(
@@ -573,7 +593,8 @@ mod tests {
     fn audio_alarm_escalates_end_to_end() {
         use crate::audio::suite::{AudioController, HeardEvent, LoggingSpeechSink};
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        let audio = AudioController::new(Arc::new(LoggingSpeechSink)).with_world_memory(Arc::clone(&world));
+        let audio =
+            AudioController::new(Arc::new(LoggingSpeechSink)).with_world_memory(Arc::clone(&world));
         audio
             .observe(
                 &HeardEvent {
@@ -595,7 +616,8 @@ mod tests {
         let fired = engine.tick(&world, 2_000).unwrap();
         assert!(fired
             .iter()
-            .any(|f| f.rule_id == "safe-audio-alarm-mic0" && matches!(f.action, Action::Escalate { .. })));
+            .any(|f| f.rule_id == "safe-audio-alarm-mic0"
+                && matches!(f.action, Action::Escalate { .. })));
     }
 
     #[test]
@@ -604,11 +626,24 @@ mod tests {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let sensing = SensingController::new(vec![(
             "temperature".to_string(),
-            QuantitySpec { min: Some(-40.0), max: Some(85.0), max_staleness_ms: None, unit: None },
+            QuantitySpec {
+                min: Some(-40.0),
+                max: Some(85.0),
+                max_staleness_ms: None,
+                unit: None,
+            },
         )])
         .with_world_memory(Arc::clone(&world));
         sensing
-            .ingest(&Sample { quantity: "temperature".into(), value: 200.0, unit: None, source: None }, 1_000)
+            .ingest(
+                &Sample {
+                    quantity: "temperature".into(),
+                    value: 200.0,
+                    unit: None,
+                    source: None,
+                },
+                1_000,
+            )
             .unwrap();
 
         let opts = SafingOptions {
@@ -617,7 +652,9 @@ mod tests {
         };
         let engine = ReflexEngine::new(standard_safing_rules(&opts));
         let fired = engine.tick(&world, 2_000).unwrap();
-        assert!(fired.iter().any(|f| f.rule_id == "safe-sensor-unreliable-temperature"));
+        assert!(fired
+            .iter()
+            .any(|f| f.rule_id == "safe-sensor-unreliable-temperature"));
     }
 
     #[test]
@@ -626,13 +663,19 @@ mod tests {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         // No range limits, so the reading is in-range (quality ok) — the overheat
         // guard fires purely on the numeric value crossing the threshold.
-        let sensing = SensingController::new(vec![(
-            "cpu_temp".to_string(),
-            QuantitySpec::default(),
-        )])
-        .with_world_memory(Arc::clone(&world));
+        let sensing =
+            SensingController::new(vec![("cpu_temp".to_string(), QuantitySpec::default())])
+                .with_world_memory(Arc::clone(&world));
         sensing
-            .ingest(&Sample { quantity: "cpu_temp".into(), value: 92.0, unit: Some("C".into()), source: None }, 1_000)
+            .ingest(
+                &Sample {
+                    quantity: "cpu_temp".into(),
+                    value: 92.0,
+                    unit: Some("C".into()),
+                    source: None,
+                },
+                1_000,
+            )
             .unwrap();
 
         let opts = SafingOptions {
@@ -646,7 +689,16 @@ mod tests {
         // Below threshold ⇒ no fire.
         let world2 = Arc::new(WorldMemory::open_in_memory().unwrap());
         let s2 = SensingController::new(vec![]).with_world_memory(Arc::clone(&world2));
-        s2.ingest(&Sample { quantity: "cpu_temp".into(), value: 50.0, unit: None, source: None }, 1_000).unwrap();
+        s2.ingest(
+            &Sample {
+                quantity: "cpu_temp".into(),
+                value: 50.0,
+                unit: None,
+                source: None,
+            },
+            1_000,
+        )
+        .unwrap();
         let engine2 = ReflexEngine::new(standard_safing_rules(&opts));
         assert!(engine2.tick(&world2, 2_000).unwrap().is_empty());
     }
@@ -669,20 +721,28 @@ mod tests {
         let state = Arc::new(SafingState::new());
         let sink = SafingSink::new(Arc::clone(&state), Arc::new(LoggingActionSink));
         // a power-low safing publish flips shed_load (and is still forwarded).
-        sink.publish(SAFING_TOPIC, &json!({ "action": "shed_load" })).await.unwrap();
+        sink.publish(SAFING_TOPIC, &json!({ "action": "shed_load" }))
+            .await
+            .unwrap();
         assert!(state.shed_load());
         // an unrelated topic does not touch safing state.
         let s2 = Arc::new(SafingState::new());
         let sink2 = SafingSink::new(Arc::clone(&s2), Arc::new(LoggingActionSink));
-        sink2.publish("obc/other", &json!({ "action": "shed_load" })).await.unwrap();
+        sink2
+            .publish("obc/other", &json!({ "action": "shed_load" }))
+            .await
+            .unwrap();
         assert!(!s2.shed_load());
     }
 
     #[test]
     fn power_low_fires_shed_load() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        let power = PowerController::new(PowerThresholds { low_pct: 20.0, critical_pct: 10.0 })
-            .with_world_memory(Arc::clone(&world));
+        let power = PowerController::new(PowerThresholds {
+            low_pct: 20.0,
+            critical_pct: 10.0,
+        })
+        .with_world_memory(Arc::clone(&world));
         power
             .ingest(
                 &BatteryReading {
@@ -699,6 +759,8 @@ mod tests {
         let fired = engine.tick(&world, 2_000).unwrap();
         assert!(fired.iter().any(|f| f.rule_id == "safe-power-low"));
         // critical/offline rules must NOT fire at merely-low charge
-        assert!(!fired.iter().any(|f| f.rule_id == "safe-power-critical-escalate"));
+        assert!(!fired
+            .iter()
+            .any(|f| f.rule_id == "safe-power-critical-escalate"));
     }
 }

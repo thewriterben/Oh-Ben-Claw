@@ -1114,10 +1114,28 @@ pub async fn get_approvals(State(state): State<Arc<GatewayState>>) -> impl IntoR
             .into_response();
     };
 
+    // Physical-aware surface (Track 0): annotate every tool row with its
+    // declared risk class so remote consoles can show what kind of action the
+    // operator is granting — not just its name.
+    let risk_of = |tool: &str| -> Value {
+        let risk = state
+            .agent
+            .as_ref()
+            .map(|h| h.tool_risk(tool))
+            .unwrap_or_default();
+        json!({
+            "physical": risk.physical,
+            "reversible": risk.reversible,
+            "blast": format!("{:?}", risk.blast).to_lowercase(),
+            "requires_per_call": risk.requires_per_call_approval(),
+        })
+    };
+
     let funnel: Vec<Value> = approval
         .funnel_summary()
         .into_iter()
         .map(|(tool, c)| {
+            let risk = risk_of(&tool);
             json!({
                 "tool": tool,
                 "asked": c.asked,
@@ -1126,6 +1144,7 @@ pub async fn get_approvals(State(state): State<Arc<GatewayState>>) -> impl IntoR
                 "approved_forever": c.approved_forever,
                 "denied": c.denied,
                 "plan_violations": c.plan_violations,
+                "risk": risk,
             })
         })
         .collect();
@@ -1133,7 +1152,10 @@ pub async fn get_approvals(State(state): State<Arc<GatewayState>>) -> impl IntoR
         .forever_grants()
         .list()
         .into_iter()
-        .map(|g| json!({ "tool": g.tool_name, "granted_at": g.granted_at }))
+        .map(|g| {
+            let risk = risk_of(&g.tool_name);
+            json!({ "tool": g.tool_name, "granted_at": g.granted_at, "risk": risk })
+        })
         .collect();
     let audit_tail: Vec<Value> = approval
         .audit_log()
@@ -1181,6 +1203,7 @@ pub async fn post_approval_decision(
     let req = ApprovalRequest {
         tool_name: tool.clone(),
         arguments: json!({ "channel": "gateway-remote" }),
+        risk: None,
     };
     match body.decision.as_str() {
         "call" => approval.record_external_decision(&req, ApprovalResponse::Yes),

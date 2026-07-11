@@ -1661,6 +1661,28 @@ pub struct ReflexConfig {
     pub safing_overheat: Vec<OverheatConfig>,
 }
 
+/// System 2 slow-reasoner configuration (`[system2]`, Phase 18).
+///
+/// When enabled (and the reflex controller is running), System 1 escalations
+/// wake the LLM agent — novelty-gated and budget-capped, never per event.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct System2Config {
+    /// Enable escalation-driven LLM wakes. Off by default: escalations still
+    /// notify the operator; turning this on additionally spends LLM calls.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Suppress repeat wakes for the same situation fingerprint within this
+    /// window (ms). Default 600 000 (10 minutes).
+    #[serde(default)]
+    pub novelty_window_ms: Option<u64>,
+    /// Hard cap on LLM wakes per sliding hour. Default 6.
+    #[serde(default)]
+    pub max_wakes_per_hour: Option<u32>,
+    /// Bounded wake-queue capacity between System 1 and System 2. Default 8.
+    #[serde(default)]
+    pub queue_capacity: Option<usize>,
+}
+
 /// Actuator to stop on power-critical safing (`[reflex.safing_stop_actuator]`).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SafingActuatorConfig {
@@ -2143,6 +2165,10 @@ pub struct Config {
     /// Phase 18 dual-system reflexes (System 1).
     #[serde(default)]
     pub reflex: ReflexConfig,
+    /// Phase 18 slow reasoner (System 2): escalation-driven, novelty-gated
+    /// LLM wakes.
+    #[serde(default)]
+    pub system2: System2Config,
     /// Movement subsystem — typed, safety-bounded actuation tool.
     #[serde(default)]
     pub movement: MovementConfig,
