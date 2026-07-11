@@ -20,6 +20,7 @@ pub mod ota;
 pub mod power;
 pub mod sensing;
 pub mod shell;
+pub mod site_anchor;
 pub mod siteplan;
 pub mod vision;
 pub mod world;

@@ -840,7 +840,7 @@
       "vid": 9114,
       "pid": 41,
       "name": "rak4631",
-      "architecture": "Nordic nRF52840 + Semtech SX1262 LoRa (RAKwireless WisBlock core; Meshtastic-compatible; Adafruit nRF52 UF2 bootloader VID/PID, shared \u2014 selected by name)",
+      "architecture": "Nordic nRF52840 + Semtech SX1262 LoRa (RAKwireless WisBlock core; Meshtastic-compatible; Adafruit nRF52 UF2 bootloader VID/PID, shared — selected by name)",
       "transport": "serial",
       "capabilities": [
         "gpio",
@@ -1159,12 +1159,245 @@
       "connectors": [
         "hat_pi"
       ]
+    },
+    {
+      "vid": 999,
+      "pid": 9349,
+      "name": "oak-d-lite",
+      "architecture": "Intel Movidius Myriad X VPU, 1.4 TOPS; 12.3MP RGB + 2x 480p stereo depth (USB 3)",
+      "transport": "serial",
+      "capabilities": [
+        "vpu",
+        "camera_capture"
+      ],
+      "vendor": "Luxonis",
+      "ecosystem": "OAK",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "esp32-c5",
+      "architecture": "ESP32-C5 RISC-V single-core @ 240 MHz (dual-band 2.4/5 GHz Wi-Fi 6, BLE 5, 802.15.4; native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "thread",
+        "zigbee"
+      ],
+      "vendor": "Espressif",
+      "ecosystem": "ESP32-C5",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "xiao-esp32c5",
+      "architecture": "ESP32-C5 RISC-V @ 240 MHz, dual-band 2.4/5 GHz Wi-Fi 6, BLE 5, 802.15.4 (native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "thread",
+        "zigbee",
+        "battery"
+      ],
+      "vendor": "Seeed Studio",
+      "ecosystem": "XIAO",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "m5stack-tab5",
+      "architecture": "ESP32-P4 dual RISC-V @ 400 MHz + ESP32-C6 radio co-proc; 5\" 1280x720 MIPI-DSI touch, 2MP camera (native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "display",
+        "touch",
+        "camera_capture",
+        "audio_sample",
+        "audio_output",
+        "microsd",
+        "psram",
+        "battery",
+        "nn_accel"
+      ],
+      "vendor": "M5Stack",
+      "ecosystem": "Tab",
+      "connectors": [
+        "mbus",
+        "grove"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "m5stack-cardputer",
+      "architecture": "M5StampS3 (ESP32-S3) @ 240 MHz, 56-key keyboard, 1.14\" ST7789, mic + speaker, IR TX (native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "display",
+        "keyboard",
+        "audio_sample",
+        "audio_output",
+        "infrared",
+        "microsd",
+        "battery"
+      ],
+      "vendor": "M5Stack",
+      "ecosystem": "Cardputer",
+      "connectors": [
+        "grove"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "lilygo-t-lora-pager",
+      "architecture": "ESP32-S3 @ 240 MHz + SX1262 LoRa, keyboard + rotary encoder, GPS, NFC, IMU (native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "lora",
+        "mesh",
+        "gps",
+        "nfc",
+        "imu",
+        "display",
+        "keyboard",
+        "audio_output",
+        "battery",
+        "microsd"
+      ],
+      "vendor": "LILYGO",
+      "ecosystem": "T-Lora",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 11914,
+      "pid": 5,
+      "name": "pimoroni-presto",
+      "architecture": "RP2350 dual Cortex-M33 @ 150 MHz + RM2 Wi-Fi/BLE, 4\" 480x480 IPS touch (MicroPython VID/PID; shared)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "display",
+        "touch",
+        "microsd",
+        "battery",
+        "audio_output"
+      ],
+      "vendor": "Pimoroni",
+      "ecosystem": "Presto",
+      "connectors": [
+        "qwiic"
+      ]
+    },
+    {
+      "vid": 11914,
+      "pid": 10,
+      "name": "raspberry-pi-pico2-w",
+      "architecture": "RP2350 dual-core ARM Cortex-M33 @ 150 MHz + CYW43439 (Wi-Fi 4, BLE 5.2; SDK CDC id shared with pico-w)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "pwm",
+        "wifi",
+        "ble"
+      ],
+      "vendor": "Raspberry Pi",
+      "ecosystem": "Pico",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 9114,
+      "pid": 33053,
+      "name": "adafruit-feather-esp32s3-tft",
+      "architecture": "ESP32-S3 Xtensa LX7 dual-core @ 240 MHz, 1.14\" ST7789 240x135 TFT, LiPo charge (CircuitPython VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "display",
+        "battery"
+      ],
+      "vendor": "Adafruit",
+      "ecosystem": "Feather",
+      "connectors": [
+        "featherwing",
+        "stemma_qt"
+      ]
+    },
+    {
+      "vid": 9025,
+      "pid": 112,
+      "name": "arduino-nano-esp32",
+      "architecture": "ESP32-S3 (u-blox NORA-W106) Xtensa LX7 dual-core @ 240 MHz, Nano form factor",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble"
+      ],
+      "vendor": "Arduino",
+      "ecosystem": "Nano",
+      "connectors": [
+        "bare"
+      ]
     }
   ],
   "accessories": [
     {
       "name": "bme280",
-      "description": "Bosch BME280 \u2014 temperature, humidity, and pressure sensor",
+      "description": "Bosch BME280 — temperature, humidity, and pressure sensor",
       "bus": "i2c",
       "default_i2c_addr": 118,
       "capabilities": [
@@ -1175,7 +1408,7 @@
     },
     {
       "name": "bmp388",
-      "description": "Bosch BMP388 \u2014 high-accuracy barometric pressure and temperature",
+      "description": "Bosch BMP388 — high-accuracy barometric pressure and temperature",
       "bus": "i2c",
       "default_i2c_addr": 119,
       "capabilities": [
@@ -1186,7 +1419,7 @@
     },
     {
       "name": "sht31",
-      "description": "Sensirion SHT31 \u2014 high-accuracy temperature and humidity",
+      "description": "Sensirion SHT31 — high-accuracy temperature and humidity",
       "bus": "i2c",
       "default_i2c_addr": 68,
       "capabilities": [
@@ -1197,7 +1430,7 @@
     },
     {
       "name": "aht20",
-      "description": "ASAIR AHT20 \u2014 temperature and humidity sensor",
+      "description": "ASAIR AHT20 — temperature and humidity sensor",
       "bus": "i2c",
       "default_i2c_addr": 56,
       "capabilities": [
@@ -1208,7 +1441,7 @@
     },
     {
       "name": "mpu6050",
-      "description": "InvenSense MPU-6050 \u2014 6-axis accelerometer + gyroscope",
+      "description": "InvenSense MPU-6050 — 6-axis accelerometer + gyroscope",
       "bus": "i2c",
       "default_i2c_addr": 104,
       "capabilities": [
@@ -1219,7 +1452,7 @@
     },
     {
       "name": "lsm6ds3",
-      "description": "ST LSM6DS3 \u2014 6-axis IMU (accelerometer + gyroscope)",
+      "description": "ST LSM6DS3 — 6-axis IMU (accelerometer + gyroscope)",
       "bus": "i2c",
       "default_i2c_addr": 106,
       "capabilities": [
@@ -1230,7 +1463,7 @@
     },
     {
       "name": "ads1115",
-      "description": "TI ADS1115 \u2014 16-bit 4-channel ADC with programmable gain",
+      "description": "TI ADS1115 — 16-bit 4-channel ADC with programmable gain",
       "bus": "i2c",
       "default_i2c_addr": 72,
       "capabilities": [
@@ -1241,7 +1474,7 @@
     },
     {
       "name": "mcp4725",
-      "description": "Microchip MCP4725 \u2014 12-bit single-channel DAC",
+      "description": "Microchip MCP4725 — 12-bit single-channel DAC",
       "bus": "i2c",
       "default_i2c_addr": 96,
       "capabilities": [
@@ -1252,7 +1485,7 @@
     },
     {
       "name": "pcf8574",
-      "description": "NXP PCF8574 \u2014 8-bit I2C GPIO expander",
+      "description": "NXP PCF8574 — 8-bit I2C GPIO expander",
       "bus": "i2c",
       "default_i2c_addr": 32,
       "capabilities": [
@@ -1263,7 +1496,7 @@
     },
     {
       "name": "mcp23017",
-      "description": "Microchip MCP23017 \u2014 16-bit I2C GPIO expander",
+      "description": "Microchip MCP23017 — 16-bit I2C GPIO expander",
       "bus": "i2c",
       "default_i2c_addr": 33,
       "capabilities": [
@@ -1274,7 +1507,7 @@
     },
     {
       "name": "max31855",
-      "description": "Maxim MAX31855 \u2014 thermocouple-to-digital converter (K-type)",
+      "description": "Maxim MAX31855 — thermocouple-to-digital converter (K-type)",
       "bus": "spi",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1285,7 +1518,7 @@
     },
     {
       "name": "ds18b20",
-      "description": "Maxim DS18B20 \u2014 1-Wire digital temperature sensor",
+      "description": "Maxim DS18B20 — 1-Wire digital temperature sensor",
       "bus": "onewire",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1296,7 +1529,7 @@
     },
     {
       "name": "ina260",
-      "description": "TI INA260 \u2014 high/low-side current, voltage, and power monitor",
+      "description": "TI INA260 — high/low-side current, voltage, and power monitor",
       "bus": "i2c",
       "default_i2c_addr": 64,
       "capabilities": [
@@ -1307,7 +1540,7 @@
     },
     {
       "name": "ssd1306",
-      "description": "Solomon SSD1306 \u2014 128x64 OLED display",
+      "description": "Solomon SSD1306 — 128x64 OLED display",
       "bus": "i2c",
       "default_i2c_addr": 60,
       "capabilities": [],
@@ -1316,7 +1549,7 @@
     },
     {
       "name": "dht22",
-      "description": "AOSONG DHT22 (AM2302) \u2014 capacitive humidity and temperature sensor, single-wire protocol",
+      "description": "AOSONG DHT22 (AM2302) — capacitive humidity and temperature sensor, single-wire protocol",
       "bus": "gpio",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1334,7 +1567,7 @@
     },
     {
       "name": "dht11",
-      "description": "AOSONG DHT11 \u2014 basic humidity and temperature sensor, single-wire protocol",
+      "description": "AOSONG DHT11 — basic humidity and temperature sensor, single-wire protocol",
       "bus": "gpio",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1345,7 +1578,7 @@
     },
     {
       "name": "ov2640",
-      "description": "OmniVision OV2640 \u2014 2 MP camera image sensor (SCCB control bus)",
+      "description": "OmniVision OV2640 — 2 MP camera image sensor (SCCB control bus)",
       "bus": "sccb",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1360,7 +1593,7 @@
     },
     {
       "name": "ili9341",
-      "description": "ILITEK ILI9341 \u2014 240x320 SPI TFT LCD controller",
+      "description": "ILITEK ILI9341 — 240x320 SPI TFT LCD controller",
       "bus": "spi",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1373,7 +1606,7 @@
     },
     {
       "name": "xpt2046",
-      "description": "XPT2046 \u2014 resistive touch-screen controller (SPI)",
+      "description": "XPT2046 — resistive touch-screen controller (SPI)",
       "bus": "spi",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1386,7 +1619,7 @@
     },
     {
       "name": "sg90",
-      "description": "TowerPro SG90 \u2014 micro servo (PWM position control)",
+      "description": "TowerPro SG90 — micro servo (PWM position control)",
       "bus": "pwm",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1397,7 +1630,7 @@
     },
     {
       "name": "tb6612fng",
-      "description": "Toshiba TB6612FNG \u2014 dual DC motor driver (PWM + direction)",
+      "description": "Toshiba TB6612FNG — dual DC motor driver (PWM + direction)",
       "bus": "gpio",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1408,7 +1641,7 @@
     },
     {
       "name": "pca9685",
-      "description": "NXP PCA9685 \u2014 16-channel 12-bit I2C PWM / servo driver",
+      "description": "NXP PCA9685 — 16-channel 12-bit I2C PWM / servo driver",
       "bus": "i2c",
       "default_i2c_addr": 64,
       "capabilities": [
@@ -1420,7 +1653,7 @@
     },
     {
       "name": "inmp441",
-      "description": "InvenSense INMP441 \u2014 I2S MEMS microphone (audio capture)",
+      "description": "InvenSense INMP441 — I2S MEMS microphone (audio capture)",
       "bus": "i2s",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1431,7 +1664,7 @@
     },
     {
       "name": "max98357a",
-      "description": "Maxim MAX98357A \u2014 I2S Class-D amplifier (speaker output)",
+      "description": "Maxim MAX98357A — I2S Class-D amplifier (speaker output)",
       "bus": "i2s",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1442,7 +1675,7 @@
     },
     {
       "name": "max17048",
-      "description": "Maxim MAX17048 \u2014 LiPo battery fuel gauge (state of charge)",
+      "description": "Maxim MAX17048 — LiPo battery fuel gauge (state of charge)",
       "bus": "i2c",
       "default_i2c_addr": 54,
       "capabilities": [
@@ -1453,7 +1686,7 @@
     },
     {
       "name": "sim7600",
-      "description": "SIMCom SIM7600 \u2014 LTE Cat-4 cellular modem with GNSS (UART/USB)",
+      "description": "SIMCom SIM7600 — LTE Cat-4 cellular modem with GNSS (UART/USB)",
       "bus": "uart",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1465,7 +1698,7 @@
     },
     {
       "name": "scd41",
-      "description": "Sensirion SCD41 \u2014 true CO2 (photoacoustic NDIR), temperature, humidity",
+      "description": "Sensirion SCD41 — true CO2 (photoacoustic NDIR), temperature, humidity",
       "bus": "i2c",
       "default_i2c_addr": 98,
       "capabilities": [
@@ -1476,7 +1709,7 @@
     },
     {
       "name": "vl53l1x",
-      "description": "ST VL53L1X \u2014 time-of-flight distance sensor (up to 4 m)",
+      "description": "ST VL53L1X — time-of-flight distance sensor (up to 4 m)",
       "bus": "i2c",
       "default_i2c_addr": 41,
       "capabilities": [
@@ -1487,7 +1720,7 @@
     },
     {
       "name": "bno055",
-      "description": "Bosch BNO055 \u2014 9-DOF IMU with on-chip sensor fusion (absolute orientation)",
+      "description": "Bosch BNO055 — 9-DOF IMU with on-chip sensor fusion (absolute orientation)",
       "bus": "i2c",
       "default_i2c_addr": 40,
       "capabilities": [
@@ -1499,7 +1732,7 @@
     },
     {
       "name": "sgp40",
-      "description": "Sensirion SGP40 \u2014 VOC air-quality gas sensor",
+      "description": "Sensirion SGP40 — VOC air-quality gas sensor",
       "bus": "i2c",
       "default_i2c_addr": 89,
       "capabilities": [
@@ -1510,7 +1743,7 @@
     },
     {
       "name": "rpi-ai-hat-plus-13t",
-      "description": "Raspberry Pi AI HAT+ (13 TOPS) \u2014 Hailo-8L NPU over PCIe Gen3 (RPi 5)",
+      "description": "Raspberry Pi AI HAT+ (13 TOPS) — Hailo-8L NPU over PCIe Gen3 (RPi 5)",
       "bus": "pcie",
       "default_i2c_addr": null,
       "capabilities": [
@@ -1523,7 +1756,7 @@
     },
     {
       "name": "grove-vision-ai-v2",
-      "description": "Seeed Grove Vision AI Module V2 \u2014 Himax WiseEye2 (Cortex-M55 + Ethos-U55 microNPU) smart camera",
+      "description": "Seeed Grove Vision AI Module V2 — Himax WiseEye2 (Cortex-M55 + Ethos-U55 microNPU) smart camera",
       "bus": "i2c",
       "default_i2c_addr": 98,
       "capabilities": [
@@ -1532,6 +1765,34 @@
       ],
       "compatible_boards": [],
       "connector": "grove"
+    },
+    {
+      "name": "rpi-ai-hat-plus-2",
+      "description": "Raspberry Pi AI HAT+ 2 — Hailo-10H NPU, 40 TOPS INT4 / 20 TOPS INT8, GenAI-capable (RPi 5, PCIe)",
+      "bus": "pcie",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "hailo"
+      ],
+      "compatible_boards": [
+        "raspberry-pi-5"
+      ],
+      "connector": "hat_pi"
+    },
+    {
+      "name": "rpi-ai-camera-imx500",
+      "description": "Raspberry Pi AI Camera — Sony IMX500 12.3MP sensor with on-sensor NN inference accelerator (CSI)",
+      "bus": "csi",
+      "default_i2c_addr": null,
+      "capabilities": [
+        "npu",
+        "camera_capture"
+      ],
+      "compatible_boards": [
+        "raspberry-pi-4",
+        "raspberry-pi-5"
+      ],
+      "connector": "bare"
     }
   ]
 }

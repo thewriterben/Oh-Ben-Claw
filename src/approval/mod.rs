@@ -259,7 +259,10 @@ impl ApprovedPlan {
         tool_name: &str,
         arguments: &serde_json::Value,
     ) -> Result<(), PlanViolation> {
-        let step = self.steps.get(self.cursor).ok_or(PlanViolation::PlanExhausted)?;
+        let step = self
+            .steps
+            .get(self.cursor)
+            .ok_or(PlanViolation::PlanExhausted)?;
 
         if step.tool_name != tool_name {
             return Err(PlanViolation::WrongTool {
@@ -331,7 +334,9 @@ impl ApprovalFunnel {
 
     fn record_plan_violation(&self, tool_name: &str) {
         let mut map = self.counters.lock();
-        map.entry(tool_name.to_string()).or_default().plan_violations += 1;
+        map.entry(tool_name.to_string())
+            .or_default()
+            .plan_violations += 1;
     }
 
     /// Snapshot of all counters, sorted by ask count descending.
@@ -385,7 +390,11 @@ pub struct ApprovalManager {
 impl ApprovalManager {
     /// Create an `ApprovalManager` from the given autonomy configuration.
     pub fn from_config(config: &AutonomyConfig) -> Self {
-        Self::with_grants(config, ForeverGrants::load(ForeverGrants::default_path()), false)
+        Self::with_grants(
+            config,
+            ForeverGrants::load(ForeverGrants::default_path()),
+            false,
+        )
     }
 
     /// Create an `ApprovalManager` for non-interactive contexts (bots, API, etc.).
@@ -393,7 +402,11 @@ impl ApprovalManager {
     /// In non-interactive mode every request that would normally prompt the user
     /// is automatically denied so that the system never blocks waiting for input.
     pub fn for_non_interactive(config: &AutonomyConfig) -> Self {
-        Self::with_grants(config, ForeverGrants::load(ForeverGrants::default_path()), true)
+        Self::with_grants(
+            config,
+            ForeverGrants::load(ForeverGrants::default_path()),
+            true,
+        )
     }
 
     /// Construct with an explicit grants store (used by tests).
@@ -650,6 +663,18 @@ impl ApprovalManager {
     pub fn forever_grants(&self) -> &ForeverGrants {
         &self.forever_grants
     }
+
+    /// Tools granted `Always` (session scope) so far this session, sorted.
+    pub fn session_grants(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.session_allowlist.lock().iter().cloned().collect();
+        v.sort();
+        v
+    }
+
+    /// Revoke a session-scope grant. Returns whether it was present.
+    pub fn revoke_session(&self, tool_name: &str) -> bool {
+        self.session_allowlist.lock().remove(tool_name)
+    }
 }
 
 #[cfg(test)]
@@ -681,8 +706,11 @@ mod tests {
     }
 
     fn temp_grants() -> ForeverGrants {
-        let path = std::env::temp_dir()
-            .join(format!("obc_grants_{}_{}.json", std::process::id(), rand_suffix()));
+        let path = std::env::temp_dir().join(format!(
+            "obc_grants_{}_{}.json",
+            std::process::id(),
+            rand_suffix()
+        ));
         ForeverGrants::load(path)
     }
 
@@ -729,7 +757,10 @@ mod tests {
             always_ask: vec![],
         };
         let mgr = manager(&cfg, false).with_trust(scorer_at(0)); // trusted
-        assert_eq!(mgr.decide("move", Some("rover"), phys_low()), Decision::Allow);
+        assert_eq!(
+            mgr.decide("move", Some("rover"), phys_low()),
+            Decision::Allow
+        );
     }
 
     #[test]
@@ -741,13 +772,19 @@ mod tests {
         };
         // Two failures → probation; the auto-approve shortcut is overridden.
         let mgr = manager(&cfg, false).with_trust(scorer_at(2));
-        assert_eq!(mgr.decide("move", Some("rover"), phys_low()), Decision::NeedsApproval);
+        assert_eq!(
+            mgr.decide("move", Some("rover"), phys_low()),
+            Decision::NeedsApproval
+        );
     }
 
     #[test]
     fn untrusted_node_denied_physical_but_not_reads() {
         let mgr = manager(&config_full(), false).with_trust(scorer_at(3)); // untrusted
-        assert_eq!(mgr.decide("move", Some("rover"), phys_low()), Decision::Deny);
+        assert_eq!(
+            mgr.decide("move", Some("rover"), phys_low()),
+            Decision::Deny
+        );
         // non-physical reads are never blocked by trust
         assert_eq!(
             mgr.decide("read_file", Some("rover"), RiskClass::safe()),
@@ -832,7 +869,10 @@ mod tests {
 
     #[test]
     fn response_scope_mapping() {
-        assert_eq!(ApprovalResponse::Yes.granted_scope(), Some(ApprovalScope::Call));
+        assert_eq!(
+            ApprovalResponse::Yes.granted_scope(),
+            Some(ApprovalScope::Call)
+        );
         assert_eq!(
             ApprovalResponse::Always.granted_scope(),
             Some(ApprovalScope::Session)
@@ -858,8 +898,7 @@ mod tests {
 
     #[test]
     fn forever_grants_persist_across_instances() {
-        let path = std::env::temp_dir()
-            .join(format!("obc_grants_persist_{}.json", rand_suffix()));
+        let path = std::env::temp_dir().join(format!("obc_grants_persist_{}.json", rand_suffix()));
         {
             let grants = ForeverGrants::load(&path);
             grants.grant("backup_tool");
@@ -905,7 +944,9 @@ mod tests {
                 tool_name: "camera_capture".to_string(),
                 bounds: HashMap::from([(
                     "device_id".to_string(),
-                    ArgumentBound::Exact { value: json!("cam-01") },
+                    ArgumentBound::Exact {
+                        value: json!("cam-01"),
+                    },
                 )]),
                 deny_unlisted_args: false,
             },
@@ -955,7 +996,9 @@ mod tests {
         );
         // Violation recorded in funnel + audit.
         let funnel = mgr.funnel_summary();
-        assert!(funnel.iter().any(|(t, c)| t == "delete_file" && c.plan_violations == 1));
+        assert!(funnel
+            .iter()
+            .any(|(t, c)| t == "delete_file" && c.plan_violations == 1));
         assert_eq!(mgr.audit_log().len(), 1);
     }
 
@@ -966,7 +1009,12 @@ mod tests {
         let err = mgr
             .check_plan_call(&id, "camera_capture", &json!({"device_id": "cam-99"}))
             .unwrap_err();
-        assert_eq!(err, PlanViolation::ArgOutOfBounds { key: "device_id".to_string() });
+        assert_eq!(
+            err,
+            PlanViolation::ArgOutOfBounds {
+                key: "device_id".to_string()
+            }
+        );
     }
 
     #[test]
@@ -976,21 +1024,32 @@ mod tests {
             tool_name: "set_brightness".to_string(),
             bounds: HashMap::from([(
                 "level".to_string(),
-                ArgumentBound::Range { min: 0.0, max: 100.0 },
+                ArgumentBound::Range {
+                    min: 0.0,
+                    max: 100.0,
+                },
             )]),
             deny_unlisted_args: true,
         }]);
         let err = mgr
             .check_plan_call(&id, "set_brightness", &json!({"level": 50, "extra": true}))
             .unwrap_err();
-        assert_eq!(err, PlanViolation::UnlistedArg { key: "extra".to_string() });
+        assert_eq!(
+            err,
+            PlanViolation::UnlistedArg {
+                key: "extra".to_string()
+            }
+        );
 
         // Fresh plan; in-range value with only listed keys passes.
         let id2 = mgr.approve_plan(vec![PlanStep {
             tool_name: "set_brightness".to_string(),
             bounds: HashMap::from([(
                 "level".to_string(),
-                ArgumentBound::Range { min: 0.0, max: 100.0 },
+                ArgumentBound::Range {
+                    min: 0.0,
+                    max: 100.0,
+                },
             )]),
             deny_unlisted_args: true,
         }]);

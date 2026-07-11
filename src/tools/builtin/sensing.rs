@@ -65,7 +65,8 @@ impl SenseTool {
                 ToolResult::ok(body.to_string())
             }
             Ok(None) => ToolResult::ok(
-                json!({ "quantity": quantity, "fact": Value::Null, "quality": "stale" }).to_string(),
+                json!({ "quantity": quantity, "fact": Value::Null, "quality": "stale" })
+                    .to_string(),
             ),
             Err(e) => ToolResult::err(e.to_string()),
         }
@@ -74,9 +75,9 @@ impl SenseTool {
     fn history(&self, quantity: &str) -> ToolResult {
         let entity = format!("sensor.{quantity}");
         match self.world.history(&entity) {
-            Ok(facts) => ToolResult::ok(
-                json!({ "quantity": quantity, "history": facts }).to_string(),
-            ),
+            Ok(facts) => {
+                ToolResult::ok(json!({ "quantity": quantity, "history": facts }).to_string())
+            }
             Err(e) => ToolResult::err(e.to_string()),
         }
     }
@@ -145,7 +146,11 @@ impl Tool for SenseTool {
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         let action = args.get("action").and_then(Value::as_str).unwrap_or("");
-        let quantity = || args.get("quantity").and_then(Value::as_str).map(str::to_string);
+        let quantity = || {
+            args.get("quantity")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
         Ok(match action {
             "ingest" => self.ingest(&args),
             "current" => match quantity() {
@@ -198,7 +203,10 @@ mod tests {
             .unwrap();
         assert!(r.success, "ingest failed: {:?}", r.error);
 
-        let r = t.execute(json!({ "action": "current", "quantity": "temperature" })).await.unwrap();
+        let r = t
+            .execute(json!({ "action": "current", "quantity": "temperature" }))
+            .await
+            .unwrap();
         assert!(r.success);
         let v: Value = serde_json::from_str(&r.output).unwrap();
         assert!((v["fact"]["value"]["value"].as_f64().unwrap() - 21.0).abs() < 1e-9);
@@ -227,7 +235,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let r = t.execute(json!({ "action": "history", "quantity": "temperature" })).await.unwrap();
+        let r = t
+            .execute(json!({ "action": "history", "quantity": "temperature" }))
+            .await
+            .unwrap();
         let v: Value = serde_json::from_str(&r.output).unwrap();
         assert_eq!(v["history"].as_array().unwrap().len(), 3);
     }

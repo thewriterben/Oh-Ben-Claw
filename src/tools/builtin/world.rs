@@ -85,8 +85,14 @@ impl Tool for WorldMemoryTool {
                 };
                 let value = args.get("value").cloned().unwrap_or(Value::Null);
                 let now = now_ms();
-                let valid_from = args.get("valid_from").and_then(|v| v.as_u64()).unwrap_or(now);
-                let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("agent");
+                let valid_from = args
+                    .get("valid_from")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(now);
+                let source = args
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("agent");
                 let fact = self.mem.observe(entity, value, valid_from, now, source)?;
                 Ok(ToolResult::ok(serde_json::to_string(&fact)?))
             }
@@ -139,7 +145,9 @@ mod tests {
     async fn observe_then_current_roundtrips() {
         let t = tool();
         let r = t
-            .execute(json!({"action": "observe", "entity": "room.temp", "value": 21.5, "source": "pir"}))
+            .execute(
+                json!({"action": "observe", "entity": "room.temp", "value": 21.5, "source": "pir"}),
+            )
             .await
             .unwrap();
         assert!(r.success);

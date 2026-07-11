@@ -26,12 +26,22 @@ impl AerialStatusTool {
 }
 
 fn parse_boundary(v: &Value) -> Result<Vec<GeoPoint>, String> {
-    let arr = v.as_array().ok_or("'geofence' must be an array of [lat, lon] points")?;
+    let arr = v
+        .as_array()
+        .ok_or("'geofence' must be an array of [lat, lon] points")?;
     let mut out = Vec::with_capacity(arr.len());
     for (i, p) in arr.iter().enumerate() {
-        let pa = p.as_array().ok_or(format!("geofence[{i}] must be [lat, lon]"))?;
-        let lat = pa.first().and_then(Value::as_f64).ok_or(format!("geofence[{i}].lat"))?;
-        let lon = pa.get(1).and_then(Value::as_f64).ok_or(format!("geofence[{i}].lon"))?;
+        let pa = p
+            .as_array()
+            .ok_or(format!("geofence[{i}] must be [lat, lon]"))?;
+        let lat = pa
+            .first()
+            .and_then(Value::as_f64)
+            .ok_or(format!("geofence[{i}].lat"))?;
+        let lon = pa
+            .get(1)
+            .and_then(Value::as_f64)
+            .ok_or(format!("geofence[{i}].lon"))?;
         let alt = pa.get(2).and_then(Value::as_f64).unwrap_or(0.0);
         out.push(GeoPoint::new(lat, lon, alt));
     }
@@ -40,9 +50,18 @@ fn parse_boundary(v: &Value) -> Result<Vec<GeoPoint>, String> {
 
 fn parse_telemetry(v: &Value) -> Result<AerialTelemetry, String> {
     let obj = v.as_object().ok_or("'telemetry' must be an object")?;
-    let id = obj.get("id").and_then(Value::as_str).ok_or("telemetry.id (string) is required")?;
-    let lat = obj.get("lat").and_then(Value::as_f64).ok_or("telemetry.lat (number) is required")?;
-    let lon = obj.get("lon").and_then(Value::as_f64).ok_or("telemetry.lon (number) is required")?;
+    let id = obj
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("telemetry.id (string) is required")?;
+    let lat = obj
+        .get("lat")
+        .and_then(Value::as_f64)
+        .ok_or("telemetry.lat (number) is required")?;
+    let lon = obj
+        .get("lon")
+        .and_then(Value::as_f64)
+        .ok_or("telemetry.lon (number) is required")?;
     let battery = obj
         .get("battery_percent")
         .and_then(Value::as_f64)
@@ -54,7 +73,11 @@ fn parse_telemetry(v: &Value) -> Result<AerialTelemetry, String> {
         alt_m: obj.get("alt_m").and_then(Value::as_f64).unwrap_or(0.0),
         battery_percent: battery,
         armed: obj.get("armed").and_then(Value::as_bool).unwrap_or(false),
-        mode: obj.get("mode").and_then(Value::as_str).unwrap_or("").to_string(),
+        mode: obj
+            .get("mode")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -132,7 +155,10 @@ impl Tool for AerialStatusTool {
             Some(s) => s.frame(),
             None => GeoFrame::new(telem.position()),
         };
-        let min_batt = args.get("min_battery_percent").and_then(Value::as_f64).unwrap_or(20.0);
+        let min_batt = args
+            .get("min_battery_percent")
+            .and_then(Value::as_f64)
+            .unwrap_or(20.0);
         let now_ms = args.get("now_ms").and_then(Value::as_u64).unwrap_or(0);
 
         let node = telem.to_node_state(&frame, now_ms);

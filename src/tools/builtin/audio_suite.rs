@@ -48,7 +48,9 @@ impl HearTool {
     fn current(&self, stream: &str) -> ToolResult {
         match self.world.current(&format!("audio.{stream}")) {
             Ok(Some(fact)) => ToolResult::ok(json!({ "stream": stream, "fact": fact }).to_string()),
-            Ok(None) => ToolResult::ok(json!({ "stream": stream, "fact": Value::Null }).to_string()),
+            Ok(None) => {
+                ToolResult::ok(json!({ "stream": stream, "fact": Value::Null }).to_string())
+            }
             Err(e) => ToolResult::err(e.to_string()),
         }
     }
@@ -106,7 +108,10 @@ impl Tool for HearTool {
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         let action = args.get("action").and_then(Value::as_str).unwrap_or("");
-        let stream = args.get("stream").and_then(Value::as_str).map(str::to_string);
+        let stream = args
+            .get("stream")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         Ok(match action {
             "observe" => self.observe(&args),
             "current" => match stream {
@@ -132,7 +137,10 @@ pub struct SpeakTool {
 
 impl SpeakTool {
     pub fn new(controller: Arc<AudioController>, default_voice: impl Into<String>) -> Self {
-        Self { controller, default_voice: default_voice.into() }
+        Self {
+            controller,
+            default_voice: default_voice.into(),
+        }
     }
 }
 
@@ -223,7 +231,10 @@ mod tests {
             .unwrap();
         assert!(r.success, "observe failed: {:?}", r.error);
 
-        let r = h.execute(json!({ "action": "current", "stream": "mic0" })).await.unwrap();
+        let r = h
+            .execute(json!({ "action": "current", "stream": "mic0" }))
+            .await
+            .unwrap();
         let v: Value = serde_json::from_str(&r.output).unwrap();
         assert_eq!(v["fact"]["value"]["text"], "lights on");
         assert_eq!(v["fact"]["value"]["reliable"], true);
@@ -237,7 +248,10 @@ mod tests {
         let v: Value = serde_json::from_str(&r.output).unwrap();
         assert_eq!(v["text"], "hello");
         assert_eq!(v["voice"], "nova"); // default applied
-        assert_eq!(world.current("speech.last").unwrap().unwrap().value["text"], "hello");
+        assert_eq!(
+            world.current("speech.last").unwrap().unwrap().value["text"],
+            "hello"
+        );
     }
 
     #[tokio::test]

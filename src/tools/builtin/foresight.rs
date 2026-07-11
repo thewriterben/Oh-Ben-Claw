@@ -19,7 +19,10 @@ pub struct ForesightTool {
 
 impl ForesightTool {
     pub fn new(world: Arc<WorldMemory>) -> Self {
-        Self { world, forecaster: Forecaster::default() }
+        Self {
+            world,
+            forecaster: Forecaster::default(),
+        }
     }
 
     pub fn with_forecaster(mut self, forecaster: Forecaster) -> Self {
@@ -62,10 +65,17 @@ impl Tool for ForesightTool {
         let Some(entity) = args.get("entity").and_then(Value::as_str) else {
             return Ok(ToolResult::err("'entity' is required"));
         };
-        let horizon = args.get("horizon_ms").and_then(Value::as_u64).unwrap_or(60_000);
+        let horizon = args
+            .get("horizon_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(60_000);
         let fc = match self.forecaster.forecast(&self.world, entity) {
             Ok(Some(fc)) => fc,
-            Ok(None) => return Ok(ToolResult::err(format!("no numeric history for '{entity}'"))),
+            Ok(None) => {
+                return Ok(ToolResult::err(format!(
+                    "no numeric history for '{entity}'"
+                )))
+            }
             Err(e) => return Ok(ToolResult::err(e.to_string())),
         };
         let mut body = json!({
@@ -91,7 +101,8 @@ mod tests {
     fn world() -> Arc<WorldMemory> {
         let w = Arc::new(WorldMemory::open_in_memory().unwrap());
         for (t, v) in [(0u64, 100.0), (1_000, 80.0), (2_000, 60.0)] {
-            w.observe("power.soc", json!({ "value": v }), t, t, "s").unwrap();
+            w.observe("power.soc", json!({ "value": v }), t, t, "s")
+                .unwrap();
         }
         w
     }

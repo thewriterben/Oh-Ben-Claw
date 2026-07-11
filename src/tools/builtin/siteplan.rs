@@ -23,12 +23,22 @@ impl SitePlanTool {
 }
 
 fn parse_boundary(v: &Value) -> Result<Vec<GeoPoint>, String> {
-    let arr = v.as_array().ok_or("'boundary' must be an array of [lat, lon] points")?;
+    let arr = v
+        .as_array()
+        .ok_or("'boundary' must be an array of [lat, lon] points")?;
     let mut out = Vec::with_capacity(arr.len());
     for (i, p) in arr.iter().enumerate() {
-        let pa = p.as_array().ok_or(format!("boundary[{i}] must be [lat, lon]"))?;
-        let lat = pa.first().and_then(Value::as_f64).ok_or(format!("boundary[{i}].lat"))?;
-        let lon = pa.get(1).and_then(Value::as_f64).ok_or(format!("boundary[{i}].lon"))?;
+        let pa = p
+            .as_array()
+            .ok_or(format!("boundary[{i}] must be [lat, lon]"))?;
+        let lat = pa
+            .first()
+            .and_then(Value::as_f64)
+            .ok_or(format!("boundary[{i}].lat"))?;
+        let lon = pa
+            .get(1)
+            .and_then(Value::as_f64)
+            .ok_or(format!("boundary[{i}].lon"))?;
         let alt = pa.get(2).and_then(Value::as_f64).unwrap_or(0.0);
         out.push(GeoPoint::new(lat, lon, alt));
     }
@@ -87,22 +97,48 @@ impl Tool for SitePlanTool {
         if boundary.len() < 3 {
             return Ok(ToolResult::err("'boundary' needs at least 3 points"));
         }
-        let site_id = args.get("site_id").and_then(Value::as_str).unwrap_or("site").to_string();
+        let site_id = args
+            .get("site_id")
+            .and_then(Value::as_str)
+            .unwrap_or("site")
+            .to_string();
         let site = Site::new(site_id.clone(), "", boundary);
 
         let d = PlacementSpec::default();
         let spec = PlacementSpec {
-            budget: args.get("budget").and_then(Value::as_u64).map(|v| v as usize).unwrap_or(d.budget),
-            detection_radius_m: args.get("detection_radius_m").and_then(Value::as_f64).unwrap_or(d.detection_radius_m),
-            min_spacing_m: args.get("min_spacing_m").and_then(Value::as_f64).unwrap_or(d.min_spacing_m),
-            mesh_range_m: args.get("mesh_range_m").and_then(Value::as_f64).unwrap_or(d.mesh_range_m),
-            lattice_step_m: args.get("lattice_step_m").and_then(Value::as_f64).unwrap_or(d.lattice_step_m),
-            demand_step_m: args.get("demand_step_m").and_then(Value::as_f64).unwrap_or(d.demand_step_m),
+            budget: args
+                .get("budget")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize)
+                .unwrap_or(d.budget),
+            detection_radius_m: args
+                .get("detection_radius_m")
+                .and_then(Value::as_f64)
+                .unwrap_or(d.detection_radius_m),
+            min_spacing_m: args
+                .get("min_spacing_m")
+                .and_then(Value::as_f64)
+                .unwrap_or(d.min_spacing_m),
+            mesh_range_m: args
+                .get("mesh_range_m")
+                .and_then(Value::as_f64)
+                .unwrap_or(d.mesh_range_m),
+            lattice_step_m: args
+                .get("lattice_step_m")
+                .and_then(Value::as_f64)
+                .unwrap_or(d.lattice_step_m),
+            demand_step_m: args
+                .get("demand_step_m")
+                .and_then(Value::as_f64)
+                .unwrap_or(d.demand_step_m),
             require_mesh_connectivity: args
                 .get("require_mesh_connectivity")
                 .and_then(Value::as_bool)
                 .unwrap_or(d.require_mesh_connectivity),
-            node_height_m: args.get("node_height_m").and_then(Value::as_f64).unwrap_or(d.node_height_m),
+            node_height_m: args
+                .get("node_height_m")
+                .and_then(Value::as_f64)
+                .unwrap_or(d.node_height_m),
         };
 
         let plan = plan_site(&site, &spec);
@@ -170,7 +206,10 @@ mod tests {
         assert!(v["coverage_fraction"].as_f64().unwrap() > 0.0);
         assert_eq!(v["mesh_connected"], json!(true));
         assert!(v["toml"].as_str().unwrap().contains("[[site.node]]"));
-        assert_eq!(v["nodes"].as_array().unwrap().len(), v["node_count"].as_u64().unwrap() as usize);
+        assert_eq!(
+            v["nodes"].as_array().unwrap().len(),
+            v["node_count"].as_u64().unwrap() as usize
+        );
     }
 
     #[tokio::test]
@@ -184,7 +223,10 @@ mod tests {
 
     #[tokio::test]
     async fn missing_boundary_is_soft_error() {
-        let r = SitePlanTool::new().execute(json!({ "budget": 2 })).await.unwrap();
+        let r = SitePlanTool::new()
+            .execute(json!({ "budget": 2 }))
+            .await
+            .unwrap();
         assert!(!r.success);
     }
 }

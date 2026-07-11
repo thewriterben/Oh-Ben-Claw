@@ -106,8 +106,7 @@ impl FeatureDesire {
             }
             Self::LongRangeRadio => "long-range radio link (LoRa/LoRaWAN)".to_string(),
             Self::OperatorConsole => {
-                "handheld operator console (keyboard + display, in-field fleet control)"
-                    .to_string()
+                "handheld operator console (keyboard + display, in-field fleet control)".to_string()
             }
             Self::Localization => "geospatial localization via GNSS/GPS".to_string(),
             Self::Actuation => "physical actuation (servos, motors)".to_string(),
@@ -324,6 +323,72 @@ impl HardwareInventory {
         caps
     }
 
+    /// Render this inventory as the **real runtime `[deployment]` schema** —
+    /// a `[deployment]` table plus one `[[deployment.hardware]]` per item,
+    /// paste-ready into `~/.oh-ben-claw/config.toml` (parsed by
+    /// `config::DeploymentConfig` / `DeploymentHardwareConfig`).
+    ///
+    /// This is the **cross-repo parity contract** (Ecosystem Integration I2):
+    /// the OBC-deployment-generator's TypeScript emitter must produce
+    /// byte-identical output for the same inventory, pinned by the shared
+    /// golden fixtures in `tests/fixtures/deployment/`. Emission rules:
+    /// deterministic field order (`name`, `board_name`, `transport`, `path?`,
+    /// `node_id?`, `role?`, `accessories?`); optional fields omitted when
+    /// absent (`role` when unassigned, `accessories` when empty); feature
+    /// desires as their serde snake_case tokens in inventory order.
+    pub fn to_deployment_toml(&self) -> String {
+        fn desire_token(d: &FeatureDesire) -> String {
+            // Unit variants serialize to their snake_case token; Custom(s)
+            // serializes to a map — render its free-form string directly.
+            match serde_json::to_value(d) {
+                Ok(serde_json::Value::String(s)) => s,
+                _ => match d {
+                    FeatureDesire::Custom(s) => s.clone(),
+                    _ => String::new(),
+                },
+            }
+        }
+
+        let mut out = String::new();
+        out.push_str("[deployment]\n");
+        out.push_str("enabled = true\n");
+        out.push_str(&format!("scenario = {:?}\n", self.scenario_name));
+        out.push_str("auto_plan = true\n");
+        let desires: Vec<String> = self
+            .feature_desires
+            .iter()
+            .map(desire_token)
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("{:?}", s))
+            .collect();
+        out.push_str(&format!("feature_desires = [{}]\n", desires.join(", ")));
+
+        for item in &self.items {
+            out.push_str("\n[[deployment.hardware]]\n");
+            out.push_str(&format!("name = {:?}\n", item.name));
+            out.push_str(&format!("board_name = {:?}\n", item.board_name));
+            out.push_str(&format!("transport = {:?}\n", item.transport));
+            if let Some(path) = &item.path {
+                out.push_str(&format!("path = {:?}\n", path));
+            }
+            if let Some(node_id) = &item.node_id {
+                out.push_str(&format!("node_id = {:?}\n", node_id));
+            }
+            if item.role != ItemRole::Unassigned {
+                out.push_str(&format!("role = {:?}\n", item.role.to_string()));
+            }
+            if !item.accessories.is_empty() {
+                let accs: Vec<String> = item
+                    .accessories
+                    .iter()
+                    .map(|a| format!("{:?}", a))
+                    .collect();
+                out.push_str(&format!("accessories = [{}]\n", accs.join(", ")));
+            }
+        }
+        out
+    }
+
     /// Build the standard NanoPi + ESP32-S3 Touch LCD + XIAO + Sipeed mic + DHT22 scenario.
     ///
     /// This is the reference deployment scenario described in the Oh-Ben-Claw
@@ -485,7 +550,15 @@ mod tests {
     #[test]
     fn accelerated_inference_requires_any_accelerator_token() {
         let caps = FeatureDesire::AcceleratedInference.required_capabilities();
-        for t in ["cuda", "tensor_rt", "npu", "edge_tpu", "hailo", "kpu", "nn_accel"] {
+        for t in [
+            "cuda",
+            "tensor_rt",
+            "npu",
+            "edge_tpu",
+            "hailo",
+            "kpu",
+            "nn_accel",
+        ] {
             assert!(caps.contains(&t), "AcceleratedInference missing token {t}");
         }
         // EdgeInference stays host-level (satisfiable on a CPU-only host).
@@ -513,8 +586,14 @@ mod tests {
             FeatureDesire::LongRangeRadio.required_capabilities(),
             &["lora"]
         );
-        assert_eq!(FeatureDesire::Localization.required_capabilities(), &["gps"]);
-        assert_eq!(FeatureDesire::Actuation.required_capabilities(), &["actuate"]);
+        assert_eq!(
+            FeatureDesire::Localization.required_capabilities(),
+            &["gps"]
+        );
+        assert_eq!(
+            FeatureDesire::Actuation.required_capabilities(),
+            &["actuate"]
+        );
         // Every new variant has a non-empty human description.
         for d in [
             FeatureDesire::AcceleratedInference,

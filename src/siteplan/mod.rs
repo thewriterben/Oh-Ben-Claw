@@ -88,7 +88,14 @@ impl Heightfield {
         for row in &rows {
             data.extend_from_slice(row);
         }
-        Self { origin_e, origin_n, step: if step > 0.0 { step } else { 1.0 }, cols: c, rows: r, data }
+        Self {
+            origin_e,
+            origin_n,
+            step: if step > 0.0 { step } else { 1.0 },
+            cols: c,
+            rows: r,
+            data,
+        }
     }
 
     /// Bilinearly-interpolated elevation at ENU `(e, n)`, clamped to the grid edges.
@@ -113,10 +120,15 @@ impl Heightfield {
 
 /// Whether the straight line from `(ax, ay, az)` to `(bx, by, bz)` clears the terrain —
 /// true if no interior sample of the ground rises above the sight ray.
+#[allow(clippy::too_many_arguments)] // two 3D endpoints + terrain + sampling: inherent arity
 fn los_clear(
     hf: &Heightfield,
-    ax: f64, ay: f64, az: f64,
-    bx: f64, by: f64, bz: f64,
+    ax: f64,
+    ay: f64,
+    az: f64,
+    bx: f64,
+    by: f64,
+    bz: f64,
     samples: usize,
 ) -> bool {
     let n = samples.max(2);
@@ -160,7 +172,11 @@ impl SitePlan {
             "{} node(s), coverage {:.0}%, {} ({} demand pts)",
             self.nodes.len(),
             self.coverage_fraction * 100.0,
-            if self.mesh_connected { "mesh-connected" } else { "MESH SPLIT" },
+            if self.mesh_connected {
+                "mesh-connected"
+            } else {
+                "MESH SPLIT"
+            },
             self.demand_points,
         )
     }
@@ -174,11 +190,17 @@ impl SitePlan {
         s.push_str("[site]\n");
         s.push_str(&format!("id = {:?}\n", site_id));
         s.push_str(&format!("nodes = {}\n", self.nodes.len()));
-        s.push_str(&format!("coverage_fraction = {:.4}\n", self.coverage_fraction));
+        s.push_str(&format!(
+            "coverage_fraction = {:.4}\n",
+            self.coverage_fraction
+        ));
         s.push_str(&format!("mesh_connected = {}\n", self.mesh_connected));
         for (i, n) in self.nodes.iter().enumerate() {
             s.push_str("\n[[site.node]]\n");
-            s.push_str(&format!("id = {:?}\n", format!("{}-n{:02}", site_id, i + 1)));
+            s.push_str(&format!(
+                "id = {:?}\n",
+                format!("{}-n{:02}", site_id, i + 1)
+            ));
             s.push_str(&format!("lat = {:.6}\n", n.geo.lat));
             s.push_str(&format!("lon = {:.6}\n", n.geo.lon));
             s.push_str(&format!("alt = {:.2}\n", n.geo.alt));
@@ -395,7 +417,10 @@ mod tests {
     }
 
     fn spec(budget: usize) -> PlacementSpec {
-        PlacementSpec { budget, ..Default::default() }
+        PlacementSpec {
+            budget,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -433,7 +458,10 @@ mod tests {
         let poly: Vec<(f64, f64)> = site
             .boundary
             .iter()
-            .map(|p| { let e = frame.to_enu(*p); (e.e, e.n) })
+            .map(|p| {
+                let e = frame.to_enu(*p);
+                (e.e, e.n)
+            })
             .collect();
         for node in plan_site(&site, &spec(4)).nodes {
             assert!(point_in_polygon(node.enu.e, node.enu.n, &poly));
@@ -494,7 +522,9 @@ mod tests {
 
     #[test]
     fn summary_mentions_coverage() {
-        assert!(plan_site(&square_site(), &spec(4)).summary().contains("coverage"));
+        assert!(plan_site(&square_site(), &spec(4))
+            .summary()
+            .contains("coverage"));
     }
 
     fn approx(a: f64, b: f64, tol: f64) -> bool {
@@ -514,14 +544,26 @@ mod tests {
     fn line_of_sight_ridge_blocks_low_clears() {
         // Tall ridge (20 m) at the middle column blocks a 3 m mast → ground sightline.
         let tall = Heightfield::from_rows(
-            -10.0, -10.0, 10.0,
-            vec![vec![0.0, 0.0, 0.0], vec![0.0, 20.0, 0.0], vec![0.0, 0.0, 0.0]],
+            -10.0,
+            -10.0,
+            10.0,
+            vec![
+                vec![0.0, 0.0, 0.0],
+                vec![0.0, 20.0, 0.0],
+                vec![0.0, 0.0, 0.0],
+            ],
         );
         assert!(!los_clear(&tall, -10.0, 0.0, 3.0, 10.0, 0.0, 0.0, 32));
         // A 1 m bump sits below the ~1.5 m sight ray at the midpoint → clear.
         let low = Heightfield::from_rows(
-            -10.0, -10.0, 10.0,
-            vec![vec![0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0]],
+            -10.0,
+            -10.0,
+            10.0,
+            vec![
+                vec![0.0, 0.0, 0.0],
+                vec![0.0, 1.0, 0.0],
+                vec![0.0, 0.0, 0.0],
+            ],
         );
         assert!(los_clear(&low, -10.0, 0.0, 3.0, 10.0, 0.0, 0.0, 32));
     }
@@ -547,13 +589,22 @@ mod tests {
         let mut rows = Vec::new();
         for r in 0..dim {
             let n = origin + r as f64 * step;
-            let hv = if (n.round() as i64) % 20 == 0 { 40.0 } else { 0.0 };
+            let hv = if (n.round() as i64) % 20 == 0 {
+                40.0
+            } else {
+                0.0
+            };
             rows.push(vec![hv; dim]);
         }
         let hf = Heightfield::from_rows(origin, origin, step, rows);
         let site = square_site();
         let flat = plan_site(&site, &spec(4)).coverage_fraction;
         let terr = plan_site_on(&site, &spec(4), Some(&hf)).coverage_fraction;
-        assert!(terr < flat, "terrain should occlude: terr={} flat={}", terr, flat);
+        assert!(
+            terr < flat,
+            "terrain should occlude: terr={} flat={}",
+            terr,
+            flat
+        );
     }
 }

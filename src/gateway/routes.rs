@@ -1076,3 +1076,225 @@ pub async fn get_agent(
             .into_response()
     }
 }
+
+// ── Hardware registry (live catalog) ──────────────────────────────────────────
+
+/// `GET /api/v1/registry` — The live hardware registry, serialized straight
+/// from the running binary's `peripherals::registry` tables. Always current by
+/// construction (no staleness possible), same JSON shape as the committed
+/// `registry/registry.json` export — consumers (deployment generator,
+/// Accelerapp) can refresh their bundled copy from a running fleet.
+pub async fn get_registry() -> impl IntoResponse {
+    match crate::peripherals::registry::registry_json() {
+        Ok(body) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            body,
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("registry serialization failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+// ── Approvals (I4 Operate mode) ────────────────────────────────────────────────
+
+/// `GET /api/v1/approvals` — Approval posture for remote consoles: per-tool
+/// ask/approve/deny funnel, active session + forever grants, and the tail of
+/// the decision audit log.
+pub async fn get_approvals(State(state): State<Arc<GatewayState>>) -> impl IntoResponse {
+    let Some(approval) = &state.approval else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Approval manager not attached" })),
+        )
+            .into_response();
+    };
+
+    let funnel: Vec<Value> = approval
+        .funnel_summary()
+        .into_iter()
+        .map(|(tool, c)| {
+            json!({
+                "tool": tool,
+                "asked": c.asked,
+                "approved_call": c.approved_call,
+                "approved_session": c.approved_session,
+                "approved_forever": c.approved_forever,
+                "denied": c.denied,
+                "plan_violations": c.plan_violations,
+            })
+        })
+        .collect();
+    let forever: Vec<Value> = approval
+        .forever_grants()
+        .list()
+        .into_iter()
+        .map(|g| json!({ "tool": g.tool_name, "granted_at": g.granted_at }))
+        .collect();
+    let audit_tail: Vec<Value> = approval
+        .audit_log()
+        .into_iter()
+        .rev()
+        .take(20)
+        .map(|e| json!(e))
+        .collect();
+
+    Json(json!({
+        "funnel": funnel,
+        "session_grants": approval.session_grants(),
+        "forever_grants": forever,
+        "audit_tail": audit_tail,
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApprovalDecisionRequest {
+    /// One of: `"call"` (this call class once), `"session"`, `"forever"`,
+    /// `"deny"`, `"revoke"` (drop session + forever grants for the tool).
+    pub decision: String,
+}
+
+/// `POST /api/v1/approvals/{tool}` — Record a remote operator decision for a
+/// tool: grant (session/forever), deny, or revoke existing grants. Grants and
+/// audit flow through the same `ApprovalManager` the agent consults, so the
+/// next tool call sees the new posture immediately.
+pub async fn post_approval_decision(
+    State(state): State<Arc<GatewayState>>,
+    Path(tool): Path<String>,
+    Json(body): Json<ApprovalDecisionRequest>,
+) -> impl IntoResponse {
+    use crate::approval::{ApprovalRequest, ApprovalResponse};
+
+    let Some(approval) = &state.approval else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Approval manager not attached" })),
+        )
+            .into_response();
+    };
+
+    let req = ApprovalRequest {
+        tool_name: tool.clone(),
+        arguments: json!({ "channel": "gateway-remote" }),
+    };
+    match body.decision.as_str() {
+        "call" => approval.record_external_decision(&req, ApprovalResponse::Yes),
+        "session" => approval.record_external_decision(&req, ApprovalResponse::Always),
+        "forever" => approval.record_external_decision(&req, ApprovalResponse::Forever),
+        "deny" => approval.record_external_decision(&req, ApprovalResponse::No),
+        "revoke" => {
+            let session = approval.revoke_session(&tool);
+            let forever = approval.forever_grants().revoke(&tool);
+            return Json(json!({
+                "tool": tool,
+                "revoked_session": session,
+                "revoked_forever": forever,
+            }))
+            .into_response();
+        }
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": format!(
+                        "unknown decision '{other}' (expected call|session|forever|deny|revoke)"
+                    )
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    Json(json!({
+        "tool": tool,
+        "decision": body.decision,
+        "session_grants": approval.session_grants(),
+    }))
+    .into_response()
+}
+
+// ── Deployment scheme push (I4 Operate mode) ──────────────────────────────────
+
+/// Maximum accepted scheme size (bytes) — a config TOML, not a firmware image.
+const MAX_SCHEME_BYTES: usize = 256 * 1024;
+
+#[derive(Debug, Deserialize)]
+pub struct PushSchemeRequest {
+    /// The scheme's TOML configuration (as produced by the deployment
+    /// generator / `DeploymentPlanner`).
+    pub toml: String,
+    /// Optional label used in the saved filename.
+    pub name: Option<String>,
+}
+
+/// `POST /api/v1/deployment/scheme` — Receive a generated deployment scheme.
+///
+/// The TOML is validated for well-formedness and staged to
+/// `~/.oh-ben-claw/incoming/` for **operator review** — it is never applied
+/// automatically. Returns the staged path.
+pub async fn push_scheme(Json(body): Json<PushSchemeRequest>) -> impl IntoResponse {
+    if body.toml.len() > MAX_SCHEME_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({ "error": format!("scheme exceeds {MAX_SCHEME_BYTES} bytes") })),
+        )
+            .into_response();
+    }
+    if let Err(e) = toml::from_str::<toml::Value>(&body.toml) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("invalid TOML: {e}") })),
+        )
+            .into_response();
+    }
+
+    let label: String = body
+        .name
+        .as_deref()
+        .unwrap_or("scheme")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(48)
+        .collect();
+    let dir = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(".oh-ben-claw")
+        .join("incoming");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("could not create incoming dir: {e}") })),
+        )
+            .into_response();
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = dir.join(format!("{label}-{ts}.toml"));
+    match std::fs::write(&path, &body.toml) {
+        Ok(()) => Json(json!({
+            "staged": path.to_string_lossy(),
+            "note": "Staged for operator review — not applied automatically.",
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("could not write scheme: {e}") })),
+        )
+            .into_response(),
+    }
+}

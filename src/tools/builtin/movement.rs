@@ -114,8 +114,12 @@ mod tests {
         limit.value_min = Some(0);
         limit.value_max = Some(180);
         let ctrl = Arc::new(
-            MovementController::new("n1", Arc::new(SafetyGate::new(vec![limit])), Arc::new(LoggingActuatorSink))
-                .with_world_memory(Arc::clone(&world)),
+            MovementController::new(
+                "n1",
+                Arc::new(SafetyGate::new(vec![limit])),
+                Arc::new(LoggingActuatorSink),
+            )
+            .with_world_memory(Arc::clone(&world)),
         );
         (MovementTool::new(ctrl), world)
     }
@@ -155,7 +159,10 @@ mod tests {
     #[tokio::test]
     async fn malformed_command_is_soft_error() {
         let (t, _) = tool();
-        let r = t.execute(json!({ "type": "fly", "name": "arm", "channel": 0 })).await.unwrap();
+        let r = t
+            .execute(json!({ "type": "fly", "name": "arm", "channel": 0 }))
+            .await
+            .unwrap();
         assert!(!r.success);
     }
 }

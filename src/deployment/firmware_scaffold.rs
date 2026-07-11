@@ -32,7 +32,11 @@ pub struct ScaffoldOptions {
 
 impl Default for ScaffoldOptions {
     fn default() -> Self {
-        Self { node_id: "obc-node".to_string(), baud: 115_200, lang: SketchLang::Arduino }
+        Self {
+            node_id: "obc-node".to_string(),
+            baud: 115_200,
+            lang: SketchLang::Arduino,
+        }
     }
 }
 
@@ -154,18 +158,128 @@ pub fn scaffold_firmware(board: &BoardInfo, opts: &ScaffoldOptions) -> FirmwareS
     }
 }
 
+// ── Shared template export (Ecosystem Integration I6) ─────────────────────────
+
+/// Schema version of the exported `templates.json` document. Bump on any
+/// breaking change to the template shape.
+pub const TEMPLATES_SCHEMA_VERSION: u32 = 1;
+
+/// Serialize the canonical firmware template set as JSON:
+/// one starter sketch per **flashable** registry board (serial/probe
+/// transports), generated with the default placeholder node id (`obc-node`) so
+/// consumers substitute their own. This is the single source of truth the
+/// OBC-deployment-generator and Accelerapp bundle instead of maintaining
+/// their own template copies (exporter: the `emit-firmware-templates` binary).
+pub fn templates_json() -> serde_json::Result<String> {
+    use crate::peripherals::registry::known_boards;
+
+    let mut seen = std::collections::HashSet::new();
+    let templates: Vec<serde_json::Value> = known_boards()
+        .iter()
+        .filter(|b| matches!(b.transport, "serial" | "probe"))
+        .filter(|b| seen.insert(b.name)) // boards repeat per USB id — one template each
+        .map(|b| {
+            let sketch = scaffold_firmware(b, &ScaffoldOptions::default());
+            serde_json::json!({
+                "board": sketch.board,
+                "language": "arduino",
+                "filename": sketch.filename,
+                "source": sketch.source,
+                "capabilities": b.capabilities,
+                "vendor": b.vendor,
+            })
+        })
+        .collect();
+
+    serde_json::to_string_pretty(&serde_json::json!({
+        "schema_version": TEMPLATES_SCHEMA_VERSION,
+        "generated_from": "oh-ben-claw firmware_scaffold",
+        "node_id_placeholder": "obc-node",
+        "templates": templates,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::peripherals::registry::known_boards;
 
     fn board(name: &str) -> &'static BoardInfo {
-        known_boards().iter().find(|b| b.name == name).expect("board in registry")
+        known_boards()
+            .iter()
+            .find(|b| b.name == name)
+            .expect("board in registry")
+    }
+
+    #[test]
+    fn templates_json_covers_every_flashable_board_once() {
+        let j = templates_json().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["schema_version"], TEMPLATES_SCHEMA_VERSION);
+        let templates = v["templates"].as_array().unwrap();
+        let mut names: Vec<&str> = templates
+            .iter()
+            .map(|t| t["board"].as_str().unwrap())
+            .collect();
+        let distinct_flashable: std::collections::HashSet<&str> = known_boards()
+            .iter()
+            .filter(|b| matches!(b.transport, "serial" | "probe"))
+            .map(|b| b.name)
+            .collect();
+        assert_eq!(
+            templates.len(),
+            distinct_flashable.len(),
+            "one template per board"
+        );
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), templates.len(), "no duplicate boards");
+        // Placeholder node id baked in, ready for substitution.
+        assert!(templates[0]["source"]
+            .as_str()
+            .unwrap()
+            .contains("obc-node"));
+    }
+
+    /// Drift guard (I6): the committed `firmware-templates/templates.json`
+    /// must match what the live scaffold generates — same policy as the
+    /// registry export.
+    #[test]
+    fn committed_templates_json_is_current() {
+        let candidates = [
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/firmware-templates/templates.json"
+            ),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../firmware-templates/templates.json"
+            ),
+        ];
+        let committed = candidates
+            .iter()
+            .find_map(|p| std::fs::read_to_string(p).ok())
+            .expect(
+                "firmware-templates/templates.json missing — generate it with \
+                 `cargo run --bin emit-firmware-templates -- firmware-templates/templates.json`",
+            );
+        let live = templates_json().unwrap();
+        let norm = |s: &str| s.replace("\r\n", "\n").trim_end().to_string();
+        assert_eq!(
+            norm(&committed),
+            norm(&live),
+            "firmware-templates/templates.json is stale — regenerate and copy \
+             to the consumers (generator lib/firmware-templates.json, \
+             Accelerapp src/accelerapp/firmware/templates.json)"
+        );
     }
 
     #[test]
     fn camera_board_gets_capability_conditioned_includes() {
-        let opts = ScaffoldOptions { node_id: "cam-1".into(), ..Default::default() };
+        let opts = ScaffoldOptions {
+            node_id: "cam-1".into(),
+            ..Default::default()
+        };
         let sk = scaffold_firmware(board("esp32-s3-cam"), &opts);
         assert!(sk.source.contains("#include <WiFi.h>"));
         assert!(sk.source.contains("#include <Wire.h>"));
@@ -200,7 +314,11 @@ mod tests {
 
     #[test]
     fn baud_and_node_id_are_honored() {
-        let opts = ScaffoldOptions { node_id: "rover-9".into(), baud: 921_600, lang: SketchLang::Arduino };
+        let opts = ScaffoldOptions {
+            node_id: "rover-9".into(),
+            baud: 921_600,
+            lang: SketchLang::Arduino,
+        };
         let sk = scaffold_firmware(board("esp32-c3"), &opts);
         assert!(sk.source.contains("Serial.begin(921600)"));
         assert!(sk.source.contains("OBC_NODE_ID = \"rover-9\""));

@@ -574,6 +574,13 @@ pub struct GatewayConfig {
     /// Optional Bearer token for API authentication.
     #[serde(default)]
     pub api_token: Option<String>,
+    /// Optional Operate-mode token (Ecosystem Integration I4). When set,
+    /// **mutating** API requests (anything but GET/HEAD) additionally require
+    /// the `X-OBC-Operate` header carrying this token — read-only by default,
+    /// explicit elevation for remote actions. When unset, mutating requests
+    /// follow the ordinary `api_token` rules (local-console compatibility).
+    #[serde(default)]
+    pub operate_token: Option<String>,
     /// Whether to serve the built-in PWA web client.
     #[serde(default = "default_true")]
     pub serve_pwa: bool,
@@ -601,6 +608,7 @@ impl Default for GatewayConfig {
             host: default_gateway_host(),
             port: default_gateway_port(),
             api_token: None,
+            operate_token: None,
             serve_pwa: true,
             cors_origins: vec![],
         }

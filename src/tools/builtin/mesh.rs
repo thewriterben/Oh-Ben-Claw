@@ -74,13 +74,27 @@ impl Tool for MeshCommandTool {
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        let node_id = args.get("node_id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let node_id = args
+            .get("node_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if node_id.is_empty() {
-            return Ok(ToolResult::err("mesh_command requires a non-empty 'node_id'"));
+            return Ok(ToolResult::err(
+                "mesh_command requires a non-empty 'node_id'",
+            ));
         }
-        let command = args.get("command").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let command = args
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if command.is_empty() {
-            return Ok(ToolResult::err("mesh_command requires a non-empty 'command'"));
+            return Ok(ToolResult::err(
+                "mesh_command requires a non-empty 'command'",
+            ));
         }
         let cmd_args = args.get("args").cloned().unwrap_or_else(|| json!({}));
         let id = uuid::Uuid::new_v4().to_string();
@@ -151,11 +165,31 @@ mod tests {
     async fn mesh_status_summarizes_node_health() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         world
-            .observe("mesh.n1", json!({ "last_type": "reflex", "rssi_dbm": -80 }), 1_000, 1_000, "t")
+            .observe(
+                "mesh.n1",
+                json!({ "last_type": "reflex", "rssi_dbm": -80 }),
+                1_000,
+                1_000,
+                "t",
+            )
             .unwrap();
-        world.observe("mesh.n1.health", json!({ "status": "offline" }), 1_000, 1_000, "t").unwrap();
         world
-            .observe("mesh.n1.escalation", json!({ "status": "escalated" }), 1_000, 1_000, "t")
+            .observe(
+                "mesh.n1.health",
+                json!({ "status": "offline" }),
+                1_000,
+                1_000,
+                "t",
+            )
+            .unwrap();
+        world
+            .observe(
+                "mesh.n1.escalation",
+                json!({ "status": "escalated" }),
+                1_000,
+                1_000,
+                "t",
+            )
             .unwrap();
 
         let tool = MeshStatusTool::new(world);
