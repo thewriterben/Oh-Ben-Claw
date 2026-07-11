@@ -1,0 +1,44 @@
+{
+  "site": {
+    "id": "square",
+    "name": "parity square",
+    "origin": {
+      "lat": 45.5,
+      "lon": -122.6,
+      "alt": 0.0
+    },
+    "boundary": [
+      {
+        "lat": 45.49955033908929,
+        "lon": -122.60064153940262,
+        "alt": 0.0
+      },
+      {
+        "lat": 45.49955033908929,
+        "lon": -122.59935846059737,
+        "alt": 0.0
+      },
+      {
+        "lat": 45.50044966091071,
+        "lon": -122.59935846059737,
+        "alt": 0.0
+      },
+      {
+        "lat": 45.50044966091071,
+        "lon": -122.60064153940262,
+        "alt": 0.0
+      }
+    ],
+    "dem_ref": null
+  },
+  "spec": {
+    "budget": 4,
+    "detection_radius_m": 30.0,
+    "min_spacing_m": 20.0,
+    "mesh_range_m": 250.0,
+    "lattice_step_m": 10.0,
+    "demand_step_m": 10.0,
+    "require_mesh_connectivity": true,
+    "node_height_m": 3.0
+  }
+}

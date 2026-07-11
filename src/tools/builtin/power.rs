@@ -139,8 +139,11 @@ mod tests {
     fn tool() -> (PowerTool, Arc<WorldMemory>) {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let ctrl = Arc::new(
-            PowerController::new(PowerThresholds { low_pct: 20.0, critical_pct: 10.0 })
-                .with_world_memory(Arc::clone(&world)),
+            PowerController::new(PowerThresholds {
+                low_pct: 20.0,
+                critical_pct: 10.0,
+            })
+            .with_world_memory(Arc::clone(&world)),
         );
         (PowerTool::new(ctrl, Arc::clone(&world)), world)
     }
@@ -197,7 +200,10 @@ mod tests {
     async fn malformed_report_is_soft_error() {
         let (t, _) = tool();
         // soc_pct missing → deserialization fails → soft error.
-        let r = t.execute(json!({ "action": "report", "charging": "discharging" })).await.unwrap();
+        let r = t
+            .execute(json!({ "action": "report", "charging": "discharging" }))
+            .await
+            .unwrap();
         assert!(!r.success);
     }
 

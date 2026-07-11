@@ -29,7 +29,12 @@ impl LearnTool {
         miner: RuleMiner,
         outcome: OutcomeSpec,
     ) -> Self {
-        Self { world, store, miner, outcome }
+        Self {
+            world,
+            store,
+            miner,
+            outcome,
+        }
     }
 }
 
@@ -113,17 +118,33 @@ mod tests {
     use std::sync::Mutex;
 
     fn obs(world: &WorldMemory, entity: &str, t: u64, v: f64) {
-        world.observe(entity, json!({ "value": v }), t, t, "test").unwrap();
+        world
+            .observe(entity, json!({ "value": v }), t, t, "test")
+            .unwrap();
     }
 
     fn setup() -> LearnTool {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        for &(t, v) in &[(0, 0.0), (1_000, 1.0), (1_100, 0.0), (2_000, 1.0), (2_100, 0.0), (3_000, 1.0)] {
+        for &(t, v) in &[
+            (0, 0.0),
+            (1_000, 1.0),
+            (1_100, 0.0),
+            (2_000, 1.0),
+            (2_100, 0.0),
+            (3_000, 1.0),
+        ] {
             obs(&world, "alarm", t, v);
         }
         for &(t, v) in &[
-            (950, 80.0), (1_050, 10.0), (1_950, 80.0), (2_050, 10.0), (2_950, 80.0), (3_050, 10.0),
-            (500, 10.0), (1_500, 10.0), (2_500, 10.0),
+            (950, 80.0),
+            (1_050, 10.0),
+            (1_950, 80.0),
+            (2_050, 10.0),
+            (2_950, 80.0),
+            (3_050, 10.0),
+            (500, 10.0),
+            (1_500, 10.0),
+            (2_500, 10.0),
         ] {
             obs(&world, "x", t, v);
         }
@@ -135,7 +156,11 @@ mod tests {
             min_confidence: 0.6,
             candidates: vec!["x".into()],
         };
-        let outcome = OutcomeSpec { entity: "alarm".into(), op: Cmp::Ge, threshold: 1.0 };
+        let outcome = OutcomeSpec {
+            entity: "alarm".into(),
+            op: Cmp::Ge,
+            threshold: 1.0,
+        };
         LearnTool::new(world, store, miner, outcome)
     }
 
@@ -153,10 +178,16 @@ mod tests {
 
         let r = t.execute(json!({ "action": "list" })).await.unwrap();
         let v: Value = serde_json::from_str(&r.output).unwrap();
-        let id = v["proposals"][0]["rule"]["id"].as_str().unwrap().to_string();
+        let id = v["proposals"][0]["rule"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert_eq!(v["active"], 0);
 
-        let r = t.execute(json!({ "action": "approve", "id": id })).await.unwrap();
+        let r = t
+            .execute(json!({ "action": "approve", "id": id }))
+            .await
+            .unwrap();
         assert!(r.success, "approve failed: {:?}", r.error);
         let v: Value = serde_json::from_str(&r.output).unwrap();
         assert_eq!(v["active"], 1);
@@ -165,7 +196,10 @@ mod tests {
     #[tokio::test]
     async fn approve_unknown_is_soft_error() {
         let t = setup();
-        let r = t.execute(json!({ "action": "approve", "id": "nope" })).await.unwrap();
+        let r = t
+            .execute(json!({ "action": "approve", "id": "nope" }))
+            .await
+            .unwrap();
         assert!(!r.success);
     }
 }

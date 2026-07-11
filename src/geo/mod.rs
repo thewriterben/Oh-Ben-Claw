@@ -21,6 +21,13 @@
 //! `events_in_site`, so "is this detection inside the survey area?" answers identically on
 //! both sides of the wire.
 
+// World-memory anchoring needs SQLite; the pure geometry below is also
+// compiled into the `planner-wasm` crate (Ecosystem Integration I5), which
+// doesn't enable this feature — so the anchor module (and its rusqlite
+// dependency chain) stays out of wasm builds.
+#[cfg(feature = "world-anchor")]
+pub mod anchor;
+
 use serde::{Deserialize, Serialize};
 
 /// Mean Earth radius in metres (spherical approximation).
@@ -71,7 +78,10 @@ pub struct GeoFrame {
 
 impl GeoFrame {
     pub fn new(origin: GeoPoint) -> Self {
-        Self { origin, cos_lat0: origin.lat.to_radians().cos() }
+        Self {
+            origin,
+            cos_lat0: origin.lat.to_radians().cos(),
+        }
     }
 
     pub fn origin(&self) -> GeoPoint {
@@ -90,9 +100,12 @@ impl GeoFrame {
     pub fn from_enu(&self, enu: Enu) -> GeoPoint {
         let lat = self.origin.lat + (enu.n / EARTH_RADIUS_M).to_degrees();
         // cos_lat0 is bounded away from 0 for any realistic site (|lat| < 90).
-        let lon = self.origin.lon
-            + (enu.e / (EARTH_RADIUS_M * self.cos_lat0)).to_degrees();
-        GeoPoint { lat, lon, alt: self.origin.alt + enu.u }
+        let lon = self.origin.lon + (enu.e / (EARTH_RADIUS_M * self.cos_lat0)).to_degrees();
+        GeoPoint {
+            lat,
+            lon,
+            alt: self.origin.alt + enu.u,
+        }
     }
 }
 
@@ -109,8 +122,8 @@ fn point_in_polygon(lat: f64, lon: f64, boundary: &[GeoPoint]) -> bool {
     for i in 0..n {
         let (xi, yi) = (boundary[i].lat, boundary[i].lon);
         let (xj, yj) = (boundary[j].lat, boundary[j].lon);
-        let intersect = ((yi > lon) != (yj > lon))
-            && (lat < (xj - xi) * (lon - yi) / (yj - yi) + xi);
+        let intersect =
+            ((yi > lon) != (yj > lon)) && (lat < (xj - xi) * (lon - yi) / (yj - yi) + xi);
         if intersect {
             inside = !inside;
         }
@@ -137,7 +150,13 @@ impl Site {
     /// non-empty (matching ClawCam's `upsert_site` centroid default).
     pub fn new(id: impl Into<String>, name: impl Into<String>, boundary: Vec<GeoPoint>) -> Self {
         let origin = Self::centroid(&boundary).unwrap_or(GeoPoint::new(0.0, 0.0, 0.0));
-        Self { id: id.into(), name: name.into(), origin, boundary, dem_ref: None }
+        Self {
+            id: id.into(),
+            name: name.into(),
+            origin,
+            boundary,
+            dem_ref: None,
+        }
     }
 
     fn centroid(boundary: &[GeoPoint]) -> Option<GeoPoint> {

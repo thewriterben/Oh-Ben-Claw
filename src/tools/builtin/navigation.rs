@@ -287,11 +287,13 @@ impl Tool for NavStatusTool {
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        Ok(match args.get("action").and_then(Value::as_str).unwrap_or("") {
-            "status" => self.status(),
-            "stop" => self.stop().await,
-            other => ToolResult::err(format!("unknown action: '{other}'")),
-        })
+        Ok(
+            match args.get("action").and_then(Value::as_str).unwrap_or("") {
+                "status" => self.status(),
+                "stop" => self.stop().await,
+                other => ToolResult::err(format!("unknown action: '{other}'")),
+            },
+        )
     }
 }
 
@@ -332,7 +334,9 @@ mod tests {
     fn navigate_gated_status_safe() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let c = controller(&world);
-        assert!(NavigateTool::new(Arc::clone(&c)).risk_class().requires_per_call_approval());
+        assert!(NavigateTool::new(Arc::clone(&c))
+            .risk_class()
+            .requires_per_call_approval());
         assert!(!NavStatusTool::new(c, world).risk_class().physical);
     }
 
@@ -404,7 +408,9 @@ mod tests {
         Arc::new(
             NavController::new(movement, ("steer".into(), 0), ("drive".into(), 1))
                 .with_world_memory(Arc::clone(world))
-                .with_grid(Arc::new(Mutex::new(OccupancyGrid::new(0.0, 0.0, 1.0, 10, 10)))),
+                .with_grid(Arc::new(Mutex::new(OccupancyGrid::new(
+                    0.0, 0.0, 1.0, 10, 10,
+                )))),
         )
     }
 
@@ -426,24 +432,45 @@ mod tests {
         assert_eq!(v["obstacles"], 8);
 
         // pose at the start, then a planned navigate detours around the wall
-        world.observe("sensor.pos_x", json!({"value": 0.5}), 1, 1, "o").unwrap();
-        world.observe("sensor.pos_y", json!({"value": 0.5}), 1, 1, "o").unwrap();
-        world.observe("sensor.heading", json!({"value": 0.0}), 1, 1, "o").unwrap();
-        let r = NavigateTool::new(Arc::clone(&c)).execute(json!({ "x": 9.5, "y": 0.5 })).await.unwrap();
+        world
+            .observe("sensor.pos_x", json!({"value": 0.5}), 1, 1, "o")
+            .unwrap();
+        world
+            .observe("sensor.pos_y", json!({"value": 0.5}), 1, 1, "o")
+            .unwrap();
+        world
+            .observe("sensor.heading", json!({"value": 0.0}), 1, 1, "o")
+            .unwrap();
+        let r = NavigateTool::new(Arc::clone(&c))
+            .execute(json!({ "x": 9.5, "y": 0.5 }))
+            .await
+            .unwrap();
         assert!(r.success, "navigate failed: {:?}", r.error);
         let v: Value = serde_json::from_str(&r.output).unwrap();
-        assert!(v["planned_waypoints"].as_u64().unwrap() >= 2, "expected a detour");
+        assert!(
+            v["planned_waypoints"].as_u64().unwrap() >= 2,
+            "expected a detour"
+        );
     }
 
     #[tokio::test]
     async fn nav_map_scan_marks_obstacles_from_pose() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let c = controller_with_grid(&world);
-        world.observe("sensor.pos_x", json!({"value": 0.5}), 1, 1, "o").unwrap();
-        world.observe("sensor.pos_y", json!({"value": 0.5}), 1, 1, "o").unwrap();
-        world.observe("sensor.heading", json!({"value": 0.0}), 1, 1, "o").unwrap();
+        world
+            .observe("sensor.pos_x", json!({"value": 0.5}), 1, 1, "o")
+            .unwrap();
+        world
+            .observe("sensor.pos_y", json!({"value": 0.5}), 1, 1, "o")
+            .unwrap();
+        world
+            .observe("sensor.heading", json!({"value": 0.0}), 1, 1, "o")
+            .unwrap();
         let map = NavMapTool::new(Arc::clone(&c));
-        let r = map.execute(json!({ "action": "scan", "beams": [[0.0, 4.0]] })).await.unwrap();
+        let r = map
+            .execute(json!({ "action": "scan", "beams": [[0.0, 4.0]] }))
+            .await
+            .unwrap();
         assert!(r.success, "scan failed: {:?}", r.error);
         assert!(c.obstacle_count() >= 1);
     }

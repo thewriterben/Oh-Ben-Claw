@@ -233,7 +233,11 @@ async fn main() -> Result<()> {
         Commands::Skill(cmd) => {
             run_skill(&config, cmd)?;
         }
-        Commands::McpServe { transport, port, mode } => {
+        Commands::McpServe {
+            transport,
+            port,
+            mode,
+        } => {
             run_mcp_serve(&transport, port, &mode).await?;
         }
         Commands::JudgeCalibrate { gold, threshold } => {
@@ -502,42 +506,56 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
 
     // Phase 18: open world memory once, shared by the world_memory tool and the
     // reflex controller.
-    let world_mem: Option<Arc<oh_ben_claw::memory::world::WorldMemory>> =
-        if config.perception.world_memory {
-            let world_path = config
-                .perception
-                .world_db_path
-                .clone()
-                .unwrap_or_else(|| track0_data_path("world.db"));
-            if let Some(parent) = std::path::Path::new(&world_path).parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            match oh_ben_claw::memory::world::WorldMemory::open(&world_path) {
-                Ok(wm) => {
-                    let wm = Arc::new(wm);
+    let world_mem: Option<Arc<oh_ben_claw::memory::world::WorldMemory>> = if config
+        .perception
+        .world_memory
+    {
+        let world_path = config
+            .perception
+            .world_db_path
+            .clone()
+            .unwrap_or_else(|| track0_data_path("world.db"));
+        if let Some(parent) = std::path::Path::new(&world_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match oh_ben_claw::memory::world::WorldMemory::open(&world_path) {
+            Ok(wm) => {
+                let wm = Arc::new(wm);
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::world::WorldMemoryTool::new(Arc::clone(&wm)),
+                ));
+                info!(path = %world_path, "Phase 18 world memory tool active");
+                // Conservation Grid G0: the shared geospatial frame lives in world
+                // memory, so node poses ↔ (lat, lon) through one anchored site.
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::site_anchor::SiteAnchorTool::new(Arc::clone(&wm)),
+                ));
+                info!("Site anchor tool active (Conservation Grid G0)");
+                // Swap the stateless gnss_fix for the frame-aware one: fixes then
+                // land in the anchored site frame when a site is pinned.
+                all_tools.retain(|t| t.name() != "gnss_fix");
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::gnss::GnssFixTool::with_world(Arc::clone(&wm)),
+                ));
+                // System 2 mesh awareness: a read-only mesh_status tool so the agent
+                // can see fleet health when a mesh escalation wakes it (paired with
+                // mesh_command for action). Registered whenever mesh is in play.
+                if config.mesh_supervisor.enabled || config.lora_gateway.is_some() {
                     all_tools.push(Box::new(
-                        oh_ben_claw::tools::builtin::world::WorldMemoryTool::new(Arc::clone(&wm)),
+                        oh_ben_claw::tools::builtin::mesh::MeshStatusTool::new(Arc::clone(&wm)),
                     ));
-                    info!(path = %world_path, "Phase 18 world memory tool active");
-                    // System 2 mesh awareness: a read-only mesh_status tool so the agent
-                    // can see fleet health when a mesh escalation wakes it (paired with
-                    // mesh_command for action). Registered whenever mesh is in play.
-                    if config.mesh_supervisor.enabled || config.lora_gateway.is_some() {
-                        all_tools.push(Box::new(
-                            oh_ben_claw::tools::builtin::mesh::MeshStatusTool::new(Arc::clone(&wm)),
-                        ));
-                        info!("Mesh status tool active (System 2 mesh awareness)");
-                    }
-                    Some(wm)
+                    info!("Mesh status tool active (System 2 mesh awareness)");
                 }
-                Err(e) => {
-                    tracing::warn!("Phase 18: failed to open world memory: {e}");
-                    None
-                }
+                Some(wm)
             }
-        } else {
-            None
-        };
+            Err(e) => {
+                tracing::warn!("Phase 18: failed to open world memory: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Handle to the mesh command sink (set when the LoRa gateway opens), shared with
     // the mesh supervisor below so it can auto-issue recovery commands over the mesh.
@@ -566,8 +584,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                         .map(|d| d.as_millis() as u64)
                                         .unwrap_or(0)
                                 };
-                                oh_ben_claw::spine::lora_gateway::run_gateway_rx(rd, world_rx, now_ms)
-                                    .await;
+                                oh_ben_claw::spine::lora_gateway::run_gateway_rx(
+                                    rd, world_rx, now_ms,
+                                )
+                                .await;
                                 tracing::warn!("LoRa gateway RX loop ended (serial link closed)");
                             });
                             info!("LoRa gateway: inbound mesh -> world memory active");
@@ -585,8 +605,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     let sink: Arc<dyn oh_ben_claw::spine::lora_gateway::CommandSink> =
                         Arc::new(oh_ben_claw::spine::lora_gateway::SerialCommandSink::new(wr));
                     mesh_sink = Some(Arc::clone(&sink));
-                    all_tools
-                        .push(Box::new(oh_ben_claw::tools::builtin::mesh::MeshCommandTool::new(sink)));
+                    all_tools.push(Box::new(
+                        oh_ben_claw::tools::builtin::mesh::MeshCommandTool::new(sink),
+                    ));
                     info!("LoRa gateway: outbound mesh_command tool active");
                 }
                 Err(e) => tracing::warn!("[lora_gateway] failed to open {}: {e}", gw.port),
@@ -646,47 +667,51 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // `Action::Move` through the *same* gate (below). Physical actuation MUST be
     // deterministically bounded (Suite §7), so it requires the Track 0 gate;
     // commanded state is recorded into world memory when available.
-    let movement_controller: Option<Arc<oh_ben_claw::movement::MovementController>> =
-        if config.movement.enabled {
-            match &safety_gate {
-                Some(gate) => {
-                    // Drive real hardware over the spine when connected; fall back
-                    // to the dry-run logging sink otherwise.
-                    let sink: Arc<dyn oh_ben_claw::movement::ActuatorSink> = match &reflex_spine {
-                        Some(spine) => {
-                            info!("Movement actuation dispatches over the spine");
-                            Arc::new(oh_ben_claw::movement::SpineActuatorSink::new(Arc::clone(spine)))
-                        }
-                        None => Arc::new(oh_ben_claw::movement::LoggingActuatorSink),
-                    };
-                    let mut controller = oh_ben_claw::movement::MovementController::new(
-                        config.movement.node_id.clone(),
-                        Arc::clone(gate),
-                        sink,
-                    );
-                    if let Some(world) = &world_mem {
-                        controller = controller.with_world_memory(Arc::clone(world));
+    let movement_controller: Option<Arc<oh_ben_claw::movement::MovementController>> = if config
+        .movement
+        .enabled
+    {
+        match &safety_gate {
+            Some(gate) => {
+                // Drive real hardware over the spine when connected; fall back
+                // to the dry-run logging sink otherwise.
+                let sink: Arc<dyn oh_ben_claw::movement::ActuatorSink> = match &reflex_spine {
+                    Some(spine) => {
+                        info!("Movement actuation dispatches over the spine");
+                        Arc::new(oh_ben_claw::movement::SpineActuatorSink::new(Arc::clone(
+                            spine,
+                        )))
                     }
-                    let controller = Arc::new(controller);
-                    all_tools.push(Box::new(
-                        oh_ben_claw::tools::builtin::movement::MovementTool::new(Arc::clone(
-                            &controller,
-                        )),
-                    ));
-                    info!(node_id = %config.movement.node_id, "Movement subsystem: move_actuator tool active");
-                    Some(controller)
+                    None => Arc::new(oh_ben_claw::movement::LoggingActuatorSink),
+                };
+                let mut controller = oh_ben_claw::movement::MovementController::new(
+                    config.movement.node_id.clone(),
+                    Arc::clone(gate),
+                    sink,
+                );
+                if let Some(world) = &world_mem {
+                    controller = controller.with_world_memory(Arc::clone(world));
                 }
-                None => {
-                    tracing::warn!(
-                        "[movement] enabled but [safety] is off — movement is physical and \
-                         requires deterministic limits; skipping move_actuator tool"
-                    );
-                    None
-                }
+                let controller = Arc::new(controller);
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::movement::MovementTool::new(Arc::clone(
+                        &controller,
+                    )),
+                ));
+                info!(node_id = %config.movement.node_id, "Movement subsystem: move_actuator tool active");
+                Some(controller)
             }
-        } else {
-            None
-        };
+            None => {
+                tracing::warn!(
+                    "[movement] enabled but [safety] is off — movement is physical and \
+                         requires deterministic limits; skipping move_actuator tool"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Sensing subsystem: expose the quality-aware `sense` tool. Non-actuating
     // (reads + reversible memory appends), so it needs no Track 0 gate; it
@@ -717,10 +742,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     controller = controller.with_source(source.clone());
                 }
                 let controller = Arc::new(controller);
-                all_tools.push(Box::new(oh_ben_claw::tools::builtin::sensing::SenseTool::new(
-                    Arc::clone(&controller),
-                    Arc::clone(world),
-                )));
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::sensing::SenseTool::new(
+                        Arc::clone(&controller),
+                        Arc::clone(world),
+                    ),
+                ));
                 info!(
                     quantities = config.sensing.quantities.len(),
                     "Sensing subsystem: sense tool active"
@@ -759,7 +786,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                         match &reflex_spine {
                             Some(spine) => {
                                 info!("Audio: speech emitted over the spine");
-                                Arc::new(oh_ben_claw::audio::suite::SpineSpeechSink::new(Arc::clone(spine)))
+                                Arc::new(oh_ben_claw::audio::suite::SpineSpeechSink::new(
+                                    Arc::clone(spine),
+                                ))
                             }
                             None => Arc::new(oh_ben_claw::audio::suite::LoggingSpeechSink),
                         }
@@ -779,14 +808,18 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     .voice
                     .clone()
                     .unwrap_or_else(|| "nova".to_string());
-                all_tools.push(Box::new(oh_ben_claw::tools::builtin::audio_suite::HearTool::new(
-                    Arc::clone(&controller),
-                    Arc::clone(world),
-                )));
-                all_tools.push(Box::new(oh_ben_claw::tools::builtin::audio_suite::SpeakTool::new(
-                    Arc::clone(&controller),
-                    voice,
-                )));
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::audio_suite::HearTool::new(
+                        Arc::clone(&controller),
+                        Arc::clone(world),
+                    ),
+                ));
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::audio_suite::SpeakTool::new(
+                        Arc::clone(&controller),
+                        voice,
+                    ),
+                ));
                 info!("Audio suite: hear + speak tools active");
             }
             None => {
@@ -810,16 +843,18 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     low_pct: config.power.low_pct.unwrap_or(defaults.low_pct),
                     critical_pct: config.power.critical_pct.unwrap_or(defaults.critical_pct),
                 };
-                let mut controller =
-                    oh_ben_claw::power::PowerController::new(thresholds).with_world_memory(Arc::clone(world));
+                let mut controller = oh_ben_claw::power::PowerController::new(thresholds)
+                    .with_world_memory(Arc::clone(world));
                 if let Some(source) = &config.power.source {
                     controller = controller.with_source(source.clone());
                 }
                 let controller = Arc::new(controller);
-                all_tools.push(Box::new(oh_ben_claw::tools::builtin::power::PowerTool::new(
-                    Arc::clone(&controller),
-                    Arc::clone(world),
-                )));
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::power::PowerTool::new(
+                        Arc::clone(&controller),
+                        Arc::clone(world),
+                    ),
+                ));
                 info!(
                     low_pct = thresholds.low_pct,
                     critical_pct = thresholds.critical_pct,
@@ -845,19 +880,24 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 let defaults = oh_ben_claw::comms::LinkThresholds::default();
                 let thresholds = oh_ben_claw::comms::LinkThresholds {
                     min_rssi_dbm: config.comms.min_rssi_dbm.unwrap_or(defaults.min_rssi_dbm),
-                    max_latency_ms: config.comms.max_latency_ms.unwrap_or(defaults.max_latency_ms),
+                    max_latency_ms: config
+                        .comms
+                        .max_latency_ms
+                        .unwrap_or(defaults.max_latency_ms),
                     max_loss_pct: config.comms.max_loss_pct.unwrap_or(defaults.max_loss_pct),
                 };
-                let mut controller =
-                    oh_ben_claw::comms::CommsController::new(thresholds).with_world_memory(Arc::clone(world));
+                let mut controller = oh_ben_claw::comms::CommsController::new(thresholds)
+                    .with_world_memory(Arc::clone(world));
                 if let Some(source) = &config.comms.source {
                     controller = controller.with_source(source.clone());
                 }
                 let controller = Arc::new(controller);
-                all_tools.push(Box::new(oh_ben_claw::tools::builtin::comms::CommsTool::new(
-                    Arc::clone(&controller),
-                    Arc::clone(world),
-                )));
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::comms::CommsTool::new(
+                        Arc::clone(&controller),
+                        Arc::clone(world),
+                    ),
+                ));
                 info!(
                     max_latency_ms = thresholds.max_latency_ms,
                     "Comms suite: comms tool active"
@@ -905,9 +945,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 if let Some(v) = config.navigation.align_threshold_deg {
                     gains.align_threshold_deg = v;
                 }
-                let mut nav = oh_ben_claw::navigation::NavController::new(Arc::clone(mc), steer, drive)
-                    .with_world_memory(Arc::clone(world))
-                    .with_gains(gains);
+                let mut nav =
+                    oh_ben_claw::navigation::NavController::new(Arc::clone(mc), steer, drive)
+                        .with_world_memory(Arc::clone(world))
+                        .with_gains(gains);
                 if let Some(s) = &config.navigation.source {
                     nav = nav.with_source(s.clone());
                 }
@@ -915,18 +956,27 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     nav = nav.with_sensor_range(r);
                 }
                 // Clearance-aware planning: inflate obstacles by the robot footprint.
-                if let (Some(insc), Some(infl)) =
-                    (config.navigation.inscribed_radius, config.navigation.inflation_radius)
-                {
+                if let (Some(insc), Some(infl)) = (
+                    config.navigation.inscribed_radius,
+                    config.navigation.inflation_radius,
+                ) {
                     let decay = config.navigation.inflation_decay.unwrap_or(2.0);
                     nav = nav.with_inflation(insc, infl, decay);
-                    info!(inscribed = insc, inflation = infl, "Navigation: clearance-aware planning (inflation)");
+                    info!(
+                        inscribed = insc,
+                        inflation = infl,
+                        "Navigation: clearance-aware planning (inflation)"
+                    );
                 }
                 // Obstacle-aware planning: attach an occupancy grid if configured.
                 let has_grid = config.navigation.grid.is_some();
                 if let Some(gc) = &config.navigation.grid {
                     let grid = oh_ben_claw::navigation::planning::OccupancyGrid::new(
-                        gc.origin_x, gc.origin_y, gc.resolution, gc.width, gc.height,
+                        gc.origin_x,
+                        gc.origin_y,
+                        gc.resolution,
+                        gc.width,
+                        gc.height,
                     );
                     nav = nav.with_grid(Arc::new(std::sync::Mutex::new(grid)));
                     info!(
@@ -937,17 +987,19 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 }
                 let nav = Arc::new(nav);
                 nav_controller = Some(Arc::clone(&nav));
-                all_tools.push(Box::new(oh_ben_claw::tools::builtin::navigation::NavigateTool::new(
-                    Arc::clone(&nav),
-                )));
-                all_tools.push(Box::new(oh_ben_claw::tools::builtin::navigation::NavStatusTool::new(
-                    Arc::clone(&nav),
-                    Arc::clone(world),
-                )));
-                if has_grid {
-                    all_tools.push(Box::new(oh_ben_claw::tools::builtin::navigation::NavMapTool::new(
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::navigation::NavigateTool::new(Arc::clone(&nav)),
+                ));
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::navigation::NavStatusTool::new(
                         Arc::clone(&nav),
-                    )));
+                        Arc::clone(world),
+                    ),
+                ));
+                if has_grid {
+                    all_tools.push(Box::new(
+                        oh_ben_claw::tools::builtin::navigation::NavMapTool::new(Arc::clone(&nav)),
+                    ));
                 }
                 let interval = std::time::Duration::from_millis(
                     config.navigation.interval_ms.unwrap_or(500).max(100),
@@ -1048,14 +1100,18 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 library.insert(m.id.clone(), m.clone());
             }
             let library = Arc::new(library);
-            all_tools.push(Box::new(oh_ben_claw::tools::builtin::mission::MissionStartTool::new(
-                Arc::clone(&runner),
-                Arc::clone(&library),
-            )));
-            all_tools.push(Box::new(oh_ben_claw::tools::builtin::mission::MissionStatusTool::new(
-                Arc::clone(&runner),
-                Arc::clone(&library),
-            )));
+            all_tools.push(Box::new(
+                oh_ben_claw::tools::builtin::mission::MissionStartTool::new(
+                    Arc::clone(&runner),
+                    Arc::clone(&library),
+                ),
+            ));
+            all_tools.push(Box::new(
+                oh_ben_claw::tools::builtin::mission::MissionStatusTool::new(
+                    Arc::clone(&runner),
+                    Arc::clone(&library),
+                ),
+            ));
             let interval = std::time::Duration::from_millis(
                 config.mission.interval_ms.unwrap_or(500).max(100),
             );
@@ -1185,9 +1241,11 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     z_alert: cp.anomaly_z_alert,
                     debounce_ms: cp.analytics_debounce_ms,
                 };
-                let arules =
-                    oh_ben_claw::vision::clawcam_rules::vision_analytics_rules(&aopts);
-                info!(count = arules.len(), "ClawCam analytics reflex rules appended");
+                let arules = oh_ben_claw::vision::clawcam_rules::vision_analytics_rules(&aopts);
+                info!(
+                    count = arules.len(),
+                    "ClawCam analytics reflex rules appended"
+                );
                 rules.extend(arules);
             }
         }
@@ -1217,10 +1275,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             let base_sink: Arc<dyn ActionSink> = match &clawcam_client {
                 Some(client) => {
                     info!("Phase 18 reflexes can command ClawCam (capture/arm/alert)");
-                    Arc::new(oh_ben_claw::vision::clawcam_actuate::ClawCamActionSink::new(
-                        Arc::clone(client),
-                        base_sink,
-                    ))
+                    Arc::new(
+                        oh_ben_claw::vision::clawcam_actuate::ClawCamActionSink::new(
+                            Arc::clone(client),
+                            base_sink,
+                        ),
+                    )
                 }
                 None => base_sink,
             };
@@ -1249,7 +1309,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 use oh_ben_claw::agent::notify::Severity;
                 if config.notifications.log_to_world_memory {
                     notifier = notifier.with_channel_min(
-                        Arc::new(oh_ben_claw::agent::notify::WorldMemoryChannel::new(Arc::clone(world))),
+                        Arc::new(oh_ben_claw::agent::notify::WorldMemoryChannel::new(
+                            Arc::clone(world),
+                        )),
                         Severity::from_name(config.notifications.log_min_severity.as_deref()),
                     );
                 }
@@ -1271,18 +1333,29 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                 .unwrap_or_else(|| "/tmp".to_string());
                             Arc::new(oh_ben_claw::audio::suite::TtsSpeechSink::new(dir))
                         } else if let Some(spine) = &reflex_spine {
-                            Arc::new(oh_ben_claw::audio::suite::SpineSpeechSink::new(Arc::clone(spine)))
+                            Arc::new(oh_ben_claw::audio::suite::SpineSpeechSink::new(Arc::clone(
+                                spine,
+                            )))
                         } else {
                             Arc::new(oh_ben_claw::audio::suite::LoggingSpeechSink)
                         };
-                    let voice =
-                        config.audio_suite.voice.clone().unwrap_or_else(|| "nova".to_string());
+                    let voice = config
+                        .audio_suite
+                        .voice
+                        .clone()
+                        .unwrap_or_else(|| "nova".to_string());
                     notifier = notifier.with_channel_min(
-                        Arc::new(oh_ben_claw::agent::notify::SpeechChannel::new(speech).with_voice(voice)),
+                        Arc::new(
+                            oh_ben_claw::agent::notify::SpeechChannel::new(speech)
+                                .with_voice(voice),
+                        ),
                         Severity::from_name(config.notifications.speak_min_severity.as_deref()),
                     );
                 }
-                info!(channels = notifier.channel_count(), "Escalation notifications wired");
+                info!(
+                    channels = notifier.channel_count(),
+                    "Escalation notifications wired"
+                );
                 let notifier = Arc::new(notifier);
 
                 // Periodic digest: roll the escalation log up by reason on a schedule and
@@ -1310,21 +1383,25 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|d| d.as_millis() as u64)
                                 .unwrap_or(0);
-                            let records: Vec<_> = world_d
-                                .history("notifications.escalation")
-                                .unwrap_or_default()
-                                .into_iter()
-                                .filter_map(|f| {
-                                    f.value.get("reason").and_then(|r| r.as_str()).map(|reason| {
-                                        oh_ben_claw::agent::notify::EscalationRecord {
-                                            reason: reason.to_string(),
-                                            ts_ms: f.valid_from,
-                                        }
+                            let records: Vec<_> =
+                                world_d
+                                    .history("notifications.escalation")
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .filter_map(|f| {
+                                        f.value.get("reason").and_then(|r| r.as_str()).map(
+                                            |reason| oh_ben_claw::agent::notify::EscalationRecord {
+                                                reason: reason.to_string(),
+                                                ts_ms: f.valid_from,
+                                            },
+                                        )
                                     })
-                                })
-                                // Don't fold prior digests back into the next digest.
-                                .filter(|r| !r.reason.starts_with(oh_ben_claw::agent::notify::DIGEST_PREFIX))
-                                .collect();
+                                    // Don't fold prior digests back into the next digest.
+                                    .filter(|r| {
+                                        !r.reason
+                                            .starts_with(oh_ben_claw::agent::notify::DIGEST_PREFIX)
+                                    })
+                                    .collect();
                             let lines =
                                 oh_ben_claw::agent::notify::build_digest(&records, interval, now);
                             if let Some(text) =
@@ -1336,7 +1413,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     });
                 }
 
-                Arc::new(oh_ben_claw::agent::notify::NotifyingActionSink::new(sink, notifier))
+                Arc::new(oh_ben_claw::agent::notify::NotifyingActionSink::new(
+                    sink, notifier,
+                ))
             } else {
                 sink
             };
@@ -1382,9 +1461,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // world-memory trends and fires *before* a threshold crossing.
     if config.foresight.enabled {
         if let Some(world) = &world_mem {
-            all_tools.push(Box::new(oh_ben_claw::tools::builtin::foresight::ForesightTool::new(
-                Arc::clone(world),
-            )));
+            all_tools.push(Box::new(
+                oh_ben_claw::tools::builtin::foresight::ForesightTool::new(Arc::clone(world)),
+            ));
             if !config.foresight.rules.is_empty()
                 || config.learning.enabled
                 || config.perception.vision_rules.enabled
@@ -1403,8 +1482,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                         rate_threshold: vc.rate_threshold,
                         horizon_ms: vc.horizon_ms,
                     };
-                    foresight_rules
-                        .extend(oh_ben_claw::vision::clawcam_rules::vision_foresight_rules(&opts));
+                    foresight_rules.extend(
+                        oh_ben_claw::vision::clawcam_rules::vision_foresight_rules(&opts),
+                    );
                 }
                 let engine = oh_ben_claw::foresight::ForesightEngine::new(foresight_rules)
                     .with_learned_rules(Arc::clone(&learned_rules));
@@ -1412,10 +1492,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     Some(spine) => Arc::new(SpineActionSink::new(Arc::clone(spine))),
                     None => Arc::new(LoggingActionSink),
                 };
-                let mut controller =
-                    oh_ben_claw::foresight::ForesightController::new(engine, Arc::clone(world), sink);
+                let mut controller = oh_ben_claw::foresight::ForesightController::new(
+                    engine,
+                    Arc::clone(world),
+                    sink,
+                );
                 if let Some(max) = config.foresight.max_escalations_per_min {
-                    controller = controller.with_escalation_budget(EscalationBudget::per_minute(max));
+                    controller =
+                        controller.with_escalation_budget(EscalationBudget::per_minute(max));
                 }
                 let interval = std::time::Duration::from_millis(
                     config.foresight.interval_ms.unwrap_or(1000).max(100),
@@ -1473,12 +1557,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             config.learning.debounce_ms.unwrap_or(30_000),
                         ),
                 );
-                all_tools.push(Box::new(oh_ben_claw::tools::builtin::learn::LearnTool::new(
-                    Arc::clone(world),
-                    Arc::clone(&store),
-                    miner.clone(),
-                    outcome.clone(),
-                )));
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::learn::LearnTool::new(
+                        Arc::clone(world),
+                        Arc::clone(&store),
+                        miner.clone(),
+                        outcome.clone(),
+                    ),
+                ));
                 if let Some(ms) = config.learning.auto_mine_interval_ms {
                     let world_l = Arc::clone(world);
                     let store_l = Arc::clone(&store);
@@ -1493,7 +1579,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             if let Ok(props) = miner_l.mine(&world_l, &outcome_l) {
                                 let n = store_l.ingest(props);
                                 if n > 0 {
-                                    info!(proposals = n, "learning: new rule proposals (awaiting approval)");
+                                    info!(
+                                        proposals = n,
+                                        "learning: new rule proposals (awaiting approval)"
+                                    );
                                 }
                             }
                         }
@@ -1532,12 +1621,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             coord = coord.with_assignment_outbox();
         }
         let coord = Arc::new(coord);
-        all_tools.push(Box::new(oh_ben_claw::tools::builtin::fleet::FleetTool::new(Arc::clone(
-            &coord,
-        ))));
-        all_tools.push(Box::new(oh_ben_claw::tools::builtin::fleet::FleetStatusTool::new(
-            Arc::clone(&coord),
-        )));
+        all_tools.push(Box::new(
+            oh_ben_claw::tools::builtin::fleet::FleetTool::new(Arc::clone(&coord)),
+        ));
+        all_tools.push(Box::new(
+            oh_ben_claw::tools::builtin::fleet::FleetStatusTool::new(Arc::clone(&coord)),
+        ));
         // Distributed fleet: ingest node heartbeats from the spine when connected.
         if let Some(spine) = &reflex_spine {
             match spine
@@ -1556,44 +1645,42 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         // heartbeats into `coord` and rebroadcasts multi-hop frames; the radio handle
         // is kept for the assignment egress below. Returns `(radio, relay_hops)`.
         #[cfg(feature = "hardware")]
-        let lora_egress: Option<(
-            Arc<oh_ben_claw::spine::lora_mesh::SerialMeshRadio>,
-            u8,
-        )> = if let Some(lora) = &config.fleet.lora_serial {
-            match oh_ben_claw::spine::lora_mesh::SerialMeshRadio::open(&lora.port, lora.baud) {
-                Ok((radio, rd)) => {
-                    let radio = Arc::new(radio);
-                    info!(port = %lora.port, baud = lora.baud, hops = lora.relay_hops, "Fleet: LoRa-mesh serial bridge attached");
-                    let coord_rx = Arc::clone(&coord);
-                    let radio_rx = Arc::clone(&radio);
-                    let relay =
-                        Arc::new(oh_ben_claw::spine::lora_mesh::relay::MeshRelay::new());
-                    tokio::spawn(async move {
-                        oh_ben_claw::spine::lora_mesh::run_serial_rx_relay(
-                            rd,
-                            coord_rx,
-                            radio_rx,
-                            relay,
-                            || {
-                                std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_millis() as u64)
-                                    .unwrap_or(0)
-                            },
-                        )
-                        .await;
-                        tracing::warn!("Fleet: LoRa-mesh serial link closed");
-                    });
-                    Some((radio, lora.relay_hops))
+        let lora_egress: Option<(Arc<oh_ben_claw::spine::lora_mesh::SerialMeshRadio>, u8)> =
+            if let Some(lora) = &config.fleet.lora_serial {
+                match oh_ben_claw::spine::lora_mesh::SerialMeshRadio::open(&lora.port, lora.baud) {
+                    Ok((radio, rd)) => {
+                        let radio = Arc::new(radio);
+                        info!(port = %lora.port, baud = lora.baud, hops = lora.relay_hops, "Fleet: LoRa-mesh serial bridge attached");
+                        let coord_rx = Arc::clone(&coord);
+                        let radio_rx = Arc::clone(&radio);
+                        let relay =
+                            Arc::new(oh_ben_claw::spine::lora_mesh::relay::MeshRelay::new());
+                        tokio::spawn(async move {
+                            oh_ben_claw::spine::lora_mesh::run_serial_rx_relay(
+                                rd,
+                                coord_rx,
+                                radio_rx,
+                                relay,
+                                || {
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_millis() as u64)
+                                        .unwrap_or(0)
+                                },
+                            )
+                            .await;
+                            tracing::warn!("Fleet: LoRa-mesh serial link closed");
+                        });
+                        Some((radio, lora.relay_hops))
+                    }
+                    Err(e) => {
+                        tracing::warn!("LoRa-mesh serial bridge failed to open: {e}");
+                        None
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!("LoRa-mesh serial bridge failed to open: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
         // Unified assignment egress: drain the coordinator's outbox and fan each
         // intent out to every connected transport — publish over the MQTT spine
         // (`obc/fleet/assign/{node}`) and/or broadcast over the LoRa mesh (multi-hop
@@ -1612,10 +1699,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     ticker.tick().await;
                     for (node, x, y) in coord_eg.drain_outbox() {
                         if let Some(spine) = &spine_eg {
-                            let goal =
-                                oh_ben_claw::navigation::NavGoal { x, y, tolerance: 0.5 };
-                            let _ = oh_ben_claw::fleet::publish_assignment(spine, &node, &goal)
-                                .await;
+                            let goal = oh_ben_claw::navigation::NavGoal {
+                                x,
+                                y,
+                                tolerance: 0.5,
+                            };
+                            let _ =
+                                oh_ben_claw::fleet::publish_assignment(spine, &node, &goal).await;
                         }
                         #[cfg(feature = "hardware")]
                         if let Some((radio, hops)) = &lora_eg {
@@ -1696,7 +1786,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                 // Maintain vision.count.{subject} so foresight can
                                 // trend the detection rate over time.
                                 let _ = oh_ben_claw::vision::clawcam_ingest::record_subject_counts(
-                                    &world, &entities, now, &cfg.source,
+                                    &world,
+                                    &entities,
+                                    now,
+                                    &cfg.source,
                                 );
                                 info!(
                                     count = entities.len(),
@@ -1716,9 +1809,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             if let Ok(raw) = raw {
                                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
                                     let rows =
-                                        oh_ben_claw::vision::clawcam_ingest::extract_node_health(&v);
+                                        oh_ben_claw::vision::clawcam_ingest::extract_node_health(
+                                            &v,
+                                        );
                                     let _ = oh_ben_claw::vision::clawcam_ingest::ingest_node_health(
-                                        &world, &rows, now, &cfg.source,
+                                        &world,
+                                        &rows,
+                                        now,
+                                        &cfg.source,
                                     );
                                 }
                             }
@@ -1842,8 +1940,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         if let Some(parent) = std::path::Path::new(&db_path).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let tracker = match oh_ben_claw::cost::CostTracker::with_db(config.cost.clone(), &db_path)
-        {
+        let tracker = match oh_ben_claw::cost::CostTracker::with_db(config.cost.clone(), &db_path) {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(error = %e, "cost DB unavailable; tracking session-only");
@@ -1860,13 +1957,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         None
     };
     // Phase 16 P1: experience retrieval top-k (None = disabled).
-    let experience_k = if trajectory_store.is_some()
-        && config.self_improvement.retrieval.unwrap_or(true)
-    {
-        Some(config.self_improvement.retrieval_k.unwrap_or(3))
-    } else {
-        None
-    };
+    let experience_k =
+        if trajectory_store.is_some() && config.self_improvement.retrieval.unwrap_or(true) {
+            Some(config.self_improvement.retrieval_k.unwrap_or(3))
+        } else {
+            None
+        };
 
     // Build the plain reasoning agent, attaching Track 0 + Phase 16 when configured.
     let mut agent = Agent::new(
@@ -2056,7 +2152,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             config.self_improvement.evolve_max_per_pass.unwrap_or(5),
                         );
                         let evolve_interval = std::time::Duration::from_secs(
-                            config.self_improvement.evolve_interval_secs.unwrap_or(86_400),
+                            config
+                                .self_improvement
+                                .evolve_interval_secs
+                                .unwrap_or(86_400),
                         );
                         tokio::spawn(async move {
                             evolver.run_periodically(evolve_interval).await;
@@ -2134,8 +2233,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             tokio::spawn(async move {
                 match harness.initialize(&mission_name, objectives) {
                     Ok(mut record) => {
-                        if let Err(e) =
-                            harness.run_mission(&mut record, max_passes, pass_delay).await
+                        if let Err(e) = harness
+                            .run_mission(&mut record, max_passes, pass_delay)
+                            .await
                         {
                             tracing::warn!(mission = %mission_name, error = %e, "harness mission errored");
                         }
@@ -2174,6 +2274,15 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
         if let Some(world) = &world_mem {
             gs = gs.with_world(Arc::clone(world));
+        }
+        // I4 Operate mode: remote approval management + Track 0 signed audit
+        // for remote mutating requests.
+        gs = gs.with_approval(Arc::clone(&approval));
+        if let Some(auditor) = &action_auditor {
+            gs = gs.with_action_audit(Arc::clone(auditor));
+        }
+        if config.gateway.operate_token.is_some() {
+            info!("Gateway Operate tier active (mutating requests require X-OBC-Operate)");
         }
         let state = Arc::new(gs);
         let router = gateway::build_router(state.clone());
@@ -2415,10 +2524,17 @@ async fn run_status(config: &Config) -> Result<()> {
                         .current(&format!("mesh.{}.escalation", v.node))
                         .ok()
                         .flatten()
-                        .and_then(|f| f.value.get("status").and_then(|s| s.as_str()).map(|s| s == "escalated"))
+                        .and_then(|f| {
+                            f.value
+                                .get("status")
+                                .and_then(|s| s.as_str())
+                                .map(|s| s == "escalated")
+                        })
                         .unwrap_or(false);
                     let tag = if escalated { " (presumed lost)" } else { "" };
-                    let rssi_s = rssi.map(|r| format!("{r} dBm")).unwrap_or_else(|| "-".to_string());
+                    let rssi_s = rssi
+                        .map(|r| format!("{r} dBm"))
+                        .unwrap_or_else(|| "-".to_string());
                     let age_s = now.saturating_sub(v.last_seen_ms) / 1000;
                     println!(
                         "  {} | {}{} | rssi: {} | last: {} ({}s ago)",

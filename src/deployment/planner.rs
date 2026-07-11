@@ -63,6 +63,7 @@ impl DeploymentPlanner {
                 "memory_note".to_string(),
             ],
             config_snippet: String::new(),
+            position: None,
         });
 
         // ── Vision agent ──────────────────────────────────────────────────────
@@ -88,6 +89,7 @@ impl DeploymentPlanner {
                     item.transport,
                     item.path.as_deref().map(|p| format!("\npath = \"{}\"", p)).unwrap_or_default()
                 ),
+                position: None,
             });
         } else if inventory.feature_desires.contains(&FeatureDesire::Vision) {
             warnings.push(
@@ -125,6 +127,7 @@ impl DeploymentPlanner {
                     item.transport,
                     item.path.as_deref().map(|p| format!("\npath = \"{}\"", p)).unwrap_or_default()
                 ),
+                position: None,
             });
         } else if inventory
             .feature_desires
@@ -164,6 +167,7 @@ impl DeploymentPlanner {
                     item.transport,
                     item.path.as_deref().map(|p| format!("\npath = \"{}\"", p)).unwrap_or_default()
                 ),
+                position: None,
             });
         } else if inventory
             .feature_desires
@@ -221,6 +225,7 @@ impl DeploymentPlanner {
                     "memory_note".to_string(),
                 ],
                 config_snippet: String::new(),
+                position: None,
             });
         } else if inventory
             .feature_desires

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     ".",
+    "planner-wasm",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
@@ -134,7 +135,11 @@ fastembed = { version = "5", optional = true }
 rppal = { version = "0.14", optional = true }
 
 [features]
-default = ["hardware", "mqtt-spine"]
+default = ["hardware", "mqtt-spine", "world-anchor"]
+# World-memory geo anchoring (SQLite). Default-on for the runtime; the
+# `planner-wasm` crate compiles the same geo sources *without* this feature so
+# the pure geometry stays wasm-compatible.
+world-anchor = []
 hardware = ["nusb", "tokio-serial"]
 mqtt-spine = []
 peripheral-rpi = ["rppal"]

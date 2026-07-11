@@ -146,7 +146,10 @@ mod tests {
             "greet".to_string(),
             Mission {
                 id: "greet".into(),
-                steps: vec![MissionStep::Record { entity: "m".into(), value: json!(1) }],
+                steps: vec![MissionStep::Record {
+                    entity: "m".into(),
+                    value: json!(1),
+                }],
                 guards: vec![],
             },
         );

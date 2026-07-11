@@ -69,8 +69,16 @@ impl Tool for FleetTool {
         ) else {
             return Ok(ToolResult::err("'fleet' requires 'id', 'x', 'y'"));
         };
-        let min_battery = args.get("min_battery").and_then(Value::as_f64).unwrap_or(0.0);
-        self.coord.add_task(Task { id: id.to_string(), x, y, min_battery });
+        let min_battery = args
+            .get("min_battery")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        self.coord.add_task(Task {
+            id: id.to_string(),
+            x,
+            y,
+            min_battery,
+        });
         Ok(ToolResult::ok(json!({ "queued": id }).to_string()))
     }
 }
@@ -167,7 +175,9 @@ mod tests {
     #[test]
     fn fleet_gated_status_safe() {
         let c = coord();
-        assert!(FleetTool::new(Arc::clone(&c)).risk_class().requires_per_call_approval());
+        assert!(FleetTool::new(Arc::clone(&c))
+            .risk_class()
+            .requires_per_call_approval());
         assert!(!FleetStatusTool::new(c).risk_class().physical);
     }
 
@@ -180,7 +190,10 @@ mod tests {
         fs.execute(json!({ "action": "report", "id": "a", "x": 0.0, "y": 0.0, "battery": 80.0 }))
             .await
             .unwrap();
-        let r = ft.execute(json!({ "id": "t1", "x": 1.0, "y": 0.0 })).await.unwrap();
+        let r = ft
+            .execute(json!({ "id": "t1", "x": 1.0, "y": 0.0 }))
+            .await
+            .unwrap();
         assert!(r.success, "queue failed: {:?}", r.error);
 
         // a coordination tick assigns it
@@ -194,7 +207,10 @@ mod tests {
 
     #[tokio::test]
     async fn queue_missing_fields_is_soft_error() {
-        let r = FleetTool::new(coord()).execute(json!({ "id": "t" })).await.unwrap();
+        let r = FleetTool::new(coord())
+            .execute(json!({ "id": "t" }))
+            .await
+            .unwrap();
         assert!(!r.success);
     }
 }

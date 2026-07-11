@@ -124,6 +124,12 @@ pub struct GatewayState {
     pub cost: Option<Arc<crate::cost::CostTracker>>,
     /// World memory — powers `GET /api/v1/mesh/status`. `None` if not wired.
     pub world: Option<Arc<crate::memory::world::WorldMemory>>,
+    /// Approval manager — powers the remote approval endpoints (I4 Operate
+    /// mode). `None` if not wired.
+    pub approval: Option<Arc<crate::approval::ApprovalManager>>,
+    /// Track 0 tamper-evident action audit — remote mutating requests are
+    /// chained into it so remote operation is signed like any physical action.
+    pub action_audit: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
 }
 
 /// What the gateway needs to serve the skill endpoints: the forge directory,
@@ -163,6 +169,8 @@ impl GatewayState {
             skills: None,
             cost: None,
             world: None,
+            approval: None,
+            action_audit: None,
         }
     }
 
@@ -214,6 +222,23 @@ impl GatewayState {
         self
     }
 
+    /// Attach the approval manager so remote consoles can inspect and manage
+    /// approval grants (I4 Operate mode).
+    pub fn with_approval(mut self, approval: Arc<crate::approval::ApprovalManager>) -> Self {
+        self.approval = Some(approval);
+        self
+    }
+
+    /// Attach the Track 0 action auditor so remote mutating requests join the
+    /// same tamper-evident, MAC-chained audit trail as physical actions.
+    pub fn with_action_audit(
+        mut self,
+        audit: Arc<std::sync::Mutex<crate::security::ActionAuditor>>,
+    ) -> Self {
+        self.action_audit = Some(audit);
+        self
+    }
+
     /// Broadcast an event to all connected SSE subscribers.
     pub fn broadcast(&self, event: GatewayEvent) {
         let _ = self.event_tx.send(event);
@@ -246,7 +271,19 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .route("/agents", post(routes::spawn_agent))
         .route("/agents/{name}", get(routes::get_agent))
         .route("/agents/{name}", delete(routes::stop_agent))
-        .route("/agents/{name}/delegate", post(routes::delegate_to_agent));
+        .route("/agents/{name}/delegate", post(routes::delegate_to_agent))
+        .route("/registry", get(routes::get_registry))
+        .route("/approvals", get(routes::get_approvals))
+        .route("/approvals/{tool}", post(routes::post_approval_decision))
+        .route("/deployment/scheme", post(routes::push_scheme));
+
+    // I4 Operate tier: mutating requests (non-GET/HEAD) require the operate
+    // token when configured, and are chained into the Track 0 signed audit.
+    // Layered *inside* require_auth so the ordinary API token still applies.
+    let api_routes = api_routes.layer(axum_middleware::from_fn_with_state(
+        state.clone(),
+        middleware::require_operate,
+    ));
 
     // Apply auth middleware to API routes if a token is configured
     let api_routes = if state.config.api_token.is_some() {

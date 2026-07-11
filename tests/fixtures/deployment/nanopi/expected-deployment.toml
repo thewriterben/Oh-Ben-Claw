@@ -1,0 +1,30 @@
+[deployment]
+enabled = true
+scenario = "NanoPi-Neo3 Reference Deployment"
+auto_plan = true
+feature_desires = ["vision", "listening", "speech", "environmental_sensing", "display_output", "touch_input", "wireless_mesh", "persistent_memory"]
+
+[[deployment.hardware]]
+name = "nanopi-neo3"
+board_name = "nanopi-neo3"
+transport = "native"
+role = "host"
+accessories = ["dht22"]
+
+[[deployment.hardware]]
+name = "waveshare-esp32-s3-touch-lcd-2.1"
+board_name = "waveshare-esp32-s3-touch-lcd-2.1"
+transport = "serial"
+role = "display"
+
+[[deployment.hardware]]
+name = "xiao-esp32s3-sense"
+board_name = "xiao-esp32s3-sense"
+transport = "serial"
+role = "vision"
+
+[[deployment.hardware]]
+name = "sipeed-6plus1-mic-array"
+board_name = "sipeed-6plus1-mic-array"
+transport = "serial"
+role = "listening"

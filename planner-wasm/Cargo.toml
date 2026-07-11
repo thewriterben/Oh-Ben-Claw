@@ -1,0 +1,19 @@
+[package]
+name = "obc-planner-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Oh-Ben-Claw deployment planner compiled to WebAssembly (Ecosystem Integration I5) — the same Rust registry/planner/siteplan sources, callable from JS"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# wasm-opt's prebuilt Windows binary fails on this module; the unoptimized
+# wasm is ~1 MB and plenty fast for planning. Re-enable if size matters later.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[dependencies]
+wasm-bindgen = "0.2"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }

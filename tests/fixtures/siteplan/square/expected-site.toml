@@ -1,0 +1,41 @@
+[site]
+id = "square"
+nodes = 4
+coverage_fraction = 0.8264
+mesh_connected = true
+
+[[site.node]]
+id = "square-n01"
+lat = 45.499820
+lon = -122.600257
+alt = 0.00
+enu_e = -20.00
+enu_n = -20.00
+covers = 29
+
+[[site.node]]
+id = "square-n02"
+lat = 45.500270
+lon = -122.599872
+alt = 0.00
+enu_e = 10.00
+enu_n = 30.00
+covers = 28
+
+[[site.node]]
+id = "square-n03"
+lat = 45.499730
+lon = -122.599615
+alt = 0.00
+enu_e = 30.00
+enu_n = -30.00
+covers = 27
+
+[[site.node]]
+id = "square-n04"
+lat = 45.500270
+lon = -122.600513
+alt = 0.00
+enu_e = -40.00
+enu_n = 30.00
+covers = 22

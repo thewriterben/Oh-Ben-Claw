@@ -2235,7 +2235,11 @@ mod tests {
     fn every_board_has_vendor_and_connectors() {
         for b in known_boards() {
             assert!(!b.vendor.is_empty(), "board {} missing vendor", b.name);
-            assert!(!b.ecosystem.is_empty(), "board {} missing ecosystem", b.name);
+            assert!(
+                !b.ecosystem.is_empty(),
+                "board {} missing ecosystem",
+                b.name
+            );
             assert!(
                 !b.connectors.is_empty(),
                 "board {} must declare at least one connector (use Bare)",
@@ -2278,10 +2282,7 @@ mod tests {
             .count();
         assert!(accs.iter().all(|a| {
             a.connector == Connector::Bare
-                || board
-                    .connectors
-                    .iter()
-                    .any(|&p| a.connector.mates_with(p))
+                || board.connectors.iter().any(|&p| a.connector.mates_with(p))
         }));
         assert!(accs.len() >= bare_count);
         // A HatPi-only board does NOT accept Qwiic/STEMMA QT plug-in modules.
@@ -2366,7 +2367,10 @@ mod tests {
 
     #[test]
     fn meshtastic_boards_are_mesh_capable() {
-        let names: Vec<_> = boards_with_capability("mesh").iter().map(|b| b.name).collect();
+        let names: Vec<_> = boards_with_capability("mesh")
+            .iter()
+            .map(|b| b.name)
+            .collect();
         assert!(names.contains(&"lilygo-t-beam"));
         assert!(names.contains(&"heltec-wifi-lora-32-v3"));
         assert!(names.contains(&"rak4631"));
@@ -2428,6 +2432,39 @@ mod tests {
         assert_eq!(snap.schema_version, REGISTRY_SCHEMA_VERSION);
         assert_eq!(snap.boards.len(), KNOWN_BOARDS.len());
         assert_eq!(snap.accessories.len(), KNOWN_ACCESSORIES.len());
+    }
+
+    /// Drift guard (Ecosystem Integration I1): the committed
+    /// `registry/registry.json` must match what the live registry serializes
+    /// to (modulo line endings / trailing whitespace). Fails CI whenever
+    /// `registry.rs` changes without re-running the exporter — the generator
+    /// app and Accelerapp consume the committed file, so a stale export
+    /// silently forks the catalog.
+    #[test]
+    fn committed_registry_json_is_current() {
+        // This source file is also compiled into the `planner-wasm` crate,
+        // whose manifest dir is one level down — check both locations.
+        let candidates = [
+            concat!(env!("CARGO_MANIFEST_DIR"), "/registry/registry.json"),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../registry/registry.json"),
+        ];
+        let committed = candidates
+            .iter()
+            .find_map(|p| std::fs::read_to_string(p).ok())
+            .expect(
+                "registry/registry.json missing — generate it with \
+                 `cargo run --bin emit-registry -- registry/registry.json`",
+            );
+        let live = registry_json().expect("registry serializes to JSON");
+        let norm = |s: &str| s.replace("\r\n", "\n").trim_end().to_string();
+        assert_eq!(
+            norm(&committed),
+            norm(&live),
+            "registry/registry.json is stale — regenerate with \
+             `cargo run --bin emit-registry -- registry/registry.json` \
+             and copy it to the consumers (OBC-deployment-generator \
+             lib/registry.json, Accelerapp src/accelerapp/hardware/registry.json)"
+        );
     }
 
     // ── Capability-token validity (typo guard) ────────────────────────────────
@@ -2636,7 +2673,10 @@ mod tests {
         for cap in ["edge_tpu", "npu", "hailo", "nn_accel", "tensor_rt", "cuda"] {
             let boards = boards_with_capability(cap).len();
             let accs = accessories_with_capability(cap).len();
-            assert!(boards + accs > 0, "no hardware provides accelerator token {cap}");
+            assert!(
+                boards + accs > 0,
+                "no hardware provides accelerator token {cap}"
+            );
         }
     }
 

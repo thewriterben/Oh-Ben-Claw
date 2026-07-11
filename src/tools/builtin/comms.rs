@@ -162,7 +162,10 @@ mod tests {
         assert_eq!(v["state"], "online");
         assert_eq!(v["net_mode"], "online");
 
-        let r = t.execute(json!({ "action": "status", "link": "wifi" })).await.unwrap();
+        let r = t
+            .execute(json!({ "action": "status", "link": "wifi" }))
+            .await
+            .unwrap();
         let v: Value = serde_json::from_str(&r.output).unwrap();
         assert_eq!(v["net_mode"]["mode"], "online");
         assert_eq!(v["fact"]["value"]["state"], "online");
@@ -198,7 +201,10 @@ mod tests {
     async fn malformed_report_is_soft_error() {
         let (t, _) = tool();
         // missing 'link' → deserialization fails.
-        let r = t.execute(json!({ "action": "report", "up": true })).await.unwrap();
+        let r = t
+            .execute(json!({ "action": "report", "up": true }))
+            .await
+            .unwrap();
         assert!(!r.success);
     }
 

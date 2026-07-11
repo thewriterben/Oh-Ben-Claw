@@ -293,7 +293,10 @@ mod tests {
         inv.add_desire(FeatureDesire::AcceleratedInference);
 
         let r = HardwareAdvisor::check_desire(&inv, &FeatureDesire::AcceleratedInference);
-        assert!(r.satisfied, "expected an accelerator board to satisfy the desire");
+        assert!(
+            r.satisfied,
+            "expected an accelerator board to satisfy the desire"
+        );
         assert_eq!(r.satisfied_by.as_deref(), Some("tpu"));
         assert_eq!(r.required_capability.as_deref(), Some("edge_tpu"));
     }
