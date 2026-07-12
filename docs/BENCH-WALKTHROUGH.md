@@ -17,6 +17,7 @@ you still have a working milestone. Later stages assume earlier ones.
 | `HARDWARE-TEST-WALKTHROUGH.md` | Exhaustive per-command detail for the control node (Phase A), mesh (B), fleet (C) |
 | `PHASE-B-LORA-MESH.md` | LoRa mesh runbook: radio config, frame format, bridge wiring, troubleshooting |
 | `playbooks/mesh-node-lost.md` | What System 2 (and you) should do when a node drops |
+| `BENCH-WALKTHROUGH-ADVANCED.md` + `BENCH-ADVANCED-WIRING.svg` | Stages 8–12: GNSS, backhaul, aerial, edge-AI, full-grid rehearsal |
 
 **Bench rules (always):**
 
