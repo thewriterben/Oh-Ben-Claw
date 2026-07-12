@@ -48,7 +48,7 @@ USB-C data cables. If not, add the *Core rig* rows from §0.
 add a $12 logic analyzer from §0 if you don't have a scope).
 
 **Suggested bring-up order once it arrives:**
-1. Flash one **Heltec V3**, confirm boot/OLED, then a **two-Heltec ping** (Station B, antennas on).
+1. Flash one **Heltec V3**, confirm boot/OLED, then a **two-Heltec ping** (Station B, antennas on). The **third Heltec is the relay** — it joins at walkthrough Stage 3b for the true 3-hop test (that's why the kit has 3, not 2).
 2. Bring up the **Waveshare ESP32-S3** control path — LED smoke test, then **DHT22** read (Station A).
 3. Add the **XIAO ↔ Heltec UART bridge** (Appendix B pins) → a sensor summary over the mesh.
 4. Flash an **ESP32-S3-EYE**, wire a **PIR**, verify capture → microSD → wake (Station C).
