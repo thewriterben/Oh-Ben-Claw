@@ -1,0 +1,214 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 900" font-family="Segoe UI, Arial, sans-serif">
+  <rect x="0" y="0" width="980" height="900" fill="#ffffff"/>
+  <text x="490" y="30" text-anchor="middle" font-size="21" font-weight="700" fill="#111827">Beyond-MVB Bench — Wiring (Stations D–G)</text>
+  <text x="490" y="52" text-anchor="middle" font-size="12.5" fill="#6b7280">GNSS positioning (D) · cellular/satellite backhaul (E) · aerial tier (F) · edge-AI acceleration (G)</text>
+
+  <!-- legend -->
+  <g font-size="11" fill="#374151">
+    <rect x="30" y="64" width="14" height="12" rx="2" fill="#dbeafe" stroke="#1e40af"/><text x="49" y="74">radio / RF</text>
+    <rect x="130" y="64" width="14" height="12" rx="2" fill="#dcfce7" stroke="#166534"/><text x="149" y="74">MCU / FC</text>
+    <rect x="228" y="64" width="14" height="12" rx="2" fill="#fef3c7" stroke="#92400e"/><text x="247" y="74">module / sensor</text>
+    <rect x="372" y="64" width="14" height="12" rx="2" fill="#e5e7eb" stroke="#374151"/><text x="391" y="74">host / gateway</text>
+    <rect x="500" y="64" width="14" height="12" rx="2" fill="#fce7f3" stroke="#9d174d"/><text x="519" y="74">accelerator</text>
+    <text x="620" y="74" fill="#9ca3af">dashed = PLANNED (code pending)</text>
+  </g>
+
+  <!-- ================= (D) GNSS ================= -->
+  <text x="30" y="108" font-size="13" font-weight="700" fill="#1e40af">④ GNSS positioning (Station D — G3)</text>
+
+  <!-- GPS antenna -->
+  <rect x="30" y="122" width="112" height="52" rx="8" fill="#dbeafe" stroke="#1e40af"/>
+  <text x="86" y="144" text-anchor="middle" font-size="12" font-weight="600" fill="#111827">Active GPS ant.</text>
+  <text x="86" y="160" text-anchor="middle" font-size="10" fill="#4b5563">window / sky view</text>
+
+  <line x1="142" y1="148" x2="188" y2="148" stroke="#1e40af" stroke-width="2"/>
+  <polygon points="188,148 180,144 180,152" fill="#1e40af"/>
+  <text x="165" y="140" text-anchor="middle" font-size="10" fill="#6b7280">u.FL/SMA</text>
+
+  <!-- NEO-M8N -->
+  <rect x="188" y="118" width="140" height="86" rx="8" fill="#fef3c7" stroke="#92400e"/>
+  <text x="258" y="140" text-anchor="middle" font-size="12.5" font-weight="600" fill="#111827">u-blox NEO-M8N</text>
+  <text x="258" y="156" text-anchor="middle" font-size="10" fill="#4b5563">NMEA @ 9600 8N1</text>
+  <text x="196" y="176" font-size="10" fill="#92400e">VCC → 3V3 · GND → GND</text>
+  <text x="196" y="192" font-size="10" fill="#92400e">TX → adapter RXD</text>
+
+  <line x1="328" y1="160" x2="392" y2="160" stroke="#374151" stroke-width="2"/>
+  <polygon points="392,160 384,156 384,164" fill="#374151"/>
+  <text x="360" y="152" text-anchor="middle" font-size="10" fill="#6b7280">UART 3V3</text>
+
+  <!-- CP2102N -->
+  <rect x="392" y="130" width="128" height="62" rx="8" fill="#fef3c7" stroke="#92400e"/>
+  <text x="456" y="154" text-anchor="middle" font-size="12" font-weight="600" fill="#111827">CP2102N</text>
+  <text x="456" y="170" text-anchor="middle" font-size="10" fill="#4b5563">USB–UART (3V3!)</text>
+
+  <line x1="520" y1="161" x2="584" y2="161" stroke="#374151" stroke-width="2"/>
+  <polygon points="584,161 576,157 576,165" fill="#374151"/>
+  <text x="552" y="153" text-anchor="middle" font-size="10" fill="#6b7280">USB</text>
+
+  <!-- Host -->
+  <rect x="584" y="122" width="150" height="80" rx="8" fill="#e5e7eb" stroke="#374151"/>
+  <text x="659" y="146" text-anchor="middle" font-size="12.5" font-weight="600" fill="#111827">Host (brain)</text>
+  <text x="659" y="163" text-anchor="middle" font-size="10.5" fill="#4b5563">gnss_fix tool → GGA →</text>
+  <text x="659" y="178" text-anchor="middle" font-size="10.5" fill="#4b5563">anchored site frame</text>
+  <text x="659" y="193" text-anchor="middle" font-size="10" fill="#166534">frame: "site" (geo.site)</text>
+
+  <!-- integrated alternative -->
+  <rect x="768" y="122" width="182" height="80" rx="8" fill="#dcfce7" stroke="#166534"/>
+  <text x="859" y="144" text-anchor="middle" font-size="12" font-weight="600" fill="#111827">Integrated alt.</text>
+  <text x="859" y="161" text-anchor="middle" font-size="10.5" fill="#4b5563">LILYGO T-Beam (GPS+LoRa)</text>
+  <text x="859" y="176" text-anchor="middle" font-size="10.5" fill="#4b5563">T-Deck Plus (MIA-M10Q)</text>
+  <text x="859" y="192" text-anchor="middle" font-size="10" fill="#6b7280">fix rides the mesh spine</text>
+
+  <!-- ================= (E) Backhaul ================= -->
+  <text x="30" y="248" font-size="13" font-weight="700" fill="#1e40af">⑤ Cellular / satellite backhaul (Station E — G6)</text>
+
+  <!-- LTE antenna -->
+  <rect x="30" y="262" width="100" height="50" rx="8" fill="#dbeafe" stroke="#1e40af"/>
+  <text x="80" y="284" text-anchor="middle" font-size="12" font-weight="600" fill="#111827">LTE ant.</text>
+  <text x="80" y="299" text-anchor="middle" font-size="10" fill="#4b5563">+ GPS ant.</text>
+
+  <line x1="130" y1="287" x2="176" y2="287" stroke="#1e40af" stroke-width="2"/>
+  <polygon points="176,287 168,283 168,291" fill="#1e40af"/>
+
+  <!-- SIM7600 -->
+  <rect x="176" y="258" width="150" height="92" rx="8" fill="#fef3c7" stroke="#92400e"/>
+  <text x="251" y="280" text-anchor="middle" font-size="12.5" font-weight="600" fill="#111827">SIM7600 LTE</text>
+  <text x="251" y="296" text-anchor="middle" font-size="10" fill="#4b5563">Cat-4 + GNSS · data SIM</text>
+  <text x="184" y="316" font-size="10" fill="#92400e">UART or USB to host</text>
+  <text x="184" y="331" font-size="10" fill="#92400e">5V supply ≥ 2 A (bursts)</text>
+
+  <line x1="326" y1="300" x2="392" y2="300" stroke="#374151" stroke-width="2"/>
+  <polygon points="392,300 384,296 384,304" fill="#374151"/>
+  <text x="359" y="292" text-anchor="middle" font-size="10" fill="#6b7280">USB / UART</text>
+
+  <!-- Host comms -->
+  <rect x="392" y="262" width="176" height="88" rx="8" fill="#e5e7eb" stroke="#374151"/>
+  <text x="480" y="284" text-anchor="middle" font-size="12.5" font-weight="600" fill="#111827">Host — comms suite</text>
+  <text x="480" y="301" text-anchor="middle" font-size="10.5" fill="#4b5563">LinkReading → net.mode</text>
+  <text x="480" y="316" text-anchor="middle" font-size="10.5" fill="#4b5563">(online/degraded/offline)</text>
+  <text x="480" y="333" text-anchor="middle" font-size="10" fill="#166534">safing reflexes + System 2</text>
+
+  <!-- satellite (planned) -->
+  <rect x="606" y="258" width="164" height="92" rx="8" fill="#fef3c7" stroke="#92400e" stroke-dasharray="6,4"/>
+  <text x="688" y="280" text-anchor="middle" font-size="12" font-weight="600" fill="#111827">Iridium / Swarm</text>
+  <text x="688" y="296" text-anchor="middle" font-size="10.5" fill="#4b5563">RockBLOCK 9603 · M138</text>
+  <text x="688" y="313" text-anchor="middle" font-size="10" fill="#9ca3af">PLANNED — sat_gateway.rs</text>
+  <text x="688" y="328" text-anchor="middle" font-size="10" fill="#9ca3af">sky view + service plan</text>
+
+  <rect x="800" y="258" width="150" height="92" rx="8" fill="#fef3c7" stroke="#92400e"/>
+  <text x="875" y="282" text-anchor="middle" font-size="12" font-weight="600" fill="#111827">Bench trick</text>
+  <text x="875" y="300" text-anchor="middle" font-size="10" fill="#4b5563">pull the LTE antenna →</text>
+  <text x="875" y="315" text-anchor="middle" font-size="10" fill="#4b5563">degraded → offline →</text>
+  <text x="875" y="330" text-anchor="middle" font-size="10" fill="#4b5563">safing fires (Stage 9)</text>
+
+  <!-- ================= (F) Aerial ================= -->
+  <text x="30" y="398" font-size="13" font-weight="700" fill="#1e40af">⑥ Aerial tier (Station F — G8) — SITL first, props off always</text>
+
+  <!-- SITL -->
+  <rect x="30" y="412" width="168" height="86" rx="8" fill="#e5e7eb" stroke="#374151"/>
+  <text x="114" y="434" text-anchor="middle" font-size="12.5" font-weight="600" fill="#111827">PX4 SITL (first!)</text>
+  <text x="114" y="451" text-anchor="middle" font-size="10.5" fill="#4b5563">jMAVSim / Gazebo</text>
+  <text x="114" y="466" text-anchor="middle" font-size="10.5" fill="#4b5563">MAVLink on localhost</text>
+  <text x="114" y="483" text-anchor="middle" font-size="10" fill="#166534">$0 — validates mapping</text>
+
+  <line x1="198" y1="452" x2="262" y2="452" stroke="#374151" stroke-width="2" stroke-dasharray="6,4"/>
+  <polygon points="262,452 254,448 254,456" fill="#374151"/>
+  <text x="230" y="444" text-anchor="middle" font-size="10" fill="#9ca3af">then hardware</text>
+
+  <!-- Pixhawk -->
+  <rect x="262" y="408" width="158" height="96" rx="8" fill="#dcfce7" stroke="#166534"/>
+  <text x="341" y="430" text-anchor="middle" font-size="12.5" font-weight="600" fill="#111827">Pixhawk 6C</text>
+  <text x="341" y="446" text-anchor="middle" font-size="10.5" fill="#4b5563">PX4 / ArduPilot</text>
+  <text x="270" y="466" font-size="10" fill="#166534">GPS/compass → GPS1</text>
+  <text x="270" y="481" font-size="10" fill="#166534">SiK radio → TELEM1</text>
+  <text x="270" y="496" font-size="10" fill="#b91c1c">PROPS OFF on the bench</text>
+
+  <line x1="420" y1="452" x2="478" y2="452" stroke="#1e40af" stroke-width="2"/>
+  <polygon points="478,452 470,448 470,456" fill="#1e40af"/>
+  <text x="449" y="444" text-anchor="middle" font-size="10" fill="#6b7280">915 MHz</text>
+
+  <!-- SiK pair -->
+  <rect x="478" y="418" width="128" height="66" rx="8" fill="#dbeafe" stroke="#1e40af"/>
+  <text x="542" y="442" text-anchor="middle" font-size="12" font-weight="600" fill="#111827">SiK radio pair</text>
+  <text x="542" y="458" text-anchor="middle" font-size="10" fill="#4b5563">air ↔ ground, USB</text>
+  <text x="542" y="473" text-anchor="middle" font-size="10" fill="#4b5563">antennas on!</text>
+
+  <line x1="606" y1="452" x2="664" y2="452" stroke="#374151" stroke-width="2"/>
+  <polygon points="664,452 656,448 656,456" fill="#374151"/>
+  <text x="635" y="444" text-anchor="middle" font-size="10" fill="#6b7280">USB</text>
+
+  <!-- Host aerial -->
+  <rect x="664" y="408" width="286" height="96" rx="8" fill="#e5e7eb" stroke="#374151"/>
+  <text x="807" y="430" text-anchor="middle" font-size="12.5" font-weight="600" fill="#111827">Host — aerial adapter</text>
+  <text x="807" y="448" text-anchor="middle" font-size="10.5" fill="#4b5563">MAVLink → AerialTelemetry → fleet NodeState</text>
+  <text x="807" y="464" text-anchor="middle" font-size="10.5" fill="#4b5563">geofence = anchored Site boundary (contains)</text>
+  <text x="807" y="481" text-anchor="middle" font-size="10" fill="#166534">outside boundary → reflex alert → System 2</text>
+  <text x="807" y="496" text-anchor="middle" font-size="10" fill="#9ca3af">MAVLink ingest bridge: PLANNED (adapter done)</text>
+
+  <!-- ================= (G) Edge-AI ================= -->
+  <text x="30" y="552" font-size="13" font-weight="700" fill="#1e40af">⑦ Edge-AI acceleration (Station G) — pick one to start</text>
+
+  <!-- Pi 5 -->
+  <rect x="30" y="566" width="190" height="118" rx="8" fill="#e5e7eb" stroke="#374151"/>
+  <text x="125" y="588" text-anchor="middle" font-size="12.5" font-weight="600" fill="#111827">Raspberry Pi 5 gateway</text>
+  <text x="125" y="605" text-anchor="middle" font-size="10.5" fill="#4b5563">ClawCam gateway + brain</text>
+  <text x="38" y="625" font-size="10" fill="#374151">USB 3.0 → Coral USB</text>
+  <text x="38" y="640" font-size="10" fill="#374151">GPIO header → AI HAT+ (Hailo-8L)</text>
+  <text x="38" y="655" font-size="10" fill="#374151">CSI-2 → AI Camera (IMX500)</text>
+  <text x="38" y="670" font-size="10" fill="#374151">USB 3.0 → OAK-D Lite (VPU+depth)</text>
+
+  <line x1="220" y1="600" x2="286" y2="600" stroke="#9d174d" stroke-width="2"/>
+  <polygon points="286,600 278,596 278,604" fill="#9d174d"/>
+  <text x="253" y="592" text-anchor="middle" font-size="10" fill="#6b7280">USB 3.0</text>
+
+  <!-- Coral -->
+  <rect x="286" y="566" width="140" height="56" rx="8" fill="#fce7f3" stroke="#9d174d"/>
+  <text x="356" y="588" text-anchor="middle" font-size="12" font-weight="600" fill="#111827">Coral USB</text>
+  <text x="356" y="604" text-anchor="middle" font-size="10" fill="#4b5563">Edge TPU · cheapest in</text>
+
+  <line x1="220" y1="648" x2="286" y2="648" stroke="#9d174d" stroke-width="2"/>
+  <polygon points="286,648 278,644 278,652" fill="#9d174d"/>
+  <text x="253" y="640" text-anchor="middle" font-size="10" fill="#6b7280">GPIO hdr</text>
+
+  <!-- Hailo -->
+  <rect x="286" y="630" width="140" height="54" rx="8" fill="#fce7f3" stroke="#9d174d"/>
+  <text x="356" y="650" text-anchor="middle" font-size="12" font-weight="600" fill="#111827">AI HAT+ (Hailo-8L)</text>
+  <text x="356" y="666" text-anchor="middle" font-size="10" fill="#4b5563">13 TOPS · detectors</text>
+
+  <!-- what it runs -->
+  <rect x="470" y="566" width="220" height="118" rx="8" fill="#fef3c7" stroke="#92400e"/>
+  <text x="580" y="588" text-anchor="middle" font-size="12" font-weight="600" fill="#111827">What it accelerates</text>
+  <text x="478" y="608" font-size="10" fill="#92400e">MegaDetector (mammals)</text>
+  <text x="478" y="623" font-size="10" fill="#92400e">BirdNET (audio) · SpeciesNet</text>
+  <text x="478" y="638" font-size="10" fill="#92400e">ClawCam review-queue triage</text>
+  <text x="478" y="656" font-size="10" fill="#6b7280">edge node advertises its token</text>
+  <text x="478" y="671" font-size="10" fill="#6b7280">(edge_tpu / hailo / vpu) on the spine</text>
+
+  <!-- brain -->
+  <rect x="734" y="566" width="216" height="118" rx="8" fill="#e5e7eb" stroke="#374151"/>
+  <text x="842" y="588" text-anchor="middle" font-size="12.5" font-weight="600" fill="#111827">Brain checks</text>
+  <text x="742" y="608" font-size="10" fill="#374151">registry: accelerator catalogued</text>
+  <text x="742" y="623" font-size="10" fill="#374151">Fleet app catalog: live refresh</text>
+  <text x="742" y="638" font-size="10" fill="#374151">deployment planner: AcceleratedInference</text>
+  <text x="742" y="653" font-size="10" fill="#374151">desire satisfied by the token</text>
+  <text x="742" y="670" font-size="10" fill="#166534">clawcam.* facts keep flowing (Stage 6)</text>
+
+  <!-- footer -->
+  <g font-size="10.5" fill="#6b7280">
+    <text x="30" y="726">Rules: antenna before power (LoRa, LTE, SiK) · 3V3 logic only on GNSS UART · SIM7600 needs its own 5 V ≥ 2 A supply · props NEVER on indoors.</text>
+    <text x="30" y="744">Dashed boxes/lines are PLANNED integrations (see BENCH-TEST-HARDWARE.md status column) — wire them, but expect to write the bridge code.</text>
+    <text x="30" y="762">Companions: BENCH-MVB-WIRING.svg (Stations A–C) · BENCH-WALKTHROUGH.md (Stages 0–7) · BENCH-WALKTHROUGH-ADVANCED.md (Stages 8–12).</text>
+  </g>
+
+  <!-- pin tables -->
+  <g font-size="10" fill="#374151">
+    <text x="30" y="800" font-weight="700" fill="#111827">Quick pins — NEO-M8N → CP2102N:</text>
+    <text x="235" y="800">VCC→3V3 · GND→GND · TX→RXD · (RX→TXD only if configuring the module)</text>
+    <text x="30" y="820" font-weight="700" fill="#111827">Pixhawk 6C:</text>
+    <text x="120" y="820">GPS/compass→GPS1 · SiK air radio→TELEM1 (57600 8N1) · battery via power module — bench = USB power, PROPS OFF</text>
+    <text x="30" y="840" font-weight="700" fill="#111827">SIM7600:</text>
+    <text x="100" y="840">5V/GND (own supply) · USB to host (enumerates as multiple ttyUSB*) · SIM in before power · LTE + GPS antennas on</text>
+    <text x="30" y="860" font-weight="700" fill="#111827">T-Beam alt.:</text>
+    <text x="115" y="860">GPS is internal (u-blox on UART1) — flash the lora-node bridge; the fix rides the existing mesh spine, no extra wiring</text>
+  </g>
+</svg>
