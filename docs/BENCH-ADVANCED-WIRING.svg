@@ -196,6 +196,7 @@
   <!-- footer -->
   <g font-size="10.5" fill="#6b7280">
     <text x="30" y="726">Rules: antenna before power (LoRa, LTE, SiK) · 3V3 logic only on GNSS UART · SIM7600 needs its own 5 V ≥ 2 A supply · props NEVER on indoors.</text>
+    <text x="30" y="708">RF coexistence: SiK 915 MHz shares the band with the LoRa mesh (Stations B/D) — don't run both a metre apart; use SITL or 433 MHz SiK for concurrent soaks.</text>
     <text x="30" y="744">Dashed boxes/lines are PLANNED integrations (see BENCH-TEST-HARDWARE.md status column) — wire them, but expect to write the bridge code.</text>
     <text x="30" y="762">Companions: BENCH-MVB-WIRING.svg (Stations A–C) · BENCH-WALKTHROUGH.md (Stages 0–7) · BENCH-WALKTHROUGH-ADVANCED.md (Stages 8–12).</text>
   </g>

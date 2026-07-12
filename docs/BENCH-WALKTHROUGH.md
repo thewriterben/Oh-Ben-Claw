@@ -24,8 +24,9 @@ you still have a working milestone. Later stages assume earlier ones.
 1. ⚠️ **Never power a LoRa board without its antenna.** TX into an open port can
    destroy the SX1262's PA. Antenna first, every time.
 2. **One change at a time.** Flash one board, verify, then the next.
-3. **Label everything.** Node IDs on tape (`heltec-base`, `heltec-gw`, `xiao-1`,
-   `ws-ctl`, `eye-1`), and note each board's COM port on the label.
+3. **Label everything.** Node IDs on tape (`heltec-base`, `heltec-gw`,
+   `heltec-relay`, `xiao-1`, `ws-ctl`, `eye-1`), and note each board's COM port
+   on the label.
 4. LiPo cells: charge supervised, store half-charged, nothing conductive on the bench mat.
 
 ---
@@ -70,12 +71,14 @@ pose and plan from here on shares this frame.
 
 ---
 
-## Stage 1 — First light: the LoRa spine (2–3× Heltec V3)
+## Stage 1 — First light: the LoRa spine (3× Heltec V3)
 
-*Kit rows 1–2. Deep detail: `PHASE-B-LORA-MESH.md`.*
+*Kit rows 1–2 — the kit deliberately includes **three** Heltecs: base station,
+gateway (field), and **relay**. The relay is what turns point-to-point into a
+mesh (Stage 3b). Deep detail: `PHASE-B-LORA-MESH.md`.*
 
-**1.1** Screw antennas onto **all** Heltecs. Label them `heltec-base`, `heltec-gw`
-(and `heltec-3` if you bought the third).
+**1.1** Screw antennas onto **all three** Heltecs. Label them `heltec-base`,
+`heltec-gw`, `heltec-relay`.
 
 **1.2 Flash the linktest firmware** (each board, one at a time):
 
@@ -91,10 +94,13 @@ Boot + OLED alive = board good.
 **RSSI** on the other. Typical desk RSSI: −30 to −60 dBm. Walk one board to another
 room; RSSI should fall, frames keep arriving.
 
-**1.4 Relay sanity (3 boards only).** Frames carry `[src][seq][ttl]` with a de-dup
-ring — confirm no frame storms with all three powered (each frame relayed once).
+**1.4 Relay sanity (all three powered).** Frames carry `[src][seq][ttl]` with a
+de-dup ring — with `heltec-relay` powered alongside the other two, each frame is
+relayed **once** (no duplicate floods, no storms). The relay does nothing else
+until Stage 3b, when it earns its keep.
 
-**PASS Stage 1:** bidirectional frames with plausible RSSI; no duplicate floods.
+**PASS Stage 1:** bidirectional frames with plausible RSSI on all pairs; no
+duplicate floods with all three powered.
 
 ---
 
@@ -162,6 +168,37 @@ shows a **Mesh nodes** section with the XIAO (health, RSSI, last-seen). World
 memory now carries `mesh.<node>` facts — the physical world is in the brain.
 
 **PASS Stage 3:** XIAO's telemetry appears in `status` via LoRa with live RSSI.
+
+### Stage 3b — True 3-hop relay *(closes the open Phase B roadmap item)*
+
+*This is the roadmap's last unchecked mesh box: "True 3-hop relay (needs a 3rd
+radio out of direct range)". Topology per the wiring SVG's RELAY inset:*
+
+```
+heltec-base ↔ heltec-relay ↔ heltec-gw ← UART ← xiao-1
+```
+
+**3b.1 Break the direct path.** Move `heltec-base` (with the host) out of
+`heltec-gw`'s direct range — different floor, far room, concrete between them.
+Confirm the break honestly: power **off** the relay and verify the XIAO's facts
+**stop** arriving in `status` (if they still arrive, the path isn't broken —
+add distance/obstacles).
+
+**3b.2 Close it through the relay.** Power `heltec-relay` on, positioned where
+it can hear both ends. Facts resume within a supervisor tick.
+
+**3b.3 Verify it's really two hops:** RSSI shown in `status` is now the
+**relay→base** hop (typically weaker/different from Stage 3's direct value),
+and the relay's console shows frames forwarded with TTL decremented, each
+exactly once (de-dup).
+
+**3b.4 Round trip over two hops.** Repeat a Stage 5-style `mesh_command` ping
+(`capabilities`) once Stage 5's return path is wired — the reply must also ride
+relay → base.
+
+**PASS Stage 3b:** with the direct path proven dead, telemetry flows only via
+the relay; kill the relay → flow stops; restore → resumes. *Then tick the
+roadmap box.*
 
 ---
 
@@ -257,6 +294,7 @@ guard for a knocked-over/silent camera (which, per Stage 4, would wake System 2)
 | 4 | Control node: capabilities + LED + sensor | 2 | ☐ |
 | 5 | **Track 0 on-MCU: all three refusals** | 2 | ☐ |
 | 6 | Mesh telemetry in world memory (`status` Mesh nodes) | 3 | ☐ |
+| 6b | True 3-hop relay: direct path dead, flow via relay only | 3b | ☐ |
 | 7 | Node loss → escalation → **one** System 2 wake → auto-clear | 4 | ☐ |
 | 8 | Over-the-air command: host per-call approval + node-side refusal of off-list pin | 5 | ☐ |
 | 9 | PIR capture → ClawCam → `clawcam.*` facts | 6 | ☐ |

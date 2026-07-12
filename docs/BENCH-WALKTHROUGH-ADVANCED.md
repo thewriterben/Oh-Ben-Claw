@@ -14,13 +14,18 @@ the comms suite, and the aerial adapter are **DRIVER** — real code, tested. Th
 satellite path and the live MAVLink ingest bridge are **PLANNED** — those stages
 tell you exactly where the walkthrough ends and the firmware work begins.
 
-**Bench rules carry over** — plus three new ones:
+**Bench rules carry over** — plus four new ones:
 
 1. ⚠️ Antenna-before-power now also applies to **LTE and SiK** radios.
 2. The SIM7600 needs its **own 5 V ≥ 2 A supply** — brownouts from USB power look
    like modem bugs.
 3. **Props never go on indoors.** The aerial stage is done entirely props-off
    (and SITL-first, for free).
+4. ⚠️ **915 MHz is shared.** The SiK telemetry pair (Stage 10) and the LoRa mesh
+   (Stages 1–5) occupy the same US ISM band a metre apart on a bench — expect
+   mutual interference. Don't run SiK hardware during a mesh soak; for
+   concurrent operation (Stage 12) use SITL for the aerial arc, or buy the
+   **433 MHz** SiK variant.
 
 ---
 
@@ -178,10 +183,14 @@ site layout attached — each agent card shows its position; push it to the
 gateway (staged for review, Operate token).
 
 **12.3 One-hour full-stack soak.** Everything on: mesh telemetry + GNSS fixes in
-the site frame, backhaul online, camera trapping, accelerator classifying. Then
-inject exactly three faults, ten minutes apart:
+the site frame, backhaul online, camera trapping, accelerator classifying. Run
+the mesh in its **Stage 3b topology** — base ↔ `heltec-relay` ↔ gateway — so the
+soak exercises multi-hop, not just point-to-point. (Aerial arc via SITL per
+bench rule 4, unless you have 433 MHz SiK.) Then inject exactly three faults,
+ten minutes apart:
 
-1. unplug a mesh node (Stage 4 arc),
+1. unplug **`heltec-relay`** — a mid-mesh partition: every node behind it drops
+   at once (harder than losing a leaf; Stage 4 arc, plural),
 2. pull the LTE antenna (Stage 9 arc),
 3. feed one outside-boundary telemetry (Stage 10 arc).
 
