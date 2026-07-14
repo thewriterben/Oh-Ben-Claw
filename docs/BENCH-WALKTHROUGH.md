@@ -13,6 +13,7 @@ you still have a working milestone. Later stages assume earlier ones.
 |---|---|
 | `BENCH-TEST-HARDWARE.md` | The BOM — what to buy, per-station checklists |
 | `BENCH-MVB-WIRING.svg` | The one-page wiring picture for everything below |
+| `BENCH-MVB-PINOUT.svg` | The one-page pin-level diagram (bridge, LED, DHT22, I2C, PIR) |
 | `BENCH-PINOUT-CARDS.md` | Print-and-tape pinout cards per board |
 | `HARDWARE-TEST-WALKTHROUGH.md` | Exhaustive per-command detail for the control node (Phase A), mesh (B), fleet (C) |
 | `PHASE-B-LORA-MESH.md` | LoRa mesh runbook: radio config, frame format, bridge wiring, troubleshooting |
@@ -134,8 +135,9 @@ reflex behaviors per Phase A.
 
 ## Stage 3 — Mesh → brain: facts flow into world memory
 
-*Kit row 3 + Stage 1 boards. Wiring: `BENCH-MVB-WIRING.svg`; pins: Appendix B of
-the BOM doc. This closes the two flash-pending items from the Phase B runbook.*
+*Kit row 3 + Stage 1 boards. Wiring: `BENCH-MVB-WIRING.svg`; pins:
+`BENCH-MVB-PINOUT.svg` §② (or Appendix B of the BOM doc). This closes the two
+flash-pending items from the Phase B runbook.*
 
 **3.1 Flash the XIAO spine mirror** (`firmware/obc-esp32-s3` XIAO profile) — it
 emits its spine JSON on UART1/**D6** autonomously.

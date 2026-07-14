@@ -50,6 +50,8 @@ USB-C data cables.
 
 **Bring-up order once it arrives:**
 1. Flash one **Heltec V3**, confirm boot/OLED, then a **two-Heltec ping** (antennas on).
+   The **third Heltec is the relay** — it joins at walkthrough Stage 3b for the true
+   3-hop test (that's why the kit has 3, not 2).
 2. Bring up the **Waveshare ESP32-S3** control path — LED smoke test, then **DHT22** read.
 3. Add the **XIAO ↔ Heltec UART bridge** (Part 3) → a sensor summary over the mesh.
 4. Flash an **ESP32-S3-EYE**, wire a **PIR**, verify capture → microSD → wake.
@@ -65,7 +67,8 @@ USB-C data cables.
 `BENCH-MVB-WIRING.svg` directly. The three subsystems it shows:
 
 - **① LoRa mesh spine:** Host PC ─USB→ Heltec V3 (base) ⇢ *LoRa 915 MHz* ⇢ Heltec V3 (field)
-  ─UART→ XIAO ESP32-S3.
+  ─UART→ XIAO ESP32-S3, plus the **Heltec V3 relay** (3rd radio, flood-relay TTL−1 + de-dup)
+  for the Stage 3b 3-hop test: base ⇢ relay ⇢ field once the direct path is out of range.
 - **② Control & sensing node:** Waveshare ESP32-S3 + I2C (BME280/MPU-6050) + DHT22 + LED.
 - **③ Camera node:** ESP32-S3-EYE + PIR (EXT0 wake) + microSD.
 - All report to the **Pi 5 gateway** (Wi-Fi/MQTT; mesh summaries via the base console).
@@ -81,7 +84,10 @@ Pins the **firmware actually drives** (for probing/soldering this bench). `[fw]`
 in our firmware · `[board]` = vendor reference. **Verify against the vendor silkscreen
 before soldering.**
 
-## Card 1 — Heltec WiFi LoRa 32 V3 (ESP32-S3 + SX1262)  ·  base + field node
+## Card 1 — Heltec WiFi LoRa 32 V3 (ESP32-S3 + SX1262)  ·  base + relay + field (all 3)
+
+*Same card for all three radios. The relay is radio-only — antenna + USB power, no external
+wiring; the UART bridge below applies only to the field unit (`heltec-gw`).*
 
 **SX1262 radio (SPI)** `[fw] sx1262.rs`: NSS **8** · SCK **9** · MOSI **10** · MISO **11** ·
 RST **12** · BUSY **13** · DIO1 **14** · TCXO on **DIO3** (1.8 V) · RF switch on **DIO2**.
