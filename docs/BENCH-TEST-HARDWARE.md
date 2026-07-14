@@ -56,7 +56,8 @@ add a $12 logic analyzer from §0 if you don't have a scope).
 
 **Wiring:** see `docs/BENCH-MVB-WIRING.svg` — base Heltec ↔ (LoRa) ↔ field Heltec ↔ XIAO
 (UART bridge), the Waveshare control node + I2C/DHT22/LED, the ESP32-S3-EYE + PIR/microSD,
-all reporting to the Pi 5 gateway.
+all reporting to the Pi 5 gateway. **Pinout:** `docs/BENCH-MVB-PINOUT.svg` (diagram) +
+`docs/BENCH-PINOUT-CARDS.md` (per-board tables).
 
 *(Detailed per-station tables, statuses, and citations are in §1–§8 below.)*
 
@@ -135,8 +136,9 @@ bringing up (DHT22 done; BME280/MPU6050 next).
 The other hardware-validated path (Heltec V3 SX1262 link). Multi-node needs ≥3 radios so
 you can test relay/multi-hop, not just point-to-point.
 
-- [ ] **3× Heltec WiFi LoRa 32 V3** (ESP32-S3 + SX1262 + OLED) — one base station + two
-      mesh nodes. **915 MHz** (US) or **868 MHz** (EU) to match your region.
+- [ ] **3× Heltec WiFi LoRa 32 V3** (ESP32-S3 + SX1262 + OLED) — one **base** station, one
+      **relay** (Stage 3b 3-hop test), one **field** node (`heltec-gw`, carries the XIAO
+      bridge). **915 MHz** (US) or **868 MHz** (EU) to match your region.
 - [ ] **LoRa antennas** — **one per radio, attached before any TX** (transmitting without
       an antenna can damage the PA). Match the band.
 - [ ] **XIAO ESP32-S3** as the sensor/camera node behind a Heltec, for the **Phase B UART

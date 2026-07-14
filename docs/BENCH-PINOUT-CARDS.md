@@ -12,7 +12,11 @@ silkscreen before soldering** — GPIO↔header mapping and safe pins vary by bo
 
 ## Card 1 — Heltec WiFi LoRa 32 V3  (ESP32-S3 + SX1262)
 
-Role: **LoRa base station + field node** (Station B). `firmware/heltec-lora-linktest`.
+Role: **all three Station B radios** — `heltec-base`, `heltec-relay`, `heltec-gw` (field).
+`firmware/heltec-lora-linktest`. Same card for all three: identical radio pinout and config.
+The **relay** is radio-only — antenna + USB power, **no external wiring at all** (the UART
+bridge below applies only to `heltec-gw`); it forwards frames (TTL−1, de-dup) and earns its
+keep in walkthrough **Stage 3b** (true 3-hop test).
 
 **SX1262 radio (SPI)** — `[fw]` `src/sx1262.rs`
 | Signal | GPIO | | Signal | GPIO |
@@ -23,7 +27,7 @@ Role: **LoRa base station + field node** (Station B). `firmware/heltec-lora-link
 | MISO | 11 | | TCXO | via **DIO3** (1.8 V) |
 | | | | RF switch | via **DIO2** |
 
-**Phase-B UART bridge to the XIAO node** — `[fw]` `docs/PHASE-B-LORA-MESH.md`
+**Phase-B UART bridge to the XIAO node** (`heltec-gw` **only**) — `[fw]` `docs/PHASE-B-LORA-MESH.md`
 | Signal | Heltec GPIO | Direction |
 |---|---|---|
 | RX (from XIAO TX) | **GPIO2** | XIAO GPIO43 → here |

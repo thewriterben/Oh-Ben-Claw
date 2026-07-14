@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 1010" font-family="Segoe UI, Arial, sans-serif">
+  <rect x="0" y="0" width="980" height="1010" fill="#ffffff"/>
+  <text x="490" y="30" text-anchor="middle" font-size="21" font-weight="700" fill="#111827">Minimum-Viable Bench — Pinout Detail</text>
+  <text x="490" y="52" text-anchor="middle" font-size="12.5" fill="#6b7280">pin-level companion to BENCH-MVB-WIRING.svg · full tables: BENCH-PINOUT-CARDS.md · sources: Appendix B + firmware pin maps</text>
+
+  <!-- legend -->
+  <g font-size="11" fill="#374151">
+    <rect x="30" y="64" width="14" height="12" rx="2" fill="#dbeafe" stroke="#1e40af"/><text x="49" y="74">LoRa radio</text>
+    <rect x="130" y="64" width="14" height="12" rx="2" fill="#dcfce7" stroke="#166534"/><text x="149" y="74">MCU node</text>
+    <rect x="228" y="64" width="14" height="12" rx="2" fill="#fef3c7" stroke="#92400e"/><text x="247" y="74">sensor / peripheral</text>
+    <text x="372" y="74" fill="#6b7280">solid = wire you run · gray box = on-module (reference only)</text>
+  </g>
+
+  <!-- ================= (1) Heltec V3 internal SX1262 (reference) ================= -->
+  <text x="30" y="106" font-size="13" font-weight="700" fill="#1e40af">① Heltec V3 ↔ SX1262 — on-module SPI (reference, no wiring to run)</text>
+  <rect x="30" y="116" width="920" height="74" rx="8" fill="#f9fafb" stroke="#9ca3af" stroke-dasharray="4 3"/>
+  <text x="45" y="138" font-size="11.5" font-family="Consolas, monospace" fill="#1e3a8a">NSS=GPIO8 · SCK=GPIO9 · MOSI=GPIO10 · MISO=GPIO11 · RST=GPIO12 · BUSY=GPIO13 · DIO1=GPIO14</text>
+  <text x="45" y="158" font-size="11" font-family="Consolas, monospace" fill="#1e3a8a">TCXO on DIO3 (1.8 V) · RF sw on DIO2 · board: OLED I2C 17/18 RST=21 · Vext=36 (act-LOW) · LED=35</text>
+  <text x="45" y="178" font-size="10.5" fill="#7c3aed">Radio: 915 MHz (US) · SF7 / BW125 / CR4-5 · syncword 0x1424 · +22 dBm — identical on BASE, RELAY, FIELD. ⚠ Antenna on before power.</text>
+
+  <!-- ================= (2) UART bridge ================= -->
+  <text x="30" y="222" font-size="13" font-weight="700" fill="#166534">② UART bridge — XIAO ESP32-S3 ↔ heltec-gw (FIELD) · the only board-to-board wires on the bench</text>
+
+  <!-- XIAO box -->
+  <rect x="30" y="236" width="290" height="168" rx="8" fill="#dcfce7" stroke="#166534"/>
+  <text x="175" y="260" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">XIAO ESP32-S3 Sense</text>
+  <text x="175" y="276" text-anchor="middle" font-size="10" fill="#166534">mesh sensor node · powered by its own USB-C</text>
+  <!-- XIAO pin stubs (right edge) -->
+  <rect x="248" y="292" width="72" height="18" rx="3" fill="#ffffff" stroke="#166534"/>
+  <text x="284" y="305" text-anchor="middle" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">D6/GPIO43</text>
+  <text x="240" y="305" text-anchor="end" font-size="9.5" fill="#166534">TX</text>
+  <rect x="248" y="326" width="72" height="18" rx="3" fill="#ffffff" stroke="#166534"/>
+  <text x="284" y="339" text-anchor="middle" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">D7/GPIO44</text>
+  <text x="240" y="339" text-anchor="end" font-size="9.5" fill="#166534">RX</text>
+  <rect x="248" y="360" width="72" height="18" rx="3" fill="#ffffff" stroke="#374151"/>
+  <text x="284" y="373" text-anchor="middle" font-size="10.5" font-family="Consolas, monospace" fill="#111827">GND</text>
+
+  <!-- Heltec box -->
+  <rect x="660" y="236" width="290" height="168" rx="8" fill="#dbeafe" stroke="#1e40af"/>
+  <line x1="920" y1="236" x2="920" y2="222" stroke="#1e40af" stroke-width="2"/><circle cx="920" cy="220" r="3" fill="#1e40af"/>
+  <text x="805" y="260" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1e3a8a">Heltec V3 — FIELD (heltec-gw)</text>
+  <text x="805" y="276" text-anchor="middle" font-size="10" fill="#1e40af">SX1262 + antenna · powered by its own USB-C</text>
+  <!-- Heltec pin stubs (left edge) -->
+  <rect x="660" y="292" width="60" height="18" rx="3" fill="#ffffff" stroke="#1e40af"/>
+  <text x="690" y="305" text-anchor="middle" font-size="10.5" font-family="Consolas, monospace" fill="#1e3a8a">GPIO2</text>
+  <text x="728" y="305" font-size="9.5" fill="#1e40af">RX</text>
+  <rect x="660" y="326" width="60" height="18" rx="3" fill="#ffffff" stroke="#1e40af"/>
+  <text x="690" y="339" text-anchor="middle" font-size="10.5" font-family="Consolas, monospace" fill="#1e3a8a">GPIO4</text>
+  <text x="728" y="339" font-size="9.5" fill="#1e40af">TX</text>
+  <rect x="660" y="360" width="60" height="18" rx="3" fill="#ffffff" stroke="#374151"/>
+  <text x="690" y="373" text-anchor="middle" font-size="10.5" font-family="Consolas, monospace" fill="#111827">GND</text>
+
+  <!-- bridge wires -->
+  <line x1="320" y1="301" x2="660" y2="301" stroke="#166534" stroke-width="2"/>
+  <polygon points="660,301 651,297 651,305" fill="#166534"/>
+  <text x="490" y="294" text-anchor="middle" font-size="10" fill="#166534">telemetry → mesh (Stage 3)</text>
+  <line x1="660" y1="335" x2="320" y2="335" stroke="#1e40af" stroke-width="2"/>
+  <polygon points="320,335 329,331 329,339" fill="#1e40af"/>
+  <text x="490" y="352" text-anchor="middle" font-size="10" fill="#1e40af">commands ← mesh (Stage 5)</text>
+  <line x1="320" y1="369" x2="660" y2="369" stroke="#111827" stroke-width="2"/>
+  <text x="490" y="384" text-anchor="middle" font-size="10" font-weight="600" fill="#111827">common ground — continuity-check with a meter BEFORE power</text>
+
+  <text x="30" y="424" font-size="10" fill="#6b7280">3V3 logic on both sides — never feed 5 V into these pins. Each board keeps its own USB power; only TX/RX/GND cross between boards.</text>
+
+  <!-- ================= (3) Station A ================= -->
+  <text x="30" y="462" font-size="13" font-weight="700" fill="#166534">③ Control &amp; sensing node — Waveshare ESP32-S3 Touch-LCD 2.1 (Station A)</text>
+
+  <rect x="30" y="476" width="270" height="216" rx="8" fill="#dcfce7" stroke="#166534"/>
+  <text x="165" y="500" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">Waveshare ESP32-S3</text>
+  <text x="45" y="524" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">UART0: TX=43 RX=44 (console/USB)</text>
+  <text x="45" y="542" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">I2C:   SDA=GPIO4  SCL=GPIO5</text>
+  <text x="45" y="560" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">LED:   GPIO26 (this walkthrough)</text>
+  <text x="45" y="584" font-size="10" fill="#166534" font-weight="600">Track 0 output allow-list:</text>
+  <text x="45" y="600" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">GPIO 3 · 14 · 26 · 33 · 46</text>
+  <text x="45" y="620" font-size="9.5" fill="#6b7280">anything else → node refuses:</text>
+  <text x="45" y="634" font-size="9.5" font-family="Consolas, monospace" fill="#b91c1c">safety: pin not in allow-list</text>
+  <text x="45" y="660" font-size="9.5" fill="#b91c1c">⚠ camera SIOD/SIOC share GPIO4/5 with</text>
+  <text x="45" y="674" font-size="9.5" fill="#b91c1c">this I2C bus — not both at once</text>
+
+  <!-- LED circuit -->
+  <rect x="360" y="476" width="270" height="92" rx="8" fill="#fef3c7" stroke="#92400e"/>
+  <text x="495" y="498" text-anchor="middle" font-size="11.5" font-weight="700" fill="#78350f">LED smoke test (Stage 2.2)</text>
+  <text x="375" y="522" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">GPIO26 ──► 330 Ω ──► LED(+)</text>
+  <text x="375" y="540" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">LED(−) ──► GND</text>
+  <text x="375" y="558" font-size="9.5" fill="#92400e">gpio_write pin 26 → 1/0 · LED tracks</text>
+  <line x1="300" y1="522" x2="360" y2="522" stroke="#92400e" stroke-width="2"/>
+
+  <!-- DHT22 -->
+  <rect x="360" y="584" width="270" height="122" rx="8" fill="#fef3c7" stroke="#92400e"/>
+  <text x="495" y="606" text-anchor="middle" font-size="11.5" font-weight="700" fill="#78350f">DHT22 (Stage 2.4 — first sensor)</text>
+  <text x="375" y="630" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">VCC  ──► 3V3</text>
+  <text x="375" y="648" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">DATA ──► free GPIO (set in config)</text>
+  <text x="375" y="666" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">GND  ──► GND</text>
+  <text x="375" y="684" font-size="9.5" fill="#92400e">pick a pin clear of camera / I2C(4,5) / I2S(0,1,2)</text>
+  <text x="375" y="698" font-size="9.5" fill="#92400e">+ 10 kΩ pull-up DATA→3V3 (breakout boards have it)</text>
+  <line x1="300" y1="638" x2="360" y2="638" stroke="#92400e" stroke-width="2"/>
+
+  <!-- I2C chain -->
+  <rect x="690" y="476" width="260" height="216" rx="8" fill="#fef3c7" stroke="#92400e"/>
+  <text x="820" y="498" text-anchor="middle" font-size="11.5" font-weight="700" fill="#78350f">I2C chain (Qwiic) — SDA=4 · SCL=5</text>
+  <rect x="710" y="514" width="220" height="58" rx="6" fill="#ffffff" stroke="#92400e"/>
+  <text x="820" y="536" text-anchor="middle" font-size="11" font-weight="600" fill="#78350f">BME280 — addr 0x76</text>
+  <text x="820" y="554" text-anchor="middle" font-size="9.5" fill="#92400e">temp / humidity / pressure</text>
+  <rect x="710" y="586" width="220" height="58" rx="6" fill="#ffffff" stroke="#92400e"/>
+  <text x="820" y="608" text-anchor="middle" font-size="11" font-weight="600" fill="#78350f">MPU-6050 — addr 0x68</text>
+  <text x="820" y="626" text-anchor="middle" font-size="9.5" fill="#92400e">IMU (tilt it for live values)</text>
+  <line x1="820" y1="572" x2="820" y2="586" stroke="#92400e" stroke-width="2"/>
+  <text x="820" y="668" text-anchor="middle" font-size="9.5" fill="#92400e">daisy-chain on one connector · 3V3 + GND ride the cable</text>
+  <line x1="630" y1="533" x2="710" y2="533" stroke="#92400e" stroke-width="2"/>
+  <text x="662" y="526" text-anchor="middle" font-size="9" fill="#92400e">SDA/SCL</text>
+
+  <!-- ================= (4) Station C ================= -->
+  <text x="30" y="732" font-size="13" font-weight="700" fill="#92400e">④ Camera-trap node — ESP32-S3-EYE v2.2 + PIR (Station C)</text>
+
+  <rect x="30" y="746" width="440" height="170" rx="8" fill="#dcfce7" stroke="#166534"/>
+  <text x="250" y="770" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">ESP32-S3-EYE v2.2 — on-board pin map (reference)</text>
+  <text x="45" y="794" font-size="10" font-family="Consolas, monospace" fill="#14532d">OV2640: XCLK=15 SIOD=4 SIOC=5 PCLK=13</text>
+  <text x="45" y="810" font-size="10" font-family="Consolas, monospace" fill="#14532d">        D0–D7 = 11/9/8/10/12/18/17/16</text>
+  <text x="45" y="826" font-size="10" font-family="Consolas, monospace" fill="#14532d">        VSYNC=6 HREF=7</text>
+  <text x="45" y="846" font-size="10" font-family="Consolas, monospace" fill="#14532d">microSD (SDMMC 1-bit): D0=40 CMD=38 CLK=39 → /sdcard</text>
+  <text x="45" y="866" font-size="10" font-family="Consolas, monospace" fill="#14532d">low-battery threshold: 3.55 V (LiPo on battery pads)</text>
+  <text x="45" y="890" font-size="9.5" fill="#6b7280">camera + SD are on-module — nothing to wire. The ONE external wire-up is the PIR →</text>
+
+  <!-- PIR -->
+  <rect x="530" y="746" width="420" height="170" rx="8" fill="#fef3c7" stroke="#92400e"/>
+  <text x="740" y="770" text-anchor="middle" font-size="11.5" font-weight="700" fill="#78350f">PIR wake trigger (external — S3-EYE has none built in)</text>
+  <text x="545" y="794" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">HC-SR501: VCC ──► 5V   (AM312: 3V3)</text>
+  <text x="545" y="812" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">          OUT ──► EXT0-capable RTC GPIO</text>
+  <text x="545" y="830" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">          GND ──► GND</text>
+  <text x="545" y="854" font-size="9.5" fill="#92400e">firmware ships pir_gpio = -1 — pick an RTC-capable pin (GPIO0–21) that is</text>
+  <text x="545" y="868" font-size="9.5" fill="#92400e">FREE of the camera/SD map at left (e.g. GPIO1/2/3/14/21 — confirm against</text>
+  <text x="545" y="882" font-size="9.5" fill="#92400e">the silkscreen), set pir_gpio, rebuild. HC-SR501 OUT is 3V3-safe on 5 V.</text>
+  <text x="545" y="902" font-size="9.5" fill="#78350f" font-weight="600">Wave at it → EXT0 deep-sleep wake → capture → microSD (Stage 6).</text>
+  <line x1="470" y1="812" x2="530" y2="812" stroke="#92400e" stroke-width="2"/>
+
+  <!-- footer -->
+  <rect x="30" y="940" width="920" height="52" rx="8" fill="#fef2f2" stroke="#b91c1c"/>
+  <text x="45" y="960" font-size="10.5" font-weight="700" fill="#b91c1c">Bench rules (pin edition)</text>
+  <text x="45" y="978" font-size="10" fill="#7f1d1d">⚠ LoRa antennas on before ANY power · 3V3 logic everywhere except PIR VCC · common GND on every board-to-board wire (meter-check) · outputs only on the Track 0 allow-list.</text>
+</svg>
