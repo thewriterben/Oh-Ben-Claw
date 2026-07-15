@@ -37,6 +37,20 @@ you still have a working milestone. Later stages assume earlier ones.
 Prove the entire host stack before anything arrives. Everything here runs on the
 workstation.
 
+**0.0 Toolchain pre-flight** — five checks so Stage 1 doesn't stall on tooling:
+
+```powershell
+cargo --version        # if "not recognized": use "$env:USERPROFILE\.cargo\bin\cargo.exe"
+                       # or add that dir to PATH — applies to every cargo command below
+espflash --version     # flashes both ESP32-S3 firmware targets (cargo run does it)
+rustup target list --installed | Select-String xtensa   # esp toolchain (espup install)
+python --version       # 3.11+ for the ClawCam gateway venv (Stage 6)
+```
+
+Plus, Windows only: the **Silicon Labs CP210x VCP driver** (Heltec USB serial —
+Device Manager shows "CP210x" per board, not an unknown device). Arduino IDE is
+needed **only** for the optional T-Beam path (Stage 8.5); nothing in Stages 0–7.
+
 **0.1 Build + full verification**
 
 ```powershell
