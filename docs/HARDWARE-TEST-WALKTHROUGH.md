@@ -109,14 +109,67 @@ Confirm the command surface:
 
 ### A3. GPIO (real actuation)
 
-Wire an LED (or meter) to GPIO3 (allow-listed; XIAO pad D2 — on the Waveshare
-build use GPIO43 throughout).
-```json
-{"id":"2","cmd":"gpio_write","args":{"pin":3,"value":1}}   → ok:true, "done"   (LED on)
-{"id":"3","cmd":"gpio_read","args":{"pin":3}}              → ok:true, "1"
-{"id":"4","cmd":"gpio_write","args":{"pin":3,"value":0}}   → ok:true, "done"   (LED off)
+*Why this test matters: it's the first time a JSON command moves real electrons.
+Every physical action later — reflex cuts, safing, over-the-mesh commands — goes
+through exactly this `gpio_write` path (and its Track 0 gate, tested next in A4).
+Get A3 solid and the rest of the physical stack is plumbing on top of it.*
+
+**How commands reach the board.** The firmware reads **newline-delimited JSON**
+on its USB serial port. ⚠ **`espflash monitor` is display-only** — it does NOT
+forward your typing to the device. Close it (Ctrl+C; it holds the port), then use
+the repo's REPL:
+
+```powershell
+# path is repo-root-relative — from a firmware dir use the full path:
+powershell -File F:\Documents\GitHub\Oh-Ben-Claw\scripts\serial-json-repl.ps1 -Port COM7
 ```
-**PASS A3:** LED tracks the writes; `gpio_read` returns the level you set.
+
+Type a command — the whole JSON object on one line — and press **Enter**;
+replies print inline. (List ports: `[System.IO.Ports.SerialPort]::GetPortNames()`.
+Any interactive serial terminal also works — PuTTY with *local echo* + *local
+line editing* forced on, or the Arduino IDE Serial Monitor with newline endings.)
+
+**Anatomy of a command:** `id` is your correlation tag — any string, echoed back
+in the reply so you can match answers to requests. `cmd` is the operation.
+`args.pin` / `args.value` are plain numbers (`value` must be 0 or 1 — anything
+else is refused by the gate, which you'll prove in A4). Every reply is one line:
+`{"id":"2","ok":true,"result":"done"}` or `{"id":"2","ok":false,"error":"safety: …"}`.
+
+**Step 0 — zero-wiring smoke test (XIAO only).** The XIAO's onboard user LED is
+GPIO**21**, allow-listed, and **active-LOW** — write **0** to light it:
+```json
+{"id":"1","cmd":"gpio_write","args":{"pin":21,"value":0}}   → ok:true — LED ON
+{"id":"2","cmd":"gpio_write","args":{"pin":21,"value":1}}   → ok:true — LED off
+```
+If this works, your command path is proven before you touch a jumper wire.
+
+**Step 1 — wire an external LED** (or just a multimeter):
+- **XIAO:** pad silk-labeled **D2** = GPIO**3**.
+- **Waveshare 2.1:** 12-pin header pin 9 (TXD) = GPIO**43** — use `"pin":43` in
+  every command below.
+- Circuit: `GPIO ── 330 Ω ── LED anode (long leg) ── LED cathode (short leg) ── GND`.
+  Meter instead: probe GPIO-to-GND, expect ~3.3 V ↔ 0 V.
+
+**Step 2 — drive it and read it back:**
+```json
+{"id":"3","cmd":"gpio_write","args":{"pin":3,"value":1}}   → ok:true, "done"   (LED on,  ~3.3 V)
+{"id":"4","cmd":"gpio_read","args":{"pin":3}}              → ok:true, "1"
+{"id":"5","cmd":"gpio_write","args":{"pin":3,"value":0}}   → ok:true, "done"   (LED off, ~0 V)
+```
+The read-back matters: `gpio_read` samples the **actual pin level**, not a cached
+value — so `"1"` after a write proves the pin is really driving, not just that
+the firmware accepted the command.
+
+**If it doesn't work:**
+
+| Symptom | Likely cause |
+|---|---|
+| No reply at all | Monitor isn't forwarding input — use a separate serial terminal; or wrong COM port |
+| `ok:false … pin not in allow-list` | Typo, or wrong build for your board (default/XIAO list: 21,3,6,7,8 · `board-waveshare-21`: 43,44) |
+| `ok:true` but LED never lights | LED backwards (long leg to resistor), missing resistor, wrong pad — or you're on pin 21 which is active-LOW |
+| Write 1 but `gpio_read` returns `"0"` | Pin shorted/overloaded, or probing the wrong pad — meter it against GND |
+
+**PASS A3:** LED (or meter) tracks the writes; `gpio_read` returns the level you set.
 
 ### A4. Track 0 safety gate — the critical safety test
 

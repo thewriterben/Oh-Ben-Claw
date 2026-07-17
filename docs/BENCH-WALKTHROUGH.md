@@ -98,6 +98,9 @@ mesh (Stage 3b). Deep detail: `PHASE-B-LORA-MESH.md`.*
 **1.2 Flash the linktest firmware** (each board, one at a time):
 
 ```powershell
+$env:CARGO_TARGET_DIR="F:\t\fw"   # REQUIRED on Windows — esp-idf-sys fails with
+                                  # "Too long output directory" under deep paths.
+                                  # Once per shell, before ANY firmware build.
 cd firmware\heltec-lora-linktest
 cargo run --release        # flashes + opens serial monitor
 ```
@@ -128,7 +131,7 @@ written there. Summary gates:*
 build is the XIAO pin map and would drive this board's LCD lines:
 
 ```powershell
-$env:CARGO_TARGET_DIR="F:\t\obc"   # Windows: esp-idf-sys fails under deep paths
+$env:CARGO_TARGET_DIR="F:\t\fw"   # if not already set in this shell (Stage 1.2)
 cd firmware\obc-esp32-s3
 cargo run --release --features board-waveshare-21
 ```
@@ -398,9 +401,10 @@ level = "full"                  # irreversible/high-blast still asks per-call (T
 | Flash Waveshare control node | `cd firmware\obc-esp32-s3; cargo run --release --features board-waveshare-21` |
 | Flash XIAO node | `cd firmware\obc-esp32-s3; cargo run --release` (default = XIAO pin map) |
 | Flash Heltec linktest | `cd firmware\heltec-lora-linktest; cargo run --release` |
-| Windows firmware builds | set `$env:CARGO_TARGET_DIR="F:\t\obc"` first (esp-idf path-length limit) |
+| Windows firmware builds | set `$env:CARGO_TARGET_DIR="F:\t\fw"` first, every shell (esp-idf path-length limit) |
 | Brain with serial bridge | `cargo run --features hardware -- start --config bench-config.toml` |
 | Bench state | `cargo run -- status` (mesh health, escalations) |
+| Talk to a node (espflash monitor is display-only!) | `powershell -File F:\Documents\GitHub\Oh-Ben-Claw\scripts\serial-json-repl.ps1 -Port COM7` |
 | Node capabilities (serial) | `{"id":"1","cmd":"capabilities"}` |
 | LED on/off (serial) | `{"id":"2","cmd":"gpio_write","args":{"pin":43,"value":1}}` (Waveshare; XIAO onboard LED: pin 21, **0=on**) |
 | Track 0 refusal probe | `{"id":"3","cmd":"gpio_write","args":{"pin":99,"value":1}}` |
