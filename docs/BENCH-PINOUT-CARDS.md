@@ -85,7 +85,7 @@ Role: **primary control / reflex-safing + sensing node** (Station A). Runs `obc-
 | UART0 console | TX **43** · RX **44** |
 | I2C bus (sensors) | SDA **4** · SCL **5** |
 | I2S microphone | SCK **0** · WS **1** · SD **2** |
-| OV2640 camera | XCLK **15** · SIOD **4** · SIOC **5** · D0–D7 **39,40,41,42,16,17,18,19** · VSYNC **21** · HREF **38** · PCLK **13** |
+| OV2640 camera *(opt-in — no on-board camera; pins used only if you wire an external module and build with the `camera` feature, else `camera_capture` is a stub)* | XCLK **15** · SIOD **4** · SIOC **5** · D0–D7 **39,40,41,42,16,17,18,19** · VSYNC **21** · HREF **38** · PCLK **13** |
 | **Safe output pins** (Track-0 GPIO writes) | **3, 14, 26, 33, 46** |
 
 **Station-A sensor hookups** (use the pins above)
