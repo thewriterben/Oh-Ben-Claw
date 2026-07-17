@@ -21,7 +21,10 @@
 
 ## What is actually exposed (all of it)
 
-**12-pin header** — the only general-purpose I/O on the board:
+**12-pin header** — the only general-purpose I/O on the board. *(Mapping
+bench-verified 2026-07-16 via the meter fingerprint below — GND pair, BOOT→IO0
+continuity, and rail voltages all matched on real hardware; header has no
+silkscreen.)*
 
 | # | Pin | GPIO | Notes |
 |---|---|---|---|
@@ -36,6 +39,20 @@
 | 10 | RXD | 44 | UART0 RX, or plain GPIO |
 | 11 | NC | — | |
 | 12 | IO0 | 0 | The one true spare. BOOT strapping pin — keep high at reset |
+
+### No silkscreen on the 12-pin header? Fingerprint it with a meter
+
+1. **Power off, continuity vs the USB-C shell (GND):** exactly two pins beep —
+   GNDs, positions **1 and 5**. They're asymmetric, so this fixes orientation:
+   the end where a GND is the *outermost* pin is the pin-1 end.
+2. **Hold the BOOT button** and re-probe: one new pin gains continuity to GND
+   while held — that's **IO0 (GPIO0), pin 12**, at the far end. Definitive, and
+   it's the DHT22 pin.
+3. **Power on, volts:** pin 2 ≈ 5 V (VBus, beside the end GND) · pin 6 = 3.3 V
+   (beside the middle GND) · pins 7/8 idle ≈ 3.3 V (I2C pull-ups) · pin 11
+   floats · pins 9/10 (TXD/RXD → safe outputs 43/44) idle high under firmware.
+
+Any disagreement → stop and check the schematic PDF (wiki §Resources) before wiring.
 
 **I2C connector** (4-pin): GND / 3V3 / SCL=GPIO7 / SDA=GPIO15 — same bus as the
 header pins 7–8, shared with the onboard CST820 + QMI8658 + PCF85063 + expander.

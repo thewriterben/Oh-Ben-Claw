@@ -89,6 +89,11 @@ Waveshare wiki/schematic — the old card's 3/14/26/33/46 outputs and 4/5 I2C do
 | I2C connector | GND / 3V3 / SCL=**7** / SDA=**15** (same bus as header) |
 | UART connector | GND / 3V3 / 43 / 44 — dead while the UART Type-C is plugged in |
 
+**No silkscreen on the header** — fingerprint it: (power off) two pins have continuity to the
+USB shell = GNDs at positions 1 & 5, and the end where a GND is *outermost* is the pin-1 end;
+hold **BOOT** → one more pin gains GND continuity = **IO0, pin 12** (the DHT22 pin). Power on:
+pin 2 ≈ 5 V, pin 6 = 3.3 V, pins 7/8 idle ≈ 3.3 V. Full steps: datasheet §fingerprint.
+
 **Firmware-assigned (`board-waveshare-21`)** — `[fw]` `firmware/obc-esp32-s3`
 | Subsystem | Pins (GPIO) |
 |---|---|
