@@ -114,7 +114,19 @@ impl Provider for CompatibleProvider {
             builder = builder.bearer_auth(key);
         }
 
-        let response: CompatResponse = builder.json(&request).send().await?.json().await?;
+        // Surface API errors instead of force-parsing them (see openai.rs).
+        let http_response = builder.json(&request).send().await?;
+        let status = http_response.status();
+        let body = http_response.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("provider API error ({status}): {body}");
+        }
+        let response: CompatResponse = serde_json::from_str(&body).map_err(|e| {
+            anyhow::anyhow!(
+                "unexpected provider response shape ({e}): {}",
+                body.chars().take(300).collect::<String>()
+            )
+        })?;
 
         let choice = response
             .choices

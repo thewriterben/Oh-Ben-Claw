@@ -108,15 +108,25 @@ impl Provider for OpenRouterProvider {
             }
         }
 
-        let response: OrResponse = self
+        // Surface API errors instead of force-parsing them (see openai.rs).
+        let http_response = self
             .client
             .post(&url)
             .bearer_auth(api_key)
             .json(&request)
             .send()
-            .await?
-            .json()
             .await?;
+        let status = http_response.status();
+        let body = http_response.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("OpenRouter API error ({status}): {body}");
+        }
+        let response: OrResponse = serde_json::from_str(&body).map_err(|e| {
+            anyhow::anyhow!(
+                "unexpected OpenRouter response shape ({e}): {}",
+                body.chars().take(300).collect::<String>()
+            )
+        })?;
 
         let choice = response
             .choices
