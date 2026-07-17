@@ -310,9 +310,11 @@ DIO1=14; TCXO on DIO3 (1.8 V); RF switch on DIO2.
 (+ shared GND); reverse command path **Heltec GPIO4 → XIAO D7/GPIO44**. Confirm the shared
 ground with a multimeter before powering.
 
-**Waveshare ESP32-S3 bring-up** (`obc-esp32-s3/BRINGUP.md`): UART0 TX=43/RX=44 · I2C SDA=4/
-SCL=5 · I2S mic SCK=0/WS=1/SD=2 · OV2640 XCLK=15/SIOD=4/SIOC=5, D0–D7=39–42,16–19, VSYNC=21,
-HREF=38, PCLK=13 · safe output pins 3,14,26,33,46.
+**Waveshare ESP32-S3 bring-up** (`obc-esp32-s3/BRINGUP.md`, build
+`--features board-waveshare-21`): safe outputs **43/44** (12-pin header) · DHT22 = **IO0/
+GPIO0** + 10 kΩ pull-up · I2C sensors **SDA=15/SCL=7** (hardwired connector) · console =
+native USB (19/20) · the round LCD consumes most other GPIOs — header pins only. Default
+(no-feature) build = **XIAO** map: outputs 21,3,6,7,8 · DHT22=9 · I2C 4/5 · I2S 0/1/2.
 
 **ClawCam ESP32-S3-EYE** (`esp32_s3_eye_v22.json`): camera XCLK=15, SIOD=4, SIOC=5,
 D0–D7=11/9/8/10/12/18/17/16, VSYNC=6, HREF=7, PCLK=13 · SD (SDMMC 1-bit) D0=40/CMD=38/

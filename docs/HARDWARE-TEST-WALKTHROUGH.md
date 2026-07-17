@@ -23,12 +23,12 @@ The test is organised in three phases so you can stop at any milestone:
 
 | Item | Qty | Notes |
 |------|-----|-------|
-| ESP32-S3 board (Waveshare ESP32-S3 Touch LCD 2.1 or compatible) | 1 | The compute node. |
+| ESP32-S3 board — XIAO ESP32-S3 (default fw pin map) or Waveshare Touch LCD 2.1 (build `--features board-waveshare-21`) | 1 | The compute node. Examples below use the **default/XIAO map**; Waveshare deltas: outputs 43/44, DHT22=IO0, I2C 15/7 (see BRINGUP.md §2). |
 | USB-C cable (data) | 1 | For flashing + serial. |
-| I2C sensors (optional but recommended) | — | MAX17048 fuel gauge (@0x36), MPU6050 IMU (@0x68), BME280 (@0x76/0x77). SDA=GPIO4, SCL=GPIO5. |
-| I2S MEMS mic (INMP441 / SPH0645) | 1 opt | SCK=GPIO0, WS=GPIO1, SD=GPIO2. |
-| OV2640 camera (FPC) | 1 opt | Only for the camera test; needs PSRAM on the board. |
-| LED + resistor (or a scope/meter) | 1 | On an allow-listed output pin (3, 14, 26, 33, or 46) to see GPIO/reflex writes. |
+| I2C sensors (optional but recommended) | — | MAX17048 fuel gauge (@0x36), MPU6050 IMU (@0x68), BME280 (@0x76/0x77). Default: SDA=GPIO4, SCL=GPIO5 · Waveshare: SDA=15, SCL=7. |
+| I2S MEMS mic (INMP441 / SPH0645) | 1 opt | SCK=GPIO0, WS=GPIO1, SD=GPIO2 (default build only; n/a on Waveshare). |
+| OV2640 camera (FPC) | 1 opt | Only for the camera test; needs PSRAM on the board (n/a on Waveshare — no connector). |
+| LED + resistor (or a scope/meter) | 1 | On an allow-listed output pin — default build: **21, 3, 6, 7, 8** (21 = XIAO onboard LED, active-LOW) · Waveshare build: **43, 44**. |
 | LoRa boards (Heltec WiFi LoRa 32 V3, T-Beam, or RAK4631), **915 MHz (US)** | 2 | Phase B/C. Buy the 915 MHz variant; attach antennas before powering. |
 | Linux/Mac host or Windows PC | 1 | Runs the OBC brain in Phase C. |
 
@@ -95,7 +95,7 @@ Watch the boot log. You should see:
 Oh-Ben-Claw ESP32-S3 firmware v0.1.0 ready
 Node ID: obc-esp32-s3-001
 on-MCU safing rules loaded (3 built-in)
-I2C sensor bus ready (SDA=4, SCL=5)      # only if sensors wired
+I2C sensor bus ready (SDA=4, SCL=5)      # only if sensors wired (Waveshare build: SDA=15, SCL=7)
 I2S mic ready (SCK=0, WS=1, SD=2)        # only if mic wired
 ```
 
@@ -109,11 +109,12 @@ Confirm the command surface:
 
 ### A3. GPIO (real actuation)
 
-Wire an LED (or meter) to GPIO26 (allow-listed).
+Wire an LED (or meter) to GPIO3 (allow-listed; XIAO pad D2 — on the Waveshare
+build use GPIO43 throughout).
 ```json
-{"id":"2","cmd":"gpio_write","args":{"pin":26,"value":1}}   → ok:true, "done"   (LED on)
-{"id":"3","cmd":"gpio_read","args":{"pin":26}}              → ok:true, "1"
-{"id":"4","cmd":"gpio_write","args":{"pin":26,"value":0}}   → ok:true, "done"   (LED off)
+{"id":"2","cmd":"gpio_write","args":{"pin":3,"value":1}}   → ok:true, "done"   (LED on)
+{"id":"3","cmd":"gpio_read","args":{"pin":3}}              → ok:true, "1"
+{"id":"4","cmd":"gpio_write","args":{"pin":3,"value":0}}   → ok:true, "done"   (LED off)
 ```
 **PASS A3:** LED tracks the writes; `gpio_read` returns the level you set.
 
@@ -128,39 +129,39 @@ This proves nothing can drive a pin outside policy — the core safety guarantee
 ```
 **(b) Value range enforced:**
 ```json
-{"id":"11","cmd":"gpio_write","args":{"pin":26,"value":5}}
+{"id":"11","cmd":"gpio_write","args":{"pin":3,"value":5}}
 → ok:false, error:"safety: value 5 out of range (min=Some(0), max=Some(1))"
 ```
 **(c) Host tightens the policy (one pin + 500 ms rate limit):**
 ```json
 {"id":"12","cmd":"set_limits","args":{"limits":[
-  {"node_id":"obc-esp32-s3-001","tool":"gpio_write","allowed_pins":[26],
+  {"node_id":"obc-esp32-s3-001","tool":"gpio_write","allowed_pins":[3],
    "value_min":0,"value_max":1,"min_interval_ms":500}]}}
-→ ok:true, result includes "applied":true, "allowed_pins":[26], "min_interval_ms":500
+→ ok:true, result includes "applied":true, "allowed_pins":[3], "min_interval_ms":500
 ```
 **(d) Previously-allowed pin now refused (policy replaced):**
 ```json
-{"id":"13","cmd":"gpio_write","args":{"pin":14,"value":1}}
-→ ok:false, error:"safety: pin 14 not in allow-list"
+{"id":"13","cmd":"gpio_write","args":{"pin":21,"value":1}}
+→ ok:false, error:"safety: pin 21 not in allow-list"
 ```
 **(e) Rate limit bites (send 15 within ~0.5 s of 14):**
 ```json
-{"id":"14","cmd":"gpio_write","args":{"pin":26,"value":1}}  → ok:true
-{"id":"15","cmd":"gpio_write","args":{"pin":26,"value":0}}  → ok:false, error:"safety: rate limit (...ms since last, min 500ms)"
+{"id":"14","cmd":"gpio_write","args":{"pin":3,"value":1}}  → ok:true
+{"id":"15","cmd":"gpio_write","args":{"pin":3,"value":0}}  → ok:false, error:"safety: rate limit (...ms since last, min 500ms)"
 ```
-Wait >500 ms and pin 26 works again. **Reboot** to restore the default allow-list
-(3,14,26,33,46) before the reflex test.
+Wait >500 ms and pin 3 works again. **Reboot** to restore the default allow-list
+(21,3,6,7,8 — Waveshare build: 43,44) before the reflex test.
 
 **PASS A4:** all five sub-cases behave as shown. This is the most important test — the
 gate refuses every out-of-policy write.
 
 ### A5. Reflexes (System 1)
 
-Push a rule that cuts GPIO26 when a temperature threshold is crossed:
+Push a rule that cuts GPIO3 when a temperature threshold is crossed:
 ```json
 {"id":"20","cmd":"set_reflex_rules","args":{"rules":[
   {"id":"overheat","when":{"type":"sensor","entity":"sensor.temperature","op":"gt","value":60.0},
-   "then":{"type":"gpio_write","node_id":"self","pin":26,"value":0},"debounce_ms":1000}]}}
+   "then":{"type":"gpio_write","node_id":"self","pin":3,"value":0},"debounce_ms":1000}]}}
 → ok:true, result includes "builtin_safing" ≥ 3   (your rule merges *behind* the built-in safing rules)
 ```
 Fire it deterministically with a synthetic snapshot (works even without a real sensor):
@@ -360,7 +361,7 @@ the same logic that runs over MQTT, with no broker and no WiFi.
 | `rustup` picks `stable`, no Xtensa target | Build from `firmware/obc-esp32-s3` (its `rust-toolchain.toml` pins `esp`). |
 | esp-idf-sys ignores sdkconfig / `extra_components` | `CARGO_WORKSPACE_DIR = { value = "", relative = true }` must be in `.cargo/config.toml` (it is). |
 | `no such command: espflash` | `cargo install espflash`, then `cargo run --release`. |
-| `gpio_write` always `pin ... not in allow-list` | Not in the boot set (3,14,26,33,46), or a tighter `set_limits` is active — reboot to reset. |
+| `gpio_write` always `pin ... not in allow-list` | Not in the boot set (default/XIAO: 21,3,6,7,8 · Waveshare build: 43,44), or a tighter `set_limits` is active — reboot to reset. |
 | `sensor_read ... Unknown sensor/field` | That part isn't wired / not supported — expected for a bare board. |
 | Camera `esp_camera_init failed` | PSRAM mode — swap `CONFIG_SPIRAM_MODE_OCT` ↔ `QUAD` in `sdkconfig.defaults`. |
 | LoRa boards don't hear each other | Match freq/BW/SF/CR/syncword on both; antennas attached; both 915 MHz. |

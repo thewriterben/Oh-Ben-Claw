@@ -124,10 +124,21 @@ duplicate floods with all three powered.
 *Kit rows 4, 7–9. This is `HARDWARE-TEST-WALKTHROUGH.md` **Phase A** — run it as
 written there. Summary gates:*
 
-**2.1** Flash `firmware/obc-esp32-s3` (`cargo run --release`), confirm the boot
-banner and `{"id":"1","cmd":"capabilities"}` → `ok:true`.
+**2.1** Flash `firmware/obc-esp32-s3` **with the board feature** — the default
+build is the XIAO pin map and would drive this board's LCD lines:
 
-**2.2 LED smoke test** on an allow-listed pin (GPIO26): `gpio_write` 1/0, LED tracks.
+```powershell
+$env:CARGO_TARGET_DIR="F:\t\obc"   # Windows: esp-idf-sys fails under deep paths
+cd firmware\obc-esp32-s3
+cargo run --release --features board-waveshare-21
+```
+
+Confirm the boot banner and `{"id":"1","cmd":"capabilities"}` → `ok:true`.
+*(Running Stage 2 on a XIAO instead? Default build, allow-list 21/3/6/7/8,
+onboard LED = GPIO21 **active-low**, I2C 4/5, DHT22 on 9.)*
+
+**2.2 LED smoke test** on an allow-listed pin — **GPIO43** (12-pin header, TXD
+pin): LED + 330 Ω to GND; `gpio_write` pin 43 → 1/0, LED tracks.
 
 **2.3 Track 0 on-MCU gate — the critical test.** All three must refuse:
 - pin outside allow-list (`pin 99`) → `safety: pin not in allow-list`
@@ -137,8 +148,11 @@ banner and `{"id":"1","cmd":"capabilities"}` → `ok:true`.
 This is the deterministic gate the LLM cannot override — if any of these pass
 through, **stop and fix before continuing**.
 
-**2.4 Sensors.** DHT22 on its data pin, then BME280/MPU-6050 on I2C (SDA=4, SCL=5):
-`sensor_read` returns real values (breathe on the DHT22, tilt the IMU).
+**2.4 Sensors.** DHT22 data → header pin **IO0** (GPIO0) with a 10 kΩ pull-up to
+3V3 (required — it also holds the BOOT strap high), then BME280/MPU-6050 on the
+**I2C connector** (SDA=15, SCL=7; the bus already carries the board's touch/IMU/
+RTC — no address conflicts): `sensor_read` returns real values (breathe on the
+DHT22, tilt the IMU).
 
 **2.5 On-MCU safing.** Confirm the boot log's `on-MCU safing rules loaded` and the
 reflex behaviors per Phase A.
@@ -381,12 +395,14 @@ level = "full"                  # irreversible/high-blast still asks per-call (T
 
 | Do | Command |
 |---|---|
-| Flash control node / XIAO | `cd firmware\obc-esp32-s3; cargo run --release` |
+| Flash Waveshare control node | `cd firmware\obc-esp32-s3; cargo run --release --features board-waveshare-21` |
+| Flash XIAO node | `cd firmware\obc-esp32-s3; cargo run --release` (default = XIAO pin map) |
 | Flash Heltec linktest | `cd firmware\heltec-lora-linktest; cargo run --release` |
+| Windows firmware builds | set `$env:CARGO_TARGET_DIR="F:\t\obc"` first (esp-idf path-length limit) |
 | Brain with serial bridge | `cargo run --features hardware -- start --config bench-config.toml` |
 | Bench state | `cargo run -- status` (mesh health, escalations) |
 | Node capabilities (serial) | `{"id":"1","cmd":"capabilities"}` |
-| LED on/off (serial) | `{"id":"2","cmd":"gpio_write","args":{"pin":26,"value":1}}` |
+| LED on/off (serial) | `{"id":"2","cmd":"gpio_write","args":{"pin":43,"value":1}}` (Waveshare; XIAO onboard LED: pin 21, **0=on**) |
 | Track 0 refusal probe | `{"id":"3","cmd":"gpio_write","args":{"pin":99,"value":1}}` |
 | Live metrics | `GET http://<host>:8080/api/v1/metrics` (or Fleet app) |
 

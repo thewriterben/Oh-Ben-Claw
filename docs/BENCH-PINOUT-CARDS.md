@@ -77,29 +77,39 @@ Free header pins for probing: D0–D5, D8–D10 (mind D4/D5 = I2C, D8–D10 = SP
 
 ## Card 3 — Waveshare ESP32-S3-Touch-LCD-2.1
 
-Role: **primary control / reflex-safing + sensing node** (Station A). Runs `obc-esp32-s3`.
+Role: **primary control / reflex-safing + sensing node** (Station A). Runs `obc-esp32-s3`
+built with **`--features board-waveshare-21`** — the default build is the XIAO pin map and
+would drive this board's LCD lines as GPIO. *(Card corrected 2026-07-16 against the
+Waveshare wiki/schematic — the old card's 3/14/26/33/46 outputs and 4/5 I2C don't exist here.)*
 
-**Firmware-assigned** — `[fw]` `firmware/obc-esp32-s3/BRINGUP.md`, `CAMERA.md`
+**The board exposes exactly three connectors** — `[board]`
+| Connector | Pins |
+|---|---|
+| 12-pin header | GND ·5V· **GPIO19/20** (native-USB D−/D+) · 3V3 · **SCL=7 / SDA=15** (I2C-only) · **TXD=43 / RXD=44** · NC · **IO0=GPIO0** |
+| I2C connector | GND / 3V3 / SCL=**7** / SDA=**15** (same bus as header) |
+| UART connector | GND / 3V3 / 43 / 44 — dead while the UART Type-C is plugged in |
+
+**Firmware-assigned (`board-waveshare-21`)** — `[fw]` `firmware/obc-esp32-s3`
 | Subsystem | Pins (GPIO) |
 |---|---|
-| UART0 console | TX **43** · RX **44** |
-| I2C bus (sensors) | SDA **4** · SCL **5** |
-| I2S microphone | SCK **0** · WS **1** · SD **2** |
-| OV2640 camera *(opt-in — no on-board camera; pins used only if you wire an external module and build with the `camera` feature, else `camera_capture` is a stub)* | XCLK **15** · SIOD **4** · SIOC **5** · D0–D7 **39,40,41,42,16,17,18,19** · VSYNC **21** · HREF **38** · PCLK **13** |
-| **Safe output pins** (Track-0 GPIO writes) | **3, 14, 26, 33, 46** |
+| **Safe output pins** (Track-0 GPIO writes) | **43, 44** (UART1 spine uplink disabled on this build) |
+| DHT22 data | **0** (header pin IO0) + 10 kΩ pull-up to 3V3 |
+| I2C bus (sensors) | SDA **15** · SCL **7** (hardwired connector) |
+| Command I/O | native USB-Serial-JTAG (GPIO19/20 — the "USB" Type-C) |
+| Camera / I2S mic | **not possible on this board** — stubs |
 
-**Station-A sensor hookups** (use the pins above)
+**Station-A sensor hookups**
 | Peripheral | Wiring |
 |---|---|
-| BME280 @0x76 / MPU-6050 @0x68 | I2C SDA=4, SCL=5 (share the bus) |
-| DHT22 | one data GPIO (1-wire) — pick a free pin, not a camera/I2C/I2S pin |
-| LED + 330 Ω | a **safe output pin**, e.g. **GPIO14** |
+| BME280 @0x76 / MPU-6050 @0x68 | I2C connector SDA=15, SCL=7 — bus already carries touch/IMU/RTC at 0x15/0x20/0x51/0x6B/0x7E; no conflict |
+| DHT22 | + →3V3 · out → **IO0** (+10 kΩ→3V3, keeps BOOT strap high) · − →GND |
+| LED + 330 Ω | **GPIO43** (header TXD pin) → LED → GND · `gpio_write pin 43` |
 
-**Board reference** — `[board]` datasheet (`docs/datasheets/waveshare-esp32-s3-touch-lcd-2.1.md`):
-2.1" round LCD, **GT911** capacitive touch (I2C), **IP5306** power management, I2S audio.
-⚠ Camera SIOD/SIOC **share** I2C GPIO4/5 with the sensor bus — don't drive both a camera and
-I2C sensors on the same pins simultaneously without planning. Reserve the I2S (0/1/2) and
-camera pins if using those subsystems.
+**Board reference** — `[board]` (`docs/datasheets/waveshare-esp32-s3-touch-lcd-2.1.md`):
+round 480×480 RGB LCD (ST7701), CST820 touch, QMI8658 IMU + PCF85063 RTC onboard (free
+extra sensors on the I2C bus!), TCA9554 expander internal-only, two Type-C ports.
+⚠ The LCD consumes GPIO 1–3, 5–14, 16–18, 21, 38–41, 45–48 — never drive those as GPIO.
+⚠ GPIO0 is the BOOT strap — anything on it must idle HIGH at reset (the DHT22 + pull-up does).
 
 ---
 
