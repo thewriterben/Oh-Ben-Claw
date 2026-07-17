@@ -58,7 +58,7 @@ shellexpand = "3.1"
 
 # Logging
 tracing = { version = "0.1", default-features = false }
-tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "env-filter"] }
 
 # Error handling
 anyhow = "1.0"

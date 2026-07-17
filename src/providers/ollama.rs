@@ -92,14 +92,20 @@ impl Provider for OllamaProvider {
             }
         }
 
-        let response: OllamaResponse = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?
-            .json()
-            .await?;
+        // Surface API errors instead of force-parsing them (see openai.rs; an
+        // uninstalled model's error JSON showed as "error decoding response").
+        let http_response = self.client.post(&url).json(&request).send().await?;
+        let status = http_response.status();
+        let body = http_response.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("Ollama API error ({status}): {body}");
+        }
+        let response: OllamaResponse = serde_json::from_str(&body).map_err(|e| {
+            anyhow::anyhow!(
+                "unexpected Ollama response shape ({e}): {}",
+                body.chars().take(300).collect::<String>()
+            )
+        })?;
 
         Ok(ChatCompletion {
             message: response.message.content,

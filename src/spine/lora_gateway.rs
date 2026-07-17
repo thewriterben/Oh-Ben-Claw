@@ -325,20 +325,23 @@ mod serial {
     use crate::memory::world::WorldMemory;
     use anyhow::Context;
     use std::io::{Read, Write};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::mpsc;
 
-    /// Shared write handle to the base-station console.
-    pub type SharedSerialWriter = Arc<Mutex<Box<dyn serialport::SerialPort>>>;
+    /// Outbound command queue into the single serial I/O thread.
+    pub type SerialWriterHandle = mpsc::Sender<String>;
 
     /// Open the base-station Heltec console. Returns a channel of console lines
-    /// (fed by a dedicated blocking reader thread) and a shared write handle for
-    /// the outbound command sink.
+    /// and a command-queue sender — BOTH serviced by one dedicated I/O thread on
+    /// one handle. No `try_clone`: duplicated Windows COM handles fail writes
+    /// with `os error 22` (ERROR_BAD_COMMAND) while the original reads fine —
+    /// bench-caught 2026-07-17 when the first over-the-air command never left
+    /// the PC.
     pub fn open_split(
         port: &str,
         baud: u32,
-    ) -> anyhow::Result<(mpsc::Receiver<String>, SharedSerialWriter)> {
+    ) -> anyhow::Result<(mpsc::Receiver<String>, SerialWriterHandle)> {
         let mut serial = serialport::new(port, baud)
             .timeout(Duration::from_millis(250))
             .open()
@@ -363,21 +366,31 @@ mod serial {
         std::thread::sleep(Duration::from_millis(1500));
         tracing::info!("[lora_gateway] boot window elapsed; lines held low (run state)");
 
-        let writer: SharedSerialWriter = Arc::new(Mutex::new(
-            serial
-                .try_clone()
-                .context("failed to clone serial handle for the command sink")?,
-        ));
-
-        // Dedicated blocking reader thread: accumulate bytes into newline-framed
-        // lines and push them over the channel. Read timeouts are the idle path.
-        let (tx, rx) = mpsc::channel::<String>(256);
+        // Single I/O thread, single handle: interleave 250 ms-timeout reads with
+        // draining the outbound command queue. Read timeouts are the idle path.
+        let (line_tx, line_rx) = mpsc::channel::<String>(256);
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<String>(32);
         std::thread::Builder::new()
-            .name("lora-gateway-rx".into())
+            .name("lora-gateway-io".into())
             .spawn(move || {
                 let mut buf = [0u8; 512];
                 let mut line: Vec<u8> = Vec::with_capacity(256);
                 loop {
+                    // 1) Outbound: drain any queued commands (newline-framed).
+                    while let Ok(cmd) = cmd_rx.try_recv() {
+                        let r = serial
+                            .write_all(cmd.as_bytes())
+                            .and_then(|()| serial.write_all(b"\n"))
+                            .and_then(|()| serial.flush());
+                        match r {
+                            Ok(()) => tracing::info!(
+                                "[lora_gateway] command written to base console ({} B)",
+                                cmd.len() + 1
+                            ),
+                            Err(e) => tracing::warn!("[lora_gateway] serial write error: {e}"),
+                        }
+                    }
+                    // 2) Inbound: read with timeout, frame into lines.
                     match serial.read(&mut buf) {
                         Ok(0) => {}
                         Ok(n) => {
@@ -386,7 +399,7 @@ mod serial {
                                     if !line.is_empty() {
                                         let s = String::from_utf8_lossy(&line).into_owned();
                                         line.clear();
-                                        if tx.blocking_send(s).is_err() {
+                                        if line_tx.blocking_send(s).is_err() {
                                             return; // receiver dropped — shut down
                                         }
                                     }
@@ -406,9 +419,9 @@ mod serial {
                     }
                 }
             })
-            .context("failed to spawn LoRa gateway reader thread")?;
+            .context("failed to spawn LoRa gateway I/O thread")?;
 
-        Ok((rx, writer))
+        Ok((line_rx, cmd_tx))
     }
 
     /// RX loop: take console lines off the reader-thread channel and bridge each
@@ -439,14 +452,15 @@ mod serial {
         }
     }
 
-    /// Outbound [`CommandSink`] over the base-station Heltec's console: writes each
-    /// command as a newline-framed line, which the station transmits over LoRa.
+    /// Outbound [`CommandSink`] over the base-station Heltec's console: queues each
+    /// command (newline-framed) into the serial I/O thread, which writes it on the
+    /// one true handle; the station then transmits it over LoRa.
     pub struct SerialCommandSink {
-        writer: SharedSerialWriter,
+        writer: SerialWriterHandle,
     }
 
     impl SerialCommandSink {
-        pub fn new(writer: SharedSerialWriter) -> Self {
+        pub fn new(writer: SerialWriterHandle) -> Self {
             Self { writer }
         }
     }
@@ -454,16 +468,10 @@ mod serial {
     #[async_trait::async_trait]
     impl CommandSink for SerialCommandSink {
         async fn send_command(&self, cmd: &NodeCommand) -> anyhow::Result<()> {
-            let line = cmd.encode();
-            let writer = Arc::clone(&self.writer);
-            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                let mut w = writer.lock().expect("serial writer lock poisoned");
-                w.write_all(line.as_bytes())?;
-                w.write_all(b"\n")?;
-                w.flush()?;
-                Ok(())
-            })
-            .await??;
+            self.writer
+                .send(cmd.encode())
+                .await
+                .map_err(|_| anyhow::anyhow!("serial I/O thread has exited"))?;
             Ok(())
         }
     }

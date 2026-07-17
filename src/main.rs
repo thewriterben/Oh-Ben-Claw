@@ -27,7 +27,7 @@
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
-use tracing::{info, Level};
+use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
 use oh_ben_claw::agent::{Agent, AgentHandle, OrchestratorAgent};
@@ -193,8 +193,14 @@ enum SkillCommands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Honor RUST_LOG (e.g. `RUST_LOG=debug` for the LoRa gateway's raw-line
+    // view); default to INFO when unset. The old hardcoded INFO level silently
+    // ignored RUST_LOG — bench-caught 2026-07-17.
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 

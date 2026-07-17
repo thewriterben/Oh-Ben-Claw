@@ -619,7 +619,7 @@ UART to a Heltec LoRa gateway, which carries it over the mesh. Runbook:
 - [x] Status surface: `oh-ben-claw status` shows recent escalations (severity + age) from the log-of-record, alongside mesh health
 - [x] Base-station Heltec: USB console (UART0 stdin) → LoRa TX — background reader thread, no UART0 reconfigure (`firmware/heltec-lora-linktest`) — **flashed + bench-validated 2026-07-17** (3 boards, ping + relay de-dup, host ingest via serial gateway)
 - [x] XIAO→Heltec **forward** jumper D6→GPIO2 (inbound) — **bench-validated 2026-07-17**: `obc-esp32-s3-001` reflex/link_state reports ride XIAO UART1 → Heltec → LoRa → base → world memory (`status` shows the node live; end-to-end during a real host-link loss)
-- [ ] Heltec→XIAO **reverse** jumper GPIO4→D7 (outbound; wired, untested — bench Stage 5)
+- [x] Heltec→XIAO **reverse** jumper GPIO4→D7 (outbound) — **bench-validated 2026-07-17** (Stage 5): brain `mesh_command` → base console → LoRa → bridge → reverse jumper → node dispatch → reply home. Track 0 held at the far end: a `gpio_write pin=99` came back `{"error":"safety: pin 99 not in allow-list"}`, ingested as `node=obc-esp32-s3-001 msg=cmd_result`. The command round trip and the node-side allow-list are both real over the air.
 - [ ] True 3-hop relay (needs a 3rd radio out of direct range) — procedure ready as bench Stage 3b
 
 ---

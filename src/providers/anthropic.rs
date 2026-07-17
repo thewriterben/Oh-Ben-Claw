@@ -137,16 +137,26 @@ impl Provider for AnthropicProvider {
             body["tool_choice"] = serde_json::json!({"type": "auto"});
         }
 
-        let response: AnthropicResponse = self
+        // Surface API errors instead of force-parsing them (see openai.rs).
+        let http_response = self
             .client
             .post(&url)
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&body)
             .send()
-            .await?
-            .json()
             .await?;
+        let status = http_response.status();
+        let body_text = http_response.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("Anthropic API error ({status}): {body_text}");
+        }
+        let response: AnthropicResponse = serde_json::from_str(&body_text).map_err(|e| {
+            anyhow::anyhow!(
+                "unexpected Anthropic response shape ({e}): {}",
+                body_text.chars().take(300).collect::<String>()
+            )
+        })?;
 
         let mut message = String::new();
         let mut tool_calls = Vec::new();
