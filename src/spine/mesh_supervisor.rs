@@ -18,7 +18,7 @@
 
 use crate::config::MeshSupervisorConfig;
 use crate::memory::world::WorldMemory;
-use crate::spine::lora_gateway::{CommandSink, NodeCommand};
+use crate::spine::lora_gateway::{CommandSink, NodeCommand, SOURCE};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -149,22 +149,33 @@ pub fn decide(views: &[MeshNodeView], now_ms: u64, cfg: &MeshSupervisorConfig) -
 /// Extract the current per-node views from world memory (rollup + last cmd_result +
 /// prior health + last recovery). Mesh nodes are the `mesh.<node>` rollup entities
 /// (node ids contain no dots, so a rollup splits into exactly two dot-parts).
+///
+/// Node discovery is **authoritative, not lexical**: a node exists because the LoRa
+/// gateway heard it on the air, so the rollup fact must carry the gateway's source.
+/// The shape of an entity name is not evidence of a radio.
+///
+/// This matters because `mesh.*` is a shared namespace. Anything else writing a
+/// two-part fact under it — the supervisor's own `mesh.escalated_count` aggregate, or
+/// (bench, 2026-07-17) a System 2 incident note at `mesh.escalation_status` — used to
+/// be mis-parsed as a phantom node. A phantom never transmits, so it goes offline,
+/// gets escalated, and pins `escalated_count >= 1` forever: the `safe-mesh-node-lost`
+/// reflex then fires every tick, waking System 2, which records another note. The
+/// agent manufactures its own emergency and reports it in a loop. Sourcing discovery
+/// at the radio closes that loop at the root, rather than blacklisting names one at a
+/// time as they appear.
 pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
     let entities = world.entities().unwrap_or_default();
     let mut views = Vec::new();
     for e in entities {
         let parts: Vec<&str> = e.split('.').collect();
-        // A mesh node rollup is `mesh.<node>` (exactly two dot-parts). Skip the
-        // supervisor's own aggregate `mesh.escalated_count`, which also has two parts
-        // but is a bare counter, not a node — otherwise it is mis-parsed as a phantom
-        // node (appearing from the tick *after* it is first written).
-        if parts.len() != 2 || parts[0] != "mesh" || parts[1] == "escalated_count" {
+        if parts.len() != 2 || parts[0] != "mesh" {
             continue;
         }
         let node = parts[1].to_string();
+        // Heard over the air by the gateway, or it is not a node.
         let last_seen_ms = match world.current(&e).ok().flatten() {
-            Some(f) => f.valid_from,
-            None => continue,
+            Some(f) if f.source == crate::spine::lora_gateway::SOURCE => f.valid_from,
+            _ => continue,
         };
         let last_cmd_ok = world
             .current(&format!("mesh.{node}.cmd_result"))
@@ -510,7 +521,7 @@ mod tests {
                 json!({ "last_type": "link_state", "rssi_dbm": -50, "seq": 1, "src": "2A" }),
                 1_000,
                 1_000,
-                "test",
+                SOURCE,
             )
             .unwrap();
 
@@ -584,7 +595,7 @@ mod tests {
     #[tokio::test]
     async fn tick_escalates_a_long_offline_node_then_clears_on_return() {
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, "test").unwrap();
+        world.observe("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, SOURCE).unwrap();
         world
             .observe("mesh.n.health", json!({ "status": "offline", "reason": "x" }), 1_000, 1_000, "test")
             .unwrap();
@@ -601,7 +612,7 @@ mod tests {
         assert_eq!(mock.sent.lock().unwrap().len(), 0, "escalated → no ping");
 
         // Node returns (fresh rollup) → escalation cleared.
-        world.observe("mesh.n", json!({ "last_type": "link_state" }), 30_500, 30_500, "test").unwrap();
+        world.observe("mesh.n", json!({ "last_type": "link_state" }), 30_500, 30_500, SOURCE).unwrap();
         tick(&world, Some(&sink), &c, 31_000).await;
         assert_eq!(
             world.current("mesh.n.escalation").unwrap().unwrap().value["status"],
@@ -615,7 +626,7 @@ mod tests {
         use crate::agent::safing::{standard_safing_rules, SafingOptions};
 
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, "test").unwrap();
+        world.observe("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, SOURCE).unwrap();
         world
             .observe("mesh.n.health", json!({ "status": "offline" }), 1_000, 1_000, "test")
             .unwrap();
@@ -640,14 +651,50 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn an_agent_note_under_mesh_never_becomes_a_node() {
+        // Bench regression, 2026-07-17. The `safe-mesh-node-lost` playbook tells System 2
+        // to record the loss; it filed the note at `mesh.escalation_status`, which
+        // lexical discovery read back as a node. The phantom can't transmit → offline →
+        // escalated → `escalated_count >= 1` forever → the reflex fires every tick →
+        // wakes System 2 → another note. The agent invents an emergency and reports it
+        // in a loop. Discovery is sourced at the radio, so the note stays a note.
+        let world = WorldMemory::open_in_memory().unwrap();
+        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE).unwrap();
+        world
+            .observe(
+                "mesh.escalation_status",
+                json!({ "nodes_escalated": ["n1"], "action_required": "operator_intervention" }),
+                1_000,
+                1_000,
+                "agent", // WorldMemoryTool's default source — an LLM wrote this
+            )
+            .unwrap();
+
+        let views = snapshot(&world);
+        assert_eq!(views.len(), 1, "the agent's own note is not a radio");
+        assert_eq!(views[0].node, "n1");
+
+        // And it is never escalated, so it cannot pin the reflex on.
+        let mut c = esc_cfg();
+        c.recover = None;
+        tick(&world, None, &c, 200_000).await;
+        assert!(
+            world.current("mesh.escalation_status.escalation").unwrap().is_none(),
+            "a note is never presumed lost"
+        );
+        let v = status_json(&world);
+        assert_eq!(v["summary"]["nodes"], json!(1), "no phantom in the fleet view");
+    }
+
     #[test]
     fn snapshot_ignores_the_escalated_count_aggregate() {
         // Regression: `mesh.escalated_count` is a bare counter with two dot-parts, so it
         // must NOT be mistaken for a `mesh.<node>` rollup (which would appear as a
         // phantom "online" node from the tick after it is first written).
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, "t").unwrap();
-        world.observe("mesh.escalated_count", json!(0), 1_000, 1_000, "t").unwrap();
+        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE).unwrap();
+        world.observe("mesh.escalated_count", json!(0), 1_000, 1_000, "mesh-supervisor").unwrap();
 
         let views = snapshot(&world);
         assert_eq!(views.len(), 1, "only the real node is a node");
@@ -662,11 +709,11 @@ mod tests {
         // The gateway route and the mesh_status tool both call status_json — one SSOT.
         let world = WorldMemory::open_in_memory().unwrap();
         world
-            .observe("mesh.n1", json!({ "last_type": "reflex", "rssi_dbm": -72 }), 1_000, 1_000, "t")
+            .observe("mesh.n1", json!({ "last_type": "reflex", "rssi_dbm": -72 }), 1_000, 1_000, SOURCE)
             .unwrap();
         world.observe("mesh.n1.health", json!({ "status": "online" }), 1_000, 1_000, "t").unwrap();
         // A second node that is offline and escalated.
-        world.observe("mesh.n2", json!({ "last_type": "-" }), 1_000, 1_000, "t").unwrap();
+        world.observe("mesh.n2", json!({ "last_type": "-" }), 1_000, 1_000, SOURCE).unwrap();
         world.observe("mesh.n2.health", json!({ "status": "offline" }), 1_000, 1_000, "t").unwrap();
         world
             .observe("mesh.n2.escalation", json!({ "status": "escalated" }), 1_000, 1_000, "t")
@@ -696,10 +743,10 @@ mod tests {
     fn rssi_series_keeps_the_newest_readings_oldest_first() {
         let world = WorldMemory::open_in_memory().unwrap();
         // Four rollups for n1; one carries no rssi and is skipped.
-        world.observe("mesh.n1", json!({ "rssi_dbm": -60 }), 1_000, 1_000, "t").unwrap();
-        world.observe("mesh.n1", json!({ "rssi_dbm": -70 }), 2_000, 2_000, "t").unwrap();
-        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 3_000, 3_000, "t").unwrap();
-        world.observe("mesh.n1", json!({ "rssi_dbm": -80 }), 4_000, 4_000, "t").unwrap();
+        world.observe("mesh.n1", json!({ "rssi_dbm": -60 }), 1_000, 1_000, SOURCE).unwrap();
+        world.observe("mesh.n1", json!({ "rssi_dbm": -70 }), 2_000, 2_000, SOURCE).unwrap();
+        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 3_000, 3_000, SOURCE).unwrap();
+        world.observe("mesh.n1", json!({ "rssi_dbm": -80 }), 4_000, 4_000, SOURCE).unwrap();
 
         let full = rssi_series(&world, "n1", 24);
         assert_eq!(full, vec![-60, -70, -80], "oldest→newest, rssi-less fact skipped");
@@ -748,7 +795,7 @@ mod tests {
         assert_eq!(esc[1]["ts_ms"], json!(1_000));
 
         // status_json surfaces the same feed.
-        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, "t").unwrap();
+        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE).unwrap();
         let v = status_json(&world);
         assert_eq!(v["escalations"].as_array().unwrap().len(), 2);
     }

@@ -83,6 +83,21 @@ impl Tool for WorldMemoryTool {
                 let Some(entity) = args.get("entity").and_then(|v| v.as_str()) else {
                     return Ok(ToolResult::err("'observe' requires 'entity'"));
                 };
+                // `mesh.*` belongs to the LoRa gateway and the mesh supervisor: those
+                // facts are perception (what a radio actually said) and derived health.
+                // An agent note filed in there is read back as fleet state — a bench
+                // run once had System 2 record an incident at `mesh.escalation_status`,
+                // which the supervisor then tracked as a node, escalated, and alarmed
+                // on forever. Notes about the mesh are welcome; they just don't get to
+                // masquerade as the mesh.
+                if entity.starts_with("mesh.") {
+                    return Ok(ToolResult::err(
+                        "'mesh.*' is reserved for mesh perception written by the LoRa \
+                         gateway and supervisor — writing there would be read back as \
+                         real node state. Use `mesh_status` to read the mesh, and file \
+                         notes under a different entity (e.g. 'incident.<node>').",
+                    ));
+                }
                 let value = args.get("value").cloned().unwrap_or(Value::Null);
                 let now = now_ms();
                 let valid_from = args
@@ -139,6 +154,37 @@ mod tests {
 
     fn tool() -> WorldMemoryTool {
         WorldMemoryTool::new(Arc::new(WorldMemory::open_in_memory().unwrap()))
+    }
+
+    #[tokio::test]
+    async fn observing_into_the_reserved_mesh_namespace_is_refused() {
+        // Bench regression, 2026-07-17: a System 2 note at `mesh.escalation_status` was
+        // read back by the mesh supervisor as a node and escalated as lost.
+        let t = tool();
+        let r = t
+            .execute(json!({
+                "action": "observe",
+                "entity": "mesh.escalation_status",
+                "value": { "status": "critical" }
+            }))
+            .await
+            .unwrap();
+        assert!(!r.success, "mesh.* is reserved for mesh perception");
+        // The reason rides in `error`, not `output` — a refusal has to say why, or the
+        // caller just sees `success: false` and guesses (bench, 2026-07-17).
+        let why = r.error.unwrap_or_default();
+        assert!(why.contains("incident."), "points at a safe namespace: {why}");
+
+        // A note *about* the mesh, filed outside the namespace, is fine.
+        let ok = t
+            .execute(json!({
+                "action": "observe",
+                "entity": "incident.obc-esp32-s3-001",
+                "value": { "status": "presumed lost" }
+            }))
+            .await
+            .unwrap();
+        assert!(ok.success);
     }
 
     #[tokio::test]
