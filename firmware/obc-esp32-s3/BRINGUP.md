@@ -153,12 +153,14 @@ policy. Verify default-deny, then a host-pushed tightening, then the rate limit.
 → ok:false, error:"safety: value 5 out of range (min=Some(0), max=Some(1))"
 ```
 
-**Host pushes a stricter policy — one pin, 500 ms rate limit:**
+**Host pushes a stricter policy — one pin, 5 s rate limit.** ⚠ Send as **one
+line** (newline-delimited protocol — a multi-line paste arrives as broken
+fragments and the policy silently never applies); confirm the raw reply contains
+`"applied":true`. (5000 ms, not 500: the main loop's ~1 s iteration means console
+commands can't arrive closer than ~1 s, so a 500 ms limit is unobservable here.)
 ```json
-{"id":"12","cmd":"set_limits","args":{"limits":[
-  {"node_id":"obc-esp32-s3-001","tool":"gpio_write","allowed_pins":[3],
-   "value_min":0,"value_max":1,"min_interval_ms":500}]}}
-→ ok:true, result includes "applied":true,"allowed_pins":[3],"min_interval_ms":500
+{"id":"12","cmd":"set_limits","args":{"limits":[{"node_id":"obc-esp32-s3-001","tool":"gpio_write","allowed_pins":[3],"value_min":0,"value_max":1,"min_interval_ms":5000}]}}
+→ ok:true, result includes "applied":true,"allowed_pins":[3],"min_interval_ms":5000
 ```
 
 **Now a previously-allowed pin is refused (policy replaced):**
@@ -170,9 +172,9 @@ policy. Verify default-deny, then a host-pushed tightening, then the rate limit.
 **And the rate limit bites on rapid re-fire of pin 3:**
 ```json
 {"id":"14","cmd":"gpio_write","args":{"pin":3,"value":1}}   → ok:true
-{"id":"15","cmd":"gpio_write","args":{"pin":3,"value":0}}   → ok:false, error:"safety: rate limit (…ms since last, min 500ms)"
+{"id":"15","cmd":"gpio_write","args":{"pin":3,"value":0}}   → ok:false, error:"safety: rate limit (…ms since last, min 5000ms)"
 ```
-(Send 15 within ~half a second of 14.) Wait >500 ms and it succeeds again.
+(Paste 15 right after 14 — within 5 s.) Wait >5 s and it succeeds again.
 
 ---
 
@@ -180,11 +182,10 @@ policy. Verify default-deny, then a host-pushed tightening, then the rate limit.
 
 The node reacts within ~1 s to sensor thresholds even with no host in the loop.
 
-**Push a rule that cuts pin 3 when a sensor crosses a threshold:**
+**Push a rule that cuts pin 3 when a sensor crosses a threshold** (one line — same
+newline-delimited caveat as §5):
 ```json
-{"id":"20","cmd":"set_reflex_rules","args":{"rules":[
-  {"id":"overheat","when":{"type":"sensor","entity":"sensor.temperature","op":"gt","value":60.0},
-   "then":{"type":"gpio_write","node_id":"self","pin":3,"value":0},"debounce_ms":1000}]}}
+{"id":"20","cmd":"set_reflex_rules","args":{"rules":[{"id":"overheat","when":{"type":"sensor","entity":"sensor.temperature","op":"gt","value":60.0},"then":{"type":"gpio_write","node_id":"self","pin":3,"value":0},"debounce_ms":1000}]}}
 → ok:true, result includes "builtin_safing" ≥ 3  (your rule is merged *behind* the built-in safing rules)
 ```
 
