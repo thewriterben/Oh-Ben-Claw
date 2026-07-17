@@ -124,10 +124,22 @@ the repo's REPL:
 powershell -File F:\Documents\GitHub\Oh-Ben-Claw\scripts\serial-json-repl.ps1 -Port COM7
 ```
 
-Type a command — the whole JSON object on one line — and press **Enter**;
-replies print inline. (List ports: `[System.IO.Ports.SerialPort]::GetPortNames()`.
-Any interactive serial terminal also works — PuTTY with *local echo* + *local
-line editing* forced on, or the Arduino IDE Serial Monitor with newline endings.)
+Wait for the green **`Connected to COMx`** banner, *then* type the command — the
+whole JSON object on one line — and press **Enter**; replies print inline.
+⚠ Don't type JSON at a normal `PS >` prompt — that's PowerShell, which will try
+to parse it as script and error. JSON only goes into the running REPL (no `PS >`
+prompt visible).
+
+**Which COM port?** List them with friendly names:
+```powershell
+Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'COM\d' } | Select-Object -ExpandProperty Name
+```
+"USB Serial Device" / "USB JTAG/serial debug unit" = the ESP32-S3 node's native
+USB (**this one**) · "Silicon Labs CP210x" = a Heltec console · "CH343" = the
+Waveshare's UART Type-C. Ambiguous? Unplug/replug the node — the number that
+vanishes and returns is yours. (Any interactive serial terminal also works —
+PuTTY with *local echo* + *local line editing* forced on, or the Arduino IDE
+Serial Monitor with newline endings.)
 
 **Anatomy of a command:** `id` is your correlation tag — any string, echoed back
 in the reply so you can match answers to requests. `cmd` is the operation.
@@ -185,24 +197,33 @@ This proves nothing can drive a pin outside policy — the core safety guarantee
 {"id":"11","cmd":"gpio_write","args":{"pin":3,"value":5}}
 → ok:false, error:"safety: value 5 out of range (min=Some(0), max=Some(1))"
 ```
-**(c) Host tightens the policy (one pin + 500 ms rate limit):**
+**(c) Host tightens the policy (one pin + 5 s rate limit):**
+
+⚠ **Send as ONE line** — the protocol is newline-delimited, so a pretty-printed
+multi-line paste arrives as broken fragments and the policy silently never
+applies (each fragment just errors). Verify the raw reply contains
+`"applied":true` before moving to (d).
+
+*(Why 5000 ms, not 500: the node's main loop takes ~1 s per iteration — reflex
+tick, sensors, heartbeat — so console commands are naturally ≥1 s apart and a
+500 ms limit can never be observed from the console. Bench-verified.)*
 ```json
-{"id":"12","cmd":"set_limits","args":{"limits":[
-  {"node_id":"obc-esp32-s3-001","tool":"gpio_write","allowed_pins":[3],
-   "value_min":0,"value_max":1,"min_interval_ms":500}]}}
-→ ok:true, result includes "applied":true, "allowed_pins":[3], "min_interval_ms":500
+{"id":"12","cmd":"set_limits","args":{"limits":[{"node_id":"obc-esp32-s3-001","tool":"gpio_write","allowed_pins":[3],"value_min":0,"value_max":1,"min_interval_ms":5000}]}}
+→ ok:true, result includes "applied":true, "allowed_pins":[3], "min_interval_ms":5000
 ```
 **(d) Previously-allowed pin now refused (policy replaced):**
 ```json
 {"id":"13","cmd":"gpio_write","args":{"pin":21,"value":1}}
 → ok:false, error:"safety: pin 21 not in allow-list"
 ```
-**(e) Rate limit bites (send 15 within ~0.5 s of 14):**
+**(e) Rate limit bites.** Paste **both lines as one block** and press Enter once —
+the embedded newline sends 14, your Enter sends 15, landing them ~100 ms apart
+(hand-pacing two pastes usually exceeds the window; bench-verified):
 ```json
 {"id":"14","cmd":"gpio_write","args":{"pin":3,"value":1}}  → ok:true
-{"id":"15","cmd":"gpio_write","args":{"pin":3,"value":0}}  → ok:false, error:"safety: rate limit (...ms since last, min 500ms)"
+{"id":"15","cmd":"gpio_write","args":{"pin":3,"value":0}}  → ok:false, error:"safety: rate limit (...ms since last, min 5000ms)"
 ```
-Wait >500 ms and pin 3 works again. **Reboot** to restore the default allow-list
+Wait >5 s and pin 3 works again. **Reboot** to restore the default allow-list
 (21,3,6,7,8 — Waveshare build: 43,44) before the reflex test.
 
 **PASS A4:** all five sub-cases behave as shown. This is the most important test — the
@@ -210,19 +231,20 @@ gate refuses every out-of-policy write.
 
 ### A5. Reflexes (System 1)
 
-Push a rule that cuts GPIO3 when a temperature threshold is crossed:
+Push a rule that cuts GPIO3 when a temperature threshold is crossed (**one line** —
+see the warning in A4c):
 ```json
-{"id":"20","cmd":"set_reflex_rules","args":{"rules":[
-  {"id":"overheat","when":{"type":"sensor","entity":"sensor.temperature","op":"gt","value":60.0},
-   "then":{"type":"gpio_write","node_id":"self","pin":3,"value":0},"debounce_ms":1000}]}}
+{"id":"20","cmd":"set_reflex_rules","args":{"rules":[{"id":"overheat","when":{"type":"sensor","entity":"sensor.temperature","op":"gt","value":60.0},"then":{"type":"gpio_write","node_id":"self","pin":3,"value":0},"debounce_ms":1000}]}}
 → ok:true, result includes "builtin_safing" ≥ 3   (your rule merges *behind* the built-in safing rules)
 ```
 Fire it deterministically with a synthetic snapshot (works even without a real sensor):
 ```json
 {"id":"21","cmd":"reflex_tick","args":{"snapshot":{"sensor.temperature":75.0},"now_ms":1000}}
-→ ok:true, result "fired":[{"rule_id":"overheat","applied":true,...}]
+→ ok:true — "fired" lists the BUILT-IN overtemp rules first (safe-overtemp-critical
+  cuts its pin with applied:true, safe-overtemp-warn escalates), THEN your
+  "overheat" rule with applied:true — built-ins always run ahead of pushed rules
 ```
-`applied:true` means the gated GPIO write succeeded (26 is allow-listed after reboot).
+`applied:true` means the gated GPIO write succeeded (pin 3 is allow-listed after reboot).
 
 **PASS A5:** the `overheat` reflex fires and `applied:true`.
 
