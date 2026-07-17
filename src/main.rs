@@ -2115,6 +2115,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 Ok(resp.message)
             }
         }
+        // The reasoner's dedicated "system2" session must exist before the first
+        // wake — message appends FK-reference sessions.id, and the first real
+        // hardware wake died on exactly that (bench, 2026-07-17).
+        if let Err(e) = memory.create_session_with_id("system2") {
+            tracing::warn!("could not pre-create the system2 session: {e}");
+        }
 
         let gate = NoveltyGate::new(
             config.system2.novelty_window_ms.unwrap_or(600_000),
