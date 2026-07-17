@@ -83,8 +83,9 @@ e.g. **3** on the XIAO (D2 pad; GPIO21 is the onboard LED, active-LOW), or **43*
 on the Waveshare — for the safety tests below. Examples below use the XIAO map.
 
 > **Windows path-length gotcha:** `esp-idf-sys` fails with "Too long output
-> directory" under deep paths. Set a short target dir first:
-> `$env:CARGO_TARGET_DIR="F:\t\obc"` (any ≤ ~10-char base works).
+> directory" under deep paths. Set a short target dir first, once per shell:
+> `$env:CARGO_TARGET_DIR="F:\t\fw"` (any ≤ ~10-char base works; applies to
+> every firmware crate — heltec-lora-linktest too).
 
 ---
 
