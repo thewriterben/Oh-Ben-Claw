@@ -20,6 +20,8 @@ resolver = "2"
 
 [package]
 name = "oh-ben-claw"
+# Plain `cargo run` should launch the agent, not the emit-* helper binaries.
+default-run = "oh-ben-claw"
 version = "0.1.0"
 edition = "2021"
 authors = ["thewriterben"]
@@ -92,8 +94,12 @@ rumqttc = { version = "0.24", default-features = false, features = ["use-rustls"
 # Hardware discovery
 nusb = { version = "0.2", default-features = false, optional = true }
 
-# Serial port for peripheral communication
+# Serial port for peripheral communication. The LoRa gateway uses the blocking
+# `serialport` crate on a reader thread — tokio-serial reads were observed to
+# pend forever on Windows (bench, 2026-07-17); tokio-serial remains for the
+# other serial drivers (arduino, lora_mesh).
 tokio-serial = { version = "5", default-features = false, optional = true }
+serialport = { version = "4", default-features = false, optional = true }
 
 # Base64 encoding (screenshots, image data, audio)
 base64 = "0.22"
@@ -140,7 +146,7 @@ default = ["hardware", "mqtt-spine", "world-anchor"]
 # `planner-wasm` crate compiles the same geo sources *without* this feature so
 # the pure geometry stays wasm-compatible.
 world-anchor = []
-hardware = ["nusb", "tokio-serial"]
+hardware = ["nusb", "tokio-serial", "serialport"]
 mqtt-spine = []
 peripheral-rpi = ["rppal"]
 peripheral-nanopi = []

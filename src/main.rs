@@ -49,6 +49,10 @@ use oh_ben_claw::{
 #[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Advanced multi-device AI assistant with distributed peripheral nodes.", long_about = None)]
 struct Cli {
+    /// Path to a config file (overrides the default location and the
+    /// OBC_CONFIG env var). E.g. `oh-ben-claw start --config bench-config.toml`.
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -195,6 +199,11 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     let cli = Cli::parse();
+    // `--config` wins over OBC_CONFIG, which wins over the default path —
+    // Config::load() reads OBC_CONFIG, so surface the flag through it.
+    if let Some(path) = &cli.config {
+        std::env::set_var("OBC_CONFIG", path);
+    }
     let mut config = Config::load()?;
 
     match cli.command {

@@ -6,6 +6,8 @@ Cargo.lock
 *.swo
 .env
 ~/.oh-ben-claw/
+# Local bench config — may carry ports/tokens; never commit
+bench-config.toml
 
 # Node.js
 node_modules/
