@@ -8,6 +8,10 @@ Cargo.lock
 ~/.oh-ben-claw/
 # Local bench config — may carry ports/tokens; never commit
 bench-config.toml
+# Runtime SQLite dbs the agent drops in cwd (named after [agent].name)
+obc-bench
+obc-bench-shm
+obc-bench-wal
 
 # Node.js
 node_modules/

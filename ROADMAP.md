@@ -617,10 +617,10 @@ UART to a Heltec LoRa gateway, which carries it over the mesh. Runbook:
 - [x] Periodic digest: scheduled roll-up of the escalation log by reason (`digest_interval_ms`, e.g. daily), delivered through the same channels; prior digests excluded from the next
 - [x] Severity routing: escalations classified (warning/critical) and routed per-channel by a configurable minimum (`log/webhook/speak_min_severity`) — log all, push/speak only the loud stuff
 - [x] Status surface: `oh-ben-claw status` shows recent escalations (severity + age) from the log-of-record, alongside mesh health
-- [x] Base-station Heltec: USB console (UART0 stdin) → LoRa TX — background reader thread, no UART0 reconfigure (`firmware/heltec-lora-linktest`, *flash-pending*)
-- [ ] XIAO→Heltec **forward** jumper D6→GPIO2 (inbound; continuity check pending)
-- [ ] Heltec→XIAO **reverse** jumper GPIO4→D7 (outbound; new)
-- [ ] True 3-hop relay (needs a 3rd radio out of direct range)
+- [x] Base-station Heltec: USB console (UART0 stdin) → LoRa TX — background reader thread, no UART0 reconfigure (`firmware/heltec-lora-linktest`) — **flashed + bench-validated 2026-07-17** (3 boards, ping + relay de-dup, host ingest via serial gateway)
+- [x] XIAO→Heltec **forward** jumper D6→GPIO2 (inbound) — **bench-validated 2026-07-17**: `obc-esp32-s3-001` reflex/link_state reports ride XIAO UART1 → Heltec → LoRa → base → world memory (`status` shows the node live; end-to-end during a real host-link loss)
+- [ ] Heltec→XIAO **reverse** jumper GPIO4→D7 (outbound; wired, untested — bench Stage 5)
+- [ ] True 3-hop relay (needs a 3rd radio out of direct range) — procedure ready as bench Stage 3b
 
 ---
 
