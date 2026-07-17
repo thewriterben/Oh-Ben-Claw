@@ -83,7 +83,12 @@ pub fn parse_gateway_line(line: &str) -> Option<GatewayFrame> {
         .parse()
         .ok()?;
     // Compact JSON never contains " : " (space-colon-space), so it's a safe split.
-    let payload = rest.split_once(" : ").map(|(_, p)| p.trim().to_string())?;
+    // Real console lines end with an ANSI color-reset (`\x1b[0m`) AFTER the
+    // payload — trailing escape bytes break serde_json, so cut at the first ESC
+    // (bench-caught 2026-07-17: every frame silently failed to ingest).
+    let payload = rest.split_once(" : ").map(|(_, p)| {
+        p.split('\u{1b}').next().unwrap_or("").trim().to_string()
+    })?;
     if payload.is_empty() {
         return None;
     }
@@ -307,69 +312,142 @@ pub trait CommandSink: Send + Sync {
 // ── Serial console reader (real hardware; `--features hardware`) ─────────────────
 //
 // Opens the base-station Heltec's USB console and drives [`ingest_gateway_line`]
-// over every line. Read-only: this side never transmits (the gateway relays and
-// keepalives on its own). tokio-serial is feature-gated like the other drivers.
+// over every line.
+//
+// Implementation note: this deliberately uses the BLOCKING `serialport` crate on
+// a dedicated reader thread feeding a tokio channel — NOT tokio-serial. On
+// Windows, tokio-serial/mio-serial reads were observed to pend forever with no
+// bytes and no errors (bench, 2026-07-17), while a blocking reader on the same
+// port streamed happily. Boring beats async here.
 #[cfg(feature = "hardware")]
 mod serial {
     use super::{ingest_gateway_line, CommandSink, NodeCommand};
     use crate::memory::world::WorldMemory;
     use anyhow::Context;
-    use std::sync::Arc;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
-    use tokio::sync::Mutex;
-    use tokio_serial::{SerialPortBuilderExt, SerialStream};
+    use std::io::{Read, Write};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tokio::sync::mpsc;
 
-    /// Open the base-station Heltec console and split it into (read, write) halves so
-    /// the inbound RX ingest loop and the outbound command sink can share the one
-    /// exclusive serial port.
+    /// Shared write handle to the base-station console.
+    pub type SharedSerialWriter = Arc<Mutex<Box<dyn serialport::SerialPort>>>;
+
+    /// Open the base-station Heltec console. Returns a channel of console lines
+    /// (fed by a dedicated blocking reader thread) and a shared write handle for
+    /// the outbound command sink.
     pub fn open_split(
         port: &str,
         baud: u32,
-    ) -> anyhow::Result<(ReadHalf<SerialStream>, WriteHalf<SerialStream>)> {
-        let serial = tokio_serial::new(port, baud)
-            .open_native_async()
+    ) -> anyhow::Result<(mpsc::Receiver<String>, SharedSerialWriter)> {
+        let mut serial = serialport::new(port, baud)
+            .timeout(Duration::from_millis(250))
+            .open()
             .with_context(|| format!("failed to open LoRa gateway console {port}"))?;
-        Ok(tokio::io::split(serial))
-    }
+        // ESP32 dev boards wire DTR/RTS to the auto-download circuit (EN/IO0).
+        // Wrong line states can HOLD THE BOARD IN RESET or — if the open glitches
+        // a reset while DTR=1/RTS=0 — strap it into DOWNLOAD MODE (dark, silent).
+        // Bench-swept on a Heltec V3 (CP2102), 2026-07-17:
+        //   steady DTR=0 RTS=1 → board HELD IN RESET
+        //   DTR=1/RTS=0 during a reset edge → download mode
+        //   both LOW → straps read high → clean boot, safe steady state
+        // So: drive both low immediately and hold; give a possibly-reset board a
+        // boot window before reading.
+        match serial.write_request_to_send(false) {
+            Ok(()) => tracing::info!("[lora_gateway] RTS deasserted"),
+            Err(e) => tracing::warn!("[lora_gateway] RTS deassert FAILED: {e}"),
+        }
+        match serial.write_data_terminal_ready(false) {
+            Ok(()) => tracing::info!("[lora_gateway] DTR deasserted"),
+            Err(e) => tracing::warn!("[lora_gateway] DTR deassert FAILED: {e}"),
+        }
+        std::thread::sleep(Duration::from_millis(1500));
+        tracing::info!("[lora_gateway] boot window elapsed; lines held low (run state)");
 
-    /// RX loop: read newline-framed console lines from the base-station Heltec and
-    /// bridge each node message into world memory. Runs until the port closes.
-    pub async fn run_gateway_rx<F>(read: ReadHalf<SerialStream>, world: Arc<WorldMemory>, now_ms: F)
-    where
-        F: Fn() -> u64 + Send,
-    {
-        let mut lines = BufReader::new(read).lines();
-        loop {
-            match lines.next_line().await {
-                Ok(Some(line)) => {
-                    if let Some(ing) = ingest_gateway_line(&line, &world, now_ms()) {
-                        tracing::info!(
-                            node = %ing.node_id,
-                            msg = %ing.msg_type,
-                            rssi = ing.rssi_dbm,
-                            "LoRa gateway → world memory"
-                        );
+        let writer: SharedSerialWriter = Arc::new(Mutex::new(
+            serial
+                .try_clone()
+                .context("failed to clone serial handle for the command sink")?,
+        ));
+
+        // Dedicated blocking reader thread: accumulate bytes into newline-framed
+        // lines and push them over the channel. Read timeouts are the idle path.
+        let (tx, rx) = mpsc::channel::<String>(256);
+        std::thread::Builder::new()
+            .name("lora-gateway-rx".into())
+            .spawn(move || {
+                let mut buf = [0u8; 512];
+                let mut line: Vec<u8> = Vec::with_capacity(256);
+                loop {
+                    match serial.read(&mut buf) {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            for &b in &buf[..n] {
+                                if b == b'\n' || b == b'\r' {
+                                    if !line.is_empty() {
+                                        let s = String::from_utf8_lossy(&line).into_owned();
+                                        line.clear();
+                                        if tx.blocking_send(s).is_err() {
+                                            return; // receiver dropped — shut down
+                                        }
+                                    }
+                                } else {
+                                    line.push(b);
+                                    if line.len() > 4096 {
+                                        line.clear(); // runaway line — discard
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+                        Err(e) => {
+                            tracing::warn!("[lora_gateway] serial read error: {e}");
+                            return;
+                        }
                     }
                 }
-                Ok(None) => break,
-                Err(e) => {
-                    tracing::warn!("LoRa gateway serial RX error: {e}");
-                    break;
-                }
+            })
+            .context("failed to spawn LoRa gateway reader thread")?;
+
+        Ok((rx, writer))
+    }
+
+    /// RX loop: take console lines off the reader-thread channel and bridge each
+    /// node message into world memory. Runs until the reader thread exits.
+    pub async fn run_gateway_rx<F>(
+        mut lines: mpsc::Receiver<String>,
+        world: Arc<WorldMemory>,
+        now_ms: F,
+    ) where
+        F: Fn() -> u64 + Send,
+    {
+        while let Some(line) = lines.recv().await {
+            // Raw-line visibility: silence must never again be ambiguous between
+            // "no bytes" and "bytes that don't parse" (bench lesson, 2026-07-17).
+            // Debug level — enable with RUST_LOG=debug when diagnosing.
+            tracing::debug!(
+                "[lora_gateway] raw: {}",
+                line.chars().take(110).collect::<String>()
+            );
+            if let Some(ing) = ingest_gateway_line(&line, &world, now_ms()) {
+                tracing::info!(
+                    node = %ing.node_id,
+                    msg = %ing.msg_type,
+                    rssi = ing.rssi_dbm,
+                    "LoRa gateway → world memory"
+                );
             }
         }
     }
 
-    /// Outbound [`CommandSink`] over the base-station Heltec's serial write half:
-    /// writes each command as a newline-framed line onto the console, which the
-    /// station transmits over LoRa.
+    /// Outbound [`CommandSink`] over the base-station Heltec's console: writes each
+    /// command as a newline-framed line, which the station transmits over LoRa.
     pub struct SerialCommandSink {
-        writer: Mutex<WriteHalf<SerialStream>>,
+        writer: SharedSerialWriter,
     }
 
     impl SerialCommandSink {
-        pub fn new(writer: WriteHalf<SerialStream>) -> Self {
-            Self { writer: Mutex::new(writer) }
+        pub fn new(writer: SharedSerialWriter) -> Self {
+            Self { writer }
         }
     }
 
@@ -377,10 +455,15 @@ mod serial {
     impl CommandSink for SerialCommandSink {
         async fn send_command(&self, cmd: &NodeCommand) -> anyhow::Result<()> {
             let line = cmd.encode();
-            let mut w = self.writer.lock().await;
-            w.write_all(line.as_bytes()).await?;
-            w.write_all(b"\n").await?;
-            w.flush().await?;
+            let writer = Arc::clone(&self.writer);
+            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                let mut w = writer.lock().expect("serial writer lock poisoned");
+                w.write_all(line.as_bytes())?;
+                w.write_all(b"\n")?;
+                w.flush()?;
+                Ok(())
+            })
+            .await??;
             Ok(())
         }
     }
@@ -411,6 +494,26 @@ mod tests {
         assert_eq!(f.src, 0xA2);
         assert_eq!(f.seq, 7);
         assert_eq!(f.rssi_dbm, -91);
+    }
+
+    /// Regression: real ESP-IDF console lines carry ANSI color codes AROUND the
+    /// whole line — including a `\x1b[0m` reset AFTER the JSON payload. That
+    /// trailing escape made serde_json reject every payload, so frames parsed
+    /// but never ingested (bench, 2026-07-17). Byte-for-byte bench line:
+    #[test]
+    fn strips_trailing_ansi_from_the_payload() {
+        let line = "\u{1b}[0;32mI (93772) heltec_lora_linktest: SPINE ◄ src=D8 seq=11 rssi=-10 dBm : {\"node_id\":\"gw-D8\",\"type\":\"gw_keepalive\",\"seq\":11}\u{1b}[0m";
+        let f = parse_gateway_line(line).expect("ANSI-wrapped line parses");
+        assert_eq!(f.src, 0xD8);
+        assert_eq!(f.seq, 11);
+        assert_eq!(f.rssi_dbm, -10);
+        // The payload must be CLEAN JSON — no escape bytes.
+        assert_eq!(
+            f.payload,
+            "{\"node_id\":\"gw-D8\",\"type\":\"gw_keepalive\",\"seq\":11}"
+        );
+        serde_json::from_str::<serde_json::Value>(&f.payload)
+            .expect("payload is valid JSON after ANSI strip");
     }
 
     #[test]

@@ -2202,11 +2202,27 @@ pub struct Config {
 }
 
 impl Config {
-    /// Load the configuration from the default location.
+    /// Load the configuration.
     ///
-    /// The default location is `~/.oh-ben-claw/config.toml`.
-    /// If the file does not exist, a default configuration is returned.
+    /// Precedence: the `OBC_CONFIG` env var (set by the CLI's `--config` flag,
+    /// or directly) → the default location per [`Self::default_config_path`]
+    /// (ProjectDirs — e.g. `%APPDATA%\thewriterben\oh-ben-claw\config\config.toml`
+    /// on Windows, `~/.config/oh-ben-claw/config.toml` on Linux).
+    /// An explicitly named file that is missing or malformed is a hard error —
+    /// never silently swapped for defaults. If only the default path is in play
+    /// and absent, a default configuration is returned.
     pub fn load() -> Result<Self> {
+        if let Ok(explicit) = std::env::var("OBC_CONFIG") {
+            let path = PathBuf::from(&explicit);
+            if !path.exists() {
+                anyhow::bail!("config file not found: {explicit} (from --config / OBC_CONFIG)");
+            }
+            let content = std::fs::read_to_string(&path)?;
+            let config: Self = toml::from_str(&content)
+                .map_err(|e| anyhow::anyhow!("config parse error in {explicit}: {e}"))?;
+            tracing::info!("Loaded config from {:?} (explicit)", path);
+            return Ok(config);
+        }
         let config_path = Self::default_config_path()?;
         if !config_path.exists() {
             tracing::info!("No config file found at {:?}, using defaults", config_path);
