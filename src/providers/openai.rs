@@ -86,15 +86,28 @@ impl Provider for OpenAiProvider {
             }
         }
 
-        let response: OpenAiResponse = self
+        // Read status + body BEFORE decoding: an API error (401 bad key, 429
+        // quota, …) returns an error JSON that force-parsing as a success shape
+        // turns into an opaque "error decoding response body" — which cost a
+        // live bench session two diagnostic laps (2026-07-17). Surface it.
+        let http_response = self
             .client
             .post(&url)
             .bearer_auth(api_key)
             .json(&request)
             .send()
-            .await?
-            .json()
             .await?;
+        let status = http_response.status();
+        let body = http_response.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("OpenAI API error ({status}): {body}");
+        }
+        let response: OpenAiResponse = serde_json::from_str(&body).map_err(|e| {
+            anyhow::anyhow!(
+                "unexpected OpenAI response shape ({e}): {}",
+                body.chars().take(300).collect::<String>()
+            )
+        })?;
 
         let choice = response
             .choices
