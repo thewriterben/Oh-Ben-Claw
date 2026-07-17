@@ -28,9 +28,17 @@ log = "0.4"
 [features]
 # Off by default: the default build needs no PSRAM and no esp32-camera IDF
 # component. Enable with `--features camera` AFTER adding `idf_component.yml` and
-# the PSRAM sdkconfig (see CAMERA.md). On the Waveshare board the camera SCCB
-# shares pins 4/5 with the I2C sensor bus, so this feature disables that bus.
+# the PSRAM sdkconfig (see CAMERA.md). The camera SCCB shares pins 4/5 with the
+# default (XIAO) I2C sensor bus, so this feature disables that bus. Not
+# applicable to the Waveshare 2.1 board (no camera connector).
 camera = []
+# Pin map for the Waveshare ESP32-S3-Touch-LCD-2.1 (round 480x480 RGB LCD).
+# That board exposes ONLY GPIO 0/19/20/43/44 (12-pin header) + a hardwired I2C
+# connector on SDA=15/SCL=7; the RGB LCD consumes most other GPIOs, so the
+# default XIAO pin map would drive LCD lines. This feature: safe outputs 43/44
+# (spine UART1 disabled — the XIAO is the mesh-bridged node), DHT22 on GPIO0,
+# I2C sensors on 15/7. Command I/O stays on native USB-Serial-JTAG (19/20).
+board-waveshare-21 = []
 
 [build-dependencies]
 embuild = "0.33"

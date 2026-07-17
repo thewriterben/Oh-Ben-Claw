@@ -60,19 +60,31 @@ match it to your module before chasing driver bugs.
 
 ---
 
-## 2. Wiring (Waveshare ESP32-S3 Touch LCD 2.1)
+## 2. Wiring — pick your board's pin map
 
-| Bus / device        | Signal → GPIO                                                   |
-|---------------------|----------------------------------------------------------------|
-| USB serial (UART0)  | TX=43, RX=44                                                   |
-| I2C sensor bus      | SDA=4, SCL=5                                                   |
-| I2S microphone      | SCK=0, WS=1, SD=2                                              |
-| Camera (OV2640)     | XCLK=15, SIOD=4, SIOC=5, D0–D7=39–42/16–19, VSYNC=21, HREF=38, PCLK=13 |
-| Output GPIOs (safe) | 3, 14, 26, 33, 46 (the boot allow-list)                        |
+The firmware has two pin maps. **Default build = XIAO ESP32-S3 (Sense).** Build with
+`--features board-waveshare-21` for the Waveshare ESP32-S3-Touch-LCD-2.1 (its round
+RGB LCD consumes most GPIOs — only the 12-pin header + I2C connector are exposed;
+see `docs/datasheets/waveshare-esp32-s3-touch-lcd-2.1.md`).
 
-The five output pins above are the only pins the Track 0 gate permits `gpio_write` on
-by default. Wire your actuator-enable line / LED to one of them (e.g. 26) for the
-safety tests below.
+| Bus / device        | Default (XIAO)              | `board-waveshare-21`             |
+|---------------------|-----------------------------|----------------------------------|
+| Command I/O         | native USB-Serial-JTAG      | native USB-Serial-JTAG (19/20)   |
+| Spine uplink (UART1)| TX=43 (D6), RX=44 (D7)      | **disabled** (pins repurposed)   |
+| I2C sensor bus      | SDA=4, SCL=5                | SDA=15, SCL=7 (hardwired conn.)  |
+| DHT22 data          | 9 (D10)                     | 0 (header IO0, 10 kΩ pull-up)    |
+| I2S microphone      | SCK=0, WS=1, SD=2           | n/a (stub)                       |
+| Camera (OV2640)     | opt-in `camera` feature     | n/a — no connector (stub)        |
+| Output GPIOs (safe) | **21, 3, 6, 7, 8**          | **43, 44**                       |
+
+The output pins are the only pins the Track 0 gate permits `gpio_write` on by
+default (boot allow-list). Wire your actuator-enable line / LED to one of them —
+e.g. **3** on the XIAO (D2 pad; GPIO21 is the onboard LED, active-LOW), or **43**
+on the Waveshare — for the safety tests below. Examples below use the XIAO map.
+
+> **Windows path-length gotcha:** `esp-idf-sys` fails with "Too long output
+> directory" under deep paths. Set a short target dir first:
+> `$env:CARGO_TARGET_DIR="F:\t\obc"` (any ≤ ~10-char base works).
 
 ---
 
@@ -108,9 +120,9 @@ to localize.
 
 **GPIO (real):**
 ```json
-{"id":"2","cmd":"gpio_write","args":{"pin":26,"value":1}}   → ok:true, result:"done"
-{"id":"3","cmd":"gpio_read","args":{"pin":26}}              → ok:true, result:"1"
-{"id":"4","cmd":"gpio_write","args":{"pin":26,"value":0}}   → ok:true, result:"done"
+{"id":"2","cmd":"gpio_write","args":{"pin":3,"value":1}}   → ok:true, result:"done"
+{"id":"3","cmd":"gpio_read","args":{"pin":3}}              → ok:true, result:"1"
+{"id":"4","cmd":"gpio_write","args":{"pin":3,"value":0}}   → ok:true, result:"done"
 ```
 
 **Sensors / camera / audio (currently stubs — confirm they respond, not the value):**
@@ -136,28 +148,28 @@ policy. Verify default-deny, then a host-pushed tightening, then the rate limit.
 
 **…and an out-of-range value:**
 ```json
-{"id":"11","cmd":"gpio_write","args":{"pin":26,"value":5}}
+{"id":"11","cmd":"gpio_write","args":{"pin":3,"value":5}}
 → ok:false, error:"safety: value 5 out of range (min=Some(0), max=Some(1))"
 ```
 
 **Host pushes a stricter policy — one pin, 500 ms rate limit:**
 ```json
 {"id":"12","cmd":"set_limits","args":{"limits":[
-  {"node_id":"obc-esp32-s3-001","tool":"gpio_write","allowed_pins":[26],
+  {"node_id":"obc-esp32-s3-001","tool":"gpio_write","allowed_pins":[3],
    "value_min":0,"value_max":1,"min_interval_ms":500}]}}
-→ ok:true, result includes "applied":true,"allowed_pins":[26],"min_interval_ms":500
+→ ok:true, result includes "applied":true,"allowed_pins":[3],"min_interval_ms":500
 ```
 
 **Now a previously-allowed pin is refused (policy replaced):**
 ```json
-{"id":"13","cmd":"gpio_write","args":{"pin":14,"value":1}}
-→ ok:false, error:"safety: pin 14 not in allow-list"
+{"id":"13","cmd":"gpio_write","args":{"pin":21,"value":1}}
+→ ok:false, error:"safety: pin 21 not in allow-list"
 ```
 
-**And the rate limit bites on rapid re-fire of pin 26:**
+**And the rate limit bites on rapid re-fire of pin 3:**
 ```json
-{"id":"14","cmd":"gpio_write","args":{"pin":26,"value":1}}   → ok:true
-{"id":"15","cmd":"gpio_write","args":{"pin":26,"value":0}}   → ok:false, error:"safety: rate limit (…ms since last, min 500ms)"
+{"id":"14","cmd":"gpio_write","args":{"pin":3,"value":1}}   → ok:true
+{"id":"15","cmd":"gpio_write","args":{"pin":3,"value":0}}   → ok:false, error:"safety: rate limit (…ms since last, min 500ms)"
 ```
 (Send 15 within ~half a second of 14.) Wait >500 ms and it succeeds again.
 
@@ -167,11 +179,11 @@ policy. Verify default-deny, then a host-pushed tightening, then the rate limit.
 
 The node reacts within ~1 s to sensor thresholds even with no host in the loop.
 
-**Push a rule that cuts pin 26 when a sensor crosses a threshold:**
+**Push a rule that cuts pin 3 when a sensor crosses a threshold:**
 ```json
 {"id":"20","cmd":"set_reflex_rules","args":{"rules":[
   {"id":"overheat","when":{"type":"sensor","entity":"sensor.temperature","op":"gt","value":60.0},
-   "then":{"type":"gpio_write","node_id":"self","pin":26,"value":0},"debounce_ms":1000}]}}
+   "then":{"type":"gpio_write","node_id":"self","pin":3,"value":0},"debounce_ms":1000}]}}
 → ok:true, result includes "builtin_safing" ≥ 3  (your rule is merged *behind* the built-in safing rules)
 ```
 
@@ -180,7 +192,7 @@ The node reacts within ~1 s to sensor thresholds even with no host in the loop.
 {"id":"21","cmd":"reflex_tick","args":{"snapshot":{"sensor.temperature":75.0},"now_ms":1000}}
 → ok:true, result "fired":[{"rule_id":"overheat","applied":true,…}]
 ```
-`applied:true` means the gated `gpio_write` succeeded (pin 26 is allow-listed). If you
+`applied:true` means the gated `gpio_write` succeeded (pin 3 is allow-listed). If you
 left the tight policy from §5 active, that's consistent; otherwise reset with a fresh
 `set_limits` or reboot.
 
@@ -220,7 +232,7 @@ The ESP32-S3 is the compute node; the LoRa mesh uses a separate radio node
 | `rustup` picks `stable`, no Xtensa target | Build from *this* dir (its `rust-toolchain.toml` pins `esp`); don't override the channel. |
 | Board boots, camera init fails | PSRAM mode mismatch (§1) — set OCT vs QUAD to match your module. |
 | `sensor_read` returns the same value always | Expected — it's still a stub (task 172). |
-| `gpio_write` always `ok:false: pin … not in allow-list` | Pin isn't in the boot allow-list (3,14,26,33,46) or a tighter `set_limits` is active — reboot to reset, or push a policy that includes your pin. |
+| `gpio_write` always `ok:false: pin … not in allow-list` | Pin isn't in the boot allow-list (default/XIAO: 21,3,6,7,8 · `board-waveshare-21`: 43,44) or a tighter `set_limits` is active — reboot to reset, or push a policy that includes your pin. |
 | No `link_state` reports | Reflex tick only runs with ≥1 rule loaded; the built-in safing rules load at boot, so this should always tick — check the boot log for "safing rules loaded". |
 
 ---

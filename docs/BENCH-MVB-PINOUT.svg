@@ -63,41 +63,41 @@
   <text x="30" y="424" font-size="10" fill="#6b7280">3V3 logic on both sides — never feed 5 V into these pins. Each board keeps its own USB power; only TX/RX/GND cross between boards.</text>
 
   <!-- ================= (3) Station A ================= -->
-  <text x="30" y="462" font-size="13" font-weight="700" fill="#166534">③ Control &amp; sensing node — Waveshare ESP32-S3 Touch-LCD 2.1 (Station A)</text>
+  <text x="30" y="462" font-size="13" font-weight="700" fill="#166534">③ Control &amp; sensing node — Waveshare ESP32-S3 Touch-LCD 2.1 (Station A) · build: --features board-waveshare-21</text>
 
   <rect x="30" y="476" width="270" height="216" rx="8" fill="#dcfce7" stroke="#166534"/>
   <text x="165" y="500" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">Waveshare ESP32-S3</text>
-  <text x="45" y="524" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">UART0: TX=43 RX=44 (console/USB)</text>
-  <text x="45" y="542" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">I2C:   SDA=GPIO4  SCL=GPIO5</text>
-  <text x="45" y="560" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">LED:   GPIO26 (this walkthrough)</text>
+  <text x="45" y="524" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">Console: native USB (GPIO19/20)</text>
+  <text x="45" y="542" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">I2C:  SDA=GPIO15  SCL=GPIO7</text>
+  <text x="45" y="560" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">DHT22: GPIO0 (header pin IO0)</text>
   <text x="45" y="584" font-size="10" fill="#166534" font-weight="600">Track 0 output allow-list:</text>
-  <text x="45" y="600" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">GPIO 3 · 14 · 26 · 33 · 46</text>
+  <text x="45" y="600" font-size="10.5" font-family="Consolas, monospace" fill="#14532d">GPIO 43 · 44 (12-pin header)</text>
   <text x="45" y="620" font-size="9.5" fill="#6b7280">anything else → node refuses:</text>
   <text x="45" y="634" font-size="9.5" font-family="Consolas, monospace" fill="#b91c1c">safety: pin not in allow-list</text>
-  <text x="45" y="660" font-size="9.5" fill="#b91c1c">⚠ camera SIOD/SIOC share GPIO4/5 with</text>
-  <text x="45" y="674" font-size="9.5" fill="#b91c1c">this I2C bus — not both at once</text>
+  <text x="45" y="660" font-size="9.5" fill="#b91c1c">⚠ LCD owns GPIO 1–3,5–14,16–18,</text>
+  <text x="45" y="674" font-size="9.5" fill="#b91c1c">21,38–41,45–48 — header pins only</text>
 
   <!-- LED circuit -->
   <rect x="360" y="476" width="270" height="92" rx="8" fill="#fef3c7" stroke="#92400e"/>
   <text x="495" y="498" text-anchor="middle" font-size="11.5" font-weight="700" fill="#78350f">LED smoke test (Stage 2.2)</text>
-  <text x="375" y="522" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">GPIO26 ──► 330 Ω ──► LED(+)</text>
+  <text x="375" y="522" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">GPIO43 (hdr TXD) ─► 330 Ω ─► LED(+)</text>
   <text x="375" y="540" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">LED(−) ──► GND</text>
-  <text x="375" y="558" font-size="9.5" fill="#92400e">gpio_write pin 26 → 1/0 · LED tracks</text>
+  <text x="375" y="558" font-size="9.5" fill="#92400e">gpio_write pin 43 → 1/0 · LED tracks</text>
   <line x1="300" y1="522" x2="360" y2="522" stroke="#92400e" stroke-width="2"/>
 
   <!-- DHT22 -->
   <rect x="360" y="584" width="270" height="122" rx="8" fill="#fef3c7" stroke="#92400e"/>
   <text x="495" y="606" text-anchor="middle" font-size="11.5" font-weight="700" fill="#78350f">DHT22 (Stage 2.4 — first sensor)</text>
-  <text x="375" y="630" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">VCC  ──► 3V3</text>
-  <text x="375" y="648" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">DATA ──► free GPIO (set in config)</text>
+  <text x="375" y="630" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">VCC  ──► 3V3 (header pin 6)</text>
+  <text x="375" y="648" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">DATA ──► IO0 / GPIO0 (header pin 12)</text>
   <text x="375" y="666" font-size="10.5" font-family="Consolas, monospace" fill="#78350f">GND  ──► GND</text>
-  <text x="375" y="684" font-size="9.5" fill="#92400e">pick a pin clear of camera / I2C(4,5) / I2S(0,1,2)</text>
-  <text x="375" y="698" font-size="9.5" fill="#92400e">+ 10 kΩ pull-up DATA→3V3 (breakout boards have it)</text>
+  <text x="375" y="684" font-size="9.5" fill="#92400e">10 kΩ pull-up DATA→3V3 — required here: it also holds</text>
+  <text x="375" y="698" font-size="9.5" fill="#92400e">the BOOT strap high at reset (DHT22 idles high — safe)</text>
   <line x1="300" y1="638" x2="360" y2="638" stroke="#92400e" stroke-width="2"/>
 
   <!-- I2C chain -->
   <rect x="690" y="476" width="260" height="216" rx="8" fill="#fef3c7" stroke="#92400e"/>
-  <text x="820" y="498" text-anchor="middle" font-size="11.5" font-weight="700" fill="#78350f">I2C chain (Qwiic) — SDA=4 · SCL=5</text>
+  <text x="820" y="498" text-anchor="middle" font-size="11.5" font-weight="700" fill="#78350f">I2C connector — SDA=15 · SCL=7</text>
   <rect x="710" y="514" width="220" height="58" rx="6" fill="#ffffff" stroke="#92400e"/>
   <text x="820" y="536" text-anchor="middle" font-size="11" font-weight="600" fill="#78350f">BME280 — addr 0x76</text>
   <text x="820" y="554" text-anchor="middle" font-size="9.5" fill="#92400e">temp / humidity / pressure</text>
@@ -105,7 +105,8 @@
   <text x="820" y="608" text-anchor="middle" font-size="11" font-weight="600" fill="#78350f">MPU-6050 — addr 0x68</text>
   <text x="820" y="626" text-anchor="middle" font-size="9.5" fill="#92400e">IMU (tilt it for live values)</text>
   <line x1="820" y1="572" x2="820" y2="586" stroke="#92400e" stroke-width="2"/>
-  <text x="820" y="668" text-anchor="middle" font-size="9.5" fill="#92400e">daisy-chain on one connector · 3V3 + GND ride the cable</text>
+  <text x="820" y="662" text-anchor="middle" font-size="9.5" fill="#92400e">bus already carries touch/IMU/RTC (0x15/20/51/6B/7E)</text>
+  <text x="820" y="676" text-anchor="middle" font-size="9.5" fill="#92400e">— no conflicts · 3V3 + GND ride the cable</text>
   <line x1="630" y1="533" x2="710" y2="533" stroke="#92400e" stroke-width="2"/>
   <text x="662" y="526" text-anchor="middle" font-size="9" fill="#92400e">SDA/SCL</text>
 

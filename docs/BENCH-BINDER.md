@@ -110,17 +110,21 @@ on the **Sense expansion board** (not on the header). Free for probing: D0–D5,
 
 ## Card 3 — Waveshare ESP32-S3-Touch-LCD-2.1  ·  control / sensing node
 
-`[fw] obc-esp32-s3/BRINGUP.md`:
-- UART0: TX **43** · RX **44**
-- I2C sensors: SDA **4** · SCL **5**  → BME280 @0x76, MPU-6050 @0x68 (shared bus)
-- I2S mic: SCK **0** · WS **1** · SD **2**
-- OV2640: XCLK **15** · SIOD **4** · SIOC **5** · D0–D7 **39,40,41,42,16,17,18,19** · VSYNC
-  **21** · HREF **38** · PCLK **13**
-- **Safe output pins (Track-0 GPIO writes): 3, 14, 26, 33, 46** — put the LED here (e.g. 14).
-- DHT22: one free 1-wire GPIO (not a camera/I2C/I2S pin).
+**Build with `--features board-waveshare-21`** — the default firmware build is the XIAO pin
+map and would drive this board's LCD lines. *(Corrected against the Waveshare wiki: the board
+exposes ONLY a 12-pin header + I2C/UART connectors; the round RGB LCD consumes GPIO 1–3,
+5–14, 16–18, 21, 38–41, 45–48. No camera connector, no mic pins.)*
 
-⚠ Camera SIOD/SIOC **share** I2C 4/5 — plan camera vs sensor-bus use. `[board]`: GT911 touch,
-IP5306 power mgmt, I2S audio.
+`[fw] obc-esp32-s3` (`board-waveshare-21`):
+- **Safe output pins (Track-0 GPIO writes): 43, 44** (header TXD/RXD; spine UART1 disabled)
+  — LED + 330 Ω on **43**.
+- DHT22: header pin **IO0** (GPIO0) + 10 kΩ pull-up to 3V3 (doubles as BOOT-strap hold-high).
+- I2C sensors: **SDA 15 · SCL 7** (hardwired connector) → BME280 @0x76, MPU-6050 @0x68 —
+  coexist with onboard touch/IMU/RTC (0x15/0x20/0x51/0x6B/0x7E).
+- Command I/O: native USB-Serial-JTAG (GPIO19/20 — the "USB" Type-C port).
+
+`[board]`: CST820 touch, QMI8658 IMU + PCF85063 RTC onboard, TCA9554 expander (internal
+only), dual Type-C (native USB + CH343 UART auto-download).
 
 ## Card 4 — Espressif ESP32-S3-EYE v2.2  ·  ClawCam camera-trap node  *(pinmap unverified)*
 
@@ -239,7 +243,8 @@ map to the not-yet-built phases.
 - **Phase-B UART bridge:** XIAO **GPIO43 → Heltec GPIO2**; **Heltec GPIO4 → XIAO GPIO44**;
   shared GND (meter it).
 - **Waveshare ESP32-S3:** UART0 43/44 · I2C 4/5 · I2S mic 0/1/2 · OV2640 XCLK15/SIOD4/SIOC5/
-  D0–D7 39–42,16–19/VSYNC21/HREF38/PCLK13 · safe outputs 3,14,26,33,46.
+  D0–D7 39–42,16–19/VSYNC21/HREF38/PCLK13 · safe outputs: default/XIAO 21,3,6,7,8 ·
+  Waveshare (`board-waveshare-21`) 43,44.
 - **ESP32-S3-EYE:** camera XCLK15/SIOD4/SIOC5/D0–D7 11,9,8,10,12,18,17,16/VSYNC6/HREF7/
   PCLK13 · SD D0=40/CMD=38/CLK=39 → `/sdcard` · **PIR unassigned** · low-batt 3.55 V.
 - **T-Deck** (if used): power-gate **GPIO10 HIGH first** · shared SPI SCK40/MISO38/MOSI41 →

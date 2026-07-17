@@ -74,10 +74,18 @@
 //! | SD     | 2    |
 //!
 //! ## I2C Sensor Bus (BME280, MPU6050, SHT31, etc.)
-//! | Signal | GPIO |
-//! |--------|------|
-//! | SDA    | 4    |
-//! | SCL    | 5    |
+//! | Signal | GPIO (default / XIAO) | GPIO (`board-waveshare-21`) |
+//! |--------|-----------------------|------------------------------|
+//! | SDA    | 4                     | 15 (hardwired I2C connector) |
+//! | SCL    | 5                     | 7  (hardwired I2C connector) |
+//!
+//! ## Board pin maps
+//! The default pin map targets the **XIAO ESP32-S3 (Sense)**. Build with
+//! `--features board-waveshare-21` for the Waveshare ESP32-S3-Touch-LCD-2.1,
+//! whose round RGB LCD consumes most GPIOs — only the 12-pin header
+//! (GPIO 0/19/20/43/44) and the I2C connector (15/7) are exposed. On that
+//! build: safe outputs = 43/44 (UART1 spine uplink disabled), DHT22 = GPIO0
+//! (10 kΩ pull-up to 3V3 — also keeps the BOOT strap high), I2C = 15/7.
 //!
 //! # Build & Flash
 //!
@@ -116,6 +124,9 @@ mod safety;
 mod sensors;
 
 /// I2S microphone driver (loudness/RMS).
+// On the Waveshare 2.1 build the I2S init is compiled out (GPIO0 = DHT22,
+// GPIO1/2 = LCD), so the constructor path is intentionally unused there.
+#[cfg_attr(feature = "board-waveshare-21", allow(dead_code))]
 mod audio;
 
 /// DHT22/AM2302 single-wire temperature + humidity driver.
@@ -160,12 +171,29 @@ const MAX_LLM_RESPONSE_SIZE: usize = 8 * 1024;
 /// light it) plus exposed header pads (D2=GPIO3, D5=GPIO6, D8=GPIO7, D9=GPIO8).
 /// Deliberately avoids GPIO26–37 (consumed by the XIAO's octal PSRAM) and the
 /// I2C (GPIO4/5) and I2S (GPIO1/2) pins.
+#[cfg(not(feature = "board-waveshare-21"))]
 const OUTPUT_PINS: &[i32] = &[21, 3, 6, 7, 8];
+
+/// GPIO pins configured as outputs during startup (Waveshare 2.1 board).
+///
+/// The round RGB LCD consumes GPIO 1–3, 5–14, 16–18, 21, 38–41, 45–48; only the
+/// 12-pin header is exposed. 43/44 are the free header pins once the UART1
+/// spine uplink is disabled (it is, on this build — the XIAO is the mesh node).
+/// GPIO0 is reserved for the DHT22, 19/20 carry the native-USB console.
+#[cfg(feature = "board-waveshare-21")]
+const OUTPUT_PINS: &[i32] = &[43, 44];
 
 /// DHT22/AM2302 data line. Uses D10 (GPIO9) — a free exposed pad that avoids the
 /// actuator outputs, the I2C bus (4/5), and the I2S mic pins (1/2). Wire the
 /// module's `out` pin here (with `+`→3V3 and `-`→GND).
+#[cfg(not(feature = "board-waveshare-21"))]
 const DHT22_GPIO: i32 = 9;
+
+/// DHT22/AM2302 data line (Waveshare 2.1 board): header pin `IO0` = GPIO0, the
+/// board's one spare pin. Add a 10 kΩ pull-up to 3V3 — it doubles as the BOOT
+/// strapping hold-high (the DHT22 idles high, so normal boot is preserved).
+#[cfg(feature = "board-waveshare-21")]
+const DHT22_GPIO: i32 = 0;
 
 // ── Agent State ───────────────────────────────────────────────────────────────
 
@@ -349,6 +377,11 @@ fn main() -> anyhow::Result<()> {
     // UART1 (TX=GPIO43 / the D6 pad) to a LoRa gateway (a Heltec V3), so the node's
     // messages ride the mesh. Best-effort — `.ok()` means the node still runs if the
     // UART can't init or nothing is wired. Wire D6(GPIO43) → gateway RX, GND↔GND.
+    //
+    // Disabled on the Waveshare 2.1 build: GPIO43/44 are that board's only free
+    // header pins, repurposed as the Track 0 safe outputs (the XIAO is the
+    // mesh-bridged node in the reference bench).
+    #[cfg(not(feature = "board-waveshare-21"))]
     let mut spine_uart: Option<UartDriver<'static>> = UartDriver::new(
         peripherals.uart1,
         pins.gpio43,
@@ -359,6 +392,8 @@ fn main() -> anyhow::Result<()> {
             .baudrate(esp_idf_svc::hal::units::Hertz(115_200)),
     )
     .ok();
+    #[cfg(feature = "board-waveshare-21")]
+    let mut spine_uart: Option<UartDriver<'static>> = None;
     match &spine_uart {
         Some(_) => info!("Spine uplink: UART1 ready — mirroring status/reflex out D6 (GPIO43) @115200."),
         None => log::warn!("Spine uplink: UART1 init FAILED — no LoRa mirror (check pin/peripheral)."),
@@ -382,23 +417,30 @@ fn main() -> anyhow::Result<()> {
     );
 
     let mut agent_state = AgentState::new();
-    // Real I2C sensor bus (SDA=GPIO4, SCL=GPIO5). If init fails (or no sensors are
-    // fitted), reads fall back to the stub so the node still boots and the reflex
-    // loop still runs.
+    // Real I2C sensor bus. Default (XIAO): SDA=GPIO4, SCL=GPIO5. Waveshare 2.1
+    // build: SDA=GPIO15, SCL=GPIO7 — the board's hardwired I2C connector (shared
+    // with the onboard QMI8658 IMU / PCF85063 RTC / touch at 0x15/0x20/0x51/0x6B/
+    // 0x7E; BME280 0x76 and MPU-6050 0x68 don't collide). If init fails (or no
+    // sensors are fitted), reads fall back to the stub so the node still boots
+    // and the reflex loop still runs.
     //
-    // Disabled when the `camera` feature is on: the OV2640's SCCB uses these same
-    // GPIO4/5 pins on this board, so the two can't share the bus. Wire the sensors
-    // to other pins if you need both.
+    // Disabled when the `camera` feature is on: the OV2640's SCCB uses the same
+    // GPIO4/5 pins as the default bus, so the two can't share. (Not applicable
+    // to the Waveshare build — no camera connector there.)
     #[cfg(not(feature = "camera"))]
     {
         use esp_idf_svc::hal::i2c::config::Config as I2cConfig;
         use esp_idf_svc::hal::i2c::I2cDriver;
         use esp_idf_svc::hal::units::FromValueType;
         let i2c_cfg = I2cConfig::new().baudrate(100_u32.kHz().into());
-        match I2cDriver::new(peripherals.i2c0, pins.gpio4, pins.gpio5, &i2c_cfg) {
+        #[cfg(not(feature = "board-waveshare-21"))]
+        let (sda, scl, sda_no, scl_no) = (pins.gpio4, pins.gpio5, 4, 5);
+        #[cfg(feature = "board-waveshare-21")]
+        let (sda, scl, sda_no, scl_no) = (pins.gpio15, pins.gpio7, 15, 7);
+        match I2cDriver::new(peripherals.i2c0, sda, scl, &i2c_cfg) {
             Ok(drv) => {
                 agent_state.sensors = Some(sensors::SensorBus::new(drv));
-                info!("I2C sensor bus ready (SDA=4, SCL=5)");
+                info!("I2C sensor bus ready (SDA={sda_no}, SCL={scl_no})");
             }
             Err(e) => {
                 log::warn!("I2C sensor bus init failed ({e}); sensor reads fall back to stubs")
@@ -413,6 +455,10 @@ fn main() -> anyhow::Result<()> {
     }
     // I2S microphone (SCK=GPIO0, WS=GPIO1, SD=GPIO2). Falls back to the stub RMS if
     // init fails or no mic is fitted.
+    //
+    // Disabled on the Waveshare 2.1 build: GPIO0 is the DHT22 there and GPIO1/2
+    // are LCD lines — no mic is wirable; `audio_sample` serves the stub RMS.
+    #[cfg(not(feature = "board-waveshare-21"))]
     {
         use esp_idf_svc::hal::i2s::{config, I2sDriver};
         let i2s_cfg = config::StdConfig::philips(

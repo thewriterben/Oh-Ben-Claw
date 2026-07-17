@@ -1,21 +1,86 @@
 # Waveshare ESP32-S3 Touch LCD 2.1 — Oh-Ben-Claw Reference
 
+> Corrected 2026-07-16 against the Waveshare wiki + schematic. The previous
+> revision of this file described a 40-pin header, LED on GPIO46, and an I2C bus
+> on GPIO4/5 — **none of which exist on this board**. Pin truth below.
+
 ## Board Overview
 
 | Property | Value |
 |---|---|
-| SoC | ESP32-S3 (dual-core Xtensa LX7, 240 MHz) |
-| Flash | 16 MB (QSPI) |
-| PSRAM | 8 MB (PSRAM8) |
-| Display | 2.1" LCD 480×480 IPS, ST7701 driver (3-wire SPI) |
-| Touch | GT911 capacitive multi-touch controller (I2C) |
-| USB | USB Type-C (ESP32-S3 native USB + CH343 USB-UART bridge) |
-| Battery | IP5306 power management (I2C, optional LiPo 3.7 V) |
-| Expansion | 40-pin header (compatible with many RPi HATs for non-SPI peripherals) |
+| SoC | ESP32-S3R8 (dual-core Xtensa LX7, 240 MHz, octal PSRAM) |
+| Flash / PSRAM | 16 MB QSPI flash · 8 MB PSRAM |
+| Display | 2.1" round IPS 480×480, ST7701 (3-wire SPI init + RGB565 parallel data) |
+| Touch | CST820 capacitive (I2C, interrupt) |
+| IMU | QMI8658 6-axis (onboard, I2C) |
+| RTC | PCF85063 (onboard, I2C, battery header) |
+| USB | **Two Type-C ports**: native USB (USB-Serial-JTAG, GPIO19/20) + UART Type-C (CH343 → UART0 43/44, auto-download) |
+| Expander | TCA9554 (EXIO0–7: LCD reset/CS, SD CS, buzzer, IMU/RTC INT — internal only, **not broken out**) |
+| Storage | TF card slot (shares GPIO1/2 with LCD init SPI; CS via expander) |
+| Battery | MX1.25 2-pin LiPo header + charge manager; BAT voltage sense on GPIO4 |
+
+## What is actually exposed (all of it)
+
+**12-pin header** — the only general-purpose I/O on the board:
+
+| # | Pin | GPIO | Notes |
+|---|---|---|---|
+| 1, 5 | GND | — | |
+| 2 | VBus | — | 5 V from USB |
+| 3 | D− | 19 | native-USB pair; GPIO only if you give up native USB |
+| 4 | D+ | 20 | native-USB pair; GPIO only if you give up native USB |
+| 6 | 3V3 | — | 800 mA LDO |
+| 7 | SCL | 7 | **I2C only** — cannot be remapped as GPIO |
+| 8 | SDA | 15 | **I2C only** — cannot be remapped as GPIO |
+| 9 | TXD | 43 | UART0 TX, or plain GPIO |
+| 10 | RXD | 44 | UART0 RX, or plain GPIO |
+| 11 | NC | — | |
+| 12 | IO0 | 0 | The one true spare. BOOT strapping pin — keep high at reset |
+
+**I2C connector** (4-pin): GND / 3V3 / SCL=GPIO7 / SDA=GPIO15 — same bus as the
+header pins 7–8, shared with the onboard CST820 + QMI8658 + PCF85063 + expander.
+**Addresses in use: 0x15, 0x20, 0x51, 0x6B, 0x7E** — BME280 (0x76) and MPU-6050
+(0x68) coexist fine.
+
+**UART connector** (4-pin): GND / 3V3 / TXD=43 / RXD=44 — disabled while the
+UART Type-C port is plugged in (FSUSB42 mux).
+
+**Everything else is consumed by the LCD.** RGB data + control use GPIO
+1, 2, 3, 5, 6, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 21, 38, 39, 40, 41, 45,
+46, 47, 48. Driving any of these as GPIO corrupts the display. There is **no
+camera connector** and no wirable I2S mic (GPIO0/1/2 are spoken for).
+
+## Oh-Ben-Claw firmware — build with the board feature
+
+```bash
+cd firmware/obc-esp32-s3
+cargo run --release --features board-waveshare-21   # espflash runner
+```
+
+Pin map under `board-waveshare-21`:
+
+| Function | Pins | Notes |
+|---|---|---|
+| Track 0 safe outputs | **43, 44** | UART1 spine uplink is disabled on this build |
+| DHT22 data | **0** | 10 kΩ pull-up to 3V3 (doubles as BOOT strap hold-high) |
+| I2C sensor bus | SDA **15** · SCL **7** | the hardwired connector |
+| Command I/O | native USB (19/20) | USB-Serial-JTAG, newline-delimited JSON |
+| `camera_capture` / `audio_sample` | stubs | no camera connector / no mic pins on this board |
+
+The default (no-feature) build is the **XIAO ESP32-S3** pin map — outputs
+21/3/6/7/8, DHT22 on 9, I2C on 4/5. Flashing a default build onto the Waveshare
+drives LCD lines as GPIO outputs; don't.
+
+## Bench wiring quick-reference (Station A)
+
+```
+DHT22:  + → 3V3 (hdr 6) · out → IO0 (hdr 12) + 10 kΩ→3V3 · − → GND (hdr 1)
+LED:    GPIO43 (hdr 9) → 330 Ω → LED → GND        (gpio_write pin 43)
+BME280 / MPU-6050: I2C connector (SDA15/SCL7, 3V3, GND) — Qwiic chain OK
+Console/flash: either Type-C port (native USB or CH343 UART, auto-download)
+```
 
 ## Oh-Ben-Claw Configuration
-
-Add to `~/.oh-ben-claw/config.toml`:
 
 ```toml
 [peripherals]
@@ -24,95 +89,19 @@ enabled = true
 [[peripherals.boards]]
 board = "waveshare-esp32-s3-touch-lcd-2.1"
 transport = "serial"
-path = "/dev/ttyUSB0"   # or /dev/ttyACM0 on Linux; /dev/cu.usbmodem* on macOS
+path = "COM7"           # /dev/ttyACM* (native USB) or /dev/ttyUSB* (CH343)
 baud = 115200
-```
-
-For MQTT-based (wireless) connection:
-
-```toml
-[[peripherals.boards]]
-board = "waveshare-esp32-s3-touch-lcd-2.1"
-transport = "mqtt"
-node_id = "esp32-s3-kitchen"
 ```
 
 ## Oh-Ben-Claw Tools
 
-| Tool | Description |
+| Tool | On this board |
 |---|---|
-| `gpio_read` | Read a GPIO pin value (0 or 1) |
-| `gpio_write` | Set a GPIO pin high or low |
-| `camera_capture` | Capture JPEG from OV2640 (returns base64 JPEG) |
-| `audio_sample` | Sample I2S microphone (returns RMS level or PCM samples) |
-| `sensor_read` | Read I2C/SPI sensor field (bme280, mpu6050, sht31, etc.) |
-| `capabilities` | Report supported commands and GPIO map |
+| `gpio_read` / `gpio_write` | GPIO 43/44 (Track 0 allow-list) |
+| `sensor_read` | DHT22 (GPIO0), BME280/MPU-6050 + onboard QMI8658 on I2C 15/7 |
+| `capabilities` | reports commands + the active GPIO map |
+| `camera_capture` / `audio_sample` | stub responses (hardware absent) |
 
-## Pin Aliases
-
-| Alias | GPIO |
-|---|---|
-| builtin_led | 46 |
-| lcd_backlight | 46 |
-| touch_sda | 4 |
-| touch_scl | 5 |
-| touch_int | 7 |
-| touch_rst | 6 |
-| lcd_mosi | 11 |
-| lcd_sck | 12 |
-| lcd_cs | 10 |
-| lcd_dc | 8 |
-| lcd_rst | 9 |
-| uart_tx | 43 |
-| uart_rx | 44 |
-
-## Camera Wiring (OV2640 via FPC connector)
-
-| Signal | GPIO |
-|---|---|
-| XCLK | 15 |
-| SIOD | 4 |
-| SIOC | 5 |
-| D0–D7 | 39–42, 16–19 |
-| VSYNC | 21 |
-| HREF | 38 |
-| PCLK | 13 |
-
-## I2S Microphone Wiring (INMP441 / SPH0645)
-
-| Signal | GPIO |
-|---|---|
-| SCK | 0 |
-| WS | 1 |
-| SD | 2 |
-
-## I2C Sensor Bus (BME280, MPU6050, SHT31, etc.)
-
-| Signal | GPIO |
-|---|---|
-| SDA | 4 |
-| SCL | 5 |
-
-The I2C bus is shared with the GT911 touch controller. Sensors with unique I2C addresses coexist on this bus without conflict.
-
-## Firmware Build & Flash
-
-```bash
-# Install ESP toolchain
-cargo install espup && espup install && source ~/export-esp.sh
-
-# Build and flash
-cd firmware/obc-esp32-s3
-cargo build --release
-cargo espflash flash --monitor
-```
-
-## sdkconfig.defaults (required for camera and I2S)
-
-```ini
-CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_SPEED_80M=y
-CONFIG_ESP32_CAMERA=y
-CONFIG_I2S_ENABLE=y
-```
+*Sources: Waveshare wiki `ESP32-S3-Touch-LCD-2.1` (interfaces, internal
+connection tables, I2C address FAQ) + board schematic PDF;
+`firmware/obc-esp32-s3` (`board-waveshare-21` feature).*
