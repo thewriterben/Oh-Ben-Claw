@@ -4,7 +4,7 @@
 //! subsystem suites) can `observe` real-world state and recall it with
 //! `current`/`at`/`history`. Writes are non-destructive and time-valid.
 
-use crate::memory::world::WorldMemory;
+use crate::memory::world::{Origin, WorldMemory};
 use crate::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -129,7 +129,14 @@ impl Tool for WorldMemoryTool {
                             .or_insert_with(|| Value::String(claimed.to_string()));
                     }
                 }
-                let fact = self.mem.observe(entity, value, valid_from, now, AGENT_SOURCE)?;
+                let fact = self.mem.observe_as(
+                    entity,
+                    value,
+                    valid_from,
+                    now,
+                    AGENT_SOURCE,
+                    Origin::Asserted,
+                )?;
                 Ok(ToolResult::ok(serde_json::to_string(&fact)?))
             }
             "current" => {

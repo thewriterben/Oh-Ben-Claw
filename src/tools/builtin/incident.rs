@@ -19,7 +19,7 @@
 //! Facts land at `incident.<subject>`, which is deliberately outside `mesh.*` and any
 //! other perception namespace — an agent's conclusion is never mistaken for a reading.
 
-use crate::memory::world::WorldMemory;
+use crate::memory::world::{Origin, WorldMemory};
 use crate::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -139,9 +139,11 @@ impl Tool for RecordIncidentTool {
         }
 
         let entity = format!("{INCIDENT_PREFIX}.{subject}");
+        // An incident is something the agent *concluded*. Asserted by construction,
+        // however confident it is — that is what keeps it out of the evidence pool.
         let fact = self
             .mem
-            .observe(&entity, value, now, now, INCIDENT_SOURCE)?;
+            .observe_as(&entity, value, now, now, INCIDENT_SOURCE, Origin::Asserted)?;
         Ok(ToolResult::ok(serde_json::to_string(&fact)?))
     }
 }
