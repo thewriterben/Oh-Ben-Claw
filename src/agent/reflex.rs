@@ -215,19 +215,53 @@ pub struct FiredReflex {
 /// Evaluates a set of [`ReflexRule`]s against world snapshots, with per-rule
 /// debounce/rate state. Cheap to evaluate; runs on the host (against world
 /// memory) and, mirrored, on the node.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ReflexEngine {
     rules: Vec<ReflexRule>,
     last_fire: Mutex<HashMap<String, u64>>,
+    trusted: crate::memory::world::OriginSet,
+}
+
+/// A default engine is an engine with no rules and the standard trust policy.
+///
+/// Written out rather than derived: a derived `Default` would give the trust set its
+/// *numeric* default (the empty set), so `ReflexEngine::default()` would silently trust
+/// nothing and never fire, quietly disagreeing with `new()`. A safety-relevant policy
+/// should not be an accident of which fields a macro can see.
+impl Default for ReflexEngine {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
 }
 
 impl ReflexEngine {
-    /// Build an engine from a set of rules.
+    /// Build an engine from a set of rules, trusting only *evidence*.
+    ///
+    /// Reflexes are automatic physical responses to sensed conditions, so by default they
+    /// act on [`OriginSet::EVIDENCE`] — what the world reported and what the framework
+    /// computed from it — and ignore `Asserted` and `Instructed` facts entirely.
+    ///
+    /// Neither exclusion is arbitrary. An agent's claim that the battery is at 5% is a
+    /// claim, and a reflex that stops an actuator on it is letting a language model drive
+    /// hardware through the back door. A human's typed reading is authoritative about
+    /// *intent* but is still not a sensor: an operator who wants an actuator stopped
+    /// should command that, not report a battery level and let safing infer it.
     pub fn new(rules: Vec<ReflexRule>) -> Self {
         Self {
             rules,
             last_fire: Mutex::new(HashMap::new()),
+            trusted: crate::memory::world::OriginSet::EVIDENCE,
         }
+    }
+
+    /// Override which origins this engine will act on.
+    ///
+    /// Widening this to include `Asserted` re-opens the path where an agent's own writes
+    /// drive automatic physical responses — the hazard this gate exists to close. Do it
+    /// only for read-only or simulation engines.
+    pub fn with_trusted_origins(mut self, trusted: crate::memory::world::OriginSet) -> Self {
+        self.trusted = trusted;
+        self
     }
 
     /// Number of rules.
@@ -283,6 +317,23 @@ impl ReflexEngine {
         let mut snapshot = Snapshot::new();
         for entity in self.referenced_entities() {
             if let Some(fact) = world.current(&entity)? {
+                // The trust gate, applied once here rather than in each `Condition`
+                // variant: a fact this engine does not accept simply never enters the
+                // snapshot. Every leaf condition uses `is_some_and`, so an absent entity
+                // evaluates false and no rule fires on it — withholding is fail-safe.
+                if !self.trusted.accepts(fact.origin) {
+                    // Say so. A reflex that silently declines to fire is exactly the kind
+                    // of invisible behaviour that cost an evening on 2026-07-17, and the
+                    // difference between "the sensor is fine" and "I refused to believe
+                    // the sensor" is not something to leave to inference.
+                    tracing::debug!(
+                        entity = %entity,
+                        origin = %fact.origin.as_str(),
+                        source = %fact.source,
+                        "reflex: fact withheld from the snapshot — origin not trusted by this engine"
+                    );
+                    continue;
+                }
                 if let Some(v) = fact_to_f64(&fact.value) {
                     snapshot.nums.insert(entity.clone(), v);
                 }
@@ -627,6 +678,88 @@ mod tests {
         let e = ReflexEngine::new(vec![rule]);
         let ents = e.referenced_entities();
         assert!(ents.contains("t") && ents.contains("armed"));
+    }
+
+    #[test]
+    fn an_asserted_fact_cannot_fire_a_reflex() {
+        use crate::memory::world::Origin;
+        // The whole point of the gate: an agent writing a temperature does not get to
+        // drive an automatic physical response. Same entity, same value, same rule — only
+        // the origin differs.
+        let observed = WorldMemory::open_in_memory().unwrap();
+        observed
+            .observe_as("sensor.temperature", json!({"value": 30.0, "n": 2}), 1_000, 1_000, "fusion", Origin::Observed)
+            .unwrap();
+        assert_eq!(
+            ReflexEngine::new(vec![fan_rule()]).tick(&observed, 2_000).unwrap().len(),
+            1,
+            "a real reading fires the reflex"
+        );
+
+        let asserted = WorldMemory::open_in_memory().unwrap();
+        asserted
+            .observe_as("sensor.temperature", json!({"value": 30.0, "n": 2}), 1_000, 1_000, "agent", Origin::Asserted)
+            .unwrap();
+        assert!(
+            ReflexEngine::new(vec![fan_rule()]).tick(&asserted, 2_000).unwrap().is_empty(),
+            "an agent's claim about the temperature must not actuate anything"
+        );
+    }
+
+    #[test]
+    fn an_instructed_fact_is_also_not_evidence() {
+        use crate::memory::world::Origin;
+        // A human typing a reading is authoritative about intent, not about the world.
+        // Someone who wants an actuator stopped should command that, not report a value
+        // and let safing infer it.
+        let world = WorldMemory::open_in_memory().unwrap();
+        world
+            .observe_as("sensor.temperature", json!({"value": 30.0, "n": 2}), 1_000, 1_000, "operator", Origin::Instructed)
+            .unwrap();
+        assert!(ReflexEngine::new(vec![fan_rule()]).tick(&world, 2_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn widening_the_trust_set_re_enables_asserted_facts() {
+        use crate::memory::world::{Origin, OriginSet};
+        // The escape hatch exists for read-only and simulation engines; it is deliberately
+        // explicit, because using it on an actuating engine re-opens the hazard.
+        let world = WorldMemory::open_in_memory().unwrap();
+        world
+            .observe_as("sensor.temperature", json!({"value": 30.0, "n": 2}), 1_000, 1_000, "agent", Origin::Asserted)
+            .unwrap();
+        let permissive = ReflexEngine::new(vec![fan_rule()])
+            .with_trusted_origins(OriginSet::ALL);
+        assert_eq!(permissive.tick(&world, 2_000).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn gating_does_not_yet_cover_content_relayed_by_a_trusted_writer() {
+        use crate::memory::world::Origin;
+        // KNOWN GAP (task #12), pinned deliberately so it stays visible.
+        //
+        // `power` and `sensing` still call plain `observe()`, which classifies as
+        // `Derived` — so a reading the agent supplied through `power report` or
+        // `sense ingest` is indistinguishable here from one the framework computed, and
+        // the gate passes it. Closing this needs the ingest boundary to mark
+        // tool-originated content, not a change to the gate.
+        //
+        // When that lands, this test SHOULD fail. Update it to assert the reflex no
+        // longer fires — that failure is the signal the hazard is closed.
+        let world = WorldMemory::open_in_memory().unwrap();
+        world
+            .observe("sensor.temperature", json!({"value": 30.0, "n": 2}), 1_000, 1_000, "sensing")
+            .unwrap();
+        assert_eq!(
+            world.current("sensor.temperature").unwrap().unwrap().origin,
+            Origin::Derived,
+            "relayed content is currently indistinguishable from framework-computed"
+        );
+        assert_eq!(
+            ReflexEngine::new(vec![fan_rule()]).tick(&world, 2_000).unwrap().len(),
+            1,
+            "gate passes it today — see task #12"
+        );
     }
 
     #[test]
