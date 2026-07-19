@@ -540,6 +540,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     oh_ben_claw::tools::builtin::world::WorldMemoryTool::new(Arc::clone(&wm)),
                 ));
                 info!(path = %world_path, "Phase 18 world memory tool active");
+                // The typed way for the agent to write down a finding. Playbooks name
+                // this tool for their "record what you found" step, so the entity name,
+                // schema and provenance are owned by the framework rather than
+                // improvised per wake (see tools::builtin::incident).
+                all_tools.push(Box::new(
+                    oh_ben_claw::tools::builtin::incident::RecordIncidentTool::new(Arc::clone(&wm)),
+                ));
+                info!("Incident recording tool active");
                 // Conservation Grid G0: the shared geospatial frame lives in world
                 // memory, so node poses ↔ (lat, lon) through one anchored site.
                 all_tools.push(Box::new(
