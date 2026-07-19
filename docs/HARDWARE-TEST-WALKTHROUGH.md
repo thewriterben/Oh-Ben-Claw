@@ -94,7 +94,7 @@ Watch the boot log. You should see:
 ```
 Oh-Ben-Claw ESP32-S3 firmware v0.1.0 ready
 Node ID: obc-esp32-s3-001
-on-MCU safing rules loaded (3 built-in)
+on-MCU safing rules loaded (6 built-in)
 I2C sensor bus ready (SDA=4, SCL=5)      # only if sensors wired (Waveshare build: SDA=15, SCL=7)
 I2S mic ready (SCK=0, WS=1, SD=2)        # only if mic wired
 ```
