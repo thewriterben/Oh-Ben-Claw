@@ -80,6 +80,59 @@ impl Origin {
     }
 }
 
+/// The set of [`Origin`]s a consumer will act on.
+///
+/// A **set**, not a threshold, because trust here is not a single ordering. "May I treat
+/// this as evidence about the world?" ranks `Observed` above `Asserted`; "does this carry
+/// authority to act?" ranks `Instructed` near the top while leaving it useless as
+/// evidence. A consumer that collapsed both questions into one level would be wrong about
+/// one of them.
+///
+/// Every consumer that acts on world memory should hold one of these and say why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OriginSet(u8);
+
+impl OriginSet {
+    const fn bit(o: Origin) -> u8 {
+        match o {
+            Origin::Observed => 1,
+            Origin::Derived => 2,
+            Origin::Asserted => 4,
+            Origin::Instructed => 8,
+        }
+    }
+
+    /// Nothing is accepted. A useful base to build from, and the safe thing to fall back
+    /// to if a consumer's policy is somehow unset.
+    pub const NONE: Self = Self(0);
+
+    /// What the world reported, plus what the framework computed from it — the classes
+    /// that constitute *evidence*. Excludes `Asserted` (an agent's claim) and
+    /// `Instructed` (a human's intent): neither is a reading, however true it may be.
+    pub const EVIDENCE: Self = Self(Self::bit(Origin::Observed) | Self::bit(Origin::Derived));
+
+    /// Everything, including agent assertions. Appropriate for read-only surfaces that
+    /// present state to a human, never for anything that actuates.
+    pub const ALL: Self = Self(
+        Self::bit(Origin::Observed)
+            | Self::bit(Origin::Derived)
+            | Self::bit(Origin::Asserted)
+            | Self::bit(Origin::Instructed),
+    );
+
+    pub const fn accepts(self, o: Origin) -> bool {
+        self.0 & Self::bit(o) != 0
+    }
+
+    pub const fn with(self, o: Origin) -> Self {
+        Self(self.0 | Self::bit(o))
+    }
+
+    pub const fn without(self, o: Origin) -> Self {
+        Self(self.0 & !Self::bit(o))
+    }
+}
+
 /// A time-valid fact about an entity in the world.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Fact {
