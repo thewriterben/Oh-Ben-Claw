@@ -167,7 +167,17 @@ impl PowerController {
 
     /// Ingest a reading: derive the mode, record `power.battery` (full reading +
     /// mode) and `power.mode` (the derived mode + SoC, for reflex matching).
-    pub fn ingest(&self, reading: &BatteryReading, now_ms: u64) -> anyhow::Result<PowerStatus> {
+    /// Record a battery reading, stating where its content came from.
+    ///
+    /// See [`crate::sensing::SensingController::ingest`]: this controller writes under its
+    /// own source label whichever path fed it, so the caller must say whether the value
+    /// was measured or supplied.
+    pub fn ingest(
+        &self,
+        reading: &BatteryReading,
+        now_ms: u64,
+        origin: crate::memory::world::Origin,
+    ) -> anyhow::Result<PowerStatus> {
         let mode = self.thresholds.derive(reading.soc_pct, reading.charging);
         if let Some(world) = &self.world {
             let battery = json!({
@@ -178,9 +188,9 @@ impl PowerController {
                 "mode": mode.as_str(),
                 "source": reading.source,
             });
-            world.observe("power.battery", battery, now_ms, now_ms, &self.source)?;
+            world.observe_as("power.battery", battery, now_ms, now_ms, &self.source, origin)?;
             let mode_fact = json!({ "mode": mode.as_str(), "soc_pct": reading.soc_pct });
-            world.observe("power.mode", mode_fact, now_ms, now_ms, &self.source)?;
+            world.observe_as("power.mode", mode_fact, now_ms, now_ms, &self.source, origin)?;
         }
         Ok(PowerStatus {
             soc_pct: reading.soc_pct,
@@ -230,7 +240,7 @@ mod tests {
     #[test]
     fn ingest_records_battery_and_mode_facts() {
         let (ctrl, world) = controller();
-        let status = ctrl.ingest(&reading(8.0, ChargeState::Discharging), 1_000).unwrap();
+        let status = ctrl.ingest(&reading(8.0, ChargeState::Discharging), 1_000, crate::memory::world::Origin::Observed).unwrap();
         assert_eq!(status.mode, PowerMode::Critical);
 
         let battery = world.current("power.battery").unwrap().unwrap();
@@ -246,7 +256,7 @@ mod tests {
     #[test]
     fn full_pack_is_normal_not_charging() {
         let (ctrl, _world) = controller();
-        let status = ctrl.ingest(&reading(100.0, ChargeState::Full), 1_000).unwrap();
+        let status = ctrl.ingest(&reading(100.0, ChargeState::Full), 1_000, crate::memory::world::Origin::Observed).unwrap();
         assert_eq!(status.mode, PowerMode::Normal);
     }
 

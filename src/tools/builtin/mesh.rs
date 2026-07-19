@@ -159,18 +159,19 @@ impl Tool for MeshStatusTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::world::WorldMemory;
+    use crate::memory::world::{Origin, WorldMemory};
 
     #[tokio::test]
     async fn mesh_status_summarizes_node_health() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         world
-            .observe(
+            .observe_as(
                 "mesh.n1",
                 json!({ "last_type": "reflex", "rssi_dbm": -80 }),
                 1_000,
                 1_000,
-                "t",
+                crate::spine::lora_gateway::SOURCE,
+                Origin::Observed, // a node is a node because a radio was heard
             )
             .unwrap();
         world

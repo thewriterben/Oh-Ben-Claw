@@ -8,6 +8,7 @@
 
 use crate::audio::suite::{AudioController, HeardEvent};
 use crate::memory::world::WorldMemory;
+use crate::memory::world::Origin;
 use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -39,7 +40,7 @@ impl HearTool {
             Ok(e) => e,
             Err(e) => return ToolResult::err(format!("invalid heard event: {e}")),
         };
-        match self.controller.observe(&event, now_ms()) {
+        match self.controller.observe(&event, now_ms(), Origin::Asserted) {
             Ok(c) => ToolResult::ok(serde_json::to_string(&c).unwrap_or_else(|_| "{}".to_string())),
             Err(e) => ToolResult::err(e.to_string()),
         }

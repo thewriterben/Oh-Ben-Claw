@@ -190,7 +190,18 @@ impl AudioController {
 
     /// Perceive: classify reliability and record a heard event into world memory
     /// as `audio.{stream}`.
-    pub fn observe(&self, event: &HeardEvent, now_ms: u64) -> anyhow::Result<ClassifiedHeard> {
+    /// Record a heard event, stating where its content came from.
+    ///
+    /// This one genuinely has two feeders: the ClawCam poller supplies real device
+    /// classifications (`Observed`), and the `hear` tool supplies whatever the agent says
+    /// it heard (`Asserted`). Both land under the same source label, so the distinction
+    /// has to travel with the call.
+    pub fn observe(
+        &self,
+        event: &HeardEvent,
+        now_ms: u64,
+        origin: crate::memory::world::Origin,
+    ) -> anyhow::Result<ClassifiedHeard> {
         let reliable = event.confidence >= self.min_confidence;
         if let Some(world) = &self.world {
             let entity = format!("audio.{}", event.stream);
@@ -201,7 +212,7 @@ impl AudioController {
                 "reliable": reliable,
                 "source": event.source,
             });
-            world.observe(&entity, value, now_ms, now_ms, &self.source)?;
+            world.observe_as(&entity, value, now_ms, now_ms, &self.source, origin)?;
         }
         Ok(ClassifiedHeard {
             stream: event.stream.clone(),
@@ -260,7 +271,7 @@ mod tests {
     #[test]
     fn high_confidence_event_is_reliable_and_recorded() {
         let (ctrl, world) = controller();
-        let c = ctrl.observe(&heard("mic0", Some("lights on"), None, 0.92), 1_000).unwrap();
+        let c = ctrl.observe(&heard("mic0", Some("lights on"), None, 0.92), 1_000, crate::memory::world::Origin::Observed).unwrap();
         assert!(c.reliable);
         let fact = world.current("audio.mic0").unwrap().unwrap();
         assert_eq!(fact.value["text"], "lights on");
@@ -271,7 +282,7 @@ mod tests {
     #[test]
     fn low_confidence_event_is_unreliable_but_still_recorded() {
         let (ctrl, world) = controller();
-        let c = ctrl.observe(&heard("mic0", Some("maybe?"), None, 0.3), 1_000).unwrap();
+        let c = ctrl.observe(&heard("mic0", Some("maybe?"), None, 0.3), 1_000, crate::memory::world::Origin::Observed).unwrap();
         assert!(!c.reliable);
         let fact = world.current("audio.mic0").unwrap().unwrap();
         assert_eq!(fact.value["reliable"], false);
@@ -280,7 +291,7 @@ mod tests {
     #[test]
     fn sound_event_label_is_recorded() {
         let (ctrl, world) = controller();
-        ctrl.observe(&heard("mic0", None, Some("alarm"), 0.99), 1_000).unwrap();
+        ctrl.observe(&heard("mic0", None, Some("alarm"), 0.99), 1_000, crate::memory::world::Origin::Observed).unwrap();
         let fact = world.current("audio.mic0").unwrap().unwrap();
         assert_eq!(fact.value["label"], "alarm");
     }
