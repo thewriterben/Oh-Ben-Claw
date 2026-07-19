@@ -17,7 +17,7 @@
 //! the real store and drives the mesh command sink.
 
 use crate::config::MeshSupervisorConfig;
-use crate::memory::world::WorldMemory;
+use crate::memory::world::{Origin, WorldMemory};
 use crate::spine::lora_gateway::{CommandSink, NodeCommand, SOURCE};
 use serde_json::json;
 use std::sync::Arc;
@@ -205,9 +205,15 @@ fn is_policy_refusal(value: &serde_json::Value) -> bool {
 /// gateway heard it on the air, so the rollup fact must carry the gateway's source.
 /// The shape of an entity name is not evidence of a radio.
 ///
-/// This check is only sound because provenance is stamped by the framework and cannot
-/// be set by a caller — see `tools::builtin::world::AGENT_SOURCE`. If the agent could
-/// declare its own writes to be `lora-gateway`, it could manufacture a node here.
+/// The check is on [`Origin::Observed`] rather than on the source string. Both work
+/// today — provenance is stamped by the framework, so an agent cannot claim to be
+/// `lora-gateway` (see `tools::builtin::world::AGENT_SOURCE`) — but origin says what we
+/// actually mean. "Something reported this off a wire" is the property that makes a node
+/// real; "a component called `lora-gateway` wrote it" only implies that by convention.
+///
+/// It is also the stronger check. A source comparison cannot see when a *trusted*
+/// component relays untrusted content — the confused-deputy case that `power` and
+/// `sensing` exhibit — whereas origin travels with the content from wherever it entered.
 ///
 /// This matters because `mesh.*` is a shared namespace. Anything else writing a
 /// two-part fact under it — the supervisor's own `mesh.escalated_count` aggregate, or
@@ -227,9 +233,9 @@ pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
             continue;
         }
         let node = parts[1].to_string();
-        // Heard over the air by the gateway, or it is not a node.
+        // Heard over the air, or it is not a node.
         let last_seen_ms = match world.current(&e).ok().flatten() {
-            Some(f) if f.source == crate::spine::lora_gateway::SOURCE => f.valid_from,
+            Some(f) if f.origin == Origin::Observed => f.valid_from,
             _ => continue,
         };
         let last_cmd_ok = world
@@ -572,12 +578,13 @@ mod tests {
         let world = WorldMemory::open_in_memory().unwrap();
         // A node last heard at t=1_000.
         world
-            .observe(
+            .observe_as(
                 "mesh.node-x",
                 json!({ "last_type": "link_state", "rssi_dbm": -50, "seq": 1, "src": "2A" }),
                 1_000,
                 1_000,
                 SOURCE,
+                Origin::Observed,
             )
             .unwrap();
 
@@ -682,7 +689,7 @@ mod tests {
     #[tokio::test]
     async fn tick_escalates_a_long_offline_node_then_clears_on_return() {
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, SOURCE).unwrap();
+        world.observe_as("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
         world
             .observe("mesh.n.health", json!({ "status": "offline", "reason": "x" }), 1_000, 1_000, "test")
             .unwrap();
@@ -699,7 +706,7 @@ mod tests {
         assert_eq!(mock.sent.lock().unwrap().len(), 0, "escalated → no ping");
 
         // Node returns (fresh rollup) → escalation cleared.
-        world.observe("mesh.n", json!({ "last_type": "link_state" }), 30_500, 30_500, SOURCE).unwrap();
+        world.observe_as("mesh.n", json!({ "last_type": "link_state" }), 30_500, 30_500, SOURCE, Origin::Observed).unwrap();
         tick(&world, Some(&sink), &c, 31_000).await;
         assert_eq!(
             world.current("mesh.n.escalation").unwrap().unwrap().value["status"],
@@ -713,7 +720,7 @@ mod tests {
         use crate::agent::safing::{standard_safing_rules, SafingOptions};
 
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, SOURCE).unwrap();
+        world.observe_as("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
         world
             .observe("mesh.n.health", json!({ "status": "offline" }), 1_000, 1_000, "test")
             .unwrap();
@@ -747,14 +754,15 @@ mod tests {
         // wakes System 2 → another note. The agent invents an emergency and reports it
         // in a loop. Discovery is sourced at the radio, so the note stays a note.
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE).unwrap();
+        world.observe_as("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
         world
-            .observe(
+            .observe_as(
                 "mesh.escalation_status",
                 json!({ "nodes_escalated": ["n1"], "action_required": "operator_intervention" }),
                 1_000,
                 1_000,
-                "agent", // WorldMemoryTool's default source — an LLM wrote this
+                "agent",
+                Origin::Asserted, // what an LLM write actually is
             )
             .unwrap();
 
@@ -820,7 +828,7 @@ mod tests {
     fn a_refused_command_does_not_degrade_the_node_end_to_end() {
         // The bug in full: safety-testing a node used to mark it degraded.
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe("mesh.n", json!({ "last_type": "cmd_result" }), 10_000, 10_000, SOURCE).unwrap();
+        world.observe_as("mesh.n", json!({ "last_type": "cmd_result" }), 10_000, 10_000, SOURCE, Origin::Observed).unwrap();
         world
             .observe(
                 "mesh.n.cmd_result",
@@ -845,12 +853,31 @@ mod tests {
     }
 
     #[test]
+    fn a_relayed_fact_under_the_gateways_own_source_is_still_not_a_node() {
+        // What switching from source to origin actually buys. A source comparison sees
+        // only "who wrote this", so a trusted component relaying agent-supplied content
+        // passes it — the confused-deputy case `power` and `sensing` exhibit. Origin
+        // travels with the content from wherever it entered, so the relay is visible
+        // even when the writer is the gateway itself.
+        let world = WorldMemory::open_in_memory().unwrap();
+        world
+            .observe_as("mesh.real", json!({ "last_type": "beacon" }), 1_000, 1_000, SOURCE, Origin::Observed)
+            .unwrap();
+        world
+            .observe_as("mesh.relayed", json!({ "last_type": "beacon" }), 1_000, 1_000, SOURCE, Origin::Asserted)
+            .unwrap();
+
+        let nodes: Vec<String> = snapshot(&world).into_iter().map(|v| v.node).collect();
+        assert_eq!(nodes, vec!["real"], "only what was actually heard is a node");
+    }
+
+    #[test]
     fn snapshot_ignores_the_escalated_count_aggregate() {
         // Regression: `mesh.escalated_count` is a bare counter with two dot-parts, so it
         // must NOT be mistaken for a `mesh.<node>` rollup (which would appear as a
         // phantom "online" node from the tick after it is first written).
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE).unwrap();
+        world.observe_as("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
         world.observe("mesh.escalated_count", json!(0), 1_000, 1_000, "mesh-supervisor").unwrap();
 
         let views = snapshot(&world);
@@ -866,11 +893,11 @@ mod tests {
         // The gateway route and the mesh_status tool both call status_json — one SSOT.
         let world = WorldMemory::open_in_memory().unwrap();
         world
-            .observe("mesh.n1", json!({ "last_type": "reflex", "rssi_dbm": -72 }), 1_000, 1_000, SOURCE)
+            .observe_as("mesh.n1", json!({ "last_type": "reflex", "rssi_dbm": -72 }), 1_000, 1_000, SOURCE, Origin::Observed)
             .unwrap();
         world.observe("mesh.n1.health", json!({ "status": "online" }), 1_000, 1_000, "t").unwrap();
         // A second node that is offline and escalated.
-        world.observe("mesh.n2", json!({ "last_type": "-" }), 1_000, 1_000, SOURCE).unwrap();
+        world.observe_as("mesh.n2", json!({ "last_type": "-" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
         world.observe("mesh.n2.health", json!({ "status": "offline" }), 1_000, 1_000, "t").unwrap();
         world
             .observe("mesh.n2.escalation", json!({ "status": "escalated" }), 1_000, 1_000, "t")
@@ -900,10 +927,10 @@ mod tests {
     fn rssi_series_keeps_the_newest_readings_oldest_first() {
         let world = WorldMemory::open_in_memory().unwrap();
         // Four rollups for n1; one carries no rssi and is skipped.
-        world.observe("mesh.n1", json!({ "rssi_dbm": -60 }), 1_000, 1_000, SOURCE).unwrap();
-        world.observe("mesh.n1", json!({ "rssi_dbm": -70 }), 2_000, 2_000, SOURCE).unwrap();
-        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 3_000, 3_000, SOURCE).unwrap();
-        world.observe("mesh.n1", json!({ "rssi_dbm": -80 }), 4_000, 4_000, SOURCE).unwrap();
+        world.observe_as("mesh.n1", json!({ "rssi_dbm": -60 }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
+        world.observe_as("mesh.n1", json!({ "rssi_dbm": -70 }), 2_000, 2_000, SOURCE, Origin::Observed).unwrap();
+        world.observe_as("mesh.n1", json!({ "last_type": "reflex" }), 3_000, 3_000, SOURCE, Origin::Observed).unwrap();
+        world.observe_as("mesh.n1", json!({ "rssi_dbm": -80 }), 4_000, 4_000, SOURCE, Origin::Observed).unwrap();
 
         let full = rssi_series(&world, "n1", 24);
         assert_eq!(full, vec![-60, -70, -80], "oldest→newest, rssi-less fact skipped");
@@ -952,7 +979,7 @@ mod tests {
         assert_eq!(esc[1]["ts_ms"], json!(1_000));
 
         // status_json surfaces the same feed.
-        world.observe("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE).unwrap();
+        world.observe_as("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
         let v = status_json(&world);
         assert_eq!(v["escalations"].as_array().unwrap().len(), 2);
     }
