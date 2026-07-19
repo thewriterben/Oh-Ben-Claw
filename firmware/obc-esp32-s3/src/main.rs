@@ -306,8 +306,23 @@ struct Response {
     id: String,
     ok: bool,
     result: String,
+    /// True when `ok` is false because Track 0 *refused* the action — the node
+    /// enforcing its own policy, not the node malfunctioning.
+    ///
+    /// Both used to arrive at the host as a bare `ok: false`, so a node correctly
+    /// rejecting an out-of-policy write was scored as a failing node and marked
+    /// `degraded`. Every safety test degraded the node that passed it.
+    ///
+    /// Skipped when false, so successful replies stay byte-identical — LoRa frames
+    /// near the CRC limit get dropped silently, and reply size is not free.
+    #[serde(default, skip_serializing_if = "is_false")]
+    refused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 // ── OpenAI-Compatible HTTP Types ──────────────────────────────────────────────
@@ -945,14 +960,22 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
             id,
             ok: true,
             result: output,
+            refused: false,
             error: None,
         }),
-        Err(e) => Ok(Response {
-            id,
-            ok: false,
-            result: String::new(),
-            error: Some(e.to_string()),
-        }),
+        Err(e) => {
+            // The gate returns a typed `SafetyViolation`, which reaches here through
+            // anyhow's `?` — so a policy refusal can still be told apart from a genuine
+            // fault instead of both collapsing into one error string.
+            let refused = e.downcast_ref::<safety::SafetyViolation>().is_some();
+            Ok(Response {
+                id,
+                ok: false,
+                result: String::new(),
+                refused,
+                error: Some(e.to_string()),
+            })
+        }
     }
 }
 

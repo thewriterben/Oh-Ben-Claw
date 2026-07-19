@@ -58,7 +58,11 @@ pub struct MeshNodeView {
     pub node: String,
     /// `valid_from` of the node's latest `mesh.<node>` rollup fact (ms).
     pub last_seen_ms: u64,
-    /// `ok` of the node's latest `cmd_result`, if any.
+    /// Whether the node's latest `cmd_result` reflects a *healthy* node.
+    ///
+    /// Not simply the reply's `ok`: a Track 0 refusal arrives as `ok: false` but means
+    /// the node enforced its own policy correctly, which is the node working. See
+    /// [`cmd_result_healthy`].
     pub last_cmd_ok: Option<bool>,
     /// Previously-recorded health (so we only write on change).
     pub prev_health: Option<MeshHealth>,
@@ -159,6 +163,40 @@ pub fn decide(views: &[MeshNodeView], now_ms: u64, cfg: &MeshSupervisorConfig) -
     out
 }
 
+/// Whether a node's `cmd_result` payload indicates a healthy node.
+///
+/// A Track 0 refusal ("safety: pin 99 not in allow-list") comes back as `ok: false`,
+/// because from the command's point of view it did not succeed. But the node refusing an
+/// out-of-policy write is the safety system working — arguably the single most important
+/// thing the node does. Scoring it as a node fault meant every safety test marked the
+/// node that passed it as `degraded`, and with the post-escalation slow probe a node
+/// could be held in that wrong state indefinitely.
+///
+/// So refusals read as healthy here. The refusal itself is not lost — it stays in the
+/// `mesh.<node>.cmd_result` fact for anyone asking what the node did, rather than what
+/// state it is in.
+pub fn cmd_result_healthy(value: &serde_json::Value) -> Option<bool> {
+    if is_policy_refusal(value) {
+        return Some(true);
+    }
+    value.get("ok").and_then(|v| v.as_bool())
+}
+
+/// Did the node refuse this command on policy, rather than fail it?
+fn is_policy_refusal(value: &serde_json::Value) -> bool {
+    // Firmware ≥ the `refused` flag says so outright.
+    if value.get("refused").and_then(|v| v.as_bool()) == Some(true) {
+        return true;
+    }
+    // Compatibility with nodes flashed before that flag existed: the on-MCU gate
+    // prefixes every `SafetyViolation` with "safety:". Kept as a fallback so a
+    // half-upgraded fleet doesn't mark its older nodes degraded.
+    value
+        .get("error")
+        .and_then(|v| v.as_str())
+        .is_some_and(|e| e.starts_with("safety:"))
+}
+
 /// Extract the current per-node views from world memory (rollup + last cmd_result +
 /// prior health + last recovery). Mesh nodes are the `mesh.<node>` rollup entities
 /// (node ids contain no dots, so a rollup splits into exactly two dot-parts).
@@ -198,7 +236,7 @@ pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
             .current(&format!("mesh.{node}.cmd_result"))
             .ok()
             .flatten()
-            .and_then(|f| f.value.get("ok").and_then(|v| v.as_bool()));
+            .and_then(|f| cmd_result_healthy(&f.value));
         let health_fact = world.current(&format!("mesh.{node}.health")).ok().flatten();
         let prev_health = health_fact
             .as_ref()
@@ -734,6 +772,76 @@ mod tests {
         );
         let v = status_json(&world);
         assert_eq!(v["summary"]["nodes"], json!(1), "no phantom in the fleet view");
+    }
+
+    #[test]
+    fn a_track_0_refusal_is_not_a_node_fault() {
+        // The reply that came home over LoRa on 2026-07-17, verbatim in shape. `ok` is
+        // false because the write did not happen — but the node refusing an out-of-policy
+        // pin is the safety system working, not a malfunction.
+        let refused = json!({
+            "type": "cmd_result",
+            "node_id": "obc-esp32-s3-001",
+            "ok": false,
+            "refused": true,
+            "error": "safety: pin 99 not in allow-list",
+        });
+        assert_eq!(cmd_result_healthy(&refused), Some(true), "a refusal is the node working");
+
+        // A genuine failure still reads as a fault.
+        let failed = json!({
+            "type": "cmd_result", "ok": false,
+            "error": "gpio_set_level failed for pin 2 with error 258",
+        });
+        assert_eq!(cmd_result_healthy(&failed), Some(false));
+
+        // Success is success; a reply with no `ok` tells us nothing.
+        assert_eq!(cmd_result_healthy(&json!({"ok": true})), Some(true));
+        assert_eq!(cmd_result_healthy(&json!({"result": "x"})), None);
+    }
+
+    #[test]
+    fn a_refusal_from_firmware_without_the_flag_is_still_not_a_fault() {
+        // Nodes flashed before the `refused` flag only signal a refusal by the gate's
+        // "safety:" prefix. A half-upgraded fleet must not mark its older nodes degraded.
+        let old = json!({
+            "type": "cmd_result", "ok": false,
+            "error": "safety: value 7 out of range (min=Some(0), max=Some(1))",
+        });
+        assert_eq!(cmd_result_healthy(&old), Some(true));
+        let old_rate = json!({
+            "type": "cmd_result", "ok": false,
+            "error": "safety: rate limit (12ms since last, min 500ms)",
+        });
+        assert_eq!(cmd_result_healthy(&old_rate), Some(true));
+    }
+
+    #[test]
+    fn a_refused_command_does_not_degrade_the_node_end_to_end() {
+        // The bug in full: safety-testing a node used to mark it degraded.
+        let world = WorldMemory::open_in_memory().unwrap();
+        world.observe("mesh.n", json!({ "last_type": "cmd_result" }), 10_000, 10_000, SOURCE).unwrap();
+        world
+            .observe(
+                "mesh.n.cmd_result",
+                json!({ "ok": false, "refused": true, "error": "safety: pin 99 not in allow-list" }),
+                10_000,
+                10_000,
+                SOURCE,
+            )
+            .unwrap();
+
+        let views = snapshot(&world);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].last_cmd_ok, Some(true));
+
+        // Fresh + refusal → online, not degraded.
+        let d = decide(&views, 11_000, &cfg(None));
+        assert!(
+            matches!(&d[0], MeshDecision::Health { status: "online", .. }),
+            "the node that enforced its limits is healthy, got {:?}",
+            d[0]
+        );
     }
 
     #[test]
