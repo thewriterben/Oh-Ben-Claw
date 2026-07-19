@@ -537,6 +537,23 @@ pub async fn demote_skill(
     change_skill_stage(&state, &name, false).await
 }
 
+/// Response body for a tool that ran to completion but did not succeed.
+///
+/// Carries `error` as well as `output`. A refused or failed tool puts its reason in
+/// [`crate::tools::traits::ToolResult::error`] and leaves `output` empty, so a body built
+/// from `output` alone is `{"output":"","success":false}` — the caller can see *that*
+/// something failed but never *why*. On the bench (2026-07-17) that turned a working
+/// Track 0 refusal ("safety: pin 99 not in allow-list") into an hour of hunting a
+/// delivery problem that did not exist.
+fn tool_failure_body(name: &str, result: &crate::tools::traits::ToolResult) -> Value {
+    json!({
+        "tool": name,
+        "success": false,
+        "output": result.output,
+        "error": result.error,
+    })
+}
+
 /// `POST /api/v1/tools/{name}` — Execute a tool directly by name.
 pub async fn execute_tool(
     State(state): State<Arc<GatewayState>>,
@@ -572,11 +589,7 @@ pub async fn execute_tool(
                 }
                 (
                     StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(json!({
-                        "tool": name,
-                        "success": false,
-                        "output": result.output,
-                    })),
+                    Json(tool_failure_body(&name, &result)),
                 )
                     .into_response()
             }
@@ -843,6 +856,37 @@ pub async fn get_tunnel_status(State(state): State<Arc<GatewayState>>) -> impl I
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_tool_response_says_why() {
+        // The bench case: mesh_command refused by the node's Track 0 allow-list. The
+        // reason lives in `error`; `output` is empty. A body built from `output` alone
+        // told the operator only that something failed.
+        use crate::tools::traits::ToolResult;
+        let refused = ToolResult::err("safety: pin 99 not in allow-list");
+        let body = tool_failure_body("mesh_command", &refused);
+
+        assert_eq!(body["success"], json!(false));
+        assert_eq!(body["tool"], json!("mesh_command"));
+        assert_eq!(
+            body["error"], json!("safety: pin 99 not in allow-list"),
+            "the caller must be able to see why: {body}"
+        );
+    }
+
+    #[test]
+    fn an_approval_refusal_also_says_why() {
+        // The other refusal an operator hits: the approval gate, not the node.
+        use crate::tools::traits::ToolResult;
+        let body = tool_failure_body(
+            "mesh_command",
+            &ToolResult::err("requires operator approval (autonomy is supervised)"),
+        );
+        assert!(
+            body["error"].as_str().is_some_and(|e| e.contains("approval")),
+            "an approval refusal is distinguishable from a node refusal: {body}"
+        );
+    }
 
     #[test]
     fn chat_request_deserializes() {
