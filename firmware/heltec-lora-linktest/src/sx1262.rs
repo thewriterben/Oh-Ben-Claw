@@ -19,7 +19,7 @@ use anyhow::{bail, Result};
 use esp_idf_svc::hal::delay::Ets;
 use esp_idf_svc::hal::spi::{SpiDeviceDriver, SpiDriver};
 use esp_idf_svc::sys::*;
-use log::info;
+use log::{info, warn};
 
 // ── SX126x opcodes ────────────────────────────────────────────────────────────
 const OP_SET_STANDBY: u8 = 0x80;
@@ -256,7 +256,15 @@ impl Sx1262 {
         }
     }
 
-    /// Listen for a frame for up to `timeout_ms`. `Ok(None)` on timeout/CRC error.
+    /// Listen for a frame for up to `timeout_ms`. `Ok(None)` when nothing usable
+    /// arrived — but the three ways that happens are not equivalent, and the noisy
+    /// ones are logged:
+    ///
+    /// - **timeout** — heard nothing. Normal, silent.
+    /// - **CRC error** — a frame *arrived and was destroyed*. Logged at warn, with the
+    ///   RSSI it arrived at, because that is the only externally visible sign of it.
+    /// - **hard deadline** — the radio failed to report its own timeout. Logged,
+    ///   because it means the part is misbehaving rather than the link being quiet.
     pub fn receive(&mut self, timeout_ms: u32) -> Result<Option<RxFrame>> {
         self.cmd(OP_SET_STANDBY, &[0x00])?;
         self.cmd(OP_SET_PACKET_PARAMS, &[0x00, 0x08, 0x00, 0xFF, 0x01, 0x00])?;
@@ -272,7 +280,26 @@ impl Sx1262 {
             if irq & IRQ_RX_DONE != 0 {
                 self.clear_irq()?;
                 if irq & IRQ_CRC_ERR != 0 {
-                    return Ok(None); // corrupt frame — drop
+                    // A frame arrived and was corrupt. Dropping it silently is what made
+                    // the 2026-07-17 saturation hunt cost an evening: 205-byte report
+                    // frames were destroyed 100% of the time while ~55-byte keepalives
+                    // got through, and from the outside that is indistinguishable from
+                    // the node never transmitting.
+                    //
+                    // The packet status is still readable after RxDone, so report the
+                    // RSSI it arrived at — that is the whole diagnostic. A *strong*
+                    // RSSI on a corrupt frame means the receiver is being overdriven
+                    // (radios too close), not that the link is weak. Weak-and-corrupt
+                    // and strong-and-corrupt call for opposite fixes.
+                    let rssi = self
+                        .read_cmd(OP_GET_PACKET_STATUS, &[], 4)
+                        .ok()
+                        .map(|ps| -(ps[1] as i16) / 2);
+                    match rssi {
+                        Some(r) => warn!("SX1262 RX: CRC error — frame arrived corrupt and was dropped (rssi={r} dBm)"),
+                        None => warn!("SX1262 RX: CRC error — frame arrived corrupt and was dropped"),
+                    }
+                    return Ok(None);
                 }
                 let st = self.read_cmd(OP_GET_RX_BUFFER_STATUS, &[], 3)?; // [status,len,start]
                 let len = st[1] as usize;
@@ -290,6 +317,13 @@ impl Sx1262 {
                 return Ok(None);
             }
             if now_us() - start > hard_deadline_us {
+                // The radio should have raised its own RX timeout well before this.
+                // Reaching the backstop means the part (or the SPI link to it) is
+                // misbehaving — worth saying so rather than looking like a quiet band.
+                warn!(
+                    "SX1262 RX: radio missed its own {timeout_ms} ms timeout — backstop fired \
+                     (irq=0x{irq:04X})"
+                );
                 return Ok(None);
             }
             Ets::delay_us(2_000);
