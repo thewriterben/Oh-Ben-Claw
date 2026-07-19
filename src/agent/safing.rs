@@ -80,7 +80,7 @@ pub fn power_critical_escalate(opts: &SafingOptions) -> ReflexRule {
         "safe-power-critical-escalate",
         state("power.mode", "mode", "critical"),
         Action::Escalate {
-            reason: "battery critical — entering low-power safing".to_string(),
+            reason: format!("battery critical — entering low-power safing. {POWER_CRITICAL_PLAYBOOK}"),
         },
         debounce(opts),
     )
@@ -145,7 +145,7 @@ pub fn audio_alarm_escalate(stream: &str, opts: &SafingOptions) -> ReflexRule {
         &format!("safe-audio-alarm-{stream}"),
         state(&format!("audio.{stream}"), "label", "alarm"),
         Action::Escalate {
-            reason: format!("alarm sound detected on {stream}"),
+            reason: format!("alarm sound detected on {stream}. {AUDIO_ALARM_PLAYBOOK}"),
         },
         debounce(opts),
     )
@@ -157,7 +157,7 @@ pub fn sensor_unreliable_escalate(quantity: &str, opts: &SafingOptions) -> Refle
         &format!("safe-sensor-unreliable-{quantity}"),
         state(&format!("sensor.{quantity}"), "quality", "out_of_range"),
         Action::Escalate {
-            reason: format!("sensor {quantity} reading out of range"),
+            reason: format!("sensor {quantity} reading out of range. {SENSOR_UNRELIABLE_PLAYBOOK}"),
         },
         debounce(opts),
     )
@@ -175,7 +175,7 @@ pub fn overheat_escalate(quantity: &str, threshold: f64, opts: &SafingOptions) -
             value: threshold,
         },
         Action::Escalate {
-            reason: format!("{quantity} over limit ({threshold})"),
+            reason: format!("{quantity} over limit ({threshold}). {OVERHEAT_PLAYBOOK}"),
         },
         debounce(opts),
     )
@@ -213,6 +213,62 @@ pub fn net_recovered_clear(opts: &SafingOptions) -> ReflexRule {
         debounce(opts),
     )
 }
+
+// ── Escalation playbooks ────────────────────────────────────────────────────────
+//
+// An `Action::Escalate` reason is the entire brief System 2 gets. A bare statement of
+// fact ("battery critical") leaves the woken model to improvise everything: which tools
+// to call, what counts as a conclusion, and where to write it down. On 2026-07-17 that
+// improvisation produced a note filed into the mesh perception namespace, which the
+// supervisor then read back as a live node and alarmed on for 100 minutes.
+//
+// So every playbook follows one rule: **each step names a tool with a contract, never an
+// action with a free-form target.** They also all say that the operator alert is already
+// handled — escalations fan out to the notification log-of-record and webhook before
+// System 2 is woken, so asking the model to "alert someone" invites it to invent a
+// channel it does not have.
+
+/// `power.mode == critical`. Safing has already stopped the configured actuator.
+pub const POWER_CRITICAL_PLAYBOOK: &str = "Low-power safing has already engaged and the \
+configured actuator was stopped automatically — do not re-actuate it. Triage: (1) `power` \
+action `status` for the latest reading and derived mode, then action `history` to see \
+whether the pack is genuinely falling or one sample dipped; (2) `record_incident` with \
+subject = the pack or device, `status: confirmed` if the decline is real and needs \
+attention, `status: false_alarm` if it already recovered, passing the readings as \
+evidence. An operator is alerted automatically. Full playbook: \
+docs/playbooks/safing-escalations.md#battery-critical.";
+
+/// `audio.{stream}` classified `alarm`.
+pub const AUDIO_ALARM_PLAYBOOK: &str = "An alarm sound was classified on an audio stream. \
+This is evidence about the environment, not a device fault — do not actuate anything in \
+response to a sound. Triage: (1) `hear` action `current` on that stream for the label and \
+confidence, then action `history` to see whether it is a single detection or a repeating \
+pattern; (2) `record_incident` with subject = the stream, `status: confirmed` if the \
+detection is reliable and recurring, `status: false_alarm` for an isolated low-confidence \
+hit, passing confidence and timestamps as evidence. An operator is alerted automatically. \
+Full playbook: docs/playbooks/safing-escalations.md#audio-alarm.";
+
+/// `sensor.{quantity}` quality == `out_of_range` — the reading itself is suspect.
+pub const SENSOR_UNRELIABLE_PLAYBOOK: &str = "A sensor stream is reporting out-of-range \
+quality: the *reading* is suspect, so do not act on its value or on any conclusion that \
+depends on it. Triage: (1) `sense` action `current` for that quantity's live quality, \
+action `history` for when it degraded, and action `anomalies` to see whether other \
+quantities went bad at the same moment — several at once points at the node or its bus \
+rather than one sensor; (2) `record_incident` with subject = the quantity, \
+`status: confirmed` for a genuine sensor fault, `status: false_alarm` if quality has \
+already returned to ok, passing the readings as evidence. An operator is alerted \
+automatically. Full playbook: docs/playbooks/safing-escalations.md#sensor-unreliable.";
+
+/// `sensor.{quantity}` over a numeric limit — check the sensor before believing the heat.
+pub const OVERHEAT_PLAYBOOK: &str = "A reading crossed its limit. Check the sensor before \
+believing it: (1) `sense` action `current` for that quantity — if quality is \
+`out_of_range` or `stale` this is a sensor fault, not a heat event — then action `history` \
+to see whether it climbed steadily or jumped in one step (a jump favours the sensor); \
+(2) if the reading is trustworthy, treat the heat as real; diagnose with reads, and any \
+actuation stays Track-0 gated; (3) `record_incident` with subject = the quantity, \
+`status: confirmed` for real heat, `status: false_alarm` for a bad sensor, passing the \
+readings as evidence. An operator is alerted automatically. Full playbook: \
+docs/playbooks/safing-escalations.md#overheat.";
 
 /// Triage directive handed to System 2 when the mesh presumes a node lost. It names
 /// the exact tools so the woken agent knows what to do without guessing; the full
@@ -420,6 +476,59 @@ mod tests {
             }
             _ => panic!("expected an escalate action"),
         }
+    }
+
+    #[test]
+    fn every_escalation_names_its_tools_and_a_typed_place_to_record() {
+        // The design rule, made enforceable: an escalation reason is the entire brief
+        // System 2 gets, so each one must name tools with contracts rather than describe
+        // an intention. Adding a rule that escalates with a bare statement of fact —
+        // which is what all four non-mesh rules used to do — fails here.
+        //
+        // Bought with an incident (2026-07-17): the one unbounded step in the one
+        // playbook that existed told the model to "record the loss to world memory", and
+        // its improvised note became a phantom node the fleet alarmed on for 100 minutes.
+        // The audio/sensor/overheat rules only appear when configured, so switch them on
+        // — otherwise the four rules this test exists for are never constructed.
+        let opts = SafingOptions {
+            stop_actuator: Some(("arm".to_string(), 0)),
+            alarm_streams: vec!["mic0".to_string()],
+            unreliable_sensors: vec!["temperature".to_string()],
+            overheat: vec![("temperature".to_string(), 60.0)],
+            debounce_ms: 0,
+        };
+        let mut checked = 0;
+        {
+            for rule in standard_safing_rules(&opts) {
+                let Action::Escalate { reason } = &rule.then else {
+                    continue;
+                };
+                checked += 1;
+                let id = &rule.id;
+                assert!(
+                    reason.contains("record_incident"),
+                    "{id}: names the typed recording tool, so the model never improvises \
+                     an entity name or schema — reason was: {reason}"
+                );
+                assert!(
+                    reason.contains('`'),
+                    "{id}: names at least one tool in backticks (a perceive step), \
+                     rather than describing an intention — reason was: {reason}"
+                );
+                assert!(
+                    reason.contains("alerted automatically"),
+                    "{id}: says the operator alert is already handled; otherwise the \
+                     model invents a notification channel it does not have — reason \
+                     was: {reason}"
+                );
+                assert!(
+                    !reason.contains("world memory") && !reason.contains("world_memory"),
+                    "{id}: must not point the model at the raw store for recording — \
+                     reason was: {reason}"
+                );
+            }
+        }
+        assert!(checked >= 5, "expected every escalating rule to be covered, saw {checked}");
     }
 
     #[test]
