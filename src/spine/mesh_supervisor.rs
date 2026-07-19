@@ -123,13 +123,26 @@ pub fn decide(views: &[MeshNodeView], now_ms: u64, cfg: &MeshSupervisorConfig) -
                 });
             }
 
-            // Keep pinging until we've given up (escalated, including this tick).
-            if !v.escalated && !escalate_now {
+            // Recovery probing. Before escalation we ping at the fast cadence to try to
+            // wake the node. After escalation we do NOT give up entirely: a node that
+            // only answers a direct command — its passive beacons lost to RF, say —
+            // still gets a *slow* "are you back?" probe, so the escalation self-heals
+            // (a reply refreshes `last_seen` and the next tick clears it). The tick that
+            // escalates suppresses a redundant same-tick ping.
+            if !escalate_now {
                 if let Some(cmd_name) = &cfg.recover {
+                    let interval = if v.escalated {
+                        cfg.escalated_probe_interval_ms
+                    } else {
+                        cfg.min_recovery_interval_ms
+                    };
+                    // `escalated_probe_interval_ms == 0` opts back out of the slow probe
+                    // (an escalated node is then left silent, the old behaviour).
+                    let probe_enabled = !v.escalated || cfg.escalated_probe_interval_ms > 0;
                     let due = v
                         .last_recovery_ms
-                        .is_none_or(|t| now_ms.saturating_sub(t) >= cfg.min_recovery_interval_ms);
-                    if due {
+                        .is_none_or(|t| now_ms.saturating_sub(t) >= interval);
+                    if probe_enabled && due {
                         let id = format!("sup-{}-{}", v.node, now_ms);
                         out.push(MeshDecision::Recover {
                             node: v.node.clone(),
@@ -434,6 +447,7 @@ mod tests {
             recover: recover.map(str::to_string),
             min_recovery_interval_ms: 30_000,
             escalate_after_ms: 0,
+            escalated_probe_interval_ms: 300_000,
         }
     }
 
@@ -567,11 +581,42 @@ mod tests {
     }
 
     #[test]
-    fn an_escalated_node_is_not_re_escalated_nor_pinged() {
+    fn an_escalated_node_is_not_re_escalated() {
+        // Escalated + still offline + last probe recent → no re-escalation, no health
+        // churn, and not yet due for the slow probe.
         let mut v = offline_view("n", 1_000);
         v.escalated = true;
+        v.last_recovery_ms = Some(29_500); // probed 500 ms ago; slow interval is 300 s
         let d = decide(&[v], 30_000, &esc_cfg());
-        assert!(d.is_empty(), "no re-escalation, no recovery, no health churn");
+        assert!(d.is_empty(), "no re-escalation, no health churn, within the slow cooldown");
+    }
+
+    #[test]
+    fn an_escalated_node_is_slowly_probed_not_abandoned() {
+        // The self-healing probe: an escalated node whose beacons are lost to RF but
+        // which still answers a direct command must keep getting a slow "are you back?"
+        // ping, so it can recover on its own.
+        let mut v = offline_view("n", 1_000);
+        v.escalated = true;
+        v.last_recovery_ms = Some(1_000); // last probed at t=1_000
+        // Not yet due at +299 s (slow interval is 300 s).
+        let early = decide(&[v.clone()], 300_000, &esc_cfg());
+        assert!(!early.iter().any(|x| matches!(x, MeshDecision::Recover { .. })), "within the slow cooldown");
+        // Due at +300 s.
+        let due = decide(&[v], 301_500, &esc_cfg());
+        assert!(due.iter().any(|x| matches!(x, MeshDecision::Recover { .. })), "slow probe fires when due");
+        assert!(!due.iter().any(|x| matches!(x, MeshDecision::Escalate { .. })), "but never re-escalates");
+    }
+
+    #[test]
+    fn setting_the_escalated_probe_to_zero_restores_give_up_on_escalation() {
+        // Opt-out: `escalated_probe_interval_ms == 0` leaves an escalated node silent.
+        let mut c = esc_cfg();
+        c.escalated_probe_interval_ms = 0;
+        let mut v = offline_view("n", 1_000);
+        v.escalated = true;
+        let d = decide(&[v], 1_000_000, &c);
+        assert!(d.is_empty(), "no probe, no churn — the old give-up behaviour");
     }
 
     #[test]

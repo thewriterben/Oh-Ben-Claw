@@ -12,6 +12,8 @@ bench-config.toml
 obc-bench
 obc-bench-shm
 obc-bench-wal
+# Scratch copies of the world-memory db pulled in for offline auditing
+_audit/
 
 # Node.js
 node_modules/
