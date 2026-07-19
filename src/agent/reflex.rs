@@ -733,32 +733,75 @@ mod tests {
         assert_eq!(permissive.tick(&world, 2_000).unwrap().len(), 1);
     }
 
-    #[test]
-    fn gating_does_not_yet_cover_content_relayed_by_a_trusted_writer() {
+    #[tokio::test]
+    async fn content_relayed_by_a_trusted_writer_is_now_gated() {
+        // This test previously asserted the OPPOSITE — it pinned the gap while the ingest
+        // boundary was still open, and said in its own comment that it should fail when
+        // the boundary moved. It did, and this is that update.
+        //
+        // The distinction the gate needs is not visible in `source`: `sensing` writes
+        // under its own label whichever path fed it. It is visible in `origin`, because
+        // the `sense` tool — being the agent's boundary by construction — now says so.
         use crate::memory::world::Origin;
-        // KNOWN GAP (task #12), pinned deliberately so it stays visible.
-        //
-        // `power` and `sensing` still call plain `observe()`, which classifies as
-        // `Derived` — so a reading the agent supplied through `power report` or
-        // `sense ingest` is indistinguishable here from one the framework computed, and
-        // the gate passes it. Closing this needs the ingest boundary to mark
-        // tool-originated content, not a change to the gate.
-        //
-        // When that lands, this test SHOULD fail. Update it to assert the reflex no
-        // longer fires — that failure is the signal the hazard is closed.
-        let world = WorldMemory::open_in_memory().unwrap();
-        world
-            .observe("sensor.temperature", json!({"value": 30.0, "n": 2}), 1_000, 1_000, "sensing")
+        use crate::sensing::{QuantitySpec, Sample, SensingController};
+        use crate::tools::traits::Tool;
+        use std::sync::Arc;
+
+        // Two stores, deliberately. `SenseTool` stamps the real clock, so a
+        // driver-path write at a small fixed timestamp would land *before* it and
+        // `current()` would keep returning the tool's fact — the test would pass or fail
+        // for reasons having nothing to do with the gate. Separate worlds keep each half
+        // honest about what it is measuring.
+        let make = || {
+            let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+            let ctrl = Arc::new(
+                SensingController::new(vec![("temperature".to_string(), QuantitySpec::default())])
+                    .with_world_memory(Arc::clone(&world)),
+            );
+            (world, ctrl)
+        };
+
+        // Through the real tool: an agent says it is 30 degrees.
+        let (agent_world, agent_ctrl) = make();
+        let tool = crate::tools::builtin::sensing::SenseTool::new(
+            Arc::clone(&agent_ctrl),
+            Arc::clone(&agent_world),
+        );
+        tool.execute(json!({ "action": "ingest", "quantity": "temperature", "value": 30.0 }))
+            .await
+            .unwrap();
+        let fact = agent_world.current("sensor.temperature").unwrap().unwrap();
+        assert_eq!(
+            fact.origin,
+            Origin::Asserted,
+            "the tool is the agent boundary — what arrives there is a claim"
+        );
+        assert!(
+            ReflexEngine::new(vec![fan_rule()])
+                .tick(&agent_world, fact.valid_from + 1_000)
+                .unwrap()
+                .is_empty(),
+            "an agent-reported temperature must not actuate"
+        );
+
+        // The driver path, same controller type, same value: this one is measurement.
+        let (driver_world, driver_ctrl) = make();
+        driver_ctrl
+            .ingest(
+                &Sample {
+                    quantity: "temperature".to_string(),
+                    value: 30.0,
+                    unit: None,
+                    source: Some("bme280".to_string()),
+                },
+                3_000,
+                Origin::Observed,
+            )
             .unwrap();
         assert_eq!(
-            world.current("sensor.temperature").unwrap().unwrap().origin,
-            Origin::Derived,
-            "relayed content is currently indistinguishable from framework-computed"
-        );
-        assert_eq!(
-            ReflexEngine::new(vec![fan_rule()]).tick(&world, 2_000).unwrap().len(),
+            ReflexEngine::new(vec![fan_rule()]).tick(&driver_world, 4_000).unwrap().len(),
             1,
-            "gate passes it today — see task #12"
+            "a real reading still fires — the gate closed the hazard, not the feature"
         );
     }
 

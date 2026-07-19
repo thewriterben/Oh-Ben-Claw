@@ -106,7 +106,7 @@ async fn full_stack_mission_runs_then_safing_preempts_and_recovers() {
     set_pose(&world, 0.5, 0.5, 0.0, 1_000);
 
     // ── Phase A: healthy battery, mission starts and plans around the wall ────
-    power.ingest(&battery(85.0, ChargeState::Discharging), 1_000).unwrap();
+    power.ingest(&battery(85.0, ChargeState::Discharging), 1_000, oh_ben_claw::memory::world::Origin::Observed).unwrap();
     reflex.tick_and_dispatch(1_000).await.unwrap();
     assert!(!safing_state.shed_load(), "no shedding while healthy");
 
@@ -123,7 +123,7 @@ async fn full_stack_mission_runs_then_safing_preempts_and_recovers() {
     assert!(world.current("actuator.drive").unwrap().is_some(), "gated actuation occurred");
 
     // ── Phase B: battery low → safing engages in-process load-shedding ────────
-    power.ingest(&battery(15.0, ChargeState::Discharging), 2_000).unwrap();
+    power.ingest(&battery(15.0, ChargeState::Discharging), 2_000, oh_ben_claw::memory::world::Origin::Observed).unwrap();
     reflex.tick_and_dispatch(2_000).await.unwrap();
     assert!(safing_state.shed_load(), "low battery engages shed_load");
     // mission keeps running — low is not yet the abort condition
@@ -131,7 +131,7 @@ async fn full_stack_mission_runs_then_safing_preempts_and_recovers() {
     assert!(matches!(s, MissionStatus::Running { .. }), "mission still running at low, got {s:?}");
 
     // ── Phase C: battery critical → mission guard preempts + halts ────────────
-    power.ingest(&battery(5.0, ChargeState::Discharging), 3_000).unwrap();
+    power.ingest(&battery(5.0, ChargeState::Discharging), 3_000, oh_ben_claw::memory::world::Origin::Observed).unwrap();
     reflex.tick_and_dispatch(3_000).await.unwrap(); // power-critical escalation fires
     let s = mission_runner.tick(3_000).await.unwrap();
     assert!(
@@ -142,7 +142,7 @@ async fn full_stack_mission_runs_then_safing_preempts_and_recovers() {
     assert!(world.current("mission.reached").unwrap().is_none(), "mission never reached its goal");
 
     // ── Phase D: recharge → safing recovers automatically ─────────────────────
-    power.ingest(&battery(95.0, ChargeState::Charging), 4_000).unwrap();
+    power.ingest(&battery(95.0, ChargeState::Charging), 4_000, oh_ben_claw::memory::world::Origin::Observed).unwrap();
     reflex.tick_and_dispatch(4_000).await.unwrap();
     assert!(!safing_state.shed_load(), "recharge releases shed_load");
 }

@@ -48,19 +48,19 @@ async fn battery_drain_engages_then_recovers_shed_load() {
     let ctl = controller(&world, &state);
 
     // Healthy charge → nothing shed (the ClawCam poll keeps running).
-    power.ingest(&battery(85.0, ChargeState::Discharging), 1_000).unwrap();
+    power.ingest(&battery(85.0, ChargeState::Discharging), 1_000, oh_ben_claw::memory::world::Origin::Observed).unwrap();
     ctl.tick_and_dispatch(1_000).await.unwrap();
     assert!(!state.shed_load(), "no shedding at healthy charge");
 
     // Drain to low → power.mode=low → safe-power-low → shed_load engages
     // (the poll would now back off).
-    power.ingest(&battery(15.0, ChargeState::Discharging), 2_000).unwrap();
+    power.ingest(&battery(15.0, ChargeState::Discharging), 2_000, oh_ben_claw::memory::world::Origin::Observed).unwrap();
     ctl.tick_and_dispatch(2_000).await.unwrap();
     assert!(state.shed_load(), "shed_load engages at low charge");
 
     // Recharge to normal → power.mode=charging → safe-power-recovered →
     // shed_load releases automatically (load resumes).
-    power.ingest(&battery(95.0, ChargeState::Charging), 3_000).unwrap();
+    power.ingest(&battery(95.0, ChargeState::Charging), 3_000, oh_ben_claw::memory::world::Origin::Observed).unwrap();
     ctl.tick_and_dispatch(3_000).await.unwrap();
     assert!(!state.shed_load(), "shed_load auto-recovers once charge returns");
 }
@@ -99,7 +99,7 @@ async fn independent_subsystems_do_not_cross_clear() {
     let ctl = controller(&world, &state);
 
     // Low battery (shed) AND a healthy link (online) at the same tick.
-    power.ingest(&battery(12.0, ChargeState::Discharging), 1_000).unwrap();
+    power.ingest(&battery(12.0, ChargeState::Discharging), 1_000, oh_ben_claw::memory::world::Origin::Observed).unwrap();
     comms.ingest(&link("wifi", true, 20.0), 1_000).unwrap();
     ctl.tick_and_dispatch(1_000).await.unwrap();
 

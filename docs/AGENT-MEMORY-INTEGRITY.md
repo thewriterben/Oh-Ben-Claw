@@ -228,23 +228,34 @@ mapping function, zero call-site churn — would classify these as observed. Ori
 be set at the boundary where content enters, and travel with the reading: tool paths
 assert, driver paths observe, and the same controller serves both honestly.
 
-**Status: still open, and gating alone does not close it.** `sensing` and `power` call
-plain `observe()`, which classifies as `Derived` — so relayed agent content is currently
-indistinguishable from a framework computation, and the reflex gate passes it. Closing
-this needs the *ingest boundary* to mark tool-originated content, not a change to the
-gate. (I claimed once that reflex gating would close it; that was wrong, and the
-correction is the reason the next paragraph exists.)
+**Status: closed.** `SensingController::ingest`, `PowerController::ingest` and
+`AudioController::observe` now take an explicit `Origin` that travels with the reading.
+The three tools (`sense`, `power`, `hear`) pass `Asserted`; the ClawCam poller, which
+feeds real camera classifications into the same audio controller, passes `Observed`.
 
-That gap is pinned by a deliberately-failing-later test,
-`gating_does_not_yet_cover_content_relayed_by_a_trusted_writer`, which asserts today's
-behaviour and says in its comment that it *should* fail when the boundary moves. An
-executable gap cannot quietly drift out of the codebase's memory the way a comment can.
+The design question that looked hard turned out not to exist. Threading *caller identity*
+through the tool layer would have meant either changing `Tool::execute` across 83
+implementations, a race-prone side-channel, or — the tempting one — a flag injected into
+`args` at the gateway, which recreates the forgery bug fixed in `027ef07` exactly, since
+the model emits `args`. None of that is needed: **a tool does not have to ask who called
+it, because the tool *is* the agent boundary.** `SenseTool` is the agent's path by
+construction. Only `audio` had real ambiguity, because ClawCam and the `hear` tool
+genuinely share a controller — and that is resolved by the origin travelling with the
+call.
 
-The remaining design question is what an *operator* reading is. A human typing a real
-meter value through `power report` is `Instructed` — authoritative about intent, still not
-a sensor — but the tools cannot currently tell an operator from the LLM, because both
-arrive as the same HTTP call. Threading caller identity from the gateway is the missing
-piece.
+The answer came from reading the wiring rather than reasoning from the abstraction; the
+elaborate options were all solving a problem that the code did not have.
+
+Tests cover both directions, which matters more than the first: `power report {soc_pct:5}`
+produces `power.mode == "critical"` (the derivation stays honest) as an `Asserted` fact
+that does **not** stop an actuator, while the same value from a fuel gauge still escalates.
+Closing a hazard by breaking the feature is not closing it.
+
+*Still open:* what an **operator** reading should be. A human typing a real meter value is
+`Instructed` — authoritative about intent, still not a sensor — and there is no operator
+path through these tools today. When one is wanted, it should be a separate authenticated
+route that writes `Instructed` directly, rather than an attempt to distinguish callers
+inside a shared tool.
 
 **Also open — low-water mark not enforced.** Nothing currently derives a fact from mixed
 origins, but nothing prevents it either. When something does, it must take the

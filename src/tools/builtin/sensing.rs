@@ -15,6 +15,7 @@
 
 use crate::memory::world::WorldMemory;
 use crate::sensing::{Sample, SensingController};
+use crate::memory::world::Origin;
 use crate::tools::traits::{RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -45,7 +46,10 @@ impl SenseTool {
             Ok(s) => s,
             Err(e) => return ToolResult::err(format!("invalid sample: {e}")),
         };
-        match self.controller.ingest(&sample, now_ms()) {
+        // The `sense` tool IS the agent boundary: whatever arrives here was typed into a
+        // tool call, whatever the caller claims about its provenance in `sample.source`.
+        // No caller identity is needed to know that.
+        match self.controller.ingest(&sample, now_ms(), Origin::Asserted) {
             Ok(reading) => {
                 ToolResult::ok(serde_json::to_string(&reading).unwrap_or_else(|_| "{}".to_string()))
             }

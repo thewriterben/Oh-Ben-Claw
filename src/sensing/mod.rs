@@ -141,7 +141,19 @@ impl SensingController {
     /// Ingest a sample: classify range, record to world memory as a
     /// `sensor.{quantity}` fact, and update freshness. Returns the classified
     /// reading.
-    pub fn ingest(&self, sample: &Sample, now_ms: u64) -> anyhow::Result<ClassifiedReading> {
+    /// Record a reading, stating where its content came from.
+    ///
+    /// `origin` is not inferred: this controller writes under its own source label
+    /// (`"sensing"`) whichever path fed it, so a reading typed into the `sense` tool by an
+    /// agent is otherwise indistinguishable from one a driver read off a bus. That
+    /// ambiguity let agent-supplied values reach safing reflexes as if measured
+    /// (2026-07-19). The caller knows which it is; it must say.
+    pub fn ingest(
+        &self,
+        sample: &Sample,
+        now_ms: u64,
+        origin: crate::memory::world::Origin,
+    ) -> anyhow::Result<ClassifiedReading> {
         let quality = self.classify_range(&sample.quantity, sample.value);
         let unit = sample
             .unit
@@ -156,7 +168,7 @@ impl SensingController {
                 "source": sample.source,
                 "quality": quality.as_str(),
             });
-            world.observe(&entity, value, now_ms, now_ms, &self.source)?;
+            world.observe_as(&entity, value, now_ms, now_ms, &self.source, origin)?;
         }
 
         self.lock().insert(sample.quantity.clone(), (now_ms, quality));
@@ -237,7 +249,7 @@ mod tests {
     #[test]
     fn in_range_reading_is_ok_and_recorded_with_quality() {
         let (ctrl, world) = controller();
-        let r = ctrl.ingest(&sample("temperature", 22.5), 1_000).unwrap();
+        let r = ctrl.ingest(&sample("temperature", 22.5), 1_000, crate::memory::world::Origin::Observed).unwrap();
         assert_eq!(r.quality, Quality::Ok);
         assert_eq!(r.unit.as_deref(), Some("C")); // inherited from spec
         let fact = world.current("sensor.temperature").unwrap().unwrap();
@@ -250,7 +262,7 @@ mod tests {
     #[test]
     fn out_of_range_reading_is_flagged_but_still_recorded() {
         let (ctrl, world) = controller();
-        let r = ctrl.ingest(&sample("temperature", 150.0), 1_000).unwrap();
+        let r = ctrl.ingest(&sample("temperature", 150.0), 1_000, crate::memory::world::Origin::Observed).unwrap();
         assert_eq!(r.quality, Quality::OutOfRange);
         // Field evidence is preserved (recorded), just flagged.
         let fact = world.current("sensor.temperature").unwrap().unwrap();
@@ -261,7 +273,7 @@ mod tests {
     #[test]
     fn staleness_is_time_based() {
         let (ctrl, _world) = controller();
-        ctrl.ingest(&sample("temperature", 20.0), 1_000).unwrap();
+        ctrl.ingest(&sample("temperature", 20.0), 1_000, crate::memory::world::Origin::Observed).unwrap();
         assert_eq!(ctrl.status("temperature", 5_000), Quality::Ok); // within 10s
         assert_eq!(ctrl.status("temperature", 20_000), Quality::Stale); // past 10s
     }
@@ -275,7 +287,7 @@ mod tests {
     #[test]
     fn unspecced_quantity_accepted_as_ok() {
         let (ctrl, world) = controller();
-        let r = ctrl.ingest(&sample("lux", 999.0), 1).unwrap();
+        let r = ctrl.ingest(&sample("lux", 999.0), 1, crate::memory::world::Origin::Observed).unwrap();
         assert_eq!(r.quality, Quality::Ok);
         assert!(world.current("sensor.lux").unwrap().is_some());
     }
@@ -286,7 +298,7 @@ mod tests {
         // temperature out of range at ingest; humidity spec exists but never seen.
         let mut ctrl = ctrl;
         ctrl.specs.insert("humidity".to_string(), spec(0.0, 100.0, Some(5_000)));
-        ctrl.ingest(&sample("temperature", 200.0), 1_000).unwrap();
+        ctrl.ingest(&sample("temperature", 200.0), 1_000, crate::memory::world::Origin::Observed).unwrap();
         let anomalies = ctrl.anomalies(2_000);
         assert!(anomalies.contains(&("temperature".to_string(), Quality::OutOfRange)));
         assert!(anomalies.contains(&("humidity".to_string(), Quality::Stale)));

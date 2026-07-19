@@ -1878,7 +1878,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                         {
                                             let ev =
                                                 oh_ben_claw::vision::clawcam_ingest::audio_class_to_event(&a);
-                                            let _ = ac.observe(&ev, now);
+                                            // A real camera classified this off its own microphone.
+                                            let _ = ac.observe(
+                                                &ev,
+                                                now,
+                                                oh_ben_claw::memory::world::Origin::Observed,
+                                            );
                                         }
                                     }
                                 }

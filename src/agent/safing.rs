@@ -554,6 +554,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
+                crate::memory::world::Origin::Observed,
             )
             .unwrap();
         for f in engine.tick(&world, 1_000).unwrap() {
@@ -574,6 +575,7 @@ mod tests {
                     source: None,
                 },
                 2_000,
+                crate::memory::world::Origin::Observed,
             )
             .unwrap();
         for f in engine.tick(&world, 2_000).unwrap() {
@@ -615,6 +617,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
+                crate::memory::world::Origin::Observed,
             )
             .unwrap();
         assert_eq!(status.mode.as_str(), "critical");
@@ -648,6 +651,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
+                crate::memory::world::Origin::Observed,
             )
             .unwrap();
         let engine = ReflexEngine::new(standard_safing_rules(&SafingOptions::default()));
@@ -680,7 +684,7 @@ mod tests {
                     up: Some(false),
                     source: None,
                 },
-                1_000,
+                1_000
             )
             .unwrap();
 
@@ -715,6 +719,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
+                crate::memory::world::Origin::Observed,
             )
             .unwrap();
 
@@ -753,6 +758,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
+                crate::memory::world::Origin::Observed,
             )
             .unwrap();
 
@@ -785,6 +791,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
+                crate::memory::world::Origin::Observed,
             )
             .unwrap();
 
@@ -807,6 +814,7 @@ mod tests {
                 source: None,
             },
             1_000,
+            crate::memory::world::Origin::Observed,
         )
         .unwrap();
         let engine2 = ReflexEngine::new(standard_safing_rules(&opts));
@@ -863,6 +871,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
+                crate::memory::world::Origin::Observed,
             )
             .unwrap();
         let engine = ReflexEngine::new(standard_safing_rules(&SafingOptions::default()));
