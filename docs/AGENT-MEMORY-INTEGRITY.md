@@ -134,25 +134,64 @@ contract at all. The phantom happened on the *best*-documented path.
 
 ---
 
+## Principle 3 — origin is typed, and every consumer declares what it acts on
+
+*Shipped 2026-07-19.* Every fact carries an `Origin` distinct from the descriptive
+`source`:
+
+| | meaning | example writer |
+|---|---|---|
+| `Observed` | a sensor, radio or driver reported it — the world said so | LoRa gateway |
+| `Derived` | the framework computed it from other facts | mesh supervisor |
+| `Asserted` | an agent concluded it — a claim, not a reading | `record_incident` |
+| `Instructed` | a human said so — authority for intent, not evidence | operator input |
+
+Consumers hold an `OriginSet` and say what they will act on. It is a **set, not a
+threshold**, because trust here is not one ordering: "is this evidence about the world?"
+ranks `Observed` over `Asserted`, while "does this carry authority to act?" puts
+`Instructed` near the top and still leaves it useless as a reading. A consumer collapsing
+both questions into one level would be wrong about one of them.
+
+Declared so far:
+
+- **Reflex engine** — `EVIDENCE` (`Observed` + `Derived`). Reflexes are automatic physical
+  responses to sensed conditions, so an agent's claim and a human's typed value are both
+  excluded. Enforced at the one point facts enter the snapshot; every leaf condition uses
+  `is_some_and`, so a withheld fact evaluates false and nothing fires — withholding is
+  fail-safe by construction. Withheld facts are **logged**, because "the sensor is fine"
+  and "I refused to believe the sensor" must not look identical.
+- **Mesh supervisor** — a node exists because something was `Observed`, replacing a
+  comparison against the gateway's source string. Strictly stronger: a source check cannot
+  see a trusted component relaying untrusted content.
+- **Foresight** — `EVIDENCE`, and reports `excluded_samples` rather than silently fitting
+  fewer points. Letting asserted values into a trend closes a short loop where a model's
+  guess about a value bends the prediction *of that value*, and the output still reads
+  like measurement.
+- **Siteplan** — no declaration needed; it reads no world memory.
+
+### How the four design questions were answered
+
+1. **Is `derived` its own class?** Yes — the framework computing a health rollup is a
+   different kind of claim from a radio reporting a frame, and consumers may want one
+   without the other.
+2. **Mixed inputs → low-water mark.** A conclusion is at most as trusted as its
+   least-trusted input, or derivation launders assertions into observations. *Not yet
+   enforced mechanically* — nothing currently computes a fact from mixed origins, but
+   nothing stops it either. See Open work.
+3. **Default for a consumer that forgets.** `observe()` keeps its signature and defaults
+   to `Derived` — honest for most of the ~100 existing callers, and crucially *not*
+   `Observed`, so a caller who has not thought about provenance cannot manufacture
+   evidence by accident. `Origin::parse` returns `Asserted` for anything unrecognised,
+   including `"OBSERVED"`: no case-insensitive uplift, no forward-compatible guessing.
+4. **Migration.** Additive `ALTER TABLE` guarded by a `pragma_table_info` check, with a
+   one-time backfill by source. The backfill is explicitly *not* the ongoing rule — see
+   below — and unknown sources keep the `asserted` default rather than being guessed
+   upward, because for old rows we genuinely do not know and guessing up would launder
+   history into evidence. The phantom note now reads `asserted` in hindsight.
+
+---
+
 ## Open work
-
-**Origin taxonomy + per-consumer trust declarations** (ROADMAP / task #10). Add a trusted
-origin class distinct from the descriptive `source` — *observed* (a sensor or radio said
-it), *derived* (the framework computed it), *asserted* (an agent concluded it),
-*instructed* (a human said it) — and have every consumer declare which classes it acts on.
-
-Four questions to settle before writing the migration:
-
-1. **Is `derived` its own class, or does it inherit from its inputs?**
-2. **What happens on mixed inputs?** The defensible answer is a low-water mark: a
-   conclusion is at most as trusted as its least-trusted input. Otherwise derivation
-   launders assertions into observations.
-3. **What is the default for a consumer that forgets to declare?** Fail-open reproduces
-   this incident in miniature.
-4. **Migration.** Existing rows have no origin. Map known sources
-   (`lora-gateway` → observed, `mesh-supervisor` → derived, `agent` → asserted) and decide
-   what an *unrecognised* source becomes. Lowest trust is the safe answer and the opposite
-   of today's behaviour.
 
 ### Confirmed hazard: a trusted writer relaying untrusted content
 
@@ -184,16 +223,37 @@ What they cannot express is that a *trusted writer relayed untrusted content*. T
 is indistinguishable from a real fuel-gauge driver's. That is the confused-deputy shape,
 and it is a limitation of the vocabulary, not of the code.
 
-**Consequence for the design below: origin cannot be derived from `source`.** The obvious
-implementation — one mapping function, zero call-site churn — would classify these as
-observed. Origin has to be set at the boundary where content enters the system, and then
-travel with the reading: tool paths assert, driver paths observe, and the same controller
-can serve both honestly.
+**This is why origin cannot be derived from `source`.** The obvious implementation — one
+mapping function, zero call-site churn — would classify these as observed. Origin has to
+be set at the boundary where content enters, and travel with the reading: tool paths
+assert, driver paths observe, and the same controller serves both honestly.
 
-**Also open:** the escalation path has no *"is my intervention working?"* check. System 2
-woke 23 times over 3.2 hours with the same reason, acted, changed nothing, and never
-noticed the condition was unchanged. The novelty gate and rate limit worked exactly as
-designed — they suppressed the noise. Nothing was watching for a stuck loop underneath it.
+**Status: still open, and gating alone does not close it.** `sensing` and `power` call
+plain `observe()`, which classifies as `Derived` — so relayed agent content is currently
+indistinguishable from a framework computation, and the reflex gate passes it. Closing
+this needs the *ingest boundary* to mark tool-originated content, not a change to the
+gate. (I claimed once that reflex gating would close it; that was wrong, and the
+correction is the reason the next paragraph exists.)
+
+That gap is pinned by a deliberately-failing-later test,
+`gating_does_not_yet_cover_content_relayed_by_a_trusted_writer`, which asserts today's
+behaviour and says in its comment that it *should* fail when the boundary moves. An
+executable gap cannot quietly drift out of the codebase's memory the way a comment can.
+
+The remaining design question is what an *operator* reading is. A human typing a real
+meter value through `power report` is `Instructed` — authoritative about intent, still not
+a sensor — but the tools cannot currently tell an operator from the LLM, because both
+arrive as the same HTTP call. Threading caller identity from the gateway is the missing
+piece.
+
+**Also open — low-water mark not enforced.** Nothing currently derives a fact from mixed
+origins, but nothing prevents it either. When something does, it must take the
+least-trusted input's class, or derivation becomes a laundering step.
+
+**Also open — no *"is my intervention working?"* check.** System 2 woke 23 times over 3.2
+hours with the same reason, acted, changed nothing, and never noticed the condition was
+unchanged. The novelty gate and rate limit worked exactly as designed — they suppressed
+the noise. Nothing was watching for a stuck loop underneath it.
 
 ---
 
@@ -255,4 +315,5 @@ ones the agent wrote itself in good faith.
 
 *Origin: bench session 2026-07-17/19. Commits `5159720` (lexical discovery → sourced at
 the radio), `027ef07` (stamped provenance), `ec6c9b5` (`record_incident`), `5077554` (the
-four missing playbooks + the enforcing test).*
+four missing playbooks + the enforcing test), then the origin taxonomy: the `Origin`
+column and migration, discovery by `Observed`, and the reflex/foresight trust gates.*

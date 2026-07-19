@@ -42,6 +42,14 @@ pub struct Forecast {
     pub samples: usize,
     /// Timestamp of the latest point (ms).
     pub at_ms: u64,
+    /// Facts skipped because their [`Origin`] is not one this forecaster acts on.
+    ///
+    /// Reported rather than silently dropped: a forecast fitted to 3 points where 12
+    /// facts exist is a materially weaker claim, and the caller cannot tell the
+    /// difference from `samples` alone. Non-zero here means the entity's history mixes
+    /// evidence with assertions.
+    #[serde(default)]
+    pub excluded_samples: usize,
 }
 
 impl Forecast {
@@ -86,17 +94,39 @@ pub struct Forecaster {
     /// Forgetting factor in `(0, 1]`: weight of a point is `decay^age` (age in
     /// samples back from newest). `1.0` = equal weight (OLS).
     decay: f64,
+    /// Which fact origins this forecaster will fit a trend to.
+    ///
+    /// A forecast is a claim about where the *world* is heading, so it is fitted to
+    /// evidence: what was reported and what the framework computed from it. Including
+    /// `Asserted` points would let an agent's own guesses about a value bend the
+    /// prediction of that value — a short loop from a model's opinion back into what
+    /// looks like measurement.
+    trusted: crate::memory::world::OriginSet,
 }
 
 impl Default for Forecaster {
     fn default() -> Self {
-        Self { window: 16, decay: 1.0 }
+        Self {
+            window: 16,
+            decay: 1.0,
+            trusted: crate::memory::world::OriginSet::EVIDENCE,
+        }
     }
 }
 
 impl Forecaster {
     pub fn new(window: usize) -> Self {
-        Self { window: window.max(1), decay: 1.0 }
+        Self {
+            window: window.max(1),
+            decay: 1.0,
+            trusted: crate::memory::world::OriginSet::EVIDENCE,
+        }
+    }
+
+    /// Override which fact origins this forecaster fits a trend to.
+    pub fn with_trusted_origins(mut self, trusted: crate::memory::world::OriginSet) -> Self {
+        self.trusted = trusted;
+        self
     }
 
     /// Set the forgetting factor (clamped to `(0, 1]`). Below 1.0 turns the fit
@@ -106,15 +136,40 @@ impl Forecaster {
         self
     }
 
-    /// Fit a [`Forecast`] for `entity` from its recent history. `None` if there is
-    /// no numeric history.
+    /// Fit a [`Forecast`] for `entity` from its recent *trusted* history.
+    ///
+    /// `None` when there is no numeric history — or when every numeric fact came from an
+    /// origin this forecaster does not act on, which is a different situation with the
+    /// same answer, so it is logged.
+    ///
+    /// The exclusion matters more here than it looks. Foresight feeds decisions about
+    /// where a value is heading; letting an agent's asserted values into the fit would
+    /// close a short loop from a model's own guess back into something that reads like
+    /// measurement, and the resulting prediction would be partly a forecast of the
+    /// agent's opinions.
     pub fn forecast(&self, world: &WorldMemory, entity: &str) -> anyhow::Result<Option<Forecast>> {
         let facts = world.history(entity)?;
-        let mut pts: Vec<(f64, f64)> = facts
+        // Fit only to origins this forecaster trusts, and count what that removed.
+        let numeric: Vec<_> = facts
             .iter()
+            .filter(|f| value_to_f64(&f.value).is_some())
+            .collect();
+        let mut pts: Vec<(f64, f64)> = numeric
+            .iter()
+            .filter(|f| self.trusted.accepts(f.origin))
             .filter_map(|f| value_to_f64(&f.value).map(|v| (f.valid_from as f64, v)))
             .collect();
+        let excluded_samples = numeric.len().saturating_sub(pts.len());
         if pts.is_empty() {
+            // Every numeric point was untrusted: there is no forecast to make, and
+            // saying "no history" would be misleading when history plainly exists.
+            if excluded_samples > 0 {
+                tracing::debug!(
+                    entity = %entity,
+                    excluded = excluded_samples,
+                    "foresight: no forecast — every numeric fact was an untrusted origin"
+                );
+            }
             return Ok(None);
         }
         // Keep the most-recent `window` points.
@@ -124,7 +179,13 @@ impl Forecaster {
         let n = pts.len();
         let (last_t, current) = *pts.last().unwrap();
         if n == 1 {
-            return Ok(Some(Forecast { current, rate_per_ms: 0.0, samples: 1, at_ms: last_t as u64 }));
+            return Ok(Some(Forecast {
+                current,
+                rate_per_ms: 0.0,
+                samples: 1,
+                at_ms: last_t as u64,
+                excluded_samples,
+            }));
         }
         // Per-point weights: newest weight 1, older decays by `decay^age`.
         // (decay == 1.0 ⇒ all weights 1 ⇒ ordinary least squares.)
@@ -135,7 +196,13 @@ impl Forecaster {
         let num: f64 = pts.iter().zip(&w).map(|((t, v), wi)| wi * (t - tm) * (v - vm)).sum();
         let den: f64 = pts.iter().zip(&w).map(|((t, _), wi)| wi * (t - tm).powi(2)).sum();
         let slope = if den != 0.0 { num / den } else { 0.0 };
-        Ok(Some(Forecast { current, rate_per_ms: slope, samples: n, at_ms: last_t as u64 }))
+        Ok(Some(Forecast {
+            current,
+            rate_per_ms: slope,
+            samples: n,
+            at_ms: last_t as u64,
+            excluded_samples,
+        }))
     }
 }
 
@@ -318,6 +385,56 @@ mod tests {
             world.observe(entity, json!({ "value": v }), t, t, "sensor").unwrap();
         }
         world
+    }
+
+    #[test]
+    fn asserted_points_do_not_bend_the_forecast() {
+        use crate::memory::world::Origin;
+        // A real declining series: 100 → 80 → 60 over 0..2s ⇒ -20/s.
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        for (t, v) in [(0u64, 100.0), (1_000, 80.0), (2_000, 60.0)] {
+            world
+                .observe_as("power.battery", json!({ "value": v }), t, t, "power-driver", Origin::Observed)
+                .unwrap();
+        }
+        let baseline = Forecaster::default()
+            .forecast(&world, "power.battery")
+            .unwrap()
+            .expect("a forecast from observed points");
+        assert_eq!(baseline.samples, 3);
+        assert_eq!(baseline.excluded_samples, 0);
+
+        // Now an agent asserts the battery is fine. The trend must not move.
+        world
+            .observe_as("power.battery", json!({ "value": 100.0 }), 3_000, 3_000, "agent", Origin::Asserted)
+            .unwrap();
+        let after = Forecaster::default()
+            .forecast(&world, "power.battery")
+            .unwrap()
+            .expect("still a forecast");
+        assert_eq!(after.samples, 3, "the assertion was not fitted");
+        assert_eq!(after.excluded_samples, 1, "and its exclusion is reported, not silent");
+        assert!(
+            (after.rate_per_ms - baseline.rate_per_ms).abs() < 1e-12,
+            "an agent's opinion cannot flatten a real decline: {} vs {}",
+            after.rate_per_ms,
+            baseline.rate_per_ms
+        );
+    }
+
+    #[test]
+    fn an_entity_with_only_asserted_history_has_no_forecast() {
+        use crate::memory::world::Origin;
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        for (t, v) in [(0u64, 10.0), (1_000, 20.0)] {
+            world
+                .observe_as("guess.thing", json!({ "value": v }), t, t, "agent", Origin::Asserted)
+                .unwrap();
+        }
+        assert!(
+            Forecaster::default().forecast(&world, "guess.thing").unwrap().is_none(),
+            "predicting the future of an agent's own claims is not foresight"
+        );
     }
 
     #[test]
