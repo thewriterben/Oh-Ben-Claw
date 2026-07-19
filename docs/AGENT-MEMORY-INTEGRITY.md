@@ -154,8 +154,41 @@ Four questions to settle before writing the migration:
    what an *unrecognised* source becomes. Lowest trust is the safe answer and the opposite
    of today's behaviour.
 
-Today a reflex rule will fire on a fact an agent asserted. That is the same hazard as the
-phantom node, in a component that can actuate — it simply has not been triggered yet.
+### Confirmed hazard: a trusted writer relaying untrusted content
+
+Scoping the taxonomy work on 2026-07-19 turned "a reflex will fire on a fact an agent
+asserted" from a prediction into a two-call reproduction, entirely through legitimate
+paths:
+
+```
+LLM: power {action:"report", soc_pct: 5}
+  → PowerController::ingest
+  → world.observe("power.mode", …, source: "power")   ← a framework constant
+  → safe-power-critical-escalate fires
+  → safe-power-critical-stop issues Stop to a physical actuator
+```
+
+Same shape for `sense {action:"ingest", quantity:"temperature", value:99}` →
+`sensor.temperature` → `safe-overheat-{quantity}`, and `hear` → `audio.{stream}` →
+`safe-audio-alarm-{stream}`.
+
+**Severity, stated plainly.** Today the impact is *spurious safing* and another
+self-poisoning wake loop — not dangerous actuation. Stop is the fail-safe direction, the
+overheat rule only escalates, and Track 0 still bounds everything that reaches a pin. The
+structure is what matters: it is unsafe for any future rule whose action is not fail-safe.
+
+**The root cause is not a bug in those modules.** `sensing/mod.rs` and `power/mod.rs`
+implement the provenance/attribution split correctly — provenance is their own constant
+(`"sensing"`, `"power"`), and the caller's claimed source goes into the value as content.
+What they cannot express is that a *trusted writer relayed untrusted content*. Their fact
+is indistinguishable from a real fuel-gauge driver's. That is the confused-deputy shape,
+and it is a limitation of the vocabulary, not of the code.
+
+**Consequence for the design below: origin cannot be derived from `source`.** The obvious
+implementation — one mapping function, zero call-site churn — would classify these as
+observed. Origin has to be set at the boundary where content enters the system, and then
+travel with the reading: tool paths assert, driver paths observe, and the same controller
+can serve both honestly.
 
 **Also open:** the escalation path has no *"is my intervention working?"* check. System 2
 woke 23 times over 3.2 hours with the same reason, acted, changed nothing, and never

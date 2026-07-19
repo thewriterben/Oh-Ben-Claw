@@ -19,7 +19,7 @@
 //! serial read loop is gated behind the `hardware` feature (tokio-serial), matching
 //! the rest of the peripheral I/O.
 
-use crate::memory::world::WorldMemory;
+use crate::memory::world::{Origin, WorldMemory};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -203,7 +203,16 @@ fn ingest_node_json(
     if let Value::Object(ref mut m) = enriched {
         m.insert("_mesh".into(), mesh_meta.clone());
     }
-    let _ = world.observe(&format!("mesh.{node_id}.{msg_type}"), enriched, now_ms, now_ms, SOURCE);
+    // Observed: this arrived over the air from the node's own radio. The gateway is a
+    // transcriber here, not an interpreter — which is exactly what makes it evidence.
+    let _ = world.observe_as(
+        &format!("mesh.{node_id}.{msg_type}"),
+        enriched,
+        now_ms,
+        now_ms,
+        SOURCE,
+        Origin::Observed,
+    );
 
     // Liveness/link rollup fact.
     let link = json!({
@@ -212,7 +221,14 @@ fn ingest_node_json(
         "src": format!("{:02X}", frame.src),
         "last_type": msg_type,
     });
-    let _ = world.observe(&format!("mesh.{node_id}"), link, now_ms, now_ms, SOURCE);
+    let _ = world.observe_as(
+        &format!("mesh.{node_id}"),
+        link,
+        now_ms,
+        now_ms,
+        SOURCE,
+        Origin::Observed,
+    );
 
     GatewayIngest { node_id, msg_type, rssi_dbm: frame.rssi_dbm }
 }
