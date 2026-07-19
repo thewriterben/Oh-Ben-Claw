@@ -11,6 +11,15 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Provenance stamped on every fact written through this tool.
+///
+/// Deliberately a constant, not a parameter: this is the agent's own write path, so
+/// anything it records here is an *assertion*, whatever the agent believes the ultimate
+/// source to be. Consumers that gate on provenance (e.g. the mesh supervisor, which
+/// only treats `lora-gateway` facts as evidence a radio exists) rely on an agent being
+/// unable to claim otherwise.
+pub const AGENT_SOURCE: &str = "agent";
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -41,7 +50,9 @@ impl Tool for WorldMemoryTool {
          devices, sensors, subjects). Actions: 'observe' (record a fact for an \
          entity), 'current' (latest value), 'at' (value at a past timestamp), \
          'history' (full trail), 'entities' (list known entities). Use this to \
-         remember and recall the real-world state over time."
+         remember and recall the real-world state over time. Provenance is stamped \
+         automatically and cannot be set by the caller — to attribute a reading to a \
+         device, put that in the value (e.g. {\"reported_by\":\"pir\",\"c\":21.5})."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -66,10 +77,6 @@ impl Tool for WorldMemoryTool {
                 "ts": {
                     "type": "integer",
                     "description": "Timestamp (ms since epoch) for the 'at' query."
-                },
-                "source": {
-                    "type": "string",
-                    "description": "Who reported the fact (default 'agent')."
                 }
             },
             "required": ["action"]
@@ -98,17 +105,30 @@ impl Tool for WorldMemoryTool {
                          notes under a different entity (e.g. 'incident.<node>').",
                     ));
                 }
-                let value = args.get("value").cloned().unwrap_or(Value::Null);
+                let mut value = args.get("value").cloned().unwrap_or(Value::Null);
                 let now = now_ms();
                 let valid_from = args
                     .get("valid_from")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(now);
-                let source = args
-                    .get("source")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("agent");
-                let fact = self.mem.observe(entity, value, valid_from, now, source)?;
+                // Provenance is stamped here, never taken from the caller. It used to be
+                // a tool parameter, which meant an agent could declare its own writes to
+                // be anything — including `lora-gateway`, the source the mesh supervisor
+                // trusts to decide a radio exists. Self-declared provenance is not
+                // provenance (bench audit, 2026-07-17).
+                //
+                // The old parameter also conflated two different things: *provenance*
+                // (who wrote this fact — always the agent, here) and *attribution* (who
+                // the agent claims told it, e.g. a PIR). Attribution is content, so a
+                // caller-supplied `source` is folded into the value as `reported_by`
+                // rather than silently dropped.
+                if let Some(claimed) = args.get("source").and_then(|v| v.as_str()) {
+                    if let Value::Object(ref mut m) = value {
+                        m.entry("reported_by")
+                            .or_insert_with(|| Value::String(claimed.to_string()));
+                    }
+                }
+                let fact = self.mem.observe(entity, value, valid_from, now, AGENT_SOURCE)?;
                 Ok(ToolResult::ok(serde_json::to_string(&fact)?))
             }
             "current" => {
@@ -185,6 +205,45 @@ mod tests {
             .await
             .unwrap();
         assert!(ok.success);
+    }
+
+    #[tokio::test]
+    async fn an_agent_cannot_forge_the_provenance_of_its_own_write() {
+        // The mesh supervisor decides a radio exists by trusting facts sourced
+        // `lora-gateway`. If the agent could declare its own source, it could
+        // manufacture a node — self-declared provenance is not provenance.
+        let t = tool();
+        let r = t
+            .execute(json!({
+                "action": "observe",
+                "entity": "incident.n1",
+                "value": { "status": "presumed lost" },
+                "source": "lora-gateway"
+            }))
+            .await
+            .unwrap();
+        assert!(r.success);
+        assert!(r.output.contains(r#""source":"agent""#), "stamped, not claimed: {}", r.output);
+        assert!(!r.output.contains("\"source\":\"lora-gateway\""), "the claim is not honoured");
+    }
+
+    #[tokio::test]
+    async fn a_claimed_source_is_kept_as_attribution_in_the_value() {
+        // Provenance (who wrote it) and attribution (who the agent says told it) are
+        // different things. The write is the agent's; the PIR claim is content.
+        let t = tool();
+        let r = t
+            .execute(json!({
+                "action": "observe",
+                "entity": "room.motion",
+                "value": { "motion": true },
+                "source": "pir"
+            }))
+            .await
+            .unwrap();
+        assert!(r.success);
+        assert!(r.output.contains(r#""source":"agent""#), "provenance is the agent");
+        assert!(r.output.contains(r#""reported_by":"pir""#), "attribution preserved: {}", r.output);
     }
 
     #[tokio::test]
