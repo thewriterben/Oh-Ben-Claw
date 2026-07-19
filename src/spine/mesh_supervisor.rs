@@ -167,6 +167,10 @@ pub fn decide(views: &[MeshNodeView], now_ms: u64, cfg: &MeshSupervisorConfig) -
 /// gateway heard it on the air, so the rollup fact must carry the gateway's source.
 /// The shape of an entity name is not evidence of a radio.
 ///
+/// This check is only sound because provenance is stamped by the framework and cannot
+/// be set by a caller — see `tools::builtin::world::AGENT_SOURCE`. If the agent could
+/// declare its own writes to be `lora-gateway`, it could manufacture a node here.
+///
 /// This matters because `mesh.*` is a shared namespace. Anything else writing a
 /// two-part fact under it — the supervisor's own `mesh.escalated_count` aggregate, or
 /// (bench, 2026-07-17) a System 2 incident note at `mesh.escalation_status` — used to
