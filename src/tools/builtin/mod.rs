@@ -10,6 +10,7 @@ pub mod fleet;
 pub mod foresight;
 pub mod gnss;
 pub mod http;
+pub mod incident;
 pub mod learn;
 pub mod memory;
 pub mod mesh;

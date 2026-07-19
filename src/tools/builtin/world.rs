@@ -101,8 +101,9 @@ impl Tool for WorldMemoryTool {
                     return Ok(ToolResult::err(
                         "'mesh.*' is reserved for mesh perception written by the LoRa \
                          gateway and supervisor — writing there would be read back as \
-                         real node state. Use `mesh_status` to read the mesh, and file \
-                         notes under a different entity (e.g. 'incident.<node>').",
+                         real node state. Use `mesh_status` to read the mesh, and \
+                         `record_incident` to write down what you concluded (it files \
+                         under 'incident.<subject>' for you).",
                     ));
                 }
                 let mut value = args.get("value").cloned().unwrap_or(Value::Null);

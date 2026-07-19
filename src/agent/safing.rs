@@ -220,10 +220,10 @@ pub fn net_recovered_clear(opts: &SafingOptions) -> ReflexRule {
 pub const MESH_LOST_PLAYBOOK: &str = "A mesh node is presumed lost (LoRa escalation). \
 Triage: (1) call `mesh_status` to identify the offline/escalated node and its last state \
 (RSSI, last-seen, last command); (2) `mesh_command` it a `capabilities` ping to confirm \
-reachability; (3) if it answers, the link recovered — note it and move on; if not, record \
-the loss under an `incident.<node>` entity (the `mesh.*` namespace is reserved for what \
-the radios actually said — do not write there) and alert an operator. Every node action \
-stays Track-0 gated. Full playbook: docs/playbooks/mesh-node-lost.md.";
+reachability; (3) record the outcome with `record_incident` — `status: resolved` if it \
+answered (the link recovered), `status: unresolved` if it did not, with the `mesh_status` \
+readings as evidence. An operator is alerted automatically; you do not need to do that. \
+Every node action stays Track-0 gated. Full playbook: docs/playbooks/mesh-node-lost.md.";
 
 /// `mesh.escalated_count >= 1` → escalate to System 2: the mesh supervisor has
 /// presumed a node lost over the LoRa mesh. Fires only when mesh escalation is
