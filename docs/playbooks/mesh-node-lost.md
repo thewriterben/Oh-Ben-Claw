@@ -27,7 +27,9 @@ reason itself carries the short form of steps 1–3; this document is the full v
 
 1. **Identify.** Call `mesh_status`. Note every node whose `escalated` is true (and any
    `offline`). For each, look at `age_s` (how long since last heard), `rssi_dbm` (was the
-   link already weak?), and `last_type` / `last_cmd_ok` (what was it last doing?).
+   link already weak?), and `last_type` / `last_cmd_ok` (what was it last doing?). Note
+   `last_cmd_ok` is a *health* reading, not the raw reply: a node that refused a command
+   on its Track 0 policy shows as ok, because refusing is the node working correctly.
 
 2. **Confirm reachability.** For each lost node, `mesh_command` it a lightweight
    `capabilities` ping:
