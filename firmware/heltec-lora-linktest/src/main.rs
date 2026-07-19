@@ -56,7 +56,7 @@ fn main() -> anyhow::Result<()> {
     info!("Heltec V3 OBC spine gateway — LoRa 915 MHz ⇄ UART1 (compute uplink)");
 
     // UART1 to the compute node: TX=GPIO4, RX=GPIO2.
-    let mut uart = UartDriver::new(
+    let uart = UartDriver::new(
         peripherals.uart1,
         pins.gpio4,
         pins.gpio2,
@@ -194,7 +194,20 @@ fn main() -> anyhow::Result<()> {
                         // already handled (dup/relay) — ignore
                     } else {
                         let txt = String::from_utf8_lossy(f.payload);
-                        info!("SPINE ◄ src={:02X} seq={} rssi={} dBm : {}", f.src, f.seq, rx.rssi_dbm, txt);
+                        // SNR alongside RSSI: together they separate the two opposite RF
+                        // faults that look identical from one number. Weak-and-clean
+                        // (low RSSI, positive SNR) is range. Strong-and-dirty (high
+                        // RSSI, collapsed SNR) is an overdriven receiver — radios too
+                        // close, which on 2026-07-17 destroyed every 205-byte frame
+                        // while letting keepalives through.
+                        //
+                        // Safe to add: the host parser reads these by key
+                        // (`field_after(rest, "rssi=")`), not by position, and splits
+                        // the payload on " : " which still follows.
+                        info!(
+                            "SPINE ◄ src={:02X} seq={} rssi={} dBm snr={} dB : {}",
+                            f.src, f.seq, rx.rssi_dbm, rx.snr_db, txt
+                        );
                         // Forward the payload to the wired compute node.
                         let _ = uart.write(f.payload);
                         let _ = uart.write(b"\n");

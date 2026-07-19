@@ -524,6 +524,25 @@ mod tests {
             .expect("payload is valid JSON after ANSI strip");
     }
 
+    /// The gateway console gained an `snr=` field between `rssi=` and the payload
+    /// separator, so that RSSI and SNR together distinguish a weak link from an
+    /// overdriven receiver. The parser reads fields by key rather than position, which
+    /// is what makes that safe — this pins it, because a positional parser would have
+    /// broken silently on every frame the moment the firmware was flashed.
+    #[test]
+    fn parses_a_line_carrying_the_added_snr_field() {
+        let line = "\u{1b}[0;32mI (93772) heltec_lora_linktest: SPINE ◄ src=D8 seq=11 rssi=-10 dBm snr=-7 dB : {\"node_id\":\"gw-D8\",\"type\":\"gw_keepalive\",\"seq\":11}\u{1b}[0m";
+        let f = parse_gateway_line(line).expect("line with snr= parses");
+        assert_eq!(f.src, 0xD8);
+        assert_eq!(f.seq, 11);
+        assert_eq!(f.rssi_dbm, -10, "rssi is still read correctly with a field after it");
+        assert_eq!(
+            f.payload,
+            "{\"node_id\":\"gw-D8\",\"type\":\"gw_keepalive\",\"seq\":11}",
+            "the payload split still lands after the new field"
+        );
+    }
+
     #[test]
     fn ignores_tx_relay_keepalive_and_boot_lines() {
         assert!(parse_gateway_line("SPINE ► (uart) seq=5 (34 B) {\"type\":\"link_state\"}").is_none());
