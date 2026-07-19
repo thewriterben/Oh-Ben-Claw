@@ -166,6 +166,8 @@ designed — they suppressed the noise. Nothing was watching for a stuck loop un
 
 ## Reading
 
+### Foundations
+
 - **Biba, "Integrity Considerations for Secure Computer Systems"** (1977) — the integrity
   dual of Bell-LaPadula; the formal version of Principle 1.
 - **Buneman, Khanna & Tan, "Why and Where: A Characterization of Data Provenance"**
@@ -175,6 +177,46 @@ designed — they suppressed the noise. Nothing was watching for a stuck loop un
 - **Doyle, "A Truth Maintenance System"** (1979) — retracting conclusions when a premise
   is withdrawn. World memory is bitemporal but does not track justification, so a
   retracted premise currently leaves its conclusions standing.
+
+### Current work (surveyed 2026-07-19; titles from search, not yet read in full)
+
+- [From Untrusted Input to Trusted Memory: A Systematic Study of Memory Poisoning Attacks
+  in LLM Agents](https://arxiv.org/html/2606.04329v1) — the closest published framing of
+  this incident: memory assembled from content that is "later retrieved as part of the
+  agent's internal context and treated as trusted knowledge", with the observation that
+  current systems have "no robust mechanism to track the provenance of stored entries".
+- [From Agent Traces to Trust: A Survey of Evidence Tracing and Execution Provenance in
+  LLM Agents](https://arxiv.org/pdf/2606.04990) — best entry point for the open work
+  below; a map of what has been tried.
+- [SMSR: Certified Defence Against Runtime Memory Poisoning in Persistent LLM Agent
+  Systems](https://arxiv.org/html/2606.12703) — write-time HMAC provenance plus randomised
+  ablation. Worth reading, worth *not* copying: HMAC attestation defends against a
+  compromised writer. Ours is not compromised, it is confused. A stamped constant is the
+  right strength here.
+- [LoopTrap: Termination Poisoning Attacks on LLM Agents](https://arxiv.org/html/2605.05846v1)
+  — agents judging their own progress from signals they also process; structurally the
+  "23 wakes, nothing noticed the loop was stuck" gap, minus an attacker.
+- [MemoryGraft](https://arxiv.org/html/2512.16962v1) and
+  [AgentPoison](https://www.researchgate.net/publication/397214044_AgentPoison_Red-teaming_LLM_Agents_via_Poisoning_Memory_or_Knowledge_Bases)
+  — the attack side, for the threat picture.
+
+### Why this incident is worth more than it looks
+
+Essentially all of the current literature assumes an **adversary**: injected web content,
+poisoned documents, attacker-controlled tool output. This incident had no attacker. The
+agent poisoned itself by following its instructions correctly, and the note it wrote was
+true when written.
+
+The proposed defences mostly transfer, but the threat model is stated too narrowly, and we
+have direct evidence for the stronger claim:
+
+> **Untyped agent memory fails without anyone attacking it.**
+
+Provenance typing is therefore not a security control to add when adversaries are
+expected. It is a correctness property. That changes the default question from *"is this
+input hostile?"* — which you ask about untrusted sources — to *"is this the kind of thing
+I am allowed to act on?"*, which must be answered for every fact, always, including the
+ones the agent wrote itself in good faith.
 
 ---
 
