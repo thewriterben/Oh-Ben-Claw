@@ -502,6 +502,13 @@ fn main() -> anyhow::Result<()> {
     // the Track 0 safety gate and reported on `obc/nodes/{id}/reflex`.
     const REFLEX_INTERVAL_MS: u64 = 1000;
     let mut last_reflex_ms: u64 = 0;
+    // Liveness beacon cadence (Phase B). State reports fire only on change, so a healthy
+    // node that isn't changing is deliberately silent — which the host supervisor can't
+    // tell apart from a lost node (it infers offline from silence). A small periodic
+    // beacon makes liveness a positive signal: silence past a few beacons now genuinely
+    // means lost. Kept well under the host `stale_ms` (set stale_ms ≥ ~3× this).
+    const BEACON_INTERVAL_MS: u64 = 30_000;
+    let mut last_beacon_ms: u64 = 0;
     // Link watchdog: time of last host contact. If the host goes silent past the
     // safing timeout, the built-in `safe-link-offline` rule fires (on-MCU offline
     // safing), independent of battery safing.
@@ -674,6 +681,23 @@ fn main() -> anyhow::Result<()> {
                 send_line(&mut usb, &spine_msg);
                 mirror_spine(&mut spine_uart, &spine_msg);
             }
+        }
+
+        // ── Liveness beacon (System 1) ────────────────────────────────────────
+        // A steady node reports no state changes, so without this it looks dead to the
+        // host supervisor. Emit a tiny heartbeat on its own cadence — deliberately
+        // small (LoRa frames near the CRC limit get silently dropped under RF load), and
+        // mirrored the same way as state reports so it rides the mesh home.
+        if now.saturating_sub(last_beacon_ms) >= BEACON_INTERVAL_MS {
+            last_beacon_ms = now;
+            let beacon = serde_json::json!({
+                "type": "beacon",
+                "node_id": NODE_ID,
+                "ts_ms": now,
+            });
+            let spine_msg = beacon.to_string();
+            send_line(&mut usb, &spine_msg);
+            mirror_spine(&mut spine_uart, &spine_msg);
         }
     }
 }

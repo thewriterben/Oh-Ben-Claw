@@ -1995,10 +1995,18 @@ pub struct MeshSupervisorConfig {
     #[serde(default = "default_mesh_recovery_interval_ms")]
     pub min_recovery_interval_ms: u64,
     /// A node continuously offline for at least this long (ms) is escalated (presumed
-    /// lost): recovery pings stop and a `mesh.<node>.escalation` fact is raised (cleared
-    /// automatically if the node returns). `0` disables escalation.
+    /// lost): fast recovery pings stop and a `mesh.<node>.escalation` fact is raised
+    /// (cleared automatically if the node returns). `0` disables escalation.
     #[serde(default)]
     pub escalate_after_ms: u64,
+    /// After escalation, an escalated node is not abandoned: it still gets a *slow*
+    /// "are you back?" probe at this interval (ms), so a node whose passive beacons are
+    /// lost to RF but which still answers a direct command recovers on its own (the
+    /// reply refreshes `last_seen` and the next tick clears the escalation). Should be
+    /// well above `min_recovery_interval_ms` so a genuinely dead node isn't hammered.
+    /// `0` disables the escalated probe (revert to "give up entirely" on escalation).
+    #[serde(default = "default_mesh_escalated_probe_interval_ms")]
+    pub escalated_probe_interval_ms: u64,
 }
 
 impl Default for MeshSupervisorConfig {
@@ -2010,6 +2018,7 @@ impl Default for MeshSupervisorConfig {
             recover: None,
             min_recovery_interval_ms: default_mesh_recovery_interval_ms(),
             escalate_after_ms: 0,
+            escalated_probe_interval_ms: default_mesh_escalated_probe_interval_ms(),
         }
     }
 }
@@ -2024,6 +2033,10 @@ fn default_mesh_tick_ms() -> u64 {
 
 fn default_mesh_recovery_interval_ms() -> u64 {
     30_000
+}
+
+fn default_mesh_escalated_probe_interval_ms() -> u64 {
+    300_000 // 5 min — slow enough not to hammer a dead node, fast enough to self-heal
 }
 
 /// Escalation notifications (`[notifications]`): wire reflex escalations (mesh node
