@@ -25,9 +25,9 @@ use esp_idf_svc::hal::spi::SpiDeviceDriver;
 use esp_idf_svc::hal::uart::config::Config as UartConfig;
 use esp_idf_svc::hal::uart::UartDriver;
 use esp_idf_svc::hal::units::Hertz;
-use log::info;
+use log::{info, warn};
 
-use spine::{SeenSet, SpineFrame};
+use spine::{Framed, LineFramer, SeenSet, SpineFrame};
 use sx1262::Sx1262;
 
 const FREQ_HZ: u64 = 915_000_000;
@@ -99,21 +99,32 @@ fn main() -> anyhow::Result<()> {
         .spawn(move || {
             let stdin = std::io::stdin();
             let mut lock = stdin.lock();
-            let mut b = [0u8; 1];
-            let mut cline: Vec<u8> = Vec::new();
+            // Bulk read, not byte-at-a-time. The original took one byte per `read`
+            // and slept 20 ms whenever stdin was momentarily empty. A host writing
+            // two commands back to back (176 B, no gap — 2026-07-19 18:51:16)
+            // outran it and bytes were lost mid-burst: both commands reached the
+            // radio as mid-string fragments, 50 B and 31 B. That is worse than
+            // dropping them, because a malformed frame still transmits, still
+            // costs airtime, and still has to be parsed and rejected downstream.
+            let mut chunk = [0u8; 256];
+            let mut framer = LineFramer::new();
             loop {
-                match std::io::Read::read(&mut lock, &mut b) {
+                match std::io::Read::read(&mut lock, &mut chunk) {
                     Ok(0) => std::thread::sleep(std::time::Duration::from_millis(20)),
-                    Ok(_) => {
-                        if b[0] == b'\n' || b[0] == b'\r' {
-                            if !cline.is_empty() {
-                                if let Ok(s) = std::str::from_utf8(&cline) {
-                                    let _ = cmd_tx.send(s.trim().to_string());
+                    Ok(n) => {
+                        for &c in &chunk[..n] {
+                            match framer.push(c) {
+                                Framed::Line(l) => {
+                                    if let Ok(s) = std::str::from_utf8(l) {
+                                        let _ = cmd_tx.send(s.trim().to_string());
+                                    }
                                 }
-                                cline.clear();
+                                Framed::Overflow => warn!(
+                                    "console: command longer than {} B — discarded",
+                                    spine::MAX_PAYLOAD
+                                ),
+                                Framed::Pending => {}
                             }
-                        } else if cline.len() < spine::MAX_PAYLOAD {
-                            cline.push(b[0]);
                         }
                     }
                     Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
@@ -125,9 +136,11 @@ fn main() -> anyhow::Result<()> {
     let mut seen = SeenSet::new();
     let mut seq: u8 = 0;
     let mut buf: Vec<u8> = Vec::new();
-    let mut line: Vec<u8> = Vec::new();
     let mut last_keepalive = now_ms();
     let uart_read_timeout = TickType::new_millis(20).ticks();
+    // Same framer as the console origin: complete lines only, oversized ones
+    // discarded whole rather than transmitted as a prefix.
+    let mut uart_framer = LineFramer::new();
 
     // TX one spine frame originated by this node; advances + records seq.
     macro_rules! send_spine {
@@ -144,21 +157,20 @@ fn main() -> anyhow::Result<()> {
         let mut byte = [0u8; 1];
         for _ in 0..512 {
             match uart.read(&mut byte, uart_read_timeout) {
-                Ok(1) => {
-                    let b = byte[0];
-                    if b == b'\n' || b == b'\r' {
-                        if !line.is_empty() {
-                            let txt = String::from_utf8_lossy(&line).to_string();
-                            match send_spine!(radio, seen, seq, buf, &line) {
-                                Ok(()) => info!("SPINE ► (uart) seq={seq} ({} B) {txt}", buf.len()),
-                                Err(e) => info!("SPINE TX error: {e:#}"),
-                            }
-                            line.clear();
+                Ok(1) => match uart_framer.push(byte[0]) {
+                    Framed::Line(l) => {
+                        let txt = String::from_utf8_lossy(l).to_string();
+                        match send_spine!(radio, seen, seq, buf, l) {
+                            Ok(()) => info!("SPINE ► (uart) seq={seq} ({} B) {txt}", buf.len()),
+                            Err(e) => info!("SPINE TX error: {e:#}"),
                         }
-                    } else if line.len() < spine::MAX_PAYLOAD {
-                        line.push(b);
                     }
-                }
+                    Framed::Overflow => warn!(
+                        "SPINE ► (uart) line longer than {} B — discarded",
+                        spine::MAX_PAYLOAD
+                    ),
+                    Framed::Pending => {}
+                },
                 _ => break, // timeout / no more bytes ready
             }
         }
