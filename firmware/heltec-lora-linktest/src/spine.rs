@@ -84,6 +84,34 @@ impl SeenSet {
     }
 }
 
+/// True if a framed line is an OBC message rather than console noise.
+///
+/// The spine is content-agnostic about *payloads*, but not about what deserves
+/// airtime. GPIO43 on the XIAO is also the ROM's `U0TXD`, so every node reset
+/// dumps the ROM and bootloader log down the uplink wire before the application
+/// ever configures UART1. Observed 2026-07-19: a single reboot put fifteen frames
+/// on the air — `ESP-ROM:esp32s3-20210327`, `load:0x3fce2820,len:0x158c`, and so
+/// on — several of them mangled, because the early output is not even at the same
+/// baud. On a duty-cycle-limited band that is airtime and sequence numbers spent
+/// on nothing, and it crowds out the traffic the mesh exists to carry.
+///
+/// Every OBC message is a JSON object, so the test is cheap and total: an opening
+/// brace and a closing brace. Anything else is noise by construction.
+pub fn is_spine_payload(line: &[u8]) -> bool {
+    let t = trim_ascii_ws(line);
+    matches!((t.first(), t.last()), (Some(b'{'), Some(b'}')))
+}
+
+fn trim_ascii_ws(mut s: &[u8]) -> &[u8] {
+    while let [f, rest @ ..] = s {
+        if f.is_ascii_whitespace() { s = rest } else { break }
+    }
+    while let [rest @ .., l] = s {
+        if l.is_ascii_whitespace() { s = rest } else { break }
+    }
+    s
+}
+
 /// Accumulates bytes and yields complete newline-delimited lines.
 ///
 /// Both origins on this board — the USB console and the UART1 compute uplink —
@@ -229,6 +257,46 @@ mod tests {
         assert_eq!(overflows, 0);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].len(), MAX_PAYLOAD);
+    }
+
+    #[test]
+    fn boot_chatter_is_not_a_spine_payload() {
+        // Real lines captured off the uplink wire after a node reset, 2026-07-19.
+        for junk in [
+            &b"ESP-ROM:esp32s3-20210327"[..],
+            b"Build:Mar 27 2021",
+            b"rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)",
+            b"SPIWP:0xee",
+            b"mode:DIO, clock div:2",
+            b"load:0x3fce2820,len:0x158c",
+            b"entry 0x403c8924",
+            b"I (29) boot: ESP-IDF v5.5.1-838-gd66ebb86d2e 2nd stage bootloader",
+            // Mangled mid-line splices, also observed on air.
+            b"I (30) boot: compile time Nov 26 20size=c276ch (796524) map",
+            b"",
+        ] {
+            assert!(!is_spine_payload(junk), "would have transmitted: {:?}", junk);
+        }
+    }
+
+    #[test]
+    fn real_node_messages_are_spine_payloads() {
+        for msg in [
+            &br#"{"node_id":"obc-esp32-s3-001","ts_ms":30148,"type":"beacon"}"#[..],
+            br#"{"node_id":"gw-90","type":"gw_keepalive","seq":59}"#,
+            br#"  {"type":"reflex","applied":false}  "#, // surrounding whitespace
+        ] {
+            assert!(is_spine_payload(msg), "would have dropped: {:?}", msg);
+        }
+    }
+
+    #[test]
+    fn a_brace_alone_is_not_enough() {
+        // Guard against a filter that only checks the first byte: a truncated or
+        // interleaved line can open a brace and never close it.
+        assert!(!is_spine_payload(br#"{"node_id":"obc-esp32-s3-0"#));
+        assert!(!is_spine_payload(b"{"));
+        assert!(is_spine_payload(b"{}"));
     }
 
     #[test]
