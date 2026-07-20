@@ -114,6 +114,13 @@ fn main() -> anyhow::Result<()> {
                     Ok(n) => {
                         for &c in &chunk[..n] {
                             match framer.push(c) {
+                                // Same rule as the uplink: a stray shell command
+                                // pasted into the wrong window is not a mesh message.
+                                Framed::Line(l) if !spine::is_spine_payload(l) => warn!(
+                                    "console: ignored non-OBC line ({} B) {}",
+                                    l.len(),
+                                    String::from_utf8_lossy(l)
+                                ),
                                 Framed::Line(l) => {
                                     if let Ok(s) = std::str::from_utf8(l) {
                                         let _ = cmd_tx.send(s.trim().to_string());
@@ -158,6 +165,14 @@ fn main() -> anyhow::Result<()> {
         for _ in 0..512 {
             match uart.read(&mut byte, uart_read_timeout) {
                 Ok(1) => match uart_framer.push(byte[0]) {
+                    // Not every byte on this wire is a message. GPIO43 doubles as the
+                    // node's ROM UART, so a reset dumps the bootloader log down the
+                    // uplink before the app owns the pin. Drop it here rather than
+                    // spend airtime on it — logged locally, so it is visible without
+                    // being transmitted.
+                    Framed::Line(l) if !spine::is_spine_payload(l) => {
+                        info!("uart: dropped non-OBC line ({} B) {}", l.len(), String::from_utf8_lossy(l))
+                    }
                     Framed::Line(l) => {
                         let txt = String::from_utf8_lossy(l).to_string();
                         match send_spine!(radio, seen, seq, buf, l) {
