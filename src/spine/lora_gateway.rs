@@ -348,6 +348,13 @@ mod serial {
     /// Outbound command queue into the single serial I/O thread.
     pub type SerialWriterHandle = mpsc::Sender<String>;
 
+    /// Minimum spacing between consecutive commands written to the base console.
+    ///
+    /// A 240-byte line clears a 115200 baud link in about 21 ms, so this is
+    /// roughly twice the worst case — enough for the board's reader to drain
+    /// stdin between commands, short enough that no operator will notice it.
+    const INTER_COMMAND_GAP: Duration = Duration::from_millis(50);
+
     /// Open the base-station Heltec console. Returns a channel of console lines
     /// and a command-queue sender — BOTH serviced by one dedicated I/O thread on
     /// one handle. No `try_clone`: duplicated Windows COM handles fail writes
@@ -393,7 +400,20 @@ mod serial {
                 let mut line: Vec<u8> = Vec::with_capacity(256);
                 loop {
                     // 1) Outbound: drain any queued commands (newline-framed).
+                    let mut wrote_one = false;
                     while let Ok(cmd) = cmd_rx.try_recv() {
+                        // Space consecutive commands. Newline framing is correct here,
+                        // but it only helps a reader that keeps up; on 2026-07-19 two
+                        // commands written back to back (77 B then 99 B, microseconds
+                        // apart) reached the base faster than its console reader drained
+                        // stdin, and both were transmitted as mid-string fragments. The
+                        // firmware reader is fixed, but every board in the field runs
+                        // the old one until it is reflashed, so pace the host too — this
+                        // is the side we can change without a flash.
+                        if wrote_one {
+                            std::thread::sleep(INTER_COMMAND_GAP);
+                        }
+                        wrote_one = true;
                         let r = serial
                             .write_all(cmd.as_bytes())
                             .and_then(|()| serial.write_all(b"\n"))
