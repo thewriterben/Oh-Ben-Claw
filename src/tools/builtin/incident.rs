@@ -36,7 +36,8 @@ pub const INCIDENT_PREFIX: &str = "incident";
 /// Recognised incident statuses. A closed set so the record stays queryable — an agent
 /// inventing `"critical"`, `"presumed_lost"`, and `"degraded_maybe"` across three wakes
 /// is how a log becomes unreadable.
-const STATUSES: [&str; 5] = ["investigating", "confirmed", "resolved", "unresolved", "false_alarm"];
+pub(crate) const STATUSES: [&str; 5] =
+    ["investigating", "confirmed", "resolved", "unresolved", "false_alarm"];
 
 fn now_ms() -> u64 {
     SystemTime::now()

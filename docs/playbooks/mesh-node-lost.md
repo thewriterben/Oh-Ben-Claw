@@ -31,11 +31,20 @@ reason itself carries the short form of steps 1–3; this document is the full v
    `last_cmd_ok` is a *health* reading, not the raw reply: a node that refused a command
    on its Track 0 policy shows as ok, because refusing is the node working correctly.
 
-2. **Confirm reachability.** For each lost node, `mesh_command` it a lightweight
-   `capabilities` ping:
+2. **Confirm reachability — if you can.** For each lost node, `mesh_command` it a
+   lightweight `capabilities` ping:
    `{ "node_id": "<node>", "command": "capabilities" }`.
    Once escalated the supervisor drops to a slow background probe (5 min by default), so
    this is your deliberate, immediate check rather than a duplicate of its retry loop.
+
+   **If `mesh_command` is refused** — you will see *"requires operator approval (autonomy
+   is supervised/manual and it is not auto-approved or granted)"* — that is not a node
+   fault and not something to work around. `mesh_command` is operator-gated, and a session
+   grant does not survive a brain restart, so this happens routinely after one. Do not
+   retry it, do not look for another route to the node, and do not treat the refusal as
+   evidence about the node's state — you have learned nothing about the node.
+
+   Skip to step 3 and take the **cannot confirm** branch.
 
 3. **Branch on the result** (a reply appears as a fresh `mesh.<node>.cmd_result` /
    `mesh.<node>` fact within a few seconds):
@@ -44,6 +53,12 @@ reason itself carries the short form of steps 1–3; this document is the full v
    - **Silence** → treat as a real loss. `record_incident` with `status: unresolved`, the
      `mesh_status` readings as `evidence`, and a one-line `detail`. Do **not** keep
      hammering the node — one confirming ping is enough.
+   - **You could not ping** (step 2 was refused) → `record_incident` with
+     `status: investigating`, the `mesh_status` readings as `evidence`, and a `detail`
+     that says plainly that the probe was not attempted because `mesh_command` requires
+     operator approval. `investigating`, not `unresolved`: you did not confirm a loss,
+     you were unable to test one. An operator reading this needs to know the difference —
+     the node may be perfectly healthy.
 
    An operator is alerted automatically: every escalation already fans out to the
    notification log-of-record and any configured webhook before you are woken. You do not
@@ -71,6 +86,11 @@ reason itself carries the short form of steps 1–3; this document is the full v
 - **Record findings only through `record_incident`.** Never hand-write a finding into
   world memory. On 2026-07-17 a note filed at `mesh.escalation_status` was read back by
   the supervisor as a live node, escalated as lost, and alarmed on for 100 minutes.
+- **A refused tool is a fact about your permissions, never about the world.** If a step
+  here names a tool you cannot call, record that you could not perform the step and say
+  why. Do not substitute a different tool, do not infer the answer the step would have
+  given, and do not report a conclusion the evidence does not support. Being blocked and
+  saying so is a correct outcome; a confident verdict you could not test is not.
 
 ## Operator note
 
