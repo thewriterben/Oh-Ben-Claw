@@ -10,6 +10,71 @@ silkscreen before soldering** — GPIO↔header mapping and safe pins vary by bo
 
 ---
 
+## Card 0 — Which board is which
+
+The three Heltecs are physically identical. Every other doc refers to them by *role*
+(`heltec-base`, `heltec-gw`, `heltec-relay`), but the logs never say that — the firmware
+derives its id from the MAC (`node = mac[5]`, `main.rs`) and reports `gw-40`, `gw-90`.
+Nobody wrote the mapping down, and on 2026-07-19 that cost three separate detours: the
+XIAO was assumed to be on the bridge when it was on the base, a jumper swap silently
+reversed the working leg, and the "base" turned out to be `gw-90` rather than `gw-40`.
+
+Node ids are MAC-derived, so they are permanent per board. Roles are tape. **When the two
+disagree, believe the node id.**
+
+| Role | Node id | Port | Power | Wiring |
+|---|---|---|---|---|
+| base (host link) | **unconfirmed** — see below | **COM3** | PC USB — *must* stay on the host | none |
+| bridge (field) | **gw-40** | — | wall or power bank | the XIAO jumper pair |
+| relay (Stage 3b) | *unassigned* | — | USB power only | none — radio only |
+| node | `obc-esp32-s3-001` | **COM6** | USB or bank | jumpers to **gw-40** |
+
+🔴 **The base's node id is genuinely unresolved and must be confirmed by banner.**
+`bench-config.toml` records it as `gw-D8`. On 2026-07-19 the bridge's console showed
+`SPINE ◄ src=90` carrying a command the host had just written, which implies the
+originating board is `gw-90`. Both cannot be true. Either the config comment is stale
+after a board swap, or a third radio was powered and the frame path is not what was
+assumed.
+
+Do not infer this from traffic — **read it off the board**. Each Heltec prints its id in
+the boot banner (`main.rs`):
+
+```
+Gateway 40 — UART1(TX=4,RX=2) ⇄ LoRa. Wire compute TX→GPIO2, GND↔GND.
+```
+
+Power each board in turn, note the two hex digits, write them on tape *and* in this table.
+Ten minutes once, versus inferring it wrongly every time.
+
+⚠ `BENCH-WALKTHROUGH.md` §3.3 and `PHASE-B-LORA-MESH.md` both showed the base on **COM6**.
+That was stale — COM6 is the XIAO on this bench. Ports re-enumerate; confirm before trusting
+any port in any doc. Node ids do not.
+
+**The base cannot move to battery.** It is the brain's serial link, not just a radio. To
+separate the radios, move the *bridge* (and the XIAO with it — they are jumpered together).
+
+**TX always lands on RX.** Both jumpers are directional and swapping the pair kills both
+directions at once, which looks exactly like a dead node:
+
+```
+XIAO D6 (GPIO43, TX)  ──►  gw-40 GPIO2 (RX)     node → mesh
+gw-40 GPIO4 (TX)      ──►  XIAO D7 (GPIO44, RX) mesh → node
+XIAO GND              ◄─►  gw-40 GND            common reference
+```
+
+**Two RF facts that keep resurfacing:**
+
+- Target keepalive RSSI **−45 to −60 dBm**. Above about −35 the receiver overdrives:
+  ~55 B keepalives still pass while 120 B+ frames vanish, so the link looks healthy and
+  commands silently disappear. Cost an evening on 2026-07-17 and recurred 2026-07-19.
+  `snr=` in the `SPINE ◄` line separates the two cases — weak-and-clean is range,
+  strong-and-dirty is saturation.
+- A Heltec **wired directly to the node** transmits that frame and then de-dups its own
+  echo, so it never logs a `SPINE ◄` line for it. The host sees silence from a perfectly
+  healthy node. Only the bridge should carry the jumpers.
+
+---
+
 ## Card 1 — Heltec WiFi LoRa 32 V3  (ESP32-S3 + SX1262)
 
 Role: **all three Station B radios** — `heltec-base`, `heltec-relay`, `heltec-gw` (field).

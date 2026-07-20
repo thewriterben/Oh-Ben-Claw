@@ -176,14 +176,18 @@ emits its spine JSON on UART1/**D6** autonomously.
 **3.2 Forward jumper:** XIAO **D6 → heltec-gw GPIO2** (continuity-check the jumper
 first — this is the pending item). Gateway Heltec bridges UART↔LoRa.
 
-**3.3 Base station to host:** `heltec-base` on USB; note its COM port. In
-`bench-config.toml`:
+**3.3 Base station to host:** `heltec-base` on USB; note its COM port **and its node id
+from the boot banner** (`Gateway XX — UART1…`). In `bench-config.toml`:
 
 ```toml
 [lora_gateway]
-port = "COM6"        # heltec-base's port
+port = "COM3"        # heltec-base; COM6 is the XIAO on this bench
 baud = 115200
 ```
+
+⚠ Ports re-enumerate — confirm yours rather than copying this one. Node ids are
+MAC-derived and permanent, so when a label and a log disagree, believe the log. See
+**Card 0** in `BENCH-PINOUT-CARDS.md` for the full role ↔ node id ↔ port mapping.
 
 Restart the brain **with hardware enabled**:
 
@@ -355,9 +359,9 @@ model = "gpt-4o-mini"
 [perception]
 world_memory = true
 
-# Stage 3+ — uncomment once heltec-base is on USB
+# Stage 3+ — uncomment once heltec-base is on USB. Confirm the port.
 #[lora_gateway]
-#port = "COM6"
+#port = "COM3"
 #baud = 115200
 
 [mesh_supervisor]
