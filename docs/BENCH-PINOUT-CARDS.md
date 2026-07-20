@@ -14,37 +14,40 @@ silkscreen before soldering** — GPIO↔header mapping and safe pins vary by bo
 
 The three Heltecs are physically identical. Every other doc refers to them by *role*
 (`heltec-base`, `heltec-gw`, `heltec-relay`), but the logs never say that — the firmware
-derives its id from the MAC (`node = mac[5]`, `main.rs`) and reports `gw-40`, `gw-90`.
-Nobody wrote the mapping down, and on 2026-07-19 that cost three separate detours: the
-XIAO was assumed to be on the bridge when it was on the base, a jumper swap silently
-reversed the working leg, and the "base" turned out to be `gw-90` rather than `gw-40`.
+derives its id from the MAC (`node = mac[5]`, `main.rs`) and reports `gw-40`, `gw-90`,
+`gw-D8`. Nobody wrote the mapping down, and on 2026-07-19 that cost four separate
+detours: the XIAO was assumed to be on the bridge when it was on the base, a jumper swap
+silently reversed the working leg, the base's identity was inferred wrongly from traffic,
+and two docs pointed at a COM port belonging to the XIAO.
 
 Node ids are MAC-derived, so they are permanent per board. Roles are tape. **When the two
 disagree, believe the node id.**
 
+Confirmed by boot banner and physically labelled, 2026-07-19:
+
 | Role | Node id | Port | Power | Wiring |
 |---|---|---|---|---|
-| base (host link) | **unconfirmed** — see below | **COM3** | PC USB — *must* stay on the host | none |
+| base (host link) | **gw-D8** | **COM3** | PC USB — *must* stay on the host | none |
 | bridge (field) | **gw-40** | — | wall or power bank | the XIAO jumper pair |
-| relay (Stage 3b) | *unassigned* | — | USB power only | none — radio only |
+| relay (Stage 3b) | **gw-90** | — | USB power only | none — radio only |
 | node | `obc-esp32-s3-001` | **COM6** | USB or bank | jumpers to **gw-40** |
 
-🔴 **The base's node id is genuinely unresolved and must be confirmed by banner.**
-`bench-config.toml` records it as `gw-D8`. On 2026-07-19 the bridge's console showed
-`SPINE ◄ src=90` carrying a command the host had just written, which implies the
-originating board is `gw-90`. Both cannot be true. Either the config comment is stale
-after a board swap, or a third radio was powered and the frame path is not what was
-assumed.
+All three radios self-test clean (`status=0xA2`, syncword readback `0x1424`).
 
-Do not infer this from traffic — **read it off the board**. Each Heltec prints its id in
-the boot banner (`main.rs`):
+**Keep the relay unpowered outside Stage 3b.** On 2026-07-19 a frame carrying a
+host-originated command was observed with `src=90` — the relay — which means all three
+radios were live and the topology under test was a three-radio flood, not the two-radio
+path everyone was reasoning about. Frame paths that "don't add up" are usually this.
+
+To re-confirm identity after any swap, read the banner rather than inferring from
+traffic (`main.rs`):
 
 ```
 Gateway 40 — UART1(TX=4,RX=2) ⇄ LoRa. Wire compute TX→GPIO2, GND↔GND.
 ```
 
-Power each board in turn, note the two hex digits, write them on tape *and* in this table.
-Ten minutes once, versus inferring it wrongly every time.
+Power each board in turn, note the two hex digits, write them on tape *and* in this
+table. Ten minutes once, versus inferring it wrongly every time.
 
 ⚠ `BENCH-WALKTHROUGH.md` §3.3 and `PHASE-B-LORA-MESH.md` both showed the base on **COM6**.
 That was stale — COM6 is the XIAO on this bench. Ports re-enumerate; confirm before trusting
