@@ -161,9 +161,14 @@ the mesh link?"*, and `history("mesh.obc-esp32-s3-001.reflex")` gives the reflex
 world_memory = true          # the bridge needs somewhere to write
 
 [lora_gateway]
-port = "COM6"                # the base-station Heltec's USB console
+port = "COM3"                # base-station Heltec; COM6 is the XIAO
 baud = 115200
 ```
+
+Ports re-enumerate — confirm yours. Node ids are MAC-derived and permanent, and each
+board prints its own in the boot banner (`Gateway XX — UART1…`); read it there rather
+than inferring it from traffic. `BENCH-PINOUT-CARDS.md` **Card 0** carries the
+role ↔ node id ↔ port mapping for the whole bench.
 
 The serial loop is gated behind the `hardware` feature (tokio-serial), like the other
 peripheral drivers. Run the host with it enabled:
