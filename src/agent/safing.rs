@@ -278,7 +278,11 @@ Triage: (1) call `mesh_status` to identify the offline/escalated node and its la
 (RSSI, last-seen, last command); (2) `mesh_command` it a `capabilities` ping to confirm \
 reachability; (3) record the outcome with `record_incident` — `status: resolved` if it \
 answered (the link recovered), `status: unresolved` if it did not, with the `mesh_status` \
-readings as evidence. An operator is alerted automatically; you do not need to do that. \
+readings as evidence. If step 2 is refused for operator approval, do not retry it and do \
+not seek another route to the node: you have learned nothing about the node, so record \
+`status: investigating` and say in `detail` that the probe was not attempted because \
+`mesh_command` requires approval. A refused tool is a fact about your permissions, never \
+about the world. An operator is alerted automatically; you do not need to do that. \
 Every node action stays Track-0 gated. Full playbook: docs/playbooks/mesh-node-lost.md.";
 
 /// `mesh.escalated_count >= 1` → escalate to System 2: the mesh supervisor has
@@ -529,6 +533,45 @@ mod tests {
             }
         }
         assert!(checked >= 5, "expected every escalating rule to be covered, saw {checked}");
+    }
+
+    #[test]
+    fn a_playbook_step_that_can_be_refused_says_what_to_do_when_it_is() {
+        // A playbook is a promise about what the agent can do, and nothing checks that
+        // promise against the approval policy. `mesh_command` is operator-gated and its
+        // session grant dies with the brain, so on 2026-07-19 and again on 2026-07-20 the
+        // agent was woken, told to ping the node, and refused twelve seconds after boot —
+        // with no instruction for what to do next.
+        //
+        // The dangerous failure is not the refusal, it is what an agent might do with it:
+        // retry, look for another route, or report a conclusion it never tested. So the
+        // brief must name the refusal, forbid the workaround, and give a status that means
+        // "could not test" rather than "tested and found lost".
+        let r = MESH_LOST_PLAYBOOK;
+        assert!(
+            r.contains("refused"),
+            "names the refusal, so the model recognises it rather than improvising: {r}"
+        );
+        assert!(
+            r.contains("investigating"),
+            "gives a status meaning 'could not confirm' — `unresolved` would assert a loss \
+             that was never tested: {r}"
+        );
+        assert!(
+            r.contains("do not retry") && r.contains("another route"),
+            "forbids both workarounds explicitly; a blocked agent looking for a way around \
+             the gate is the failure this exists to prevent: {r}"
+        );
+        assert!(
+            r.contains("fact about your permissions"),
+            "states the general rule, not just this instance — a refusal is never evidence \
+             about the world: {r}"
+        );
+        // The branch is worthless if the status it names is not one record_incident takes.
+        assert!(
+            crate::tools::builtin::incident::STATUSES.contains(&"investigating"),
+            "the status the playbook names must be one the typed tool actually accepts"
+        );
     }
 
     #[test]
