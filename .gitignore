@@ -29,3 +29,7 @@ npm-debug.log*
 .vs/
 .vscode/
 *.user
+
+# Transient bench diagnostic dumps
+mesh_status.json
+gw40.log
