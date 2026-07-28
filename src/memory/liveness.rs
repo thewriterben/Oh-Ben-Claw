@@ -64,7 +64,7 @@
 use anyhow::Result;
 use serde_json::json;
 
-use super::world::{Fact, Origin, WorldMemory};
+use super::world::{Closure, Fact, Origin, WorldMemory};
 
 /// The source label liveness facts are written under.
 ///
@@ -164,9 +164,16 @@ pub fn stopped(
         return Ok(sweep);
     }
 
+    // Two different closures, marked as such. The source's own facts stopped being
+    // maintained; the beliefs downstream lost their grounds. Both set `valid_to`, and an
+    // operator reading the store afterwards needs to tell them apart from the ordinary
+    // case of an entity simply changing value.
+    let stopped_tag = Closure::SourceStopped(source.to_string());
+    let unsupported_tag = Closure::Unsupported(source.to_string());
+
     let orphaned = world.open_facts_by_source(source)?;
     for fact in &orphaned {
-        if world.close_fact(fact.id, now_ms)? {
+        if world.close_fact(fact.id, now_ms, &stopped_tag)? {
             sweep.closed.push(fact.id);
         }
     }
@@ -213,7 +220,7 @@ pub fn stopped(
                     next.push(dep.id);
                     continue;
                 }
-                if world.close_fact(dep.id, now_ms)? {
+                if world.close_fact(dep.id, now_ms, &unsupported_tag)? {
                     sweep.unsupported.push(dep.id);
                     next.push(dep.id);
                 } else {
@@ -467,6 +474,70 @@ mod tests {
         let sweep = stopped(&w, "lora-gateway", Stopped::Retired, 9_000, "gone").unwrap();
         assert!(sweep.unsupported.contains(&b.id));
         assert!(w.current("b").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_withdrawal_is_distinguishable_from_a_supersession() {
+        // Both set `valid_to`. Without the tag an operator cannot tell "the gate closed"
+        // from "we lost our grounds for believing anything about the gate", and those
+        // call for opposite responses.
+        let w = WorldMemory::open_in_memory().unwrap();
+        let reading = w
+            .observe_as("trail.cam1.motion", json!(true), 1_000, 1_000, "clawcam", Origin::Observed)
+            .unwrap();
+        w.observe_derived_from(
+            "notify.trail_activity",
+            json!({"level": "high"}),
+            1_100,
+            1_100,
+            "notifier",
+            &[reading.id],
+        )
+        .unwrap();
+        // An ordinary supersession, for contrast.
+        w.observe_as("trail.cam1.motion", json!(false), 1_200, 1_200, "clawcam", Origin::Observed)
+            .unwrap();
+
+        stopped(&w, "clawcam", Stopped::Retired, 9_000, "unplugged").unwrap();
+
+        let hist = w.history("trail.cam1.motion").unwrap();
+        assert_eq!(
+            Closure::of(&hist[0]),
+            Closure::Superseded,
+            "replaced by a newer reading, not withdrawn"
+        );
+        assert_eq!(
+            Closure::of(&hist[1]),
+            Closure::SourceStopped("clawcam".into()),
+            "its author went away"
+        );
+
+        // The alert is *not* withdrawn, and finding that out is the point of writing
+        // this test. Its in-list names the first reading, which the second reading had
+        // already superseded before the camera was ever retired — so the sweep never
+        // reached it: the walk starts from the source's *open* facts.
+        //
+        // That is not a bug in the sweep, it is the boundary of what a sweep can do. The
+        // alert lost its grounds the moment the reading changed, seconds into normal
+        // operation, and eagerly chasing that would retract and recompute on every
+        // sensor tick forever. So supersession is answered lazily instead.
+        let alert = w.current("notify.trail_activity").unwrap().unwrap();
+        assert_eq!(Closure::of(&alert), Closure::Open, "still served by current()");
+        assert!(
+            w.support_status(&alert).unwrap().has_failed(),
+            "but its justification does not stand"
+        );
+        assert_eq!(
+            w.support_status(&alert).unwrap(),
+            crate::memory::world::Support::Ungrounded { missing: vec![reading.id] },
+            "and it says which fact moved"
+        );
+        assert_eq!(w.ungrounded().unwrap().len(), 1);
+
+        // The operator's query: what did we stop believing, and why.
+        let withdrawn = w.withdrawn_since(0).unwrap();
+        assert_eq!(withdrawn.len(), 1, "only the reading; the supersession is not in here");
+        assert!(withdrawn.iter().all(|f| Closure::of(f).is_withdrawal()));
     }
 
     #[test]
