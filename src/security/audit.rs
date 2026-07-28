@@ -7,11 +7,19 @@
 //! Any insertion, deletion, reordering, or edit breaks the chain and is caught
 //! by [`verify`]. The signing key should come from the secrets vault.
 //!
-//! This is the symmetric, tamper-evident v1 of the Track 0 signed audit. A
-//! holder of the key can verify integrity. Upgrading to Ed25519 *detached
-//! signatures* (so third parties can verify without the secret) is a clean
-//! follow-up once a vetted signing crate is added — the record shape and chain
-//! logic stay the same; only `compute_mac`/`verify` change.
+//! The HMAC chain is the baseline: a holder of the key can verify integrity
+//! with no key-management story at all, which is why it is the default.
+//!
+//! **Ed25519 detached signatures are also implemented** (this comment used to
+//! describe them as a follow-up; they landed in [`audit_sign`]). Attach an
+//! [`AuditSigner`](crate::security::audit_sign::AuditSigner) with
+//! [`ActionAuditor::with_signer`] and each new record additionally carries a
+//! detached signature over the same canonical fields, so a third party can
+//! verify the log with only the public key. Signing is additive — the record
+//! shape and chain logic are unchanged, and unsigned legacy records remain
+//! covered by the HMAC chain. See [`verify_signatures`].
+//!
+//! Architecture rationale and threat model: `docs/SAFETY.md` in OBC-Prime.
 
 use crate::tools::traits::RiskClass;
 use hmac::{Hmac, Mac};
