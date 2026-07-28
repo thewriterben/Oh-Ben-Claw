@@ -37,7 +37,7 @@ impl Provider for CompatibleProvider {
         tools: &[Box<dyn Tool>],
         config: &ProviderConfig,
     ) -> Result<ChatCompletion> {
-        let api_key = config.api_key.clone();
+        let api_key = config.api_key.as_ref().map(|k| k.expose().to_string());
 
         let url = config
             .base_url

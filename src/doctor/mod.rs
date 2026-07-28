@@ -56,7 +56,7 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
     let api_key_set = config
         .provider
         .api_key
-        .as_deref()
+        .as_ref()
         .map(|k| !k.is_empty())
         .unwrap_or(false)
         || match config.provider.name.as_str() {

@@ -2131,6 +2131,16 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     if let Some(auditor) = &action_auditor {
         agent = agent.with_action_auditor(Arc::clone(auditor));
     }
+    // Credentials in the config file: works, warns. See `inline_secret_providers`.
+    for label in oh_ben_claw::config::inline_secret_providers(&config) {
+        tracing::warn!(
+            at = %label,
+            "API key stored inline in config.toml — prefer the provider's environment \
+             variable (ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY). The \
+             config file is the one people paste into issues and commit to repos."
+        );
+    }
+
     // Close the loop between the world model and the thing reasoning on top of it.
     // Without this the agent's entire context is its system prompt and the last 50
     // messages: it can query `world_memory`, but nothing tells it there is anything to

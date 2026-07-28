@@ -65,7 +65,7 @@ impl LlmJudge {
         let config = ProviderConfig {
             name,
             model,
-            api_key: std::env::var("OBC_JUDGE_API_KEY").ok(),
+            api_key: std::env::var("OBC_JUDGE_API_KEY").ok().map(Into::into),
             base_url: std::env::var("OBC_JUDGE_BASE_URL").ok(),
             ..ProviderConfig::default()
         };

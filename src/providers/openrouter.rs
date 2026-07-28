@@ -37,7 +37,8 @@ impl Provider for OpenRouterProvider {
     ) -> Result<ChatCompletion> {
         let api_key = config
             .api_key
-            .clone()
+            .as_ref()
+            .map(|k| k.expose().to_string())
             .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
             .ok_or_else(|| anyhow::anyhow!("OPENROUTER_API_KEY not set"))?;
 

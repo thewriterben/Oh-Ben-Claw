@@ -37,7 +37,8 @@ impl Provider for AnthropicProvider {
     ) -> Result<ChatCompletion> {
         let api_key = config
             .api_key
-            .clone()
+            .as_ref()
+            .map(|k| k.expose().to_string())
             .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
             .ok_or_else(|| anyhow::anyhow!("ANTHROPIC_API_KEY not set"))?;
 
