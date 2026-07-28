@@ -8,6 +8,35 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub mod secret;
+pub use secret::SecretString;
+
+/// Report any credential stored inline in the config file.
+///
+/// Not an error — an inline key works, and breaking a running deployment over a style
+/// preference would be its own kind of rude. But it is worth saying out loud once per
+/// boot, because the failure mode is social rather than technical: the config file is
+/// the artifact people paste into issues, commit to repos, and hand over when asking
+/// for help, and a key in it leaves with the file.
+///
+/// Returns the provider labels carrying inline keys, primary first, so the caller can
+/// decide how loudly to say it.
+pub fn inline_secret_providers(config: &Config) -> Vec<String> {
+    fn walk(p: &ProviderConfig, path: String, out: &mut Vec<String>) {
+        if p.api_key.as_ref().is_some_and(|k| !k.is_empty()) {
+            out.push(format!("{path} ({})", p.name));
+        }
+        for (i, fb) in p.fallbacks.iter().enumerate() {
+            // Fallbacks are the easy ones to forget: they are edited once and never
+            // looked at again, which is exactly how a key outlives the person who set it.
+            walk(fb, format!("{path}.fallbacks[{i}]"), out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(&config.provider, "provider".to_string(), &mut out);
+    out
+}
+
 // ── Provider Configuration ───────────────────────────────────────────────────
 
 /// Configuration for the LLM provider.
@@ -48,10 +77,18 @@ pub struct ProviderConfig {
     /// The model to use (e.g., "gpt-4o", "claude-3-5-sonnet-20241022").
     #[serde(default = "default_model")]
     pub model: String,
-    /// The API key for the provider. If not set, the environment variable
-    /// `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc. will be used.
+    /// The API key for the provider — **prefer the environment variable**.
+    ///
+    /// Leave this unset and export `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+    /// `OPENROUTER_API_KEY` (etc.) instead. That is the supported path, and it is the
+    /// one that keeps a credential out of the file people paste into issues, commit to
+    /// a repo, or hand over when asking for help. An inline key here works and warns at
+    /// startup.
+    ///
+    /// [`SecretString`] redacts itself in `Debug` and `Display`, so a config that ends
+    /// up in a log line or a panic message does not carry the key with it.
     #[serde(default)]
-    pub api_key: Option<String>,
+    pub api_key: Option<secret::SecretString>,
     /// The base URL for the provider API (for OpenAI-compatible endpoints).
     #[serde(default)]
     pub base_url: Option<String>,
