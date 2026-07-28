@@ -112,10 +112,19 @@ cargo espflash flash --monitor
 
 ### Deployment planner
 
+There is **no `deployment` subcommand** — an earlier version of this file said
+there was, and I copied the claim forward without running it. The planner is a
+library surface, reached from tests and from the two emitters:
+
 ```bash
-cargo run -- deployment plan --scenario nanopi
-cargo run -- deployment plan --scenario nanopi --llm-swarm   # needs a provider key
+cargo run --bin emit-registry              # registry/registry.json
+cargo run --bin emit-firmware-templates    # firmware scaffolds
+cargo test --test planner_parity           # planner vs the committed goldens
 ```
+
+The interactive way to drive it is the deployment generator app, whose
+TypeScript port is byte-identical to this one and enforced so by
+`parity/MANIFEST.json` in OBC-Prime.
 
 ## Style
 
