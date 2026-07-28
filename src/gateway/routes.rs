@@ -1305,7 +1305,7 @@ pub struct PushSchemeRequest {
 /// `POST /api/v1/deployment/scheme` — Receive a generated deployment scheme.
 ///
 /// The TOML is validated for well-formedness and staged to
-/// `~/.oh-ben-claw/incoming/` for **operator review** — it is never applied
+/// `incoming/` in the data root for **operator review** — it is never applied
 /// automatically. Returns the staged path.
 pub async fn push_scheme(Json(body): Json<PushSchemeRequest>) -> impl IntoResponse {
     if body.toml.len() > MAX_SCHEME_BYTES {
@@ -1337,12 +1337,7 @@ pub async fn push_scheme(Json(body): Json<PushSchemeRequest>) -> impl IntoRespon
         })
         .take(48)
         .collect();
-    let dir = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join(".oh-ben-claw")
-        .join("incoming");
+    let dir = crate::config::paths::in_data_dir("incoming");
     if let Err(e) = std::fs::create_dir_all(&dir) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,

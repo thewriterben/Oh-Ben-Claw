@@ -1,14 +1,19 @@
 # Open Body Control — example configuration
 #
-# Copy to ~/.oh-ben-claw/config.toml and edit. Everything here has a working
-# default; the file exists so you can see what is adjustable, not because you
-# need all of it.
+# Copy to the platform config directory and edit — on Linux
+# `~/.config/oh-ben-claw/config.toml`, on Windows
+# `%APPDATA%\thewriterben\oh-ben-claw\config\config.toml`. Or put it in the data
+# root (see [paths] below) if you want a self-contained instance, or point at it
+# directly with `--config` / `OBC_CONFIG`.
+#
+# Everything here has a working default; the file exists so you can see what is
+# adjustable, not because you need all of it.
 #
 # YOU MAY NOT NEED THIS FILE AT ALL. With no config, OBC looks at which provider
 # key is in your environment and uses that one:
 #
 #     export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY, OPENROUTER_API_KEY
-#     obc start
+#     oh-ben-claw start
 #
 # With no key anywhere it falls back to a local Ollama, which needs none. Write
 # this file when you want to pin a choice rather than have one inferred.
@@ -32,6 +37,22 @@ Answer directly and concisely. Reach for a tool when the answer depends on the
 current state of the machine or the mesh; otherwise just answer. Confirm before
 writing files, running shell commands, or changing configuration.
 """
+
+# ── Where this instance keeps its data ───────────────────────────────────────
+# Unset means the platform convention: ~/.local/share/oh-ben-claw on Linux,
+# %APPDATA%\thewriterben\oh-ben-claw\data on Windows, ~/Library/Application
+# Support/com.thewriterben.oh-ben-claw on macOS.
+#
+# Everything lives under this one root — memory.db, world.db, scheduler.db,
+# vault.db, the journal, the audit chain, standing approval grants. Two agents on
+# one machine need two roots, or they share all of the above, including the
+# permission-to-act grants.
+#
+# The OBC_DATA_DIR environment variable overrides this, because starting a second
+# instance should not require editing a file the first one reads.
+#
+# [paths]
+# data_dir = "/srv/obc/kitchen"
 
 # ── Brain ────────────────────────────────────────────────────────────────────
 [provider]

@@ -8,7 +8,7 @@
 //!   `kind`, or `parameters`. Evolution can make a skill easier to *pick*,
 //!   never easier to *run*.
 //! - Every change is appended to a JSONL diff log
-//!   (`~/.oh-ben-claw/skill_evolution.jsonl`) and is revertible
+//!   (`skill_evolution.jsonl` in the data root) and is revertible
 //!   (`oh-ben-claw skill revert-description <name>`).
 //! - LLM output is treated as a proposal: sanitized, length-bounded, and
 //!   dropped when empty/unchanged.
@@ -53,12 +53,9 @@ pub struct DescriptionEvolver {
     max_per_pass: usize,
 }
 
-/// The default evolution log path (`~/.oh-ben-claw/skill_evolution.jsonl`).
+/// `skill_evolution.jsonl` in the data root — see [`crate::config::paths`].
 pub fn default_log_path() -> PathBuf {
-    directories::UserDirs::new()
-        .map(|d| d.home_dir().join(".oh-ben-claw"))
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("skill_evolution.jsonl")
+    crate::config::paths::in_data_dir("skill_evolution.jsonl")
 }
 
 fn now_ms() -> u64 {

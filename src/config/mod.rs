@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub mod first_run;
+pub mod paths;
 pub mod secret;
 pub use secret::SecretString;
 
@@ -999,6 +1000,28 @@ impl ProxyConfig {
             tracing::info!(proxy = %url, "Outbound HTTP proxy configured");
         }
     }
+}
+
+// ── Paths ────────────────────────────────────────────────────────────────────
+
+/// Where this instance keeps its data.
+///
+/// ```toml
+/// [paths]
+/// data_dir = "/srv/obc/kitchen"
+/// ```
+///
+/// Unset means the platform convention (`~/.local/share/oh-ben-claw` on Linux,
+/// `%APPDATA%` on Windows, `~/Library/Application Support` on macOS). The
+/// `OBC_DATA_DIR` environment variable overrides both, because starting a second
+/// instance should not require editing a file that may be shared or checked in.
+///
+/// See [`paths`] for the resolution order and why there is only one root.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PathsConfig {
+    /// Root directory for this instance's databases, logs and notes.
+    #[serde(default)]
+    pub data_dir: Option<String>,
 }
 
 // ── Phase 12 config ───────────────────────────────────────────────────────────
@@ -2183,6 +2206,9 @@ pub struct Config {
     /// HTTP proxy for outbound requests (new in Phase 11).
     #[serde(default)]
     pub proxy: ProxyConfig,
+    /// Where this instance keeps its data (`[paths]`).
+    #[serde(default)]
+    pub paths: PathsConfig,
     /// Browser automation configuration (new in Phase 12).
     #[serde(default)]
     pub browser: BrowserConfig,
@@ -2248,11 +2274,19 @@ impl Config {
     ///
     /// Precedence, first hit wins:
     ///   1. the `OBC_CONFIG` env var (set by the CLI's `--config` flag, or directly)
-    ///   2. [`Self::default_config_path`] (ProjectDirs — e.g.
+    ///   2. `config.toml` in the data root — so that `OBC_DATA_DIR=/srv/obc/b` gives
+    ///      a fully self-contained second instance, config included, without editing
+    ///      anything the first instance reads
+    ///   3. [`Self::default_config_path`] (ProjectDirs — e.g.
     ///      `%APPDATA%\thewriterben\oh-ben-claw\config\config.toml` on Windows,
     ///      `~/.config/oh-ben-claw/config.toml` on Linux)
-    ///   3. `~/.oh-ben-claw/config.toml` — the documented location, next to the
-    ///      agent's own data directory
+    ///   4. `~/.oh-ben-claw/config.toml` — kept for anyone who followed the old
+    ///      documentation, which named it for years
+    ///
+    /// Whichever wins, `[paths].data_dir` is published to [`paths`] before returning,
+    /// so every subsystem resolves the same root. Note the one asymmetry: a config
+    /// found at (2) cannot move the data root it was found in — only `OBC_DATA_DIR`
+    /// can, and that is the point of the ordering rather than a limitation of it.
     ///
     /// If none exist, built-in defaults are used and a warning names the
     /// provider they select, because those defaults are a cloud provider and
@@ -2270,14 +2304,26 @@ impl Config {
             let config: Self = toml::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("config parse error in {explicit}: {e}"))?;
             tracing::info!("Loaded config from {:?} (explicit)", path);
-            return Ok(config);
+            return Ok(config.published());
         }
+        // A config beside the data. This is what makes a relocated instance
+        // self-contained: `OBC_DATA_DIR=/srv/obc/b obc start` picks up b's config, b's
+        // database and b's audit chain without touching anything a's config says.
+        let rooted = paths::data_dir().join("config.toml");
+        if rooted.exists() {
+            let content = std::fs::read_to_string(&rooted)?;
+            let config: Self = toml::from_str(&content)
+                .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", rooted.display()))?;
+            tracing::info!("Loaded config from {:?} (data root)", rooted);
+            return Ok(config.published());
+        }
+
         let config_path = Self::default_config_path()?;
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
             let config: Self = toml::from_str(&content)?;
             tracing::info!("Loaded config from {:?}", config_path);
-            return Ok(config);
+            return Ok(config.published());
         }
 
         // `~/.oh-ben-claw/config.toml` is where the documentation, the setup
@@ -2295,7 +2341,7 @@ impl Config {
                     anyhow::anyhow!("config parse error in {}: {e}", home.display())
                 })?;
                 tracing::info!("Loaded config from {:?} (home)", home);
-                return Ok(config);
+                return Ok(config.published());
             }
         }
 
@@ -2312,7 +2358,7 @@ impl Config {
             } => tracing::info!(
                 provider = %p, model = %model, from = %var,
                 "No config file — using the provider whose API key is set. \
-                 Write ~/.oh-ben-claw/config.toml to pin this."
+                 Write a config.toml to pin this — see config.example.toml."
             ),
             first_run::Resolution::LocalFallback { provider: p, model } => tracing::warn!(
                 provider = %p, model = %model,
@@ -2320,18 +2366,33 @@ impl Config {
             ),
         }
         tracing::debug!(
-            "No config file at {:?} or ~/.oh-ben-claw/config.toml; \
+            "No config file at {:?}, in the data root, or at ~/.oh-ben-claw/config.toml; \
              set OBC_CONFIG or pass --config to load a specific file.",
             config_path
         );
         Ok(Config {
             provider,
             ..Self::default()
-        })
+        }
+        .published())
     }
 
-    /// `~/.oh-ben-claw/config.toml` - the documented location, kept on the
-    /// search path alongside the platform config dir.
+    /// Publish `[paths].data_dir` so every subsystem resolves the same root, and
+    /// return self.
+    ///
+    /// Called on every path out of [`Self::load`] rather than by the binary, because
+    /// a library consumer that loads a config and then opens a `MemoryStore` should
+    /// get the database the config asked for — not silently the platform default
+    /// because it forgot a wiring call it had no way to know about.
+    fn published(self) -> Self {
+        if let Some(dir) = self.paths.data_dir.as_deref() {
+            paths::set_configured(dir);
+        }
+        self
+    }
+
+    /// `~/.oh-ben-claw/config.toml` — kept on the search path for anyone who
+    /// followed the old documentation, which named this location for years.
     pub fn home_config_path() -> Option<PathBuf> {
         directories::UserDirs::new().map(|d| d.home_dir().join(".oh-ben-claw").join("config.toml"))
     }

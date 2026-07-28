@@ -126,18 +126,52 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
     }
 
     // ── Workspace ────────────────────────────────────────────────────────────
+    // "Where does this instance keep its data" is the first question anyone asks
+    // when two agents share a machine, and until now doctor could not answer it —
+    // it reported only whether the *platform* config directory happened to exist,
+    // which it warned about even when a config had been loaded from elsewhere.
+    let root = crate::config::paths::data_dir();
+    let source =
+        if std::env::var(crate::config::paths::DATA_DIR_VAR).is_ok_and(|v| !v.trim().is_empty()) {
+            "OBC_DATA_DIR"
+        } else if config.paths.data_dir.is_some() {
+            "[paths].data_dir"
+        } else {
+            "platform default"
+        };
+    results.push(DiagResult::ok(
+        "workspace",
+        format!("Data root: {} ({source})", root.display()),
+    ));
+    if !root.exists() {
+        results.push(DiagResult::warn(
+            "workspace",
+            format!(
+                "Data root does not exist yet: {} — it is created on first write",
+                root.display()
+            ),
+        ));
+    }
+
     match crate::config::Config::default_config_path() {
         Ok(path) => {
             let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
             if dir.exists() {
                 results.push(DiagResult::ok(
                     "workspace",
-                    format!("Config directory exists: {}", dir.display()),
+                    format!("Platform config directory exists: {}", dir.display()),
                 ));
             } else {
-                results.push(DiagResult::warn(
+                // Not a warning. There are four places a config may legitimately
+                // live, and this one being absent says nothing about whether a
+                // config was found — which is what the reader actually wants to
+                // know, and what the startup log already tells them.
+                results.push(DiagResult::ok(
                     "workspace",
-                    format!("Config directory not found: {}", dir.display()),
+                    format!(
+                        "No config in the platform directory ({}); the search also covers --config/OBC_CONFIG, the data root, and ~/.oh-ben-claw",
+                        dir.display()
+                    ),
                 ));
             }
         }

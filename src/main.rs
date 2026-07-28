@@ -370,9 +370,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // The old hardcoded dev key is gone — a published constant would let anyone
     // forge audit entries.
     fn track0_data_path(name: &str) -> String {
-        directories::ProjectDirs::from("com", "thewriterben", "oh-ben-claw")
-            .map(|d| d.data_dir().join(name).to_string_lossy().into_owned())
-            .unwrap_or_else(|| name.to_string())
+        oh_ben_claw::config::paths::in_data_dir(name)
+            .to_string_lossy()
+            .into_owned()
     }
     fn track0_random_key() -> String {
         use rand::RngCore;
@@ -2488,12 +2488,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         // manager runs with a working directory the user doesn't control
         // (Task Scheduler uses System32), which made this fatal for any
         // unattended start. Resolve a real path in the data directory.
-        let sched_path = directories::ProjectDirs::from("com", "thewriterben", "oh-ben-claw")
-            .map(|d| d.data_dir().join("scheduler.db"))
-            .unwrap_or_else(|| std::path::PathBuf::from("scheduler.db"));
-        if let Some(parent) = sched_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+        let sched_path = oh_ben_claw::config::paths::in_data_dir("scheduler.db");
         let sched = match scheduler::Scheduler::new(&sched_path.to_string_lossy()) {
             Ok(s) => s,
             Err(e) => {
@@ -2761,9 +2756,9 @@ async fn run_status(config: &Config) -> Result<()> {
     // flags any node the supervisor has escalated (presumed lost).
     if config.perception.world_memory {
         let world_path = config.perception.world_db_path.clone().unwrap_or_else(|| {
-            directories::ProjectDirs::from("com", "thewriterben", "oh-ben-claw")
-                .map(|d| d.data_dir().join("world.db").to_string_lossy().into_owned())
-                .unwrap_or_else(|| "world.db".to_string())
+            oh_ben_claw::config::paths::in_data_dir("world.db")
+                .to_string_lossy()
+                .into_owned()
         });
         if let Ok(world) = oh_ben_claw::memory::world::WorldMemory::open(&world_path) {
             let views = oh_ben_claw::spine::mesh_supervisor::snapshot(&world);

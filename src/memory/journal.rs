@@ -28,7 +28,6 @@
 
 use anyhow::Result;
 use chrono::{Days, Local, NaiveDate};
-use directories::ProjectDirs;
 use std::path::PathBuf;
 
 // ── DailyJournal ─────────────────────────────────────────────────────────────
@@ -53,9 +52,7 @@ impl DailyJournal {
     }
 
     fn default_journal_dir() -> Result<PathBuf> {
-        let dirs = ProjectDirs::from("com", "thewriterben", "oh-ben-claw")
-            .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-        Ok(dirs.data_dir().join("journal"))
+        Ok(crate::config::paths::in_data_dir("journal"))
     }
 
     // ── Path helpers ──────────────────────────────────────────────────────────

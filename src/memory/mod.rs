@@ -38,7 +38,6 @@ pub use world::{Fact, WorldMemory};
 use crate::providers::{ChatMessage, ChatRole};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use directories::ProjectDirs;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -100,9 +99,7 @@ impl MemoryStore {
 
     /// Get the default database path.
     pub fn default_db_path() -> Result<PathBuf> {
-        let dirs = ProjectDirs::from("com", "thewriterben", "oh-ben-claw")
-            .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-        Ok(dirs.data_dir().join("memory.db"))
+        Ok(crate::config::paths::in_data_dir("memory.db"))
     }
 
     /// Run database migrations to create the schema.

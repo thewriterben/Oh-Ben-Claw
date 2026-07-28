@@ -150,12 +150,9 @@ impl ProgressStore {
         Self { dir: dir.into() }
     }
 
-    /// The default record directory (`~/.oh-ben-claw/harness`).
+    /// `harness/` in the data root — see [`crate::config::paths`].
     pub fn default_dir() -> PathBuf {
-        directories::UserDirs::new()
-            .map(|d| d.home_dir().join(".oh-ben-claw"))
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("harness")
+        crate::config::paths::in_data_dir("harness")
     }
 
     fn path(&self, mission: &str) -> PathBuf {
