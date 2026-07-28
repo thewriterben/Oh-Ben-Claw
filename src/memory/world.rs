@@ -533,6 +533,81 @@ impl WorldMemory {
         Ok(facts)
     }
 
+    /// A single fact by row id, open or closed.
+    pub fn fact_by_id(&self, id: i64) -> Result<Option<Fact>> {
+        let sql = format!("SELECT {} FROM world_facts WHERE id = ?1", Self::COLS);
+        self.query_one(&sql, params![id])
+    }
+
+    /// Every currently-believed fact written under `source`.
+    pub fn open_facts_by_source(&self, source: &str) -> Result<Vec<Fact>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT {} FROM world_facts WHERE source = ?1 AND valid_to IS NULL ORDER BY id ASC",
+            Self::COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let facts = stmt
+            .query_map(params![source], |row| {
+                Ok(Self::row_to_fact(
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(facts)
+    }
+
+    /// Distinct sources with at least one currently-believed fact.
+    pub fn open_sources(&self) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT source FROM world_facts WHERE valid_to IS NULL ORDER BY source",
+        )?;
+        let out = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(out)
+    }
+
+    /// When `source` last wrote anything (max `ingested_at`), if ever.
+    ///
+    /// The scrape-timestamp analogue: this is what makes "has not reported since T" a
+    /// question the store can answer, rather than something a caller has to remember.
+    pub fn last_write_by_source(&self, source: &str) -> Result<Option<u64>> {
+        let conn = self.conn.lock().unwrap();
+        let ts: Option<i64> = conn.query_row(
+            "SELECT MAX(ingested_at) FROM world_facts WHERE source = ?1",
+            params![source],
+            |r| r.get(0),
+        )?;
+        Ok(ts.map(|t| t as u64))
+    }
+
+    /// Stop believing fact `id` as of `at_ms`, without deleting it.
+    ///
+    /// Closes the valid-time interval, exactly as a superseding observation would. The
+    /// row and its history remain queryable through [`WorldMemory::at`] and
+    /// [`WorldMemory::history`]; only `current` stops returning it.
+    ///
+    /// Returns `false` if the fact does not exist or was already closed, so a caller can
+    /// tell "I retracted this" from "someone else already had".
+    pub fn close_fact(&self, id: i64, at_ms: u64) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE world_facts SET valid_to = ?1 WHERE id = ?2 AND valid_to IS NULL",
+            params![at_ms as i64, id],
+        )?;
+        Ok(n > 0)
+    }
+
     /// How many facts record their support at all.
     ///
     /// Returns `(with_support, total)`. Useful as a migration dial: the gap is the set

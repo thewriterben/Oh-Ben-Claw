@@ -22,6 +22,18 @@ use crate::spine::lora_gateway::{CommandSink, NodeCommand, SOURCE};
 use serde_json::json;
 use std::sync::Arc;
 
+/// Source tag stamped on every fact the supervisor writes.
+///
+/// Not named `SOURCE`: this module also uses the gateway's, and the two are routinely
+/// side by side — the gateway reports what came off the air, the supervisor reports
+/// what it concluded from that. Naming both `SOURCE` is how a conclusion ends up
+/// wearing a radio's label.
+///
+/// Now that source liveness can retract, this label is load-bearing rather than
+/// decorative: it decides which facts stop being believed when the supervisor is
+/// switched off.
+pub const SUPERVISOR_SOURCE: &str = "mesh-supervisor";
+
 /// Derived health of a mesh node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeshHealth {
@@ -408,7 +420,7 @@ pub async fn tick(
                     json!({ "status": status, "reason": reason, "ts_ms": now_ms }),
                     now_ms,
                     now_ms,
-                    "mesh-supervisor",
+                    SUPERVISOR_SOURCE,
                 );
                 applied += 1;
             }
@@ -420,7 +432,7 @@ pub async fn tick(
                             json!({ "cmd": cmd.cmd, "id": cmd.id, "ts_ms": now_ms }),
                             now_ms,
                             now_ms,
-                            "mesh-supervisor",
+                            SUPERVISOR_SOURCE,
                         );
                         applied += 1;
                     }
@@ -433,7 +445,7 @@ pub async fn tick(
                     json!({ "status": "escalated", "reason": reason, "ts_ms": now_ms }),
                     now_ms,
                     now_ms,
-                    "mesh-supervisor",
+                    SUPERVISOR_SOURCE,
                 );
                 applied += 1;
             }
@@ -444,7 +456,7 @@ pub async fn tick(
                     json!({ "status": "cleared", "ts_ms": now_ms }),
                     now_ms,
                     now_ms,
-                    "mesh-supervisor",
+                    SUPERVISOR_SOURCE,
                 );
                 applied += 1;
             }
@@ -490,7 +502,7 @@ pub async fn tick(
                 json!(escalated_count),
                 now_ms,
                 now_ms,
-                "mesh-supervisor",
+                SUPERVISOR_SOURCE,
                 &support,
             );
         }
@@ -926,7 +938,7 @@ mod tests {
         // phantom "online" node from the tick after it is first written).
         let world = WorldMemory::open_in_memory().unwrap();
         world.observe_as("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
-        world.observe("mesh.escalated_count", json!(0), 1_000, 1_000, "mesh-supervisor").unwrap();
+        world.observe("mesh.escalated_count", json!(0), 1_000, 1_000, SUPERVISOR_SOURCE).unwrap();
 
         let views = snapshot(&world);
         assert_eq!(views.len(), 1, "only the real node is a node");

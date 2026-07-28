@@ -22,6 +22,7 @@ pub mod embed;
 pub mod heartbeat;
 pub mod image;
 pub mod journal;
+pub mod liveness;
 pub mod personality;
 pub mod trajectory;
 pub mod vector;
