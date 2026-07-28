@@ -171,7 +171,20 @@ pub struct Fact {
     /// `Derived` is also the conservative default for callers that have not thought
     /// about provenance at all. Origin says what kind of claim this is; `derived_from`
     /// says what it rests on. Only the latter can be walked.
-    pub derived_from: Option<Vec<i64>>,
+    ///
+    /// # Alternatives
+    ///
+    /// The outer list is **alternative justifications** (`a+b`); each inner list is one
+    /// justification, all of whose members must hold (`a·b`). The belief stands while
+    /// *any* justification does. That is the semiring distinction from Green–
+    /// Karvounarakis–Tannen: `a·b` means both were needed, `a+b` means either suffices,
+    /// and collapsing them makes independent corroboration indistinguishable from a
+    /// single fragile chain.
+    ///
+    /// Stored either as a flat array of ids — one justification, the common case and the
+    /// format written before alternatives existed — or as an array of arrays. Both parse;
+    /// no migration.
+    pub derived_from: Option<Vec<Vec<i64>>>,
     /// Why this fact stopped being believed, when it has.
     ///
     /// `None` on an open fact, and `None` on a closed one means the ordinary case: a
@@ -278,6 +291,31 @@ impl Support {
     pub fn has_failed(&self) -> bool {
         matches!(self, Support::Ungrounded { .. })
     }
+}
+
+/// Read a stored in-list in either encoding.
+///
+/// A flat `[1,2]` is one justification needing both; a nested `[[1,2],[3]]` is two
+/// alternatives. Both are accepted so the format that predates alternatives keeps
+/// working without a migration — and a migration here would be the worst kind, since
+/// rewriting support is exactly the operation whose errors get walked.
+///
+/// `[]` parses in both shapes and means the same thing either way: no justification is
+/// required, i.e. a premise.
+///
+/// Anything else reads as `None` — unknown — never as `Some([])`. Garbage must not be
+/// promoted into the stronger claim, the same fail-closed rule as `Origin::parse`.
+fn parse_justifications(s: &str) -> Option<Vec<Vec<i64>>> {
+    if let Ok(nested) = serde_json::from_str::<Vec<Vec<i64>>>(s) {
+        return Some(nested);
+    }
+    serde_json::from_str::<Vec<i64>>(s).ok().map(|flat| {
+        if flat.is_empty() {
+            Vec::new()
+        } else {
+            vec![flat]
+        }
+    })
 }
 
 /// SQLite-backed temporal store of world [`Fact`]s.
@@ -463,15 +501,38 @@ impl WorldMemory {
         source: &str,
         derived_from: &[i64],
     ) -> Result<Fact> {
-        self.insert(
-            entity,
-            value,
-            valid_from,
-            ingested_at,
-            source,
-            Origin::Derived,
-            Some(derived_from.to_vec()),
-        )
+        let one = if derived_from.is_empty() {
+            Vec::new()
+        } else {
+            vec![derived_from.to_vec()]
+        };
+        self.insert(entity, value, valid_from, ingested_at, source, Origin::Derived, Some(one))
+    }
+
+    /// Record a belief supported by any one of several **alternative** justifications.
+    ///
+    /// Use this when a belief is independently corroborated: two sensors that each
+    /// establish it, a conclusion reachable by two routes. The belief survives one
+    /// justification dying, which the single-in-list form cannot express — there, one
+    /// dead member takes the whole belief down.
+    ///
+    /// Passing a single justification is identical to [`WorldMemory::observe_derived_from`];
+    /// passing none is the self-standing claim.
+    #[allow(clippy::too_many_arguments)]
+    pub fn observe_derived_from_any(
+        &self,
+        entity: &str,
+        value: Value,
+        valid_from: u64,
+        ingested_at: u64,
+        source: &str,
+        justifications: &[Vec<i64>],
+    ) -> Result<Fact> {
+        // Drop empty alternatives: one of them would be trivially satisfied and would
+        // silently make the belief unconditional, which is the opposite of what a caller
+        // listing several supports means.
+        let alts: Vec<Vec<i64>> = justifications.iter().filter(|j| !j.is_empty()).cloned().collect();
+        self.insert(entity, value, valid_from, ingested_at, source, Origin::Derived, Some(alts))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -483,11 +544,15 @@ impl WorldMemory {
         ingested_at: u64,
         source: &str,
         origin: Origin,
-        derived_from: Option<Vec<i64>>,
+        derived_from: Option<Vec<Vec<i64>>>,
     ) -> Result<Fact> {
         let value_json = serde_json::to_string(&value)?;
+        // Write the flat form for the single-justification case. It is the overwhelming
+        // majority, it is what every reader before alternatives expects, and keeping it
+        // means the nested form appears only where it means something.
         let derived_json = match &derived_from {
-            Some(ids) => Some(serde_json::to_string(ids)?),
+            Some(alts) if alts.len() == 1 => Some(serde_json::to_string(&alts[0])?),
+            Some(alts) => Some(serde_json::to_string(alts)?),
             None => None,
         };
         let conn = self.conn.lock().unwrap();
@@ -553,7 +618,7 @@ impl WorldMemory {
             origin: Origin::parse(&origin),
             // Unparseable support reads as unknown, never as empty. `Some([])` is the
             // assertion "nothing can undercut this"; a corrupted row must not make it.
-            derived_from: derived_from.and_then(|s| serde_json::from_str::<Vec<i64>>(&s).ok()),
+            derived_from: derived_from.and_then(|s| parse_justifications(&s)),
             closed_reason,
         }
     }
@@ -651,7 +716,8 @@ impl WorldMemory {
         let sql = format!(
             "SELECT {} FROM world_facts f
              WHERE f.derived_from IS NOT NULL AND EXISTS (
-                 SELECT 1 FROM json_each(f.derived_from) WHERE json_each.value = ?1
+                 SELECT 1 FROM json_tree(f.derived_from)
+                 WHERE json_tree.value = ?1 AND json_tree.type = 'integer'
              )
              ORDER BY f.id ASC",
             Self::COLS
@@ -844,29 +910,42 @@ impl WorldMemory {
     /// moved — and the honest position is that OBC can now answer the question rather
     /// than that it eagerly acts on it.
     pub fn support_status(&self, fact: &Fact) -> Result<Support> {
-        let Some(ids) = &fact.derived_from else {
+        let Some(alts) = &fact.derived_from else {
             return Ok(Support::Unknown);
         };
-        if ids.is_empty() {
+        if alts.is_empty() {
             return Ok(Support::SelfStanding);
         }
-        let mut missing = Vec::new();
-        for id in ids {
-            match self.fact_by_id(*id)? {
-                // Closed: superseded, or withdrawn. Either way it is not believed now,
-                // and a conjunctive in-list needs every member.
-                Some(f) if f.valid_to.is_some() => missing.push(*id),
-                // Gone entirely. Nothing deletes facts today, so this means a store that
-                // has been edited by hand — treat it as missing rather than as fine.
-                None => missing.push(*id),
-                Some(_) => {}
+        // One justification standing is enough — that is what an alternative is for.
+        // Only when every one of them has a dead member is the belief ungrounded.
+        let mut closest: Option<Vec<i64>> = None;
+        for justification in alts {
+            let mut missing = Vec::new();
+            for id in justification {
+                match self.fact_by_id(*id)? {
+                    // Closed: superseded, or withdrawn. Either way it is not believed
+                    // now, and a justification needs every member.
+                    Some(f) if f.valid_to.is_some() => missing.push(*id),
+                    // Gone entirely. Nothing deletes facts today, so this means a store
+                    // edited by hand — treat it as missing rather than as fine.
+                    None => missing.push(*id),
+                    Some(_) => {}
+                }
+            }
+            if missing.is_empty() {
+                return Ok(Support::Grounded);
+            }
+            // Report the justification that came closest to standing. "This is stale"
+            // is much less useful than "this is stale because #4592 moved", and with
+            // alternatives the union of everything missing would name facts that were
+            // never going to matter.
+            if closest.as_ref().is_none_or(|c| missing.len() < c.len()) {
+                closest = Some(missing);
             }
         }
-        if missing.is_empty() {
-            Ok(Support::Grounded)
-        } else {
-            Ok(Support::Ungrounded { missing })
-        }
+        Ok(Support::Ungrounded {
+            missing: closest.unwrap_or_default(),
+        })
     }
 
     /// Open facts whose justification no longer stands.
@@ -1047,7 +1126,7 @@ mod tests {
         assert_eq!(deps[0].id, roll.id);
         assert_eq!(deps[0].entity, "mesh.escalated_count");
         // Support survives the round trip through the query, not just the insert.
-        assert_eq!(deps[0].derived_from, Some(vec![n1.id, n2.id]));
+        assert_eq!(deps[0].derived_from, Some(vec![vec![n1.id, n2.id]]));
         // Both supports find it — the caller decides whether one death is enough.
         assert_eq!(w.dependents(n2.id).unwrap().len(), 1);
         // Nothing rests on the rollup itself.

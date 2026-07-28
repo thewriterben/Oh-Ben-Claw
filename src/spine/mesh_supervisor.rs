@@ -858,7 +858,7 @@ mod tests {
         assert_eq!(count.value.as_u64(), Some(1));
         assert_eq!(
             count.derived_from,
-            Some(vec![esc.id]),
+            Some(vec![vec![esc.id]]),
             "the count names the escalation fact under it"
         );
         // And the edge is walkable from the other end — this is the query that was
