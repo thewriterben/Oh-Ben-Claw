@@ -49,17 +49,17 @@
 //!
 //! # What this module does *not* do yet
 //!
-//! Propagation is **one hop**. A belief loses its justification when a fact in its
-//! in-list is closed; beliefs derived from *that* belief are not yet followed. Nor are
-//! alternative justifications represented: an in-list is conjunctive (Doyle's JTMS —
-//! every entry must hold), so `a·b` is the only semantics available here. Independent
-//! corroboration (`a+b`, where a belief survives one support dying) needs a fact to
-//! carry *several* in-lists, which is the next step and not this one.
+//! An in-list is **conjunctive** — Doyle's JTMS: every entry must hold for the
+//! justification to stand — so `a·b` is the only semantics available here. A belief that
+//! is *independently corroborated* (`a+b`, surviving one support dying) needs to carry
+//! several alternative in-lists, and the schema holds one. Until it does, a fact with
+//! two supports is treated as needing both.
 //!
-//! Both limits are deliberate and both fail in the same direction: this sweep
-//! under-retracts. Facts with unknown support are invisible to
-//! [`WorldMemory::dependents`] by construction, so the blast radius is exactly the set
-//! of beliefs that explicitly declared what they rest on.
+//! That limit over-retracts where it applies, which is the opposite direction to
+//! everything else here, so it is worth being precise about the blast radius: facts with
+//! unknown support are invisible to [`WorldMemory::dependents`] by construction, so the
+//! only beliefs any sweep can touch are the ones that explicitly declared what they rest
+//! on. Today that is the mesh supervisor and nothing else.
 
 use anyhow::Result;
 use serde_json::json;
@@ -171,36 +171,57 @@ pub fn stopped(
         }
     }
 
-    // One hop out. Collected before closing anything downstream so the walk sees a
-    // consistent picture, and de-duplicated because two closed facts can support the
-    // same belief (the escalated_count case exactly: one in-list, two dead members).
-    let mut candidates: Vec<Fact> = Vec::new();
-    for id in &sweep.closed {
-        for dep in world.dependents(*id)? {
-            if !candidates.iter().any(|c| c.id == dep.id) {
-                candidates.push(dep);
+    // Walk out transitively. A belief that loses its justification is itself no longer
+    // a justification, so the beliefs resting on *it* have to go too — Doyle's
+    // dependency-directed backtracking, and the reason a one-hop version would have been
+    // a half-measure. The mesh chain is three deep:
+    //
+    //     mesh.<node>  →  mesh.<node>.health  →  .escalation  →  mesh.escalated_count
+    //
+    // so retiring the gateway with one-hop propagation would close the rollups, mark
+    // health unsupported, and leave the escalations and the count standing — the exact
+    // bug, one level further down.
+    //
+    // Breadth-first with a seen-set. The set is what makes this terminate: `derived_from`
+    // is not schema-constrained to be acyclic, and a cycle (however it got written) must
+    // not become an infinite loop inside a startup path.
+    let mut frontier: Vec<i64> = sweep.closed.clone();
+    let mut seen: Vec<i64> = sweep.closed.clone();
+    while !frontier.is_empty() {
+        let mut next: Vec<i64> = Vec::new();
+        for id in &frontier {
+            for dep in world.dependents(*id)? {
+                if seen.contains(&dep.id) {
+                    continue;
+                }
+                seen.push(dep.id);
+                if sweep.closed.contains(&dep.id) {
+                    // The dead source's own rollup, already closed directly above.
+                    // Common, and worth naming: a component that derives a fact usually
+                    // writes it under its own source label, so retiring that source
+                    // retracts the rollup without the in-list being consulted at all.
+                    // The in-list earns its keep when the derived belief belongs to a
+                    // *different* source than its inputs — the case no amount of source
+                    // bookkeeping can reach.
+                    next.push(dep.id);
+                    continue;
+                }
+                if dep.valid_to.is_some() {
+                    // Already closed by someone else. Still traversed: whatever rested
+                    // on it is no better supported for the retraction having come from
+                    // elsewhere.
+                    next.push(dep.id);
+                    continue;
+                }
+                if world.close_fact(dep.id, now_ms)? {
+                    sweep.unsupported.push(dep.id);
+                    next.push(dep.id);
+                } else {
+                    sweep.skipped.push(dep.id);
+                }
             }
         }
-    }
-
-    for dep in candidates {
-        if sweep.closed.contains(&dep.id) {
-            // The dead source's own rollup, already closed directly above. Common, and
-            // worth naming: a component that derives a fact usually writes it under its
-            // own source label, so retiring that source retracts the rollup without the
-            // in-list being consulted at all. The in-list earns its keep when the
-            // derived belief belongs to a *different* source than its inputs — which is
-            // the case no amount of source bookkeeping can reach.
-            continue;
-        }
-        if dep.valid_to.is_some() {
-            continue; // closed by someone else since the walk started
-        }
-        if world.close_fact(dep.id, now_ms)? {
-            sweep.unsupported.push(dep.id);
-        } else {
-            sweep.skipped.push(dep.id);
-        }
+        frontier = next;
     }
 
     Ok(sweep)
@@ -367,6 +388,85 @@ mod tests {
         assert_eq!(sweep.unsupported, vec![alert.id], "the walk crossed the source boundary");
         assert!(w.current("notify.trail_activity").unwrap().is_none());
         assert!(w.current("notify.digest_due").unwrap().is_some());
+    }
+
+    #[test]
+    fn retraction_propagates_the_whole_chain_not_one_hop() {
+        // The mesh chain, three deep, sourced the way it really is: the radio observes,
+        // the supervisor concludes on top of that. One-hop propagation would close the
+        // rollup, mark health unsupported, and leave the escalation and the count
+        // standing — the original bug, one level down.
+        let w = WorldMemory::open_in_memory().unwrap();
+        let rollup = w
+            .observe_as("mesh.n", json!({"seq": 7}), 1_000, 1_000, "lora-gateway", Origin::Observed)
+            .unwrap();
+        let health = w
+            .observe_derived_from(
+                "mesh.n.health",
+                json!({"status": "offline"}),
+                1_100,
+                1_100,
+                "mesh-supervisor",
+                &[rollup.id],
+            )
+            .unwrap();
+        let esc = w
+            .observe_derived_from(
+                "mesh.n.escalation",
+                json!({"status": "escalated"}),
+                1_200,
+                1_200,
+                "mesh-supervisor",
+                &[health.id],
+            )
+            .unwrap();
+        let count = w
+            .observe_derived_from(
+                "mesh.escalated_count",
+                json!(1),
+                1_300,
+                1_300,
+                "mesh-supervisor",
+                &[esc.id],
+            )
+            .unwrap();
+
+        // Retire the *radio*, not the supervisor. The supervisor is alive and willing;
+        // it simply has nothing left to have concluded from.
+        let sweep = stopped(&w, "lora-gateway", Stopped::Retired, 9_000, "no COM port").unwrap();
+
+        assert_eq!(sweep.closed, vec![rollup.id], "only the radio's own fact");
+        assert_eq!(
+            sweep.unsupported,
+            vec![health.id, esc.id, count.id],
+            "breadth-first, all three levels"
+        );
+        for e in ["mesh.n.health", "mesh.n.escalation", "mesh.escalated_count"] {
+            assert!(w.current(e).unwrap().is_none(), "{e} still believed");
+        }
+    }
+
+    #[test]
+    fn a_cycle_in_the_support_graph_terminates() {
+        // `derived_from` is not schema-constrained to be acyclic. However a cycle got
+        // written, a startup path must not spin on it.
+        let w = WorldMemory::open_in_memory().unwrap();
+        let root = w
+            .observe_as("root", json!(1), 1_000, 1_000, "lora-gateway", Origin::Observed)
+            .unwrap();
+        let a = w
+            .observe_derived_from("a", json!(1), 1_100, 1_100, "notifier", &[root.id])
+            .unwrap();
+        let b = w
+            .observe_derived_from("b", json!(1), 1_200, 1_200, "notifier", &[a.id])
+            .unwrap();
+        // Close the loop: a is also claimed to rest on b.
+        w.observe_derived_from("a", json!(2), 1_300, 1_300, "notifier", &[b.id])
+            .unwrap();
+
+        let sweep = stopped(&w, "lora-gateway", Stopped::Retired, 9_000, "gone").unwrap();
+        assert!(sweep.unsupported.contains(&b.id));
+        assert!(w.current("b").unwrap().is_none());
     }
 
     #[test]
