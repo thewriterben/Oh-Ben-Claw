@@ -2131,6 +2131,24 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     if let Some(auditor) = &action_auditor {
         agent = agent.with_action_auditor(Arc::clone(auditor));
     }
+    // Close the loop between the world model and the thing reasoning on top of it.
+    // Without this the agent's entire context is its system prompt and the last 50
+    // messages: it can query `world_memory`, but nothing tells it there is anything to
+    // ask about, and an agent that cannot see what it believes cannot notice that a
+    // belief has been withdrawn.
+    if let Some(world) = &world_mem {
+        if config.perception.context.enabled {
+            agent = agent.with_world_context(
+                Arc::clone(world),
+                config.perception.context.clone(),
+            );
+            info!(
+                max_facts = config.perception.context.max_facts,
+                max_withdrawals = config.perception.context.max_withdrawals,
+                "World state joins the agent's context each turn"
+            );
+        }
+    }
     if let Some(t) = &trajectory_store {
         agent = agent.with_trajectory_store(Arc::clone(t));
     }
