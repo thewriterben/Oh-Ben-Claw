@@ -685,6 +685,63 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
 
+    // Source liveness: a subsystem that is configured off is not going to refresh,
+    // correct or retract anything it wrote, so its beliefs are unmaintained from the
+    // moment this process starts without it. That is not the same as those beliefs
+    // being false, and the difference is a bug we shipped: `mesh.escalated_count = 2`
+    // sat open in the bench store with the supervisor disabled, and the
+    // `safe-mesh-node-lost` reflex kept escalating on a number whose author no longer
+    // existed.
+    //
+    // So the disappearance gets written down (Prometheus staleness markers, 2017:
+    // absence of data is itself a datum) and what rested on it stops being believed.
+    // Only the deterministic half runs here — "config says this is off". The
+    // inferential half, `sweep_silent`, guesses from silence and is deliberately not
+    // wired to boot, where a source that simply has not spoken yet looks identical to
+    // one that died.
+    if let Some(world) = &world_mem {
+        use oh_ben_claw::memory::liveness::{is_marked_stopped, stopped, Stopped};
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let configured_off: [(bool, &str, &str); 2] = [
+            (
+                !config.mesh_supervisor.enabled,
+                oh_ben_claw::spine::mesh_supervisor::SUPERVISOR_SOURCE,
+                "[mesh_supervisor] enabled = false",
+            ),
+            (
+                config.lora_gateway.is_none(),
+                oh_ben_claw::spine::lora_gateway::SOURCE,
+                "[lora_gateway] not configured",
+            ),
+        ];
+        for (is_off, source, reason) in configured_off {
+            if !is_off {
+                continue;
+            }
+            match is_marked_stopped(world, source) {
+                Ok(true) => continue, // already recorded; do not churn the marker
+                Err(e) => {
+                    tracing::warn!(source, "liveness: could not read marker: {e}");
+                    continue;
+                }
+                Ok(false) => {}
+            }
+            match stopped(world, source, Stopped::Retired, now, reason) {
+                Ok(s) if !s.is_empty() => info!(
+                    source,
+                    retracted = s.closed.len(),
+                    unsupported = s.unsupported.len(),
+                    "source retired: beliefs it left standing are no longer believed"
+                ),
+                Ok(_) => info!(source, "source retired (nothing was standing)"),
+                Err(e) => tracing::warn!(source, "liveness: retirement failed: {e}"),
+            }
+        }
+    }
+
     // Movement subsystem: expose the safety-bounded `move_actuator` tool to the
     // agent (System 2), and keep the controller so System 1 reflexes can route
     // `Action::Move` through the *same* gate (below). Physical actuation MUST be
