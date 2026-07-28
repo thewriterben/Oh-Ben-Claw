@@ -768,7 +768,7 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
         }
 
         // Track 0: host pushes this node's deterministic actuator limits (mirror of
-        // the host `[[safety.limit]]` set). Retained on `obc/nodes/{id}/limits`.
+        // the host `[[safety.limits]]` set). Retained on `obc/nodes/{id}/limits`.
         // Tightens the boot default-deny policy in the field with no reflash.
         "set_limits" => {
             let limits: Vec<safety::SafetyLimit> = serde_json::from_value(

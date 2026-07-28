@@ -1405,7 +1405,7 @@ pub struct MovementConfig {
     /// Enable the `move_actuator` tool.
     #[serde(default)]
     pub enabled: bool,
-    /// Node id the movement safety limits apply to (matches `[[safety.limit]]`
+    /// Node id the movement safety limits apply to (matches `[[safety.limits]]`
     /// `node_id`); used for the `servo_angle`/`motor_speed`/`stop` limits.
     #[serde(default = "default_movement_node_id")]
     pub node_id: String,
@@ -2213,6 +2213,8 @@ pub struct Config {
     #[serde(default)]
     pub fleet: FleetConfig,
 }
+
+
 
 impl Config {
     /// Load the configuration.
