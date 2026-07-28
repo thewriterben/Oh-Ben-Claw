@@ -453,7 +453,9 @@ mod tests {
     #[tokio::test]
     async fn test_server_discover() {
         let mut server = make_server();
-        let resp = server.handle_request(req("server/discover", json!({}))).await;
+        let resp = server
+            .handle_request(req("server/discover", json!({})))
+            .await;
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
         assert_eq!(result["protocolVersion"], "2026-07-28");
@@ -578,9 +580,14 @@ mod tests {
     #[tokio::test]
     async fn test_capabilities_carry_extensions_map() {
         let mut server = make_server();
-        let resp = server.handle_request(req("server/discover", json!({}))).await;
+        let resp = server
+            .handle_request(req("server/discover", json!({})))
+            .await;
         let caps = &resp.result.unwrap()["capabilities"];
-        assert!(caps["extensions"].is_object(), "SEP-2133 extensions map present");
+        assert!(
+            caps["extensions"].is_object(),
+            "SEP-2133 extensions map present"
+        );
     }
 
     #[tokio::test]
@@ -592,20 +599,30 @@ mod tests {
             method: "notifications/initialized".to_string(),
             params: json!({}),
         };
-        let response =
-            http_handler(State(server), HeaderMap::new(), Json(notification)).await;
+        let response = http_handler(State(server), HeaderMap::new(), Json(notification)).await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
-        assert!(body.is_empty(), "notifications must not get a response body");
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert!(
+            body.is_empty(),
+            "notifications must not get a response body"
+        );
     }
 
     #[tokio::test]
     async fn test_http_request_still_gets_200_with_body() {
         let server = Arc::new(Mutex::new(make_server()));
-        let response =
-            http_handler(State(server), HeaderMap::new(), Json(req("ping", json!({})))).await;
+        let response = http_handler(
+            State(server),
+            HeaderMap::new(),
+            Json(req("ping", json!({}))),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         assert!(!body.is_empty());
     }
 }

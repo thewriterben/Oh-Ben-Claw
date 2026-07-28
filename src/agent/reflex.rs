@@ -755,20 +755,40 @@ mod tests {
         // the origin differs.
         let observed = WorldMemory::open_in_memory().unwrap();
         observed
-            .observe_as("sensor.temperature", json!({"value": 30.0, "n": 2}), 1_000, 1_000, "fusion", Origin::Observed)
+            .observe_as(
+                "sensor.temperature",
+                json!({"value": 30.0, "n": 2}),
+                1_000,
+                1_000,
+                "fusion",
+                Origin::Observed,
+            )
             .unwrap();
         assert_eq!(
-            ReflexEngine::new(vec![fan_rule()]).tick(&observed, 2_000).unwrap().len(),
+            ReflexEngine::new(vec![fan_rule()])
+                .tick(&observed, 2_000)
+                .unwrap()
+                .len(),
             1,
             "a real reading fires the reflex"
         );
 
         let asserted = WorldMemory::open_in_memory().unwrap();
         asserted
-            .observe_as("sensor.temperature", json!({"value": 30.0, "n": 2}), 1_000, 1_000, "agent", Origin::Asserted)
+            .observe_as(
+                "sensor.temperature",
+                json!({"value": 30.0, "n": 2}),
+                1_000,
+                1_000,
+                "agent",
+                Origin::Asserted,
+            )
             .unwrap();
         assert!(
-            ReflexEngine::new(vec![fan_rule()]).tick(&asserted, 2_000).unwrap().is_empty(),
+            ReflexEngine::new(vec![fan_rule()])
+                .tick(&asserted, 2_000)
+                .unwrap()
+                .is_empty(),
             "an agent's claim about the temperature must not actuate anything"
         );
     }
@@ -781,9 +801,19 @@ mod tests {
         // and let safing infer it.
         let world = WorldMemory::open_in_memory().unwrap();
         world
-            .observe_as("sensor.temperature", json!({"value": 30.0, "n": 2}), 1_000, 1_000, "operator", Origin::Instructed)
+            .observe_as(
+                "sensor.temperature",
+                json!({"value": 30.0, "n": 2}),
+                1_000,
+                1_000,
+                "operator",
+                Origin::Instructed,
+            )
             .unwrap();
-        assert!(ReflexEngine::new(vec![fan_rule()]).tick(&world, 2_000).unwrap().is_empty());
+        assert!(ReflexEngine::new(vec![fan_rule()])
+            .tick(&world, 2_000)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -793,10 +823,16 @@ mod tests {
         // explicit, because using it on an actuating engine re-opens the hazard.
         let world = WorldMemory::open_in_memory().unwrap();
         world
-            .observe_as("sensor.temperature", json!({"value": 30.0, "n": 2}), 1_000, 1_000, "agent", Origin::Asserted)
+            .observe_as(
+                "sensor.temperature",
+                json!({"value": 30.0, "n": 2}),
+                1_000,
+                1_000,
+                "agent",
+                Origin::Asserted,
+            )
             .unwrap();
-        let permissive = ReflexEngine::new(vec![fan_rule()])
-            .with_trusted_origins(OriginSet::ALL);
+        let permissive = ReflexEngine::new(vec![fan_rule()]).with_trusted_origins(OriginSet::ALL);
         assert_eq!(permissive.tick(&world, 2_000).unwrap().len(), 1);
     }
 
@@ -866,7 +902,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            ReflexEngine::new(vec![fan_rule()]).tick(&driver_world, 4_000).unwrap().len(),
+            ReflexEngine::new(vec![fan_rule()])
+                .tick(&driver_world, 4_000)
+                .unwrap()
+                .len(),
             1,
             "a real reading still fires — the gate closed the hazard, not the feature"
         );
@@ -915,7 +954,9 @@ mod tests {
                 op: Cmp::Gt,
                 value: 0.0,
             },
-            then: Action::Escalate { reason: "seen".to_string() },
+            then: Action::Escalate {
+                reason: "seen".to_string(),
+            },
             debounce_ms: 0,
             max_rate_hz: None,
             fire_on_change: true,
@@ -929,8 +970,15 @@ mod tests {
         // passed; this asks whether anything happened.
         use crate::memory::world::{Origin, WorldMemory};
         let w = WorldMemory::open_in_memory().unwrap();
-        w.observe_as("vision.hits", json!(1), 1_000, 1_000, "clawcam", Origin::Observed)
-            .unwrap();
+        w.observe_as(
+            "vision.hits",
+            json!(1),
+            1_000,
+            1_000,
+            "clawcam",
+            Origin::Observed,
+        )
+        .unwrap();
 
         let e = ReflexEngine::new(vec![rule_on_change("r", "vision.hits")]);
         assert_eq!(e.tick(&w, 1_000).unwrap().len(), 1, "first sighting fires");
@@ -942,8 +990,15 @@ mod tests {
         }
 
         // A genuinely new observation is a new row, and fires at once.
-        w.observe_as("vision.hits", json!(2), 9_000, 9_000, "clawcam", Origin::Observed)
-            .unwrap();
+        w.observe_as(
+            "vision.hits",
+            json!(2),
+            9_000,
+            9_000,
+            "clawcam",
+            Origin::Observed,
+        )
+        .unwrap();
         assert_eq!(e.tick(&w, 9_000).unwrap().len(), 1, "new evidence fires");
     }
 
@@ -953,13 +1008,24 @@ mod tests {
         // and suppressing it because the reading has not changed is exactly backwards.
         use crate::memory::world::{Origin, WorldMemory};
         let w = WorldMemory::open_in_memory().unwrap();
-        w.observe_as("power.critical", json!(1), 1_000, 1_000, "power", Origin::Observed)
-            .unwrap();
+        w.observe_as(
+            "power.critical",
+            json!(1),
+            1_000,
+            1_000,
+            "power",
+            Origin::Observed,
+        )
+        .unwrap();
         let mut rule = rule_on_change("safe", "power.critical");
         rule.fire_on_change = false;
         let e = ReflexEngine::new(vec![rule]);
         assert_eq!(e.tick(&w, 1_000).unwrap().len(), 1);
-        assert_eq!(e.tick(&w, 2_000).unwrap().len(), 1, "still critical, still says so");
+        assert_eq!(
+            e.tick(&w, 2_000).unwrap().len(),
+            1,
+            "still critical, still says so"
+        );
     }
 
     #[test]

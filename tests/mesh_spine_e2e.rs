@@ -32,7 +32,9 @@ async fn outbound_command_then_reply_round_trips_through_the_mesh() {
     let node = "obc-esp32-s3-001";
 
     // ── Outbound: the agent addresses a gpio_write to the node over the mesh. ──
-    let sink = CapturingSink { sent: Mutex::new(Vec::new()) };
+    let sink = CapturingSink {
+        sent: Mutex::new(Vec::new()),
+    };
     let cmd = NodeCommand::new(node, "h1", "gpio_write", json!({ "pin": 3, "value": 1 }));
     sink.send_command(&cmd).await.unwrap();
 
@@ -72,10 +74,17 @@ async fn outbound_command_then_reply_round_trips_through_the_mesh() {
         .expect("cmd_result fact exists");
     assert_eq!(fact.value["id"], json!("h1"), "correlation id round-trips");
     assert_eq!(fact.value["ok"], json!(true));
-    assert_eq!(fact.value["_mesh"]["rssi_dbm"], json!(-40), "mesh envelope attached");
+    assert_eq!(
+        fact.value["_mesh"]["rssi_dbm"],
+        json!(-40),
+        "mesh envelope attached"
+    );
 
     // The liveness rollup reflects the node's latest message type over the mesh.
-    let link = world.current(&format!("mesh.{node}")).unwrap().expect("rollup fact exists");
+    let link = world
+        .current(&format!("mesh.{node}"))
+        .unwrap()
+        .expect("rollup fact exists");
     assert_eq!(link.value["last_type"], json!("cmd_result"));
     assert_eq!(link.value["rssi_dbm"], json!(-40));
 }
@@ -84,11 +93,12 @@ async fn outbound_command_then_reply_round_trips_through_the_mesh() {
 async fn a_command_for_another_node_is_addressed_to_that_node() {
     // Routing contract: the encoded line names the intended recipient, so a node that
     // isn't the target drops it (the firmware compares `to` against its own id).
-    let sink = CapturingSink { sent: Mutex::new(Vec::new()) };
+    let sink = CapturingSink {
+        sent: Mutex::new(Vec::new()),
+    };
     let cmd = NodeCommand::new("node-b", "x9", "sensor_read", json!({ "kind": "dht22" }));
     sink.send_command(&cmd).await.unwrap();
-    let req: serde_json::Value =
-        serde_json::from_str(&sink.sent.lock().unwrap()[0]).unwrap();
+    let req: serde_json::Value = serde_json::from_str(&sink.sent.lock().unwrap()[0]).unwrap();
     assert_eq!(req["to"], json!("node-b"));
     assert_ne!(req["to"], json!("obc-esp32-s3-001"));
 }

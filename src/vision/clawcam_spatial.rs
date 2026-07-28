@@ -110,7 +110,10 @@ mod tests {
     fn larger_radius_marks_more_points() {
         let small = hazard_points((0.0, 0.0), 1.0, 0.5).len();
         let large = hazard_points((0.0, 0.0), 3.0, 0.5).len();
-        assert!(large > small, "a wider hazard covers more cells: {small} → {large}");
+        assert!(
+            large > small,
+            "a wider hazard covers more cells: {small} → {large}"
+        );
     }
 
     #[test]

@@ -985,8 +985,14 @@ mod tests {
         });
         let runtime = json!({"pin": 17, "city": "Oslo"});
         let out = substitute_args(&template, &runtime);
-        assert_eq!(out["pin"], 17, "whole-value placeholder keeps the number type");
-        assert_eq!(out["url"], "https://x/Oslo/now", "inline placeholder is textual");
+        assert_eq!(
+            out["pin"], 17,
+            "whole-value placeholder keeps the number type"
+        );
+        assert_eq!(
+            out["url"], "https://x/Oslo/now",
+            "inline placeholder is textual"
+        );
         assert_eq!(out["nested"]["level"], 17, "recursion into objects");
         assert_eq!(out["fixed"], true);
         // Unknown placeholder is left as-is (visible, not silently dropped).
@@ -1000,7 +1006,10 @@ mod tests {
         m.kind = SkillKind::Sequence { steps: vec![] };
         assert!(m.validate().is_err(), "empty sequence rejected");
         m.kind = SkillKind::Sequence {
-            steps: vec![SkillStep { tool: "http".into(), args: json!({}) }],
+            steps: vec![SkillStep {
+                tool: "http".into(),
+                args: json!({}),
+            }],
         };
         assert!(m.validate().is_ok());
     }

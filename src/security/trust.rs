@@ -92,7 +92,10 @@ pub struct TrustScorer {
 
 impl TrustScorer {
     pub fn new(cfg: TrustConfig) -> Self {
-        Self { cfg, nodes: Mutex::new(HashMap::new()) }
+        Self {
+            cfg,
+            nodes: Mutex::new(HashMap::new()),
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, NodeStats>> {
@@ -166,7 +169,10 @@ impl TrustScorer {
     /// The node's current trust score in `[0, 1]` (a never-seen node starts at
     /// `start_score`).
     pub fn score(&self, node: &str) -> f64 {
-        self.lock().get(node).map(|s| s.score).unwrap_or(self.cfg.start_score)
+        self.lock()
+            .get(node)
+            .map(|s| s.score)
+            .unwrap_or(self.cfg.start_score)
     }
 
     /// The node's current trust level (a never-seen node is `Trusted`).
@@ -248,7 +254,10 @@ mod tests {
         let before = t.score("n");
         // a 10x spike is far outside 3σ → anomaly penalty even though it "succeeded"
         t.record("n", 500.0, true);
-        assert!(t.score("n") < before, "anomalous latency should lower trust");
+        assert!(
+            t.score("n") < before,
+            "anomalous latency should lower trust"
+        );
     }
 
     #[test]
@@ -265,7 +274,11 @@ mod tests {
 
     #[test]
     fn gate_leaves_non_physical_actions_alone() {
-        for lvl in [TrustLevel::Trusted, TrustLevel::Probation, TrustLevel::Untrusted] {
+        for lvl in [
+            TrustLevel::Trusted,
+            TrustLevel::Probation,
+            TrustLevel::Untrusted,
+        ] {
             assert_eq!(gate(lvl, RiskClass::safe()), TrustGate::Allow);
         }
     }

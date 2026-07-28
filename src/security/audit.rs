@@ -98,8 +98,8 @@ fn canonical(
 }
 
 fn compute_mac(key: &[u8], canonical: &str) -> anyhow::Result<String> {
-    let mut mac = HmacSha256::new_from_slice(key)
-        .map_err(|e| anyhow::anyhow!("invalid audit key: {e}"))?;
+    let mut mac =
+        HmacSha256::new_from_slice(key).map_err(|e| anyhow::anyhow!("invalid audit key: {e}"))?;
     mac.update(canonical.as_bytes());
     Ok(hex::encode(mac.finalize().into_bytes()))
 }
@@ -169,7 +169,13 @@ impl ActionAuditor {
     ) -> anyhow::Result<ActionRecord> {
         let args_hash = args_sha256(args);
         let canon = canonical(
-            self.seq, ts_ms, node_id, tool, &args_hash, &decision, &self.prev_mac,
+            self.seq,
+            ts_ms,
+            node_id,
+            tool,
+            &args_hash,
+            &decision,
+            &self.prev_mac,
         );
         let mac = compute_mac(&self.key, &canon)?;
         let sig = self.signer.as_ref().map(|s| s.sign_hex(canon.as_bytes()));
@@ -254,7 +260,12 @@ pub fn verify(path: impl AsRef<Path>, key: &[u8]) -> anyhow::Result<usize> {
             return Err(AuditError::BrokenChain { seq: rec.seq }.into());
         }
         let canon = canonical(
-            rec.seq, rec.ts_ms, &rec.node_id, &rec.tool, &rec.args_sha256, &rec.decision,
+            rec.seq,
+            rec.ts_ms,
+            &rec.node_id,
+            &rec.tool,
+            &rec.args_sha256,
+            &rec.decision,
             &rec.prev_mac,
         );
         if compute_mac(key, &canon)? != rec.mac {
@@ -288,7 +299,12 @@ pub fn verify_signatures(path: impl AsRef<Path>, public_hex: &str) -> anyhow::Re
         let rec: ActionRecord = serde_json::from_str(&line)?;
         if let Some(sig) = &rec.sig {
             let canon = canonical(
-                rec.seq, rec.ts_ms, &rec.node_id, &rec.tool, &rec.args_sha256, &rec.decision,
+                rec.seq,
+                rec.ts_ms,
+                &rec.node_id,
+                &rec.tool,
+                &rec.args_sha256,
+                &rec.decision,
                 &rec.prev_mac,
             );
             if !crate::security::audit_sign::verify_hex(public_hex, canon.as_bytes(), sig) {
@@ -326,9 +342,33 @@ mod tests {
         let key = b"test-key";
         {
             let mut a = ActionAuditor::open(key.to_vec(), path.clone()).unwrap();
-            a.record(1_000, "node-1", "gpio_write", &json!({"pin":17,"value":1}), high_risk(), Decision::Allowed).unwrap();
-            a.record(1_500, "node-1", "gpio_write", &json!({"pin":99,"value":1}), high_risk(), Decision::Denied("pin not allowed".into())).unwrap();
-            a.record(2_000, "node-1", "capture_now", &json!({}), RiskClass::physical(true, BlastRadius::Low), Decision::NeedsApproval).unwrap();
+            a.record(
+                1_000,
+                "node-1",
+                "gpio_write",
+                &json!({"pin":17,"value":1}),
+                high_risk(),
+                Decision::Allowed,
+            )
+            .unwrap();
+            a.record(
+                1_500,
+                "node-1",
+                "gpio_write",
+                &json!({"pin":99,"value":1}),
+                high_risk(),
+                Decision::Denied("pin not allowed".into()),
+            )
+            .unwrap();
+            a.record(
+                2_000,
+                "node-1",
+                "capture_now",
+                &json!({}),
+                RiskClass::physical(true, BlastRadius::Low),
+                Decision::NeedsApproval,
+            )
+            .unwrap();
         }
         assert_eq!(verify(&path, key).unwrap(), 3);
         let _ = std::fs::remove_file(&path);
@@ -345,8 +385,24 @@ mod tests {
             let mut a = ActionAuditor::open(key.to_vec(), path.clone())
                 .unwrap()
                 .with_signer(signer);
-            a.record(1_000, "n", "gpio_write", &json!({"pin":17,"value":1}), high_risk(), Decision::Allowed).unwrap();
-            a.record(2_000, "n", "capture_now", &json!({}), RiskClass::physical(true, BlastRadius::Low), Decision::NeedsApproval).unwrap();
+            a.record(
+                1_000,
+                "n",
+                "gpio_write",
+                &json!({"pin":17,"value":1}),
+                high_risk(),
+                Decision::Allowed,
+            )
+            .unwrap();
+            a.record(
+                2_000,
+                "n",
+                "capture_now",
+                &json!({}),
+                RiskClass::physical(true, BlastRadius::Low),
+                Decision::NeedsApproval,
+            )
+            .unwrap();
         }
         // The HMAC chain still verifies for the key holder …
         assert_eq!(verify(&path, key).unwrap(), 2);
@@ -363,7 +419,15 @@ mod tests {
         let path = tmp_path("unsigned");
         {
             let mut a = ActionAuditor::open(b"k".to_vec(), path.clone()).unwrap();
-            a.record(1, "n", "gpio_write", &json!({"pin":17}), high_risk(), Decision::Allowed).unwrap();
+            a.record(
+                1,
+                "n",
+                "gpio_write",
+                &json!({"pin":17}),
+                high_risk(),
+                Decision::Allowed,
+            )
+            .unwrap();
         }
         // No signer ⇒ no signatures; verification is a vacuous pass (HMAC still covers it).
         assert_eq!(verify_signatures(&path, "deadbeef").unwrap(), 0);
@@ -376,11 +440,28 @@ mod tests {
         let key = b"k";
         {
             let mut a = ActionAuditor::open(key.to_vec(), path.clone()).unwrap();
-            a.record(1, "n", "gpio_write", &json!({"pin":17}), high_risk(), Decision::Allowed).unwrap();
+            a.record(
+                1,
+                "n",
+                "gpio_write",
+                &json!({"pin":17}),
+                high_risk(),
+                Decision::Allowed,
+            )
+            .unwrap();
         }
         {
             let mut a = ActionAuditor::open(key.to_vec(), path.clone()).unwrap();
-            let rec = a.record(2, "n", "gpio_write", &json!({"pin":18}), high_risk(), Decision::Allowed).unwrap();
+            let rec = a
+                .record(
+                    2,
+                    "n",
+                    "gpio_write",
+                    &json!({"pin":18}),
+                    high_risk(),
+                    Decision::Allowed,
+                )
+                .unwrap();
             assert_eq!(rec.seq, 1, "chain resumed at next seq");
         }
         assert_eq!(verify(&path, key).unwrap(), 2);
@@ -393,8 +474,24 @@ mod tests {
         let key = b"k";
         {
             let mut a = ActionAuditor::open(key.to_vec(), path.clone()).unwrap();
-            a.record(1, "n", "gpio_write", &json!({"pin":17,"value":1}), high_risk(), Decision::Allowed).unwrap();
-            a.record(2, "n", "gpio_write", &json!({"pin":17,"value":0}), high_risk(), Decision::Allowed).unwrap();
+            a.record(
+                1,
+                "n",
+                "gpio_write",
+                &json!({"pin":17,"value":1}),
+                high_risk(),
+                Decision::Allowed,
+            )
+            .unwrap();
+            a.record(
+                2,
+                "n",
+                "gpio_write",
+                &json!({"pin":17,"value":0}),
+                high_risk(),
+                Decision::Allowed,
+            )
+            .unwrap();
         }
         // Tamper a field that is actually stored in the record. (The raw args
         // are NOT stored — only their SHA-256 — so we edit the tool name, which
@@ -405,7 +502,10 @@ mod tests {
         std::fs::write(&path, tampered).unwrap();
 
         let err = verify(&path, key).unwrap_err();
-        assert!(err.to_string().contains("audit:"), "expected an AuditError, got {err}");
+        assert!(
+            err.to_string().contains("audit:"),
+            "expected an AuditError, got {err}"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -414,7 +514,15 @@ mod tests {
         let path = tmp_path("key");
         {
             let mut a = ActionAuditor::open(b"right".to_vec(), path.clone()).unwrap();
-            a.record(1, "n", "gpio_write", &json!({"pin":17}), high_risk(), Decision::Allowed).unwrap();
+            a.record(
+                1,
+                "n",
+                "gpio_write",
+                &json!({"pin":17}),
+                high_risk(),
+                Decision::Allowed,
+            )
+            .unwrap();
         }
         assert!(verify(&path, b"wrong").is_err());
         assert!(verify(&path, b"right").is_ok());

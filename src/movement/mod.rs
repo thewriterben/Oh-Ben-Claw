@@ -35,9 +35,17 @@ use std::sync::Arc;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MovementCommand {
     /// Drive a servo to an absolute angle in degrees.
-    ServoAngle { name: String, channel: i64, degrees: f64 },
+    ServoAngle {
+        name: String,
+        channel: i64,
+        degrees: f64,
+    },
     /// Drive a motor at a signed throttle in `[-1.0, 1.0]`.
-    MotorSpeed { name: String, channel: i64, speed: f64 },
+    MotorSpeed {
+        name: String,
+        channel: i64,
+        speed: f64,
+    },
     /// Stop an actuator (neutral / zero throttle).
     Stop { name: String, channel: i64 },
 }
@@ -202,7 +210,11 @@ pub struct MovementController {
 
 impl MovementController {
     /// Build a controller for `node_id` with a safety gate and actuator sink.
-    pub fn new(node_id: impl Into<String>, gate: Arc<SafetyGate>, sink: Arc<dyn ActuatorSink>) -> Self {
+    pub fn new(
+        node_id: impl Into<String>,
+        gate: Arc<SafetyGate>,
+        sink: Arc<dyn ActuatorSink>,
+    ) -> Self {
         Self {
             node_id: node_id.into(),
             gate,
@@ -228,9 +240,19 @@ impl MovementController {
     /// (synchronous; no hardware dispatch). Returns the applied movement, or a
     /// [`MovementError`] — a safety violation here means nothing was recorded or
     /// actuated.
-    pub fn plan(&self, cmd: &MovementCommand, now_ms: u64) -> Result<AppliedMovement, MovementError> {
+    pub fn plan(
+        &self,
+        cmd: &MovementCommand,
+        now_ms: u64,
+    ) -> Result<AppliedMovement, MovementError> {
         self.gate
-            .check(&self.node_id, cmd.tool(), cmd.channel(), cmd.safety_value(), now_ms)
+            .check(
+                &self.node_id,
+                cmd.tool(),
+                cmd.channel(),
+                cmd.safety_value(),
+                now_ms,
+            )
             .map_err(MovementError::Safety)?;
 
         let applied = AppliedMovement {
@@ -260,7 +282,11 @@ impl MovementController {
     /// Full apply: [`plan`](Self::plan) (gate + remember) then dispatch to the
     /// actuator sink. The order guarantees an action is only driven *after* it
     /// passes the gate and is recorded.
-    pub async fn apply(&self, cmd: &MovementCommand, now_ms: u64) -> Result<AppliedMovement, MovementError> {
+    pub async fn apply(
+        &self,
+        cmd: &MovementCommand,
+        now_ms: u64,
+    ) -> Result<AppliedMovement, MovementError> {
         let applied = self.plan(cmd, now_ms)?;
         self.sink
             .drive(&applied)
@@ -299,7 +325,11 @@ mod tests {
     #[test]
     fn servo_within_bounds_is_recorded() {
         let (ctrl, world) = controller(vec![servo_limit("n1", 0, 0, 180)]);
-        let cmd = MovementCommand::ServoAngle { name: "arm".into(), channel: 0, degrees: 90.0 };
+        let cmd = MovementCommand::ServoAngle {
+            name: "arm".into(),
+            channel: 0,
+            degrees: 90.0,
+        };
         let applied = ctrl.plan(&cmd, 1_000).unwrap();
         assert_eq!(applied.value, 90.0);
         let fact = world.current("actuator.arm").unwrap().unwrap();
@@ -311,9 +341,16 @@ mod tests {
     #[test]
     fn servo_out_of_range_is_refused_and_not_recorded() {
         let (ctrl, world) = controller(vec![servo_limit("n1", 0, 0, 180)]);
-        let cmd = MovementCommand::ServoAngle { name: "arm".into(), channel: 0, degrees: 250.0 };
+        let cmd = MovementCommand::ServoAngle {
+            name: "arm".into(),
+            channel: 0,
+            degrees: 250.0,
+        };
         let err = ctrl.plan(&cmd, 1_000).unwrap_err();
-        assert!(matches!(err, MovementError::Safety(SafetyViolation::ValueOutOfRange { .. })));
+        assert!(matches!(
+            err,
+            MovementError::Safety(SafetyViolation::ValueOutOfRange { .. })
+        ));
         // Refused → nothing recorded.
         assert!(world.current("actuator.arm").unwrap().is_none());
     }
@@ -321,7 +358,11 @@ mod tests {
     #[test]
     fn disallowed_channel_is_refused() {
         let (ctrl, _world) = controller(vec![servo_limit("n1", 0, 0, 180)]);
-        let cmd = MovementCommand::ServoAngle { name: "arm".into(), channel: 7, degrees: 45.0 };
+        let cmd = MovementCommand::ServoAngle {
+            name: "arm".into(),
+            channel: 7,
+            degrees: 45.0,
+        };
         assert!(matches!(
             ctrl.plan(&cmd, 1).unwrap_err(),
             MovementError::Safety(SafetyViolation::PinNotAllowed { .. })
@@ -336,10 +377,21 @@ mod tests {
         l.value_max = Some(100);
         let (ctrl, world) = controller(vec![l]);
         // 0.5 throttle → 50 percent, within [-100, 100].
-        let cmd = MovementCommand::MotorSpeed { name: "drive".into(), channel: 1, speed: 0.5 };
+        let cmd = MovementCommand::MotorSpeed {
+            name: "drive".into(),
+            channel: 1,
+            speed: 0.5,
+        };
         let applied = ctrl.plan(&cmd, 1).unwrap();
         assert!((applied.value - 0.5).abs() < 1e-9);
-        assert!((world.current("actuator.drive").unwrap().unwrap().value["value"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+        assert!(
+            (world.current("actuator.drive").unwrap().unwrap().value["value"]
+                .as_f64()
+                .unwrap()
+                - 0.5)
+                .abs()
+                < 1e-9
+        );
     }
 
     #[test]
@@ -347,7 +399,11 @@ mod tests {
         let mut l = servo_limit("n1", 0, 0, 180);
         l.min_interval_ms = Some(500);
         let (ctrl, _world) = controller(vec![l]);
-        let cmd = MovementCommand::ServoAngle { name: "arm".into(), channel: 0, degrees: 30.0 };
+        let cmd = MovementCommand::ServoAngle {
+            name: "arm".into(),
+            channel: 0,
+            degrees: 30.0,
+        };
         assert!(ctrl.plan(&cmd, 1_000).is_ok());
         assert!(matches!(
             ctrl.plan(&cmd, 1_200).unwrap_err(),
@@ -360,16 +416,38 @@ mod tests {
     fn no_rule_means_allowed_and_recorded() {
         // Gate with no limits → not governed here (left to the approval layer).
         let (ctrl, world) = controller(vec![]);
-        let cmd = MovementCommand::Stop { name: "arm".into(), channel: 0 };
+        let cmd = MovementCommand::Stop {
+            name: "arm".into(),
+            channel: 0,
+        };
         ctrl.plan(&cmd, 1).unwrap();
-        assert_eq!(world.current("actuator.arm").unwrap().unwrap().value["value"], 0.0);
+        assert_eq!(
+            world.current("actuator.arm").unwrap().unwrap().value["value"],
+            0.0
+        );
     }
 
     #[test]
     fn successive_commands_update_current_state() {
         let (ctrl, world) = controller(vec![servo_limit("n1", 0, 0, 180)]);
-        ctrl.plan(&MovementCommand::ServoAngle { name: "arm".into(), channel: 0, degrees: 30.0 }, 1).unwrap();
-        ctrl.plan(&MovementCommand::ServoAngle { name: "arm".into(), channel: 0, degrees: 120.0 }, 2).unwrap();
+        ctrl.plan(
+            &MovementCommand::ServoAngle {
+                name: "arm".into(),
+                channel: 0,
+                degrees: 30.0,
+            },
+            1,
+        )
+        .unwrap();
+        ctrl.plan(
+            &MovementCommand::ServoAngle {
+                name: "arm".into(),
+                channel: 0,
+                degrees: 120.0,
+            },
+            2,
+        )
+        .unwrap();
         // Current belief is the latest; history retains both.
         let current = world.current("actuator.arm").unwrap().unwrap();
         assert!((current.value["value"].as_f64().unwrap() - 120.0).abs() < 1e-9);
@@ -379,9 +457,16 @@ mod tests {
     #[tokio::test]
     async fn apply_drives_sink_after_gate_and_record() {
         let (ctrl, world) = controller(vec![servo_limit("n1", 0, 0, 180)]);
-        let cmd = MovementCommand::ServoAngle { name: "arm".into(), channel: 0, degrees: 60.0 };
+        let cmd = MovementCommand::ServoAngle {
+            name: "arm".into(),
+            channel: 0,
+            degrees: 60.0,
+        };
         let applied = ctrl.apply(&cmd, 5).await.unwrap();
         assert_eq!(applied.tool, "servo_angle");
-        assert_eq!(world.current("actuator.arm").unwrap().unwrap().value["value"], 60.0);
+        assert_eq!(
+            world.current("actuator.arm").unwrap().unwrap().value["value"],
+            60.0
+        );
     }
 }

@@ -130,7 +130,10 @@ impl OccupancyGrid {
 
     /// Count of occupied cells.
     pub fn occupied_count(&self) -> usize {
-        self.cells.iter().filter(|c| matches!(c, Cell::Occupied)).count()
+        self.cells
+            .iter()
+            .filter(|c| matches!(c, Cell::Occupied))
+            .count()
     }
 }
 
@@ -178,7 +181,10 @@ pub fn plan(grid: &OccupancyGrid, start: (f64, f64), goal: (f64, f64)) -> Option
     let mut came_from: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
 
     g_score.insert(start_c, 0.0);
-    open.push(Frontier { f: heuristic(start_c, goal_c), cell: start_c });
+    open.push(Frontier {
+        f: heuristic(start_c, goal_c),
+        cell: start_c,
+    });
 
     while let Some(Frontier { cell, .. }) = open.pop() {
         if cell == goal_c {
@@ -190,7 +196,10 @@ pub fn plan(grid: &OccupancyGrid, start: (f64, f64), goal: (f64, f64)) -> Option
             if tentative < *g_score.get(&(nx, ny)).unwrap_or(&f64::INFINITY) {
                 came_from.insert((nx, ny), cell);
                 g_score.insert((nx, ny), tentative);
-                open.push(Frontier { f: tentative + heuristic((nx, ny), goal_c), cell: (nx, ny) });
+                open.push(Frontier {
+                    f: tentative + heuristic((nx, ny), goal_c),
+                    cell: (nx, ny),
+                });
             }
         }
     }
@@ -320,7 +329,10 @@ mod tests {
             assert!(!matches!(g.get(cx, cy), Cell::Occupied));
         }
         // the detour should route through the gap (high y)
-        assert!(path.iter().any(|&(_, y)| y >= 7.0), "path should use the top gap");
+        assert!(
+            path.iter().any(|&(_, y)| y >= 7.0),
+            "path should use the top gap"
+        );
     }
 
     #[test]

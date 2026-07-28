@@ -159,7 +159,11 @@ pub enum PlanOutcome {
 impl NavController {
     /// Build a controller over a gated movement controller, naming the steering
     /// servo and drive motor `(name, channel)` pairs.
-    pub fn new(movement: Arc<MovementController>, steer: (String, i64), drive: (String, i64)) -> Self {
+    pub fn new(
+        movement: Arc<MovementController>,
+        steer: (String, i64),
+        drive: (String, i64),
+    ) -> Self {
         Self {
             movement,
             world: None,
@@ -192,7 +196,12 @@ impl NavController {
     }
 
     /// Override the world-memory entities read for pose (x, y, heading).
-    pub fn with_pose_entities(mut self, x: impl Into<String>, y: impl Into<String>, heading: impl Into<String>) -> Self {
+    pub fn with_pose_entities(
+        mut self,
+        x: impl Into<String>,
+        y: impl Into<String>,
+        heading: impl Into<String>,
+    ) -> Self {
         self.pose_entities = (x.into(), y.into(), heading.into());
         self
     }
@@ -260,7 +269,12 @@ impl NavController {
     /// Plan with a safety margin: cells within `inscribed_radius` of an obstacle
     /// are lethal, and proximity out to `inflation_radius` is penalized (decay
     /// rate `decay`). Without this, planning hugs obstacles.
-    pub fn with_inflation(mut self, inscribed_radius: f64, inflation_radius: f64, decay: f64) -> Self {
+    pub fn with_inflation(
+        mut self,
+        inscribed_radius: f64,
+        inflation_radius: f64,
+        decay: f64,
+    ) -> Self {
         self.inflation = Some((inscribed_radius, inflation_radius, decay));
         self
     }
@@ -276,7 +290,15 @@ impl NavController {
         match &self.grid {
             Some(grid) => {
                 let mut g = grid.lock().unwrap_or_else(|p| p.into_inner());
-                g.set_world(x, y, if occupied { planning::Cell::Occupied } else { planning::Cell::Free })
+                g.set_world(
+                    x,
+                    y,
+                    if occupied {
+                        planning::Cell::Occupied
+                    } else {
+                        planning::Cell::Free
+                    },
+                )
             }
             None => false,
         }
@@ -285,7 +307,10 @@ impl NavController {
     /// Number of occupied cells in the grid (0 with no grid).
     pub fn obstacle_count(&self) -> usize {
         match &self.grid {
-            Some(grid) => grid.lock().unwrap_or_else(|p| p.into_inner()).occupied_count(),
+            Some(grid) => grid
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .occupied_count(),
             None => 0,
         }
     }
@@ -308,7 +333,14 @@ impl NavController {
             return Ok(false);
         };
         let mut g = grid.lock().unwrap_or_else(|p| p.into_inner());
-        mapping::integrate_scan(&mut g, pose.x, pose.y, pose.heading_deg, beams, self.sensor_max_range);
+        mapping::integrate_scan(
+            &mut g,
+            pose.x,
+            pose.y,
+            pose.heading_deg,
+            beams,
+            self.sensor_max_range,
+        );
         Ok(true)
     }
 
@@ -355,13 +387,21 @@ impl NavController {
                 Some((inscribed, infl, decay)) => {
                     // Clearance-aware: inflate obstacles, then plan with a margin.
                     let field = costmap::inflate(&g, inscribed, infl, decay);
-                    costmap::plan_inflated(&g, &field, (pose.x, pose.y), (goal.x, goal.y)).map(|pts| {
-                        pts.into_iter()
-                            .map(|(x, y)| NavGoal { x, y, tolerance: goal.tolerance })
-                            .collect::<Vec<_>>()
-                    })
+                    costmap::plan_inflated(&g, &field, (pose.x, pose.y), (goal.x, goal.y)).map(
+                        |pts| {
+                            pts.into_iter()
+                                .map(|(x, y)| NavGoal {
+                                    x,
+                                    y,
+                                    tolerance: goal.tolerance,
+                                })
+                                .collect::<Vec<_>>()
+                        },
+                    )
                 }
-                None => planning::plan_goals(&g, (pose.x, pose.y), (goal.x, goal.y), goal.tolerance),
+                None => {
+                    planning::plan_goals(&g, (pose.x, pose.y), (goal.x, goal.y), goal.tolerance)
+                }
             }
         };
         match goals {
@@ -416,8 +456,14 @@ impl NavController {
     /// always allowed without approval.
     pub async fn halt(&self, now_ms: u64) -> anyhow::Result<()> {
         self.clear_goal();
-        self.apply(MovementCommand::Stop { name: self.drive.0.clone(), channel: self.drive.1 }, now_ms)
-            .await?;
+        self.apply(
+            MovementCommand::Stop {
+                name: self.drive.0.clone(),
+                channel: self.drive.1,
+            },
+            now_ms,
+        )
+        .await?;
         self.record_status(now_ms, json!({ "state": "halted" }));
         Ok(())
     }
@@ -447,8 +493,14 @@ impl NavController {
             };
             if remaining == 0 {
                 // Final goal: stop the drive.
-                self.apply(MovementCommand::Stop { name: self.drive.0.clone(), channel: self.drive.1 }, now_ms)
-                    .await?;
+                self.apply(
+                    MovementCommand::Stop {
+                        name: self.drive.0.clone(),
+                        channel: self.drive.1,
+                    },
+                    now_ms,
+                )
+                .await?;
                 self.record_status(now_ms, json!({ "state": "arrived", "distance": distance }));
                 return Ok(NavOutcome::Arrived { pose });
             }
@@ -468,15 +520,27 @@ impl NavController {
             .clamp(-self.gains.max_steer_deg, self.gains.max_steer_deg);
         // Drive: full cruise when roughly aligned, reduced while turning in place.
         let aligned = heading_error.abs() <= self.gains.align_threshold_deg;
-        let speed = if aligned { self.gains.forward_speed } else { self.gains.forward_speed * 0.3 };
+        let speed = if aligned {
+            self.gains.forward_speed
+        } else {
+            self.gains.forward_speed * 0.3
+        };
 
         self.apply(
-            MovementCommand::ServoAngle { name: self.steer.0.clone(), channel: self.steer.1, degrees: steer_deg },
+            MovementCommand::ServoAngle {
+                name: self.steer.0.clone(),
+                channel: self.steer.1,
+                degrees: steer_deg,
+            },
             now_ms,
         )
         .await?;
         self.apply(
-            MovementCommand::MotorSpeed { name: self.drive.0.clone(), channel: self.drive.1, speed },
+            MovementCommand::MotorSpeed {
+                name: self.drive.0.clone(),
+                channel: self.drive.1,
+                speed,
+            },
             now_ms,
         )
         .await?;
@@ -485,7 +549,11 @@ impl NavController {
             now_ms,
             json!({ "state": "driving", "distance": distance, "heading_error": heading_error }),
         );
-        Ok(NavOutcome::Driving { pose, distance, heading_error })
+        Ok(NavOutcome::Driving {
+            pose,
+            distance,
+            heading_error,
+        })
     }
 }
 
@@ -521,9 +589,15 @@ mod tests {
     }
 
     fn set_pose(world: &WorldMemory, x: f64, y: f64, heading: f64, t: u64) {
-        world.observe("sensor.pos_x", json!({"value": x}), t, t, "odom").unwrap();
-        world.observe("sensor.pos_y", json!({"value": y}), t, t, "odom").unwrap();
-        world.observe("sensor.heading", json!({"value": heading}), t, t, "odom").unwrap();
+        world
+            .observe("sensor.pos_x", json!({"value": x}), t, t, "odom")
+            .unwrap();
+        world
+            .observe("sensor.pos_y", json!({"value": y}), t, t, "odom")
+            .unwrap();
+        world
+            .observe("sensor.heading", json!({"value": heading}), t, t, "odom")
+            .unwrap();
     }
 
     #[test]
@@ -539,7 +613,14 @@ mod tests {
         let n = nav(&world);
         set_pose(&world, 1.0, 2.0, 90.0, 1_000);
         let pose = n.estimate_pose(1_000).unwrap().unwrap();
-        assert_eq!(pose, Pose { x: 1.0, y: 2.0, heading_deg: 90.0 });
+        assert_eq!(
+            pose,
+            Pose {
+                x: 1.0,
+                y: 2.0,
+                heading_deg: 90.0
+            }
+        );
         let fact = world.current("nav.pose").unwrap().unwrap();
         assert_eq!(fact.value["heading_deg"], 90.0);
     }
@@ -555,7 +636,14 @@ mod tests {
     async fn no_fix_without_pose() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let n = nav(&world);
-        n.set_goal(NavGoal { x: 5.0, y: 0.0, tolerance: 0.5 }, 1_000);
+        n.set_goal(
+            NavGoal {
+                x: 5.0,
+                y: 0.0,
+                tolerance: 0.5,
+            },
+            1_000,
+        );
         assert_eq!(n.step_toward_goal(1_000).await.unwrap(), NavOutcome::NoFix);
     }
 
@@ -564,11 +652,21 @@ mod tests {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let n = nav(&world);
         set_pose(&world, 5.0, 0.0, 0.0, 1_000);
-        n.set_goal(NavGoal { x: 5.1, y: 0.0, tolerance: 0.5 }, 1_000);
+        n.set_goal(
+            NavGoal {
+                x: 5.1,
+                y: 0.0,
+                tolerance: 0.5,
+            },
+            1_000,
+        );
         let out = n.step_toward_goal(2_000).await.unwrap();
         assert!(matches!(out, NavOutcome::Arrived { .. }));
         assert!(n.current_goal().is_none());
-        assert_eq!(world.current("nav.status").unwrap().unwrap().value["state"], "arrived");
+        assert_eq!(
+            world.current("nav.status").unwrap().unwrap().value["state"],
+            "arrived"
+        );
     }
 
     #[tokio::test]
@@ -577,10 +675,21 @@ mod tests {
         let n = nav(&world);
         // facing east (0°), goal due north → bearing 90°, large heading error
         set_pose(&world, 0.0, 0.0, 0.0, 1_000);
-        n.set_goal(NavGoal { x: 0.0, y: 10.0, tolerance: 0.5 }, 1_000);
+        n.set_goal(
+            NavGoal {
+                x: 0.0,
+                y: 10.0,
+                tolerance: 0.5,
+            },
+            1_000,
+        );
         let out = n.step_toward_goal(2_000).await.unwrap();
         match out {
-            NavOutcome::Driving { heading_error, distance, .. } => {
+            NavOutcome::Driving {
+                heading_error,
+                distance,
+                ..
+            } => {
                 assert!((heading_error - 90.0).abs() < 1e-6);
                 assert!((distance - 10.0).abs() < 1e-6);
             }
@@ -598,8 +707,16 @@ mod tests {
         // Two waypoints: (2,0) then (4,0); robot starts at origin facing east.
         n.set_path(
             vec![
-                NavGoal { x: 2.0, y: 0.0, tolerance: 0.3 },
-                NavGoal { x: 4.0, y: 0.0, tolerance: 0.3 },
+                NavGoal {
+                    x: 2.0,
+                    y: 0.0,
+                    tolerance: 0.3,
+                },
+                NavGoal {
+                    x: 4.0,
+                    y: 0.0,
+                    tolerance: 0.3,
+                },
             ],
             0,
         );
@@ -608,7 +725,10 @@ mod tests {
         // At the first waypoint → WaypointReached, advances to the second.
         set_pose(&world, 2.0, 0.0, 0.0, 1_000);
         let out = n.step_toward_goal(1_000).await.unwrap();
-        assert!(matches!(out, NavOutcome::WaypointReached { remaining: 1, .. }));
+        assert!(matches!(
+            out,
+            NavOutcome::WaypointReached { remaining: 1, .. }
+        ));
         assert_eq!(n.remaining(), 1);
         assert!((n.current_goal().unwrap().x - 4.0).abs() < 1e-9);
 
@@ -628,7 +748,16 @@ mod tests {
         }
         let n = nav(&world).with_grid(Arc::new(Mutex::new(grid)));
         set_pose(&world, 0.5, 0.5, 0.0, 1_000);
-        let out = n.plan_to(NavGoal { x: 9.5, y: 0.5, tolerance: 0.3 }, 1_000).unwrap();
+        let out = n
+            .plan_to(
+                NavGoal {
+                    x: 9.5,
+                    y: 0.5,
+                    tolerance: 0.3,
+                },
+                1_000,
+            )
+            .unwrap();
         match out {
             PlanOutcome::Planned(k) => assert!(k >= 2, "expected a detour, got {k} waypoints"),
             other => panic!("expected Planned, got {other:?}"),
@@ -639,8 +768,9 @@ mod tests {
     #[tokio::test]
     async fn scan_builds_map_used_by_planning() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        let n = nav(&world)
-            .with_grid(Arc::new(Mutex::new(planning::OccupancyGrid::new(0.0, 0.0, 1.0, 12, 12))));
+        let n = nav(&world).with_grid(Arc::new(Mutex::new(planning::OccupancyGrid::new(
+            0.0, 0.0, 1.0, 12, 12,
+        ))));
         set_pose(&world, 0.5, 0.5, 0.0, 1_000);
         // a beam straight ahead hits an obstacle at range 4 → a cell gets marked
         let used = n.integrate_scan(&[(0.0, 4.0)], 1_000).unwrap();
@@ -661,10 +791,16 @@ mod tests {
         set_pose(&world, 2.5, 2.5, 0.0, 1_000);
 
         let out = n.explore_step(1_000).unwrap();
-        assert!(matches!(out, ExploreOutcome::Exploring { .. }), "should head to a frontier, got {out:?}");
+        assert!(
+            matches!(out, ExploreOutcome::Exploring { .. }),
+            "should head to a frontier, got {out:?}"
+        );
         assert!(n.current_goal().is_some());
         // still driving there → en route, not a new pick
-        assert!(matches!(n.explore_step(1_000).unwrap(), ExploreOutcome::EnRoute { .. }));
+        assert!(matches!(
+            n.explore_step(1_000).unwrap(),
+            ExploreOutcome::EnRoute { .. }
+        ));
     }
 
     #[tokio::test]
@@ -680,7 +816,15 @@ mod tests {
             .with_inflation(1.5, 3.0, 1.0);
         set_pose(&world, 0.5, 0.5, 0.0, 1_000);
         assert_eq!(
-            n.plan_to(NavGoal { x: 9.5, y: 0.5, tolerance: 0.3 }, 1_000).unwrap(),
+            n.plan_to(
+                NavGoal {
+                    x: 9.5,
+                    y: 0.5,
+                    tolerance: 0.3
+                },
+                1_000
+            )
+            .unwrap(),
             PlanOutcome::NoPath
         );
     }
@@ -691,7 +835,15 @@ mod tests {
         let n = nav(&world);
         set_pose(&world, 0.0, 0.0, 0.0, 1_000);
         assert_eq!(
-            n.plan_to(NavGoal { x: 1.0, y: 0.0, tolerance: 0.3 }, 1_000).unwrap(),
+            n.plan_to(
+                NavGoal {
+                    x: 1.0,
+                    y: 0.0,
+                    tolerance: 0.3
+                },
+                1_000
+            )
+            .unwrap(),
             PlanOutcome::NoGrid
         );
     }
@@ -704,7 +856,14 @@ mod tests {
         let n = nav(&world);
         let mut x = 0.0;
         set_pose(&world, x, 0.0, 0.0, 0);
-        n.set_goal(NavGoal { x: 5.0, y: 0.0, tolerance: 0.3 }, 0);
+        n.set_goal(
+            NavGoal {
+                x: 5.0,
+                y: 0.0,
+                tolerance: 0.3,
+            },
+            0,
+        );
 
         let mut arrived = false;
         let mut t = 1_000u64;

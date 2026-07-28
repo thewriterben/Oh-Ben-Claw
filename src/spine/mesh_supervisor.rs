@@ -101,7 +101,11 @@ pub struct MeshNodeView {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MeshDecision {
     /// Record/refresh the node's derived health (only emitted when it changes).
-    Health { node: String, status: &'static str, reason: String },
+    Health {
+        node: String,
+        status: &'static str,
+        reason: String,
+    },
     /// Issue a recovery command to an offline node.
     Recover { node: String, cmd: NodeCommand },
     /// Escalate: the node has been offline long enough to be presumed lost (recovery
@@ -114,20 +118,31 @@ pub enum MeshDecision {
 /// Pure decision core: from per-node views + now + config, produce the actions to apply.
 /// Health is emitted only when it *changes* (no churn); recovery only for offline nodes
 /// when `recover` is configured and the per-node rate limit has elapsed.
-pub fn decide(views: &[MeshNodeView], now_ms: u64, cfg: &MeshSupervisorConfig) -> Vec<MeshDecision> {
+pub fn decide(
+    views: &[MeshNodeView],
+    now_ms: u64,
+    cfg: &MeshSupervisorConfig,
+) -> Vec<MeshDecision> {
     let mut out = Vec::new();
     for v in views {
         let age = now_ms.saturating_sub(v.last_seen_ms);
         let (status, reason) = if age > cfg.stale_ms {
             (MeshHealth::Offline, format!("no mesh message for {age} ms"))
         } else if v.last_cmd_ok == Some(false) {
-            (MeshHealth::Degraded, "last command result was not ok".to_string())
+            (
+                MeshHealth::Degraded,
+                "last command result was not ok".to_string(),
+            )
         } else {
             (MeshHealth::Online, "healthy".to_string())
         };
 
         if v.prev_health != Some(status) {
-            out.push(MeshDecision::Health { node: v.node.clone(), status: status.as_str(), reason });
+            out.push(MeshDecision::Health {
+                node: v.node.clone(),
+                status: status.as_str(),
+                reason,
+            });
         }
 
         if status == MeshHealth::Offline {
@@ -179,7 +194,9 @@ pub fn decide(views: &[MeshNodeView], now_ms: u64, cfg: &MeshSupervisorConfig) -
             }
         } else if v.escalated {
             // The node returned after being presumed lost → clear the escalation.
-            out.push(MeshDecision::ClearEscalation { node: v.node.clone() });
+            out.push(MeshDecision::ClearEscalation {
+                node: v.node.clone(),
+            });
         }
     }
     out
@@ -260,14 +277,22 @@ pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
             Some(f) if f.origin == Origin::Observed => (f.valid_from, f.id),
             _ => continue,
         };
-        let cmd_result_fact = world.current(&format!("mesh.{node}.cmd_result")).ok().flatten();
+        let cmd_result_fact = world
+            .current(&format!("mesh.{node}.cmd_result"))
+            .ok()
+            .flatten();
         let cmd_result_id = cmd_result_fact.as_ref().map(|f| f.id);
-        let last_cmd_ok = cmd_result_fact.as_ref().and_then(|f| cmd_result_healthy(&f.value));
+        let last_cmd_ok = cmd_result_fact
+            .as_ref()
+            .and_then(|f| cmd_result_healthy(&f.value));
         let health_fact = world.current(&format!("mesh.{node}.health")).ok().flatten();
         let health_id = health_fact.as_ref().map(|f| f.id);
-        let prev_health = health_fact
-            .as_ref()
-            .and_then(|f| f.value.get("status").and_then(|v| v.as_str()).and_then(MeshHealth::parse));
+        let prev_health = health_fact.as_ref().and_then(|f| {
+            f.value
+                .get("status")
+                .and_then(|v| v.as_str())
+                .and_then(MeshHealth::parse)
+        });
         let health_since_ms = health_fact.as_ref().map(|f| f.valid_from);
         let last_recovery_ms = world
             .current(&format!("mesh.{node}.recovery"))
@@ -278,7 +303,12 @@ pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
             .current(&format!("mesh.{node}.escalation"))
             .ok()
             .flatten()
-            .and_then(|f| f.value.get("status").and_then(|v| v.as_str()).map(|s| s == "escalated"))
+            .and_then(|f| {
+                f.value
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s == "escalated")
+            })
             .unwrap_or(false);
         views.push(MeshNodeView {
             node,
@@ -337,7 +367,11 @@ pub fn recent_escalations(world: &WorldMemory, limit: usize) -> Vec<serde_json::
         })
         .filter(|(_, r)| !r.starts_with(DIGEST_PREFIX))
         .map(|(ts, reason)| {
-            let head = reason.split_once(". ").map(|(h, _)| h).unwrap_or(&reason).to_string();
+            let head = reason
+                .split_once(". ")
+                .map(|(h, _)| h)
+                .unwrap_or(&reason)
+                .to_string();
             json!({
                 "ts_ms": ts,
                 "age_s": now.saturating_sub(ts) / 1000,
@@ -448,7 +482,11 @@ pub async fn tick(
 
     for d in decisions {
         match d {
-            MeshDecision::Health { node, status, reason } => {
+            MeshDecision::Health {
+                node,
+                status,
+                reason,
+            } => {
                 // Health rests on the radio evidence it was derived from: when the node
                 // was last heard, and how it answered the last command.
                 let mut support = Vec::new();
@@ -471,7 +509,8 @@ pub async fn tick(
             MeshDecision::Recover { node, cmd } => {
                 if let Some(s) = sink {
                     if s.send_command(&cmd).await.is_ok() {
-                        let support: Vec<i64> = health_ids.get(&node).copied().into_iter().collect();
+                        let support: Vec<i64> =
+                            health_ids.get(&node).copied().into_iter().collect();
                         let _ = world.observe_derived_from(
                             &format!("mesh.{node}.recovery"),
                             json!({ "cmd": cmd.cmd, "id": cmd.id, "ts_ms": now_ms }),
@@ -552,7 +591,11 @@ pub async fn tick(
                 support.push(f.id);
             }
         }
-        let prev = world.current("mesh.escalated_count").ok().flatten().and_then(|f| f.value.as_u64());
+        let prev = world
+            .current("mesh.escalated_count")
+            .ok()
+            .flatten()
+            .and_then(|f| f.value.as_u64());
         if prev != Some(escalated_count) {
             let _ = world.observe_derived_from(
                 "mesh.escalated_count",
@@ -608,14 +651,26 @@ mod tests {
     fn a_fresh_node_is_online_and_needs_no_recovery() {
         let d = decide(&[view("n", 10_000)], 11_000, &cfg(Some("capabilities")));
         assert_eq!(d.len(), 1);
-        assert!(matches!(&d[0], MeshDecision::Health { status: "online", .. }));
+        assert!(matches!(
+            &d[0],
+            MeshDecision::Health {
+                status: "online",
+                ..
+            }
+        ));
     }
 
     #[test]
     fn a_stale_node_goes_offline_and_is_recovered() {
         // last seen at 1_000, now 11_000, stale_ms 5_000 → offline.
         let d = decide(&[view("n", 1_000)], 11_000, &cfg(Some("capabilities")));
-        assert!(d.iter().any(|x| matches!(x, MeshDecision::Health { status: "offline", .. })));
+        assert!(d.iter().any(|x| matches!(
+            x,
+            MeshDecision::Health {
+                status: "offline",
+                ..
+            }
+        )));
         let rec = d.iter().find_map(|x| match x {
             MeshDecision::Recover { cmd, .. } => Some(cmd),
             _ => None,
@@ -630,13 +685,19 @@ mod tests {
         let mut v = view("n", 1_000);
         v.last_recovery_ms = Some(10_500); // recovered 500 ms ago; interval is 30 s
         let d = decide(&[v], 11_000, &cfg(Some("capabilities")));
-        assert!(!d.iter().any(|x| matches!(x, MeshDecision::Recover { .. })), "within the cooldown");
+        assert!(
+            !d.iter().any(|x| matches!(x, MeshDecision::Recover { .. })),
+            "within the cooldown"
+        );
     }
 
     #[test]
     fn observe_only_when_no_recover_command_is_set() {
         let d = decide(&[view("n", 1_000)], 11_000, &cfg(None));
-        assert!(d.iter().all(|x| matches!(x, MeshDecision::Health { .. })), "no recovery without a command");
+        assert!(
+            d.iter().all(|x| matches!(x, MeshDecision::Health { .. })),
+            "no recovery without a command"
+        );
     }
 
     #[test]
@@ -644,7 +705,13 @@ mod tests {
         let mut v = view("n", 10_500); // fresh
         v.last_cmd_ok = Some(false);
         let d = decide(&[v], 11_000, &cfg(None));
-        assert!(matches!(&d[0], MeshDecision::Health { status: "degraded", .. }));
+        assert!(matches!(
+            &d[0],
+            MeshDecision::Health {
+                status: "degraded",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -681,7 +748,9 @@ mod tests {
             )
             .unwrap();
 
-        let mock = Arc::new(MockSink { sent: Mutex::new(Vec::new()) });
+        let mock = Arc::new(MockSink {
+            sent: Mutex::new(Vec::new()),
+        });
         let sink: Arc<dyn CommandSink> = mock.clone();
         let c = cfg(Some("capabilities"));
 
@@ -718,8 +787,14 @@ mod tests {
     fn a_node_offline_past_the_threshold_is_escalated_and_stops_pinging() {
         // offline since 1_000, now 30_000 → offline_for 29_000 >= 20_000.
         let d = decide(&[offline_view("n", 1_000)], 30_000, &esc_cfg());
-        assert!(d.iter().any(|x| matches!(x, MeshDecision::Escalate { .. })), "escalates");
-        assert!(!d.iter().any(|x| matches!(x, MeshDecision::Recover { .. })), "gives up pinging");
+        assert!(
+            d.iter().any(|x| matches!(x, MeshDecision::Escalate { .. })),
+            "escalates"
+        );
+        assert!(
+            !d.iter().any(|x| matches!(x, MeshDecision::Recover { .. })),
+            "gives up pinging"
+        );
     }
 
     #[test]
@@ -730,7 +805,10 @@ mod tests {
         v.escalated = true;
         v.last_recovery_ms = Some(29_500); // probed 500 ms ago; slow interval is 300 s
         let d = decide(&[v], 30_000, &esc_cfg());
-        assert!(d.is_empty(), "no re-escalation, no health churn, within the slow cooldown");
+        assert!(
+            d.is_empty(),
+            "no re-escalation, no health churn, within the slow cooldown"
+        );
     }
 
     #[test]
@@ -741,13 +819,26 @@ mod tests {
         let mut v = offline_view("n", 1_000);
         v.escalated = true;
         v.last_recovery_ms = Some(1_000); // last probed at t=1_000
-        // Not yet due at +299 s (slow interval is 300 s).
+                                          // Not yet due at +299 s (slow interval is 300 s).
         let early = decide(&[v.clone()], 300_000, &esc_cfg());
-        assert!(!early.iter().any(|x| matches!(x, MeshDecision::Recover { .. })), "within the slow cooldown");
+        assert!(
+            !early
+                .iter()
+                .any(|x| matches!(x, MeshDecision::Recover { .. })),
+            "within the slow cooldown"
+        );
         // Due at +300 s.
         let due = decide(&[v], 301_500, &esc_cfg());
-        assert!(due.iter().any(|x| matches!(x, MeshDecision::Recover { .. })), "slow probe fires when due");
-        assert!(!due.iter().any(|x| matches!(x, MeshDecision::Escalate { .. })), "but never re-escalates");
+        assert!(
+            due.iter()
+                .any(|x| matches!(x, MeshDecision::Recover { .. })),
+            "slow probe fires when due"
+        );
+        assert!(
+            !due.iter()
+                .any(|x| matches!(x, MeshDecision::Escalate { .. })),
+            "but never re-escalates"
+        );
     }
 
     #[test]
@@ -758,7 +849,10 @@ mod tests {
         let mut v = offline_view("n", 1_000);
         v.escalated = true;
         let d = decide(&[v], 1_000_000, &c);
-        assert!(d.is_empty(), "no probe, no churn — the old give-up behaviour");
+        assert!(
+            d.is_empty(),
+            "no probe, no churn — the old give-up behaviour"
+        );
     }
 
     #[test]
@@ -776,18 +870,37 @@ mod tests {
         v.prev_health = Some(MeshHealth::Offline);
         v.escalated = true;
         let d = decide(&[v], 30_000, &esc_cfg());
-        assert!(d.iter().any(|x| matches!(x, MeshDecision::ClearEscalation { .. })));
+        assert!(d
+            .iter()
+            .any(|x| matches!(x, MeshDecision::ClearEscalation { .. })));
     }
 
     #[tokio::test]
     async fn tick_escalates_a_long_offline_node_then_clears_on_return() {
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe_as("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
         world
-            .observe("mesh.n.health", json!({ "status": "offline", "reason": "x" }), 1_000, 1_000, "test")
+            .observe_as(
+                "mesh.n",
+                json!({ "last_type": "link_state" }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+        world
+            .observe(
+                "mesh.n.health",
+                json!({ "status": "offline", "reason": "x" }),
+                1_000,
+                1_000,
+                "test",
+            )
             .unwrap();
         let c = esc_cfg();
-        let mock = Arc::new(MockSink { sent: Mutex::new(Vec::new()) });
+        let mock = Arc::new(MockSink {
+            sent: Mutex::new(Vec::new()),
+        });
         let sink: Arc<dyn CommandSink> = mock.clone();
 
         // Offline for 29 s (>= 20 s threshold) → escalate, no recovery ping.
@@ -799,7 +912,16 @@ mod tests {
         assert_eq!(mock.sent.lock().unwrap().len(), 0, "escalated → no ping");
 
         // Node returns (fresh rollup) → escalation cleared.
-        world.observe_as("mesh.n", json!({ "last_type": "link_state" }), 30_500, 30_500, SOURCE, Origin::Observed).unwrap();
+        world
+            .observe_as(
+                "mesh.n",
+                json!({ "last_type": "link_state" }),
+                30_500,
+                30_500,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
         tick(&world, Some(&sink), &c, 31_000).await;
         assert_eq!(
             world.current("mesh.n.escalation").unwrap().unwrap().value["status"],
@@ -813,9 +935,24 @@ mod tests {
         use crate::agent::safing::{standard_safing_rules, SafingOptions};
 
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe_as("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
         world
-            .observe("mesh.n.health", json!({ "status": "offline" }), 1_000, 1_000, "test")
+            .observe_as(
+                "mesh.n",
+                json!({ "last_type": "link_state" }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+        world
+            .observe(
+                "mesh.n.health",
+                json!({ "status": "offline" }),
+                1_000,
+                1_000,
+                "test",
+            )
             .unwrap();
         let mut c = esc_cfg();
         c.recover = None; // observe-only; escalation is time-based and still fires
@@ -823,7 +960,12 @@ mod tests {
         // Supervisor escalates the long-offline node → publishes the aggregate count.
         tick(&world, None, &c, 30_000).await;
         assert_eq!(
-            world.current("mesh.escalated_count").unwrap().unwrap().value.as_u64(),
+            world
+                .current("mesh.escalated_count")
+                .unwrap()
+                .unwrap()
+                .value
+                .as_u64(),
             Some(1)
         );
 
@@ -845,9 +987,24 @@ mod tests {
         // the count carries its in-list, so "what did I believe because of this node?"
         // is a walk rather than an archaeology exercise.
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe_as("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
         world
-            .observe("mesh.n.health", json!({ "status": "offline" }), 1_000, 1_000, "test")
+            .observe_as(
+                "mesh.n",
+                json!({ "last_type": "link_state" }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+        world
+            .observe(
+                "mesh.n.health",
+                json!({ "status": "offline" }),
+                1_000,
+                1_000,
+                "test",
+            )
             .unwrap();
         let mut c = esc_cfg();
         c.recover = None;
@@ -880,7 +1037,14 @@ mod tests {
 
         let world = WorldMemory::open_in_memory().unwrap();
         world
-            .observe_as("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, GATEWAY_SOURCE, Origin::Observed)
+            .observe_as(
+                "mesh.n",
+                json!({ "last_type": "link_state" }),
+                1_000,
+                1_000,
+                GATEWAY_SOURCE,
+                Origin::Observed,
+            )
             .unwrap();
         let mut c = esc_cfg();
         c.recover = None;
@@ -889,7 +1053,12 @@ mod tests {
         tick(&world, None, &c, 160_000).await; // escalate + count
 
         assert_eq!(
-            world.current("mesh.escalated_count").unwrap().unwrap().value.as_u64(),
+            world
+                .current("mesh.escalated_count")
+                .unwrap()
+                .unwrap()
+                .value
+                .as_u64(),
             Some(1)
         );
         // Every link in the chain declares its support — this is what makes the sweep
@@ -901,17 +1070,36 @@ mod tests {
             );
         }
 
-        let sweep = stopped(&world, GATEWAY_SOURCE, Stopped::Retired, 200_000, "no COM port").unwrap();
+        let sweep = stopped(
+            &world,
+            GATEWAY_SOURCE,
+            Stopped::Retired,
+            200_000,
+            "no COM port",
+        )
+        .unwrap();
 
-        assert_eq!(sweep.closed.len(), 1, "only the radio's own fact was its own");
+        assert_eq!(
+            sweep.closed.len(),
+            1,
+            "only the radio's own fact was its own"
+        );
         assert_eq!(sweep.unsupported.len(), 3, "health, escalation, count");
         for e in ["mesh.n.health", "mesh.n.escalation", "mesh.escalated_count"] {
-            assert!(world.current(e).unwrap().is_none(), "{e} outlived the radio");
+            assert!(
+                world.current(e).unwrap().is_none(),
+                "{e} outlived the radio"
+            );
         }
 
         // Undercut, not rebutted: the count is not now zero, it is not held at all.
         assert_eq!(
-            world.at("mesh.escalated_count", 170_000).unwrap().unwrap().value.as_u64(),
+            world
+                .at("mesh.escalated_count", 170_000)
+                .unwrap()
+                .unwrap()
+                .value
+                .as_u64(),
             Some(1)
         );
     }
@@ -925,7 +1113,16 @@ mod tests {
         // wakes System 2 → another note. The agent invents an emergency and reports it
         // in a loop. Discovery is sourced at the radio, so the note stays a note.
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe_as("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
+        world
+            .observe_as(
+                "mesh.n1",
+                json!({ "last_type": "reflex" }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
         world
             .observe_as(
                 "mesh.escalation_status",
@@ -946,11 +1143,18 @@ mod tests {
         c.recover = None;
         tick(&world, None, &c, 200_000).await;
         assert!(
-            world.current("mesh.escalation_status.escalation").unwrap().is_none(),
+            world
+                .current("mesh.escalation_status.escalation")
+                .unwrap()
+                .is_none(),
             "a note is never presumed lost"
         );
         let v = status_json(&world);
-        assert_eq!(v["summary"]["nodes"], json!(1), "no phantom in the fleet view");
+        assert_eq!(
+            v["summary"]["nodes"],
+            json!(1),
+            "no phantom in the fleet view"
+        );
     }
 
     #[test]
@@ -965,7 +1169,11 @@ mod tests {
             "refused": true,
             "error": "safety: pin 99 not in allow-list",
         });
-        assert_eq!(cmd_result_healthy(&refused), Some(true), "a refusal is the node working");
+        assert_eq!(
+            cmd_result_healthy(&refused),
+            Some(true),
+            "a refusal is the node working"
+        );
 
         // A genuine failure still reads as a fault.
         let failed = json!({
@@ -999,7 +1207,16 @@ mod tests {
     fn a_refused_command_does_not_degrade_the_node_end_to_end() {
         // The bug in full: safety-testing a node used to mark it degraded.
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe_as("mesh.n", json!({ "last_type": "cmd_result" }), 10_000, 10_000, SOURCE, Origin::Observed).unwrap();
+        world
+            .observe_as(
+                "mesh.n",
+                json!({ "last_type": "cmd_result" }),
+                10_000,
+                10_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
         world
             .observe(
                 "mesh.n.cmd_result",
@@ -1017,7 +1234,13 @@ mod tests {
         // Fresh + refusal → online, not degraded.
         let d = decide(&views, 11_000, &cfg(None));
         assert!(
-            matches!(&d[0], MeshDecision::Health { status: "online", .. }),
+            matches!(
+                &d[0],
+                MeshDecision::Health {
+                    status: "online",
+                    ..
+                }
+            ),
             "the node that enforced its limits is healthy, got {:?}",
             d[0]
         );
@@ -1032,14 +1255,32 @@ mod tests {
         // even when the writer is the gateway itself.
         let world = WorldMemory::open_in_memory().unwrap();
         world
-            .observe_as("mesh.real", json!({ "last_type": "beacon" }), 1_000, 1_000, SOURCE, Origin::Observed)
+            .observe_as(
+                "mesh.real",
+                json!({ "last_type": "beacon" }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Observed,
+            )
             .unwrap();
         world
-            .observe_as("mesh.relayed", json!({ "last_type": "beacon" }), 1_000, 1_000, SOURCE, Origin::Asserted)
+            .observe_as(
+                "mesh.relayed",
+                json!({ "last_type": "beacon" }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Asserted,
+            )
             .unwrap();
 
         let nodes: Vec<String> = snapshot(&world).into_iter().map(|v| v.node).collect();
-        assert_eq!(nodes, vec!["real"], "only what was actually heard is a node");
+        assert_eq!(
+            nodes,
+            vec!["real"],
+            "only what was actually heard is a node"
+        );
     }
 
     #[test]
@@ -1048,8 +1289,25 @@ mod tests {
         // must NOT be mistaken for a `mesh.<node>` rollup (which would appear as a
         // phantom "online" node from the tick after it is first written).
         let world = WorldMemory::open_in_memory().unwrap();
-        world.observe_as("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
-        world.observe("mesh.escalated_count", json!(0), 1_000, 1_000, SUPERVISOR_SOURCE).unwrap();
+        world
+            .observe_as(
+                "mesh.n1",
+                json!({ "last_type": "reflex" }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+        world
+            .observe(
+                "mesh.escalated_count",
+                json!(0),
+                1_000,
+                1_000,
+                SUPERVISOR_SOURCE,
+            )
+            .unwrap();
 
         let views = snapshot(&world);
         assert_eq!(views.len(), 1, "only the real node is a node");
@@ -1064,14 +1322,52 @@ mod tests {
         // The gateway route and the mesh_status tool both call status_json — one SSOT.
         let world = WorldMemory::open_in_memory().unwrap();
         world
-            .observe_as("mesh.n1", json!({ "last_type": "reflex", "rssi_dbm": -72 }), 1_000, 1_000, SOURCE, Origin::Observed)
+            .observe_as(
+                "mesh.n1",
+                json!({ "last_type": "reflex", "rssi_dbm": -72 }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Observed,
+            )
             .unwrap();
-        world.observe("mesh.n1.health", json!({ "status": "online" }), 1_000, 1_000, "t").unwrap();
-        // A second node that is offline and escalated.
-        world.observe_as("mesh.n2", json!({ "last_type": "-" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
-        world.observe("mesh.n2.health", json!({ "status": "offline" }), 1_000, 1_000, "t").unwrap();
         world
-            .observe("mesh.n2.escalation", json!({ "status": "escalated" }), 1_000, 1_000, "t")
+            .observe(
+                "mesh.n1.health",
+                json!({ "status": "online" }),
+                1_000,
+                1_000,
+                "t",
+            )
+            .unwrap();
+        // A second node that is offline and escalated.
+        world
+            .observe_as(
+                "mesh.n2",
+                json!({ "last_type": "-" }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+        world
+            .observe(
+                "mesh.n2.health",
+                json!({ "status": "offline" }),
+                1_000,
+                1_000,
+                "t",
+            )
+            .unwrap();
+        world
+            .observe(
+                "mesh.n2.escalation",
+                json!({ "status": "escalated" }),
+                1_000,
+                1_000,
+                "t",
+            )
             .unwrap();
 
         let v = status_json(&world);
@@ -1098,20 +1394,65 @@ mod tests {
     fn rssi_series_keeps_the_newest_readings_oldest_first() {
         let world = WorldMemory::open_in_memory().unwrap();
         // Four rollups for n1; one carries no rssi and is skipped.
-        world.observe_as("mesh.n1", json!({ "rssi_dbm": -60 }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
-        world.observe_as("mesh.n1", json!({ "rssi_dbm": -70 }), 2_000, 2_000, SOURCE, Origin::Observed).unwrap();
-        world.observe_as("mesh.n1", json!({ "last_type": "reflex" }), 3_000, 3_000, SOURCE, Origin::Observed).unwrap();
-        world.observe_as("mesh.n1", json!({ "rssi_dbm": -80 }), 4_000, 4_000, SOURCE, Origin::Observed).unwrap();
+        world
+            .observe_as(
+                "mesh.n1",
+                json!({ "rssi_dbm": -60 }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+        world
+            .observe_as(
+                "mesh.n1",
+                json!({ "rssi_dbm": -70 }),
+                2_000,
+                2_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+        world
+            .observe_as(
+                "mesh.n1",
+                json!({ "last_type": "reflex" }),
+                3_000,
+                3_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+        world
+            .observe_as(
+                "mesh.n1",
+                json!({ "rssi_dbm": -80 }),
+                4_000,
+                4_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
 
         let full = rssi_series(&world, "n1", 24);
-        assert_eq!(full, vec![-60, -70, -80], "oldest→newest, rssi-less fact skipped");
+        assert_eq!(
+            full,
+            vec![-60, -70, -80],
+            "oldest→newest, rssi-less fact skipped"
+        );
         // Limit keeps the newest N.
         let last2 = rssi_series(&world, "n1", 2);
         assert_eq!(last2, vec![-70, -80]);
 
         // Surfaced per-node in status_json.
         let v = status_json(&world);
-        let n1 = v["nodes"].as_array().unwrap().iter().find(|n| n["node"] == json!("n1")).unwrap();
+        let n1 = v["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["node"] == json!("n1"))
+            .unwrap();
         assert_eq!(n1["rssi_history"], json!([-60, -70, -80]));
     }
 
@@ -1123,21 +1464,27 @@ mod tests {
             .observe(
                 "notifications.escalation",
                 json!({ "reason": "node n1 offline. run mesh_status" }),
-                1_000, 1_000, "notify",
+                1_000,
+                1_000,
+                "notify",
             )
             .unwrap();
         world
             .observe(
                 "notifications.escalation",
                 json!({ "reason": "node n2 presumed lost. escalate" }),
-                2_000, 2_000, "notify",
+                2_000,
+                2_000,
+                "notify",
             )
             .unwrap();
         world
             .observe(
                 "notifications.escalation",
                 json!({ "reason": format!("{} 3 events", crate::agent::notify::DIGEST_PREFIX) }),
-                3_000, 3_000, "notify",
+                3_000,
+                3_000,
+                "notify",
             )
             .unwrap();
 
@@ -1150,7 +1497,16 @@ mod tests {
         assert_eq!(esc[1]["ts_ms"], json!(1_000));
 
         // status_json surfaces the same feed.
-        world.observe_as("mesh.n1", json!({ "last_type": "reflex" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
+        world
+            .observe_as(
+                "mesh.n1",
+                json!({ "last_type": "reflex" }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
         let v = status_json(&world);
         assert_eq!(v["escalations"].as_array().unwrap().len(), 2);
     }

@@ -50,7 +50,10 @@ impl SagaOutcome {
     pub fn clean(&self) -> bool {
         match self {
             SagaOutcome::Committed { .. } => true,
-            SagaOutcome::RolledBack { compensation_failures, .. } => compensation_failures.is_empty(),
+            SagaOutcome::RolledBack {
+                compensation_failures,
+                ..
+            } => compensation_failures.is_empty(),
         }
     }
 }
@@ -110,7 +113,9 @@ impl Saga {
                 }
             }
         }
-        SagaOutcome::Committed { steps: self.steps.len() }
+        SagaOutcome::Committed {
+            steps: self.steps.len(),
+        }
     }
 }
 
@@ -129,13 +134,28 @@ mod tests {
     }
     impl RecordingStep {
         fn ok(name: &str, log: Arc<Mutex<Vec<String>>>) -> Box<dyn SagaAction> {
-            Box::new(Self { name: name.into(), fail_execute: false, fail_compensate: false, log })
+            Box::new(Self {
+                name: name.into(),
+                fail_execute: false,
+                fail_compensate: false,
+                log,
+            })
         }
         fn failing(name: &str, log: Arc<Mutex<Vec<String>>>) -> Box<dyn SagaAction> {
-            Box::new(Self { name: name.into(), fail_execute: true, fail_compensate: false, log })
+            Box::new(Self {
+                name: name.into(),
+                fail_execute: true,
+                fail_compensate: false,
+                log,
+            })
         }
         fn bad_compensate(name: &str, log: Arc<Mutex<Vec<String>>>) -> Box<dyn SagaAction> {
-            Box::new(Self { name: name.into(), fail_execute: false, fail_compensate: true, log })
+            Box::new(Self {
+                name: name.into(),
+                fail_execute: false,
+                fail_compensate: true,
+                log,
+            })
         }
     }
     #[async_trait]
@@ -201,9 +221,16 @@ mod tests {
             .step(RecordingStep::bad_compensate("a", Arc::clone(&log)))
             .step(RecordingStep::failing("b", Arc::clone(&log)));
         let out = saga.run().await;
-        assert!(!out.clean(), "a failed compensation makes the rollback dirty");
+        assert!(
+            !out.clean(),
+            "a failed compensation makes the rollback dirty"
+        );
         match out {
-            SagaOutcome::RolledBack { failed_at, compensated, compensation_failures } => {
+            SagaOutcome::RolledBack {
+                failed_at,
+                compensated,
+                compensation_failures,
+            } => {
                 assert_eq!(failed_at, "b");
                 assert_eq!(compensated, 0);
                 assert_eq!(compensation_failures, vec!["a".to_string()]);
@@ -219,7 +246,11 @@ mod tests {
         let out = saga.run().await;
         assert_eq!(
             out,
-            SagaOutcome::RolledBack { failed_at: "a".into(), compensated: 0, compensation_failures: vec![] }
+            SagaOutcome::RolledBack {
+                failed_at: "a".into(),
+                compensated: 0,
+                compensation_failures: vec![]
+            }
         );
         assert_eq!(*log.lock().unwrap(), vec!["exec:a"]);
     }

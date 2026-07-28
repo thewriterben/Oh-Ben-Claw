@@ -36,8 +36,13 @@ pub const INCIDENT_PREFIX: &str = "incident";
 /// Recognised incident statuses. A closed set so the record stays queryable — an agent
 /// inventing `"critical"`, `"presumed_lost"`, and `"degraded_maybe"` across three wakes
 /// is how a log becomes unreadable.
-pub(crate) const STATUSES: [&str; 5] =
-    ["investigating", "confirmed", "resolved", "unresolved", "false_alarm"];
+pub(crate) const STATUSES: [&str; 5] = [
+    "investigating",
+    "confirmed",
+    "resolved",
+    "unresolved",
+    "false_alarm",
+];
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -142,9 +147,9 @@ impl Tool for RecordIncidentTool {
         let entity = format!("{INCIDENT_PREFIX}.{subject}");
         // An incident is something the agent *concluded*. Asserted by construction,
         // however confident it is — that is what keeps it out of the evidence pool.
-        let fact = self
-            .mem
-            .observe_as(&entity, value, now, now, INCIDENT_SOURCE, Origin::Asserted)?;
+        let fact =
+            self.mem
+                .observe_as(&entity, value, now, now, INCIDENT_SOURCE, Origin::Asserted)?;
         Ok(ToolResult::ok(serde_json::to_string(&fact)?))
     }
 }
@@ -171,7 +176,11 @@ mod tests {
             .unwrap();
         assert!(r.success, "{:?}", r.error);
         // The agent chose none of these.
-        assert!(r.output.contains(r#""entity":"incident.obc-esp32-s3-001""#), "{}", r.output);
+        assert!(
+            r.output.contains(r#""entity":"incident.obc-esp32-s3-001""#),
+            "{}",
+            r.output
+        );
         assert!(r.output.contains(r#""source":"agent""#));
         assert!(r.output.contains(r#""observed_at""#));
         assert!(r.output.contains(r#""status\":\"unresolved"#) || r.output.contains("unresolved"));
@@ -187,9 +196,19 @@ mod tests {
             .await
             .unwrap();
         let fact = t.mem.current("incident.n1").unwrap().unwrap();
-        assert!(fact.value.is_object(), "value must be an object: {}", fact.value);
-        assert_eq!(fact.value.get("status").and_then(|v| v.as_str()), Some("confirmed"));
-        assert_eq!(fact.value.get("subject").and_then(|v| v.as_str()), Some("n1"));
+        assert!(
+            fact.value.is_object(),
+            "value must be an object: {}",
+            fact.value
+        );
+        assert_eq!(
+            fact.value.get("status").and_then(|v| v.as_str()),
+            Some("confirmed")
+        );
+        assert_eq!(
+            fact.value.get("subject").and_then(|v| v.as_str()),
+            Some("n1")
+        );
     }
 
     #[tokio::test]
@@ -199,9 +218,15 @@ mod tests {
             .execute(json!({"subject": "n1", "status": "critical"}))
             .await
             .unwrap();
-        assert!(!r.success, "a free-form status would make the log unqueryable");
+        assert!(
+            !r.success,
+            "a free-form status would make the log unqueryable"
+        );
         let why = r.error.unwrap_or_default();
-        assert!(why.contains("investigating"), "names the allowed set: {why}");
+        assert!(
+            why.contains("investigating"),
+            "names the allowed set: {why}"
+        );
     }
 
     #[tokio::test]
@@ -217,7 +242,12 @@ mod tests {
     #[tokio::test]
     async fn subject_and_status_are_required() {
         let t = tool();
-        assert!(!t.execute(json!({"status": "confirmed"})).await.unwrap().success);
+        assert!(
+            !t.execute(json!({"status": "confirmed"}))
+                .await
+                .unwrap()
+                .success
+        );
         assert!(!t.execute(json!({"subject": "n1"})).await.unwrap().success);
     }
 
@@ -225,15 +255,26 @@ mod tests {
     async fn successive_records_keep_a_queryable_history() {
         // The point of a fixed schema: the trail is readable afterwards.
         let t = tool();
-        t.execute(json!({"subject": "n1", "status": "investigating"})).await.unwrap();
-        t.execute(json!({"subject": "n1", "status": "confirmed"})).await.unwrap();
-        t.execute(json!({"subject": "n1", "status": "resolved"})).await.unwrap();
+        t.execute(json!({"subject": "n1", "status": "investigating"}))
+            .await
+            .unwrap();
+        t.execute(json!({"subject": "n1", "status": "confirmed"}))
+            .await
+            .unwrap();
+        t.execute(json!({"subject": "n1", "status": "resolved"}))
+            .await
+            .unwrap();
         let trail: Vec<String> = t
             .mem
             .history("incident.n1")
             .unwrap()
             .into_iter()
-            .filter_map(|f| f.value.get("status").and_then(|s| s.as_str()).map(str::to_string))
+            .filter_map(|f| {
+                f.value
+                    .get("status")
+                    .and_then(|s| s.as_str())
+                    .map(str::to_string)
+            })
             .collect();
         assert_eq!(trail, vec!["investigating", "confirmed", "resolved"]);
     }

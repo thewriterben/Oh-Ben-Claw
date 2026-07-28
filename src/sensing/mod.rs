@@ -155,10 +155,11 @@ impl SensingController {
         origin: crate::memory::world::Origin,
     ) -> anyhow::Result<ClassifiedReading> {
         let quality = self.classify_range(&sample.quantity, sample.value);
-        let unit = sample
-            .unit
-            .clone()
-            .or_else(|| self.specs.get(&sample.quantity).and_then(|s| s.unit.clone()));
+        let unit = sample.unit.clone().or_else(|| {
+            self.specs
+                .get(&sample.quantity)
+                .and_then(|s| s.unit.clone())
+        });
 
         if let Some(world) = &self.world {
             let entity = format!("sensor.{}", sample.quantity);
@@ -171,7 +172,8 @@ impl SensingController {
             world.observe_as(&entity, value, now_ms, now_ms, &self.source, origin)?;
         }
 
-        self.lock().insert(sample.quantity.clone(), (now_ms, quality));
+        self.lock()
+            .insert(sample.quantity.clone(), (now_ms, quality));
 
         Ok(ClassifiedReading {
             quantity: sample.quantity.clone(),
@@ -237,19 +239,33 @@ mod tests {
 
     fn controller() -> (SensingController, Arc<WorldMemory>) {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        let ctrl = SensingController::new(vec![("temperature".to_string(), spec(-40.0, 85.0, Some(10_000)))])
-            .with_world_memory(Arc::clone(&world));
+        let ctrl = SensingController::new(vec![(
+            "temperature".to_string(),
+            spec(-40.0, 85.0, Some(10_000)),
+        )])
+        .with_world_memory(Arc::clone(&world));
         (ctrl, world)
     }
 
     fn sample(q: &str, v: f64) -> Sample {
-        Sample { quantity: q.to_string(), value: v, unit: None, source: Some("bme280".to_string()) }
+        Sample {
+            quantity: q.to_string(),
+            value: v,
+            unit: None,
+            source: Some("bme280".to_string()),
+        }
     }
 
     #[test]
     fn in_range_reading_is_ok_and_recorded_with_quality() {
         let (ctrl, world) = controller();
-        let r = ctrl.ingest(&sample("temperature", 22.5), 1_000, crate::memory::world::Origin::Observed).unwrap();
+        let r = ctrl
+            .ingest(
+                &sample("temperature", 22.5),
+                1_000,
+                crate::memory::world::Origin::Observed,
+            )
+            .unwrap();
         assert_eq!(r.quality, Quality::Ok);
         assert_eq!(r.unit.as_deref(), Some("C")); // inherited from spec
         let fact = world.current("sensor.temperature").unwrap().unwrap();
@@ -262,7 +278,13 @@ mod tests {
     #[test]
     fn out_of_range_reading_is_flagged_but_still_recorded() {
         let (ctrl, world) = controller();
-        let r = ctrl.ingest(&sample("temperature", 150.0), 1_000, crate::memory::world::Origin::Observed).unwrap();
+        let r = ctrl
+            .ingest(
+                &sample("temperature", 150.0),
+                1_000,
+                crate::memory::world::Origin::Observed,
+            )
+            .unwrap();
         assert_eq!(r.quality, Quality::OutOfRange);
         // Field evidence is preserved (recorded), just flagged.
         let fact = world.current("sensor.temperature").unwrap().unwrap();
@@ -273,7 +295,12 @@ mod tests {
     #[test]
     fn staleness_is_time_based() {
         let (ctrl, _world) = controller();
-        ctrl.ingest(&sample("temperature", 20.0), 1_000, crate::memory::world::Origin::Observed).unwrap();
+        ctrl.ingest(
+            &sample("temperature", 20.0),
+            1_000,
+            crate::memory::world::Origin::Observed,
+        )
+        .unwrap();
         assert_eq!(ctrl.status("temperature", 5_000), Quality::Ok); // within 10s
         assert_eq!(ctrl.status("temperature", 20_000), Quality::Stale); // past 10s
     }
@@ -287,7 +314,13 @@ mod tests {
     #[test]
     fn unspecced_quantity_accepted_as_ok() {
         let (ctrl, world) = controller();
-        let r = ctrl.ingest(&sample("lux", 999.0), 1, crate::memory::world::Origin::Observed).unwrap();
+        let r = ctrl
+            .ingest(
+                &sample("lux", 999.0),
+                1,
+                crate::memory::world::Origin::Observed,
+            )
+            .unwrap();
         assert_eq!(r.quality, Quality::Ok);
         assert!(world.current("sensor.lux").unwrap().is_some());
     }
@@ -297,8 +330,14 @@ mod tests {
         let (ctrl, _world) = controller();
         // temperature out of range at ingest; humidity spec exists but never seen.
         let mut ctrl = ctrl;
-        ctrl.specs.insert("humidity".to_string(), spec(0.0, 100.0, Some(5_000)));
-        ctrl.ingest(&sample("temperature", 200.0), 1_000, crate::memory::world::Origin::Observed).unwrap();
+        ctrl.specs
+            .insert("humidity".to_string(), spec(0.0, 100.0, Some(5_000)));
+        ctrl.ingest(
+            &sample("temperature", 200.0),
+            1_000,
+            crate::memory::world::Origin::Observed,
+        )
+        .unwrap();
         let anomalies = ctrl.anomalies(2_000);
         assert!(anomalies.contains(&("temperature".to_string(), Quality::OutOfRange)));
         assert!(anomalies.contains(&("humidity".to_string(), Quality::Stale)));

@@ -299,8 +299,8 @@ impl ClawHubClient {
             .await
             .with_context(|| "Read manifest body")?;
 
-        let manifest_json: serde_json::Value = serde_json::from_slice(&manifest_bytes)
-            .with_context(|| "Deserialize manifest JSON")?;
+        let manifest_json: serde_json::Value =
+            serde_json::from_slice(&manifest_bytes).with_context(|| "Deserialize manifest JSON")?;
 
         // Validate it can be parsed as a SkillManifest.
         let _: SkillManifest = serde_json::from_value(manifest_json.clone())

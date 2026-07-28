@@ -155,9 +155,9 @@ pub fn parameterize(eps: &[&Episode]) -> Option<SkillManifest> {
         let mut tmpl = Map::new();
         if let Some(obj) = step.args.as_object() {
             for (key, newest_val) in obj {
-                let uniform = eps.iter().all(|e| {
-                    e.steps[i].args.get(key).is_some_and(|v| v == newest_val)
-                });
+                let uniform = eps
+                    .iter()
+                    .all(|e| e.steps[i].args.get(key).is_some_and(|v| v == newest_val));
                 if uniform {
                     tmpl.insert(key.clone(), newest_val.clone());
                 } else {
@@ -309,7 +309,10 @@ mod tests {
 
     #[test]
     fn slugify_makes_safe_names() {
-        assert_eq!(slugify("Run the morning routine!"), "run_the_morning_routine");
+        assert_eq!(
+            slugify("Run the morning routine!"),
+            "run_the_morning_routine"
+        );
         assert_eq!(slugify("  turn ON — fan  "), "turn_on_fan");
         assert_eq!(slugify("???"), "skill");
     }
@@ -348,7 +351,11 @@ mod tests {
         let m = tag_physical(synthesize(&ep).unwrap());
         assert!(m.tags.contains(&"track0:supervised".to_string()));
         assert!(m.enabled, "loads for dry-runs");
-        assert_eq!(m.stage, RolloutStage::Simulate, "cannot actuate until promoted");
+        assert_eq!(
+            m.stage,
+            RolloutStage::Simulate,
+            "cannot actuate until promoted"
+        );
     }
 
     #[test]
@@ -363,7 +370,12 @@ mod tests {
         assert!(approved.enabled);
     }
 
-    fn multi_episode(id: &str, objective: &str, steps: Vec<(&str, serde_json::Value)>, ts: u64) -> Episode {
+    fn multi_episode(
+        id: &str,
+        objective: &str,
+        steps: Vec<(&str, serde_json::Value)>,
+        ts: u64,
+    ) -> Episode {
         Episode {
             id: id.to_string(),
             session_id: "s".to_string(),
@@ -424,17 +436,33 @@ mod tests {
 
     #[test]
     fn parameterize_extracts_varying_fields_single_step() {
-        let a = multi_episode("a", "check the weather in Oslo", vec![("http", json!({"q": "weather", "city": "Oslo"}))], 1);
-        let b = multi_episode("b", "check the weather", vec![("http", json!({"q": "weather", "city": "Bergen"}))], 2);
+        let a = multi_episode(
+            "a",
+            "check the weather in Oslo",
+            vec![("http", json!({"q": "weather", "city": "Oslo"}))],
+            1,
+        );
+        let b = multi_episode(
+            "b",
+            "check the weather",
+            vec![("http", json!({"q": "weather", "city": "Bergen"}))],
+            2,
+        );
         let m = parameterize(&[&a, &b]).unwrap();
-        assert_eq!(m.name, "learned_check_the_weather", "named after the shortest objective");
+        assert_eq!(
+            m.name, "learned_check_the_weather",
+            "named after the shortest objective"
+        );
         assert!(!m.enabled);
         assert!(m.tags.contains(&"parameterized".to_string()));
         match &m.kind {
             SkillKind::Delegate { tool, fixed_args } => {
                 assert_eq!(tool, "http");
                 assert_eq!(fixed_args["q"], "weather", "uniform field stays fixed");
-                assert!(fixed_args.get("city").is_none(), "varying field is a parameter");
+                assert!(
+                    fixed_args.get("city").is_none(),
+                    "varying field is a parameter"
+                );
             }
             other => panic!("expected Delegate, got {other:?}"),
         }
@@ -447,20 +475,29 @@ mod tests {
         let a = multi_episode(
             "a",
             "fetch and store 17",
-            vec![("http", json!({"q": "data"})), ("memory", json!({"slot": 17}))],
+            vec![
+                ("http", json!({"q": "data"})),
+                ("memory", json!({"slot": 17})),
+            ],
             1,
         );
         let b = multi_episode(
             "b",
             "fetch and store",
-            vec![("http", json!({"q": "data"})), ("memory", json!({"slot": 42}))],
+            vec![
+                ("http", json!({"q": "data"})),
+                ("memory", json!({"slot": 42})),
+            ],
             2,
         );
         let m = parameterize(&[&a, &b]).unwrap();
         match &m.kind {
             SkillKind::Sequence { steps } => {
                 assert_eq!(steps[0].args["q"], "data");
-                assert_eq!(steps[1].args["slot"], "{slot}", "varying value becomes a placeholder");
+                assert_eq!(
+                    steps[1].args["slot"], "{slot}",
+                    "varying value becomes a placeholder"
+                );
             }
             other => panic!("expected Sequence, got {other:?}"),
         }

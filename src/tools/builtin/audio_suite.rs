@@ -7,8 +7,8 @@
 //! not approval-gated (speech is reversible and contained; Suite §7).
 
 use crate::audio::suite::{AudioController, HeardEvent};
-use crate::memory::world::WorldMemory;
 use crate::memory::world::Origin;
+use crate::memory::world::WorldMemory;
 use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};

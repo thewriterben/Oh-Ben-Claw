@@ -40,9 +40,15 @@ fn rover_gate() -> SafetyGate {
 }
 
 fn set_pose(world: &WorldMemory, x: f64, y: f64, h: f64, t: u64) {
-    world.observe("sensor.pos_x", json!({ "value": x }), t, t, "slam").unwrap();
-    world.observe("sensor.pos_y", json!({ "value": y }), t, t, "slam").unwrap();
-    world.observe("sensor.heading", json!({ "value": h }), t, t, "slam").unwrap();
+    world
+        .observe("sensor.pos_x", json!({ "value": x }), t, t, "slam")
+        .unwrap();
+    world
+        .observe("sensor.pos_y", json!({ "value": y }), t, t, "slam")
+        .unwrap();
+    world
+        .observe("sensor.heading", json!({ "value": h }), t, t, "slam")
+        .unwrap();
 }
 
 #[tokio::test]
@@ -50,8 +56,12 @@ async fn clawcam_detection_reroutes_navigation_through_the_safety_gate() {
     let world = Arc::new(WorldMemory::open_in_memory().unwrap());
 
     let movement = Arc::new(
-        MovementController::new("rover", Arc::new(rover_gate()), Arc::new(LoggingActuatorSink))
-            .with_world_memory(Arc::clone(&world)),
+        MovementController::new(
+            "rover",
+            Arc::new(rover_gate()),
+            Arc::new(LoggingActuatorSink),
+        )
+        .with_world_memory(Arc::clone(&world)),
     );
     let grid = Arc::new(Mutex::new(OccupancyGrid::new(0.0, 0.0, 1.0, 10, 10)));
     let nav = Arc::new(
@@ -61,11 +71,19 @@ async fn clawcam_detection_reroutes_navigation_through_the_safety_gate() {
     );
 
     set_pose(&world, 0.5, 0.5, 0.0, 1_000);
-    let goal = NavGoal { x: 9.5, y: 0.5, tolerance: 0.3 };
+    let goal = NavGoal {
+        x: 9.5,
+        y: 0.5,
+        tolerance: 0.3,
+    };
 
     // ── Phase A: clear corridor → the plan is a straight shot ─────────────────
     let before = nav.plan_to(goal, 1_000).unwrap();
-    assert_eq!(before, PlanOutcome::Planned(1), "open room ⇒ single straight waypoint");
+    assert_eq!(
+        before,
+        PlanOutcome::Planned(1),
+        "open room ⇒ single straight waypoint"
+    );
 
     // ── Phase B: ClawCam sees a deer mid-corridor (real ingest seam) ──────────
     // The gateway tool-result shape from `list_species_detections`.
@@ -90,9 +108,15 @@ async fn clawcam_detection_reroutes_navigation_through_the_safety_gate() {
     let sighting = world.current("vision.subject.deer").unwrap().unwrap();
     assert_eq!(sighting.value["review_state"], "verified");
     let is_verified_animal = sighting.value["review_state"] == "verified";
-    assert!(is_verified_animal, "policy only blocks for a verified sighting");
+    assert!(
+        is_verified_animal,
+        "policy only blocks for a verified sighting"
+    );
     for cy in 0..8 {
-        assert!(nav.mark_obstacle(5.5, cy as f64 + 0.5, true), "mark the corridor hazard");
+        assert!(
+            nav.mark_obstacle(5.5, cy as f64 + 0.5, true),
+            "mark the corridor hazard"
+        );
     }
     assert_eq!(nav.obstacle_count(), 8);
 
@@ -102,14 +126,23 @@ async fn clawcam_detection_reroutes_navigation_through_the_safety_gate() {
         PlanOutcome::Planned(n) => assert!(n >= 2, "detour should have ≥2 turn points, got {n}"),
         other => panic!("expected a detour plan, got {other:?}"),
     }
-    assert!(nav.remaining() >= 2, "the active route now bends around the deer");
+    assert!(
+        nav.remaining() >= 2,
+        "the active route now bends around the deer"
+    );
 
     // ── Phase E: drive the route → a Track 0–bounded command is issued ────────
     nav.step_toward_goal(2_000).await.unwrap();
-    let drive = world.current("actuator.drive").unwrap().expect("a gated drive command was issued");
+    let drive = world
+        .current("actuator.drive")
+        .unwrap()
+        .expect("a gated drive command was issued");
     // The recorded command went through the gate (motor_speed ∈ [-100, 100]).
     if let Some(v) = drive.value.get("value").and_then(|v| v.as_i64()) {
-        assert!((-100..=100).contains(&v), "drive speed within Track 0 limits, got {v}");
+        assert!(
+            (-100..=100).contains(&v),
+            "drive speed within Track 0 limits, got {v}"
+        );
     }
 
     // The detection remains queryable in memory — the loop never mutated it.

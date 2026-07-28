@@ -2243,8 +2243,6 @@ pub struct Config {
     pub fleet: FleetConfig,
 }
 
-
-
 impl Config {
     /// Load the configuration.
     ///
@@ -2293,8 +2291,9 @@ impl Config {
         if let Some(home) = Self::home_config_path() {
             if home.exists() {
                 let content = std::fs::read_to_string(&home)?;
-                let config: Self = toml::from_str(&content)
-                    .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", home.display()))?;
+                let config: Self = toml::from_str(&content).map_err(|e| {
+                    anyhow::anyhow!("config parse error in {}: {e}", home.display())
+                })?;
                 tracing::info!("Loaded config from {:?} (home)", home);
                 return Ok(config);
             }
@@ -2306,7 +2305,11 @@ impl Config {
         // second-guessed.
         let (resolution, provider) = first_run::resolve_from_env();
         match &resolution {
-            first_run::Resolution::FromEnv { provider: p, var, model } => tracing::info!(
+            first_run::Resolution::FromEnv {
+                provider: p,
+                var,
+                model,
+            } => tracing::info!(
                 provider = %p, model = %model, from = %var,
                 "No config file — using the provider whose API key is set. \
                  Write ~/.oh-ben-claw/config.toml to pin this."
@@ -2330,8 +2333,7 @@ impl Config {
     /// `~/.oh-ben-claw/config.toml` - the documented location, kept on the
     /// search path alongside the platform config dir.
     pub fn home_config_path() -> Option<PathBuf> {
-        directories::UserDirs::new()
-            .map(|d| d.home_dir().join(".oh-ben-claw").join("config.toml"))
+        directories::UserDirs::new().map(|d| d.home_dir().join(".oh-ben-claw").join("config.toml"))
     }
 
     /// Save the configuration to the default location.

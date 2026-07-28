@@ -33,7 +33,9 @@ struct CaptureRadio {
 
 impl CaptureRadio {
     fn new() -> Self {
-        Self { sent: Mutex::new(Vec::new()) }
+        Self {
+            sent: Mutex::new(Vec::new()),
+        }
     }
     fn last(&self) -> Option<Vec<u8>> {
         self.sent.lock().unwrap().last().cloned()
@@ -67,11 +69,24 @@ async fn a_heartbeat_heard_over_the_mesh_comes_back_as_an_assignment() {
     let coord = Coordinator::new().with_assignment_outbox();
 
     // 1. Two rovers' heartbeats arrive over the mesh and bridge into the fleet.
-    assert!(ingest_line(&heartbeat_bytes("rover-a", 0.0, 0.0), &coord, 1_000));
-    assert!(ingest_line(&heartbeat_bytes("rover-b", 10.0, 0.0), &coord, 1_000));
+    assert!(ingest_line(
+        &heartbeat_bytes("rover-a", 0.0, 0.0),
+        &coord,
+        1_000
+    ));
+    assert!(ingest_line(
+        &heartbeat_bytes("rover-b", 10.0, 0.0),
+        &coord,
+        1_000
+    ));
 
     // 2. A task near rover-a is auctioned — nearest online idle node wins.
-    coord.add_task(Task { id: "t".into(), x: 1.0, y: 0.0, min_battery: 0.0 });
+    coord.add_task(Task {
+        id: "t".into(),
+        x: 1.0,
+        y: 0.0,
+        min_battery: 0.0,
+    });
     let awards = coord.auction_tick(2_000);
     assert_eq!(awards, vec![("t".to_string(), "rover-a".to_string())]);
 
@@ -82,7 +97,14 @@ async fn a_heartbeat_heard_over_the_mesh_comes_back_as_an_assignment() {
     // 4. The frame on the air is a "go here" assignment to the winning rover, at
     //    the task's coordinates — the loop is closed: heartbeat in → assignment out.
     let frame = MeshFrame::decode(&radio.last().expect("an assignment was sent")).unwrap();
-    assert_eq!(frame, MeshFrame::Assign { node: "rover-a".into(), x: 1.0, y: 0.0 });
+    assert_eq!(
+        frame,
+        MeshFrame::Assign {
+            node: "rover-a".into(),
+            x: 1.0,
+            y: 0.0
+        }
+    );
 
     // Outbox is drained: a second broadcast sends nothing.
     assert_eq!(broadcast_outbox(&radio, &coord).await, 0);
@@ -111,7 +133,12 @@ fn a_multi_hop_heartbeat_floods_once_then_is_deduped() {
     assert_eq!(MeshFrame::decode(&rebroadcast).unwrap(), hb);
 
     // The heartbeat reached the fleet: rover-c can now win a task.
-    coord.add_task(Task { id: "t".into(), x: 5.0, y: 5.0, min_battery: 0.0 });
+    coord.add_task(Task {
+        id: "t".into(),
+        x: 5.0,
+        y: 5.0,
+        min_battery: 0.0,
+    });
     assert_eq!(
         coord.auction_tick(2_000),
         vec![("t".to_string(), "rover-c".to_string())]

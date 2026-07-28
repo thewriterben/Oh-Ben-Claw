@@ -206,8 +206,7 @@ impl SkillImprover {
                 run_host_command(cmd).await == *expect_exit
             }
             VerificationCheck::SensorAssertion { tool, contains } => {
-                let (outcome, output) =
-                    executor.replay_capture(tool, &serde_json::json!({})).await;
+                let (outcome, output) = executor.replay_capture(tool, &serde_json::json!({})).await;
                 outcome == Outcome::Success && output.contains(contains)
             }
         }
@@ -231,7 +230,10 @@ impl SkillImprover {
             .into_iter()
             .map(|m| m.name)
             .collect();
-        let mut learned_installed = existing.iter().filter(|n| n.starts_with("learned_")).count();
+        let mut learned_installed = existing
+            .iter()
+            .filter(|n| n.starts_with("learned_"))
+            .count();
         let mut seen: HashSet<String> = HashSet::new();
         let physical_refs: Vec<&str> = self.physical_tools.iter().map(|s| s.as_str()).collect();
 
@@ -285,9 +287,9 @@ impl SkillImprover {
                 });
             if touches_actuator(exemplar, &physical_refs) || replay_unsafe {
                 let mut supervised = tag_physical(candidate); // stays disabled
-                // Read-only sensor checks can still strengthen the evidence:
-                // all matching SensorAssertion rules passing earns a tag the
-                // operator can trust when promoting (Track 0 staged rollout).
+                                                              // Read-only sensor checks can still strengthen the evidence:
+                                                              // all matching SensorAssertion rules passing earns a tag the
+                                                              // operator can trust when promoting (Track 0 staged rollout).
                 let sensor_rules: Vec<_> = self
                     .rules
                     .iter()
@@ -299,7 +301,10 @@ impl SkillImprover {
                 if !sensor_rules.is_empty() {
                     let mut all_ok = true;
                     for rule in &sensor_rules {
-                        if !self.check_passes(executor, &rule.check, Outcome::Success).await {
+                        if !self
+                            .check_passes(executor, &rule.check, Outcome::Success)
+                            .await
+                        {
                             all_ok = false;
                             break;
                         }
@@ -338,7 +343,10 @@ impl SkillImprover {
                     .iter()
                     .filter(|r| pattern_matches(&r.skill_pattern, &name))
                 {
-                    if !self.check_passes(executor, &rule.check, replay_outcome).await {
+                    if !self
+                        .check_passes(executor, &rule.check, replay_outcome)
+                        .await
+                    {
                         tracing::info!(
                             skill = %name,
                             "learned skill failed a configured verification check"
@@ -367,11 +375,16 @@ impl SkillImprover {
         // invisible until an operator promotes them).
         if let Some(obs) = &self.obs {
             let m = &obs.metrics;
-            m.counter("self_improve_scanned_total").add(report.episodes_scanned as u64);
-            m.counter("self_improve_candidates_total").add(report.candidates as u64);
-            m.counter("self_improve_installed_total").add(report.installed.len() as u64);
-            m.counter("self_improve_quarantined_total").add(report.pending_supervised.len() as u64);
-            m.counter("self_improve_rejected_total").add(report.rejected.len() as u64);
+            m.counter("self_improve_scanned_total")
+                .add(report.episodes_scanned as u64);
+            m.counter("self_improve_candidates_total")
+                .add(report.candidates as u64);
+            m.counter("self_improve_installed_total")
+                .add(report.installed.len() as u64);
+            m.counter("self_improve_quarantined_total")
+                .add(report.pending_supervised.len() as u64);
+            m.counter("self_improve_rejected_total")
+                .add(report.rejected.len() as u64);
         }
         if !report.installed.is_empty() || !report.pending_supervised.is_empty() {
             executor.on_skills_changed(&self.forge);
@@ -499,7 +512,8 @@ mod tests {
     #[tokio::test]
     async fn verifies_and_installs_nonphysical_skill() {
         let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
-        traj.record(&episode("e1", "check the weather", "http")).unwrap();
+        traj.record(&episode("e1", "check the weather", "http"))
+            .unwrap();
         let dir = tmp_dir("install");
         let improver = SkillImprover::new(
             Arc::clone(&traj),
@@ -508,14 +522,23 @@ mod tests {
             100,
         );
 
-        let report = improver.run_once(&MockExec(Outcome::Success), 0).await.unwrap();
+        let report = improver
+            .run_once(&MockExec(Outcome::Success), 0)
+            .await
+            .unwrap();
         assert_eq!(report.episodes_scanned, 1);
         assert_eq!(report.candidates, 1);
-        assert_eq!(report.installed, vec!["learned_check_the_weather".to_string()]);
+        assert_eq!(
+            report.installed,
+            vec!["learned_check_the_weather".to_string()]
+        );
         assert!(report.pending_supervised.is_empty());
         // installed manifest is enabled
         let manifests = SkillForge::new(&dir).list_manifests().unwrap();
-        let m = manifests.iter().find(|m| m.name == "learned_check_the_weather").unwrap();
+        let m = manifests
+            .iter()
+            .find(|m| m.name == "learned_check_the_weather")
+            .unwrap();
         assert!(m.enabled);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -525,9 +548,11 @@ mod tests {
         let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
         traj.record(&episode("e1", "do a thing", "http")).unwrap();
         let dir = tmp_dir("reject");
-        let improver =
-            SkillImprover::new(Arc::clone(&traj), SkillForge::new(&dir), vec![], 100);
-        let report = improver.run_once(&MockExec(Outcome::Failure), 0).await.unwrap();
+        let improver = SkillImprover::new(Arc::clone(&traj), SkillForge::new(&dir), vec![], 100);
+        let report = improver
+            .run_once(&MockExec(Outcome::Failure), 0)
+            .await
+            .unwrap();
         assert!(report.installed.is_empty());
         assert_eq!(report.rejected, vec!["learned_do_a_thing".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
@@ -536,7 +561,8 @@ mod tests {
     #[tokio::test]
     async fn physical_skill_is_quarantined_not_enabled() {
         let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
-        traj.record(&episode("e1", "unlock the door", "gpio_write")).unwrap();
+        traj.record(&episode("e1", "unlock the door", "gpio_write"))
+            .unwrap();
         let dir = tmp_dir("physical");
         let improver = SkillImprover::new(
             Arc::clone(&traj),
@@ -546,7 +572,10 @@ mod tests {
         );
         // Even with a "success" executor, physical skills must NOT be replayed
         // or promoted past the simulate stage.
-        let report = improver.run_once(&MockExec(Outcome::Success), 0).await.unwrap();
+        let report = improver
+            .run_once(&MockExec(Outcome::Success), 0)
+            .await
+            .unwrap();
         assert!(report.installed.is_empty());
         assert_eq!(
             report.pending_supervised,
@@ -557,7 +586,10 @@ mod tests {
             .iter()
             .find(|m| m.name == "learned_unlock_the_door")
             .unwrap();
-        assert!(m.enabled, "loads so the model can invoke it — but only as a dry-run");
+        assert!(
+            m.enabled,
+            "loads so the model can invoke it — but only as a dry-run"
+        );
         assert_eq!(
             m.stage,
             crate::tools::traits::RolloutStage::Simulate,
@@ -570,7 +602,8 @@ mod tests {
     #[tokio::test]
     async fn unsafe_risk_tool_quarantined_without_name_list() {
         let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
-        traj.record(&episode("e1", "clean up files", "shell")).unwrap();
+        traj.record(&episode("e1", "clean up files", "shell"))
+            .unwrap();
         let dir = tmp_dir("risk");
         // Empty actuator name list — gating relies purely on declared RiskClass.
         let improver = SkillImprover::new(Arc::clone(&traj), SkillForge::new(&dir), vec![], 100);
@@ -584,7 +617,10 @@ mod tests {
             },
         };
         let report = improver.run_once(&exec, 0).await.unwrap();
-        assert!(report.installed.is_empty(), "side-effecting tool must not auto-install");
+        assert!(
+            report.installed.is_empty(),
+            "side-effecting tool must not auto-install"
+        );
         assert_eq!(
             report.pending_supervised,
             vec!["learned_clean_up_files".to_string()]
@@ -619,17 +655,28 @@ mod tests {
         traj.record(&multistep_episode(
             "e1",
             "morning report",
-            vec![("http", json!({"q": "weather"})), ("http", json!({"q": "news"}))],
+            vec![
+                ("http", json!({"q": "weather"})),
+                ("http", json!({"q": "news"})),
+            ],
         ))
         .unwrap();
         let dir = tmp_dir("sequence");
         let improver = SkillImprover::new(Arc::clone(&traj), SkillForge::new(&dir), vec![], 100);
-        let report = improver.run_once(&MockExec(Outcome::Success), 0).await.unwrap();
+        let report = improver
+            .run_once(&MockExec(Outcome::Success), 0)
+            .await
+            .unwrap();
         assert_eq!(report.installed, vec!["learned_morning_report".to_string()]);
         let manifests = SkillForge::new(&dir).list_manifests().unwrap();
-        let m = manifests.iter().find(|m| m.name == "learned_morning_report").unwrap();
+        let m = manifests
+            .iter()
+            .find(|m| m.name == "learned_morning_report")
+            .unwrap();
         assert!(m.enabled);
-        assert!(matches!(&m.kind, crate::skill_forge::SkillKind::Sequence { steps } if steps.len() == 2));
+        assert!(
+            matches!(&m.kind, crate::skill_forge::SkillKind::Sequence { steps } if steps.len() == 2)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -638,22 +685,38 @@ mod tests {
         let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
         traj.record(&Episode {
             ts_ms: 1,
-            ..multistep_episode("a", "check the weather in Oslo", vec![("http", json!({"q": "weather", "city": "Oslo"}))])
+            ..multistep_episode(
+                "a",
+                "check the weather in Oslo",
+                vec![("http", json!({"q": "weather", "city": "Oslo"}))],
+            )
         })
         .unwrap();
         traj.record(&Episode {
             ts_ms: 2,
-            ..multistep_episode("b", "check the weather", vec![("http", json!({"q": "weather", "city": "Bergen"}))])
+            ..multistep_episode(
+                "b",
+                "check the weather",
+                vec![("http", json!({"q": "weather", "city": "Bergen"}))],
+            )
         })
         .unwrap();
         let dir = tmp_dir("param");
         let improver = SkillImprover::new(Arc::clone(&traj), SkillForge::new(&dir), vec![], 100);
-        let report = improver.run_once(&MockExec(Outcome::Success), 0).await.unwrap();
+        let report = improver
+            .run_once(&MockExec(Outcome::Success), 0)
+            .await
+            .unwrap();
         // The generalized skill is synthesized ahead of the per-episode one and
         // wins the name collision with "check the weather"'s one-off recipe.
-        assert!(report.installed.contains(&"learned_check_the_weather".to_string()));
+        assert!(report
+            .installed
+            .contains(&"learned_check_the_weather".to_string()));
         let manifests = SkillForge::new(&dir).list_manifests().unwrap();
-        let m = manifests.iter().find(|m| m.name == "learned_check_the_weather").unwrap();
+        let m = manifests
+            .iter()
+            .find(|m| m.name == "learned_check_the_weather")
+            .unwrap();
         assert!(m.tags.contains(&"parameterized".to_string()));
         assert!(m.parameters["properties"]["city"].is_object());
         let _ = std::fs::remove_dir_all(&dir);
@@ -672,8 +735,14 @@ mod tests {
                     expect_exit: 0,
                 },
             }]);
-        let report = improver.run_once(&MockExec(Outcome::Success), 0).await.unwrap();
-        assert!(report.installed.is_empty(), "replay passed but the check must fail it");
+        let report = improver
+            .run_once(&MockExec(Outcome::Success), 0)
+            .await
+            .unwrap();
+        assert!(
+            report.installed.is_empty(),
+            "replay passed but the check must fail it"
+        );
         assert_eq!(report.rejected, vec!["learned_fetch_data".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -691,7 +760,10 @@ mod tests {
                     expect_exit: 0,
                 },
             }]);
-        let report = improver.run_once(&MockExec(Outcome::Success), 0).await.unwrap();
+        let report = improver
+            .run_once(&MockExec(Outcome::Success), 0)
+            .await
+            .unwrap();
         assert_eq!(report.installed, vec!["learned_fetch_data".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -705,13 +777,17 @@ mod tests {
                 Outcome::Success
             }
             async fn replay_capture(&self, tool: &str, _args: &Value) -> (Outcome, String) {
-                assert_eq!(tool, "sensor_read", "only the read-only sensor is consulted");
+                assert_eq!(
+                    tool, "sensor_read",
+                    "only the read-only sensor is consulted"
+                );
                 (Outcome::Success, "door=open temp=21".to_string())
             }
         }
 
         let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
-        traj.record(&episode("e1", "unlock the door", "gpio_write")).unwrap();
+        traj.record(&episode("e1", "unlock the door", "gpio_write"))
+            .unwrap();
         let dir = tmp_dir("sensor-tag");
         let improver = SkillImprover::new(
             Arc::clone(&traj),
@@ -727,9 +803,15 @@ mod tests {
             },
         }]);
         let report = improver.run_once(&SensorExec, 0).await.unwrap();
-        assert_eq!(report.pending_supervised, vec!["learned_unlock_the_door".to_string()]);
+        assert_eq!(
+            report.pending_supervised,
+            vec!["learned_unlock_the_door".to_string()]
+        );
         let manifests = SkillForge::new(&dir).list_manifests().unwrap();
-        let m = manifests.iter().find(|m| m.name == "learned_unlock_the_door").unwrap();
+        let m = manifests
+            .iter()
+            .find(|m| m.name == "learned_unlock_the_door")
+            .unwrap();
         assert_eq!(
             m.stage,
             crate::tools::traits::RolloutStage::Simulate,
@@ -758,12 +840,15 @@ mod tests {
         let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
         traj.record(&episode("e1", "fetch news", "http")).unwrap();
         let dir = tmp_dir("notify");
-        let improver =
-            SkillImprover::new(Arc::clone(&traj), SkillForge::new(&dir), vec![], 100);
+        let improver = SkillImprover::new(Arc::clone(&traj), SkillForge::new(&dir), vec![], 100);
 
         let exec = NotifyExec(AtomicUsize::new(0));
         improver.run_once(&exec, 0).await.unwrap();
-        assert_eq!(exec.0.load(Ordering::SeqCst), 1, "hot-reload hook fires after install");
+        assert_eq!(
+            exec.0.load(Ordering::SeqCst),
+            1,
+            "hot-reload hook fires after install"
+        );
 
         // A pass with no changes must not re-notify.
         improver.run_once(&exec, 0).await.unwrap();
@@ -774,13 +859,19 @@ mod tests {
     #[tokio::test]
     async fn skips_already_installed_skill() {
         let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
-        traj.record(&episode("e1", "check weather", "http")).unwrap();
+        traj.record(&episode("e1", "check weather", "http"))
+            .unwrap();
         let dir = tmp_dir("dedup");
-        let improver =
-            SkillImprover::new(Arc::clone(&traj), SkillForge::new(&dir), vec![], 100);
-        let first = improver.run_once(&MockExec(Outcome::Success), 0).await.unwrap();
+        let improver = SkillImprover::new(Arc::clone(&traj), SkillForge::new(&dir), vec![], 100);
+        let first = improver
+            .run_once(&MockExec(Outcome::Success), 0)
+            .await
+            .unwrap();
         assert_eq!(first.installed.len(), 1);
-        let second = improver.run_once(&MockExec(Outcome::Success), 0).await.unwrap();
+        let second = improver
+            .run_once(&MockExec(Outcome::Success), 0)
+            .await
+            .unwrap();
         assert_eq!(second.installed.len(), 0);
         assert_eq!(second.skipped_existing, 1);
         let _ = std::fs::remove_dir_all(&dir);

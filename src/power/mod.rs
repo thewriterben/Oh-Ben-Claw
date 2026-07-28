@@ -39,7 +39,6 @@ impl ChargeState {
     }
 }
 
-
 /// A single battery telemetry reading.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BatteryReading {
@@ -188,8 +187,14 @@ impl PowerController {
                 "mode": mode.as_str(),
                 "source": reading.source,
             });
-            let battery_fact =
-                world.observe_as("power.battery", battery, now_ms, now_ms, &self.source, origin)?;
+            let battery_fact = world.observe_as(
+                "power.battery",
+                battery,
+                now_ms,
+                now_ms,
+                &self.source,
+                origin,
+            )?;
             let mode_fact = json!({ "mode": mode.as_str(), "soc_pct": reading.soc_pct });
             // The mode is computed from the reading immediately above, so it says so.
             //
@@ -224,8 +229,11 @@ mod tests {
 
     fn controller() -> (PowerController, Arc<WorldMemory>) {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        let ctrl = PowerController::new(PowerThresholds { low_pct: 20.0, critical_pct: 10.0 })
-            .with_world_memory(Arc::clone(&world));
+        let ctrl = PowerController::new(PowerThresholds {
+            low_pct: 20.0,
+            critical_pct: 10.0,
+        })
+        .with_world_memory(Arc::clone(&world));
         (ctrl, world)
     }
 
@@ -241,11 +249,17 @@ mod tests {
 
     #[test]
     fn mode_derivation_buckets_by_soc() {
-        let t = PowerThresholds { low_pct: 20.0, critical_pct: 10.0 };
+        let t = PowerThresholds {
+            low_pct: 20.0,
+            critical_pct: 10.0,
+        };
         assert_eq!(t.derive(80.0, ChargeState::Discharging), PowerMode::Normal);
         assert_eq!(t.derive(15.0, ChargeState::Discharging), PowerMode::Low);
         assert_eq!(t.derive(8.0, ChargeState::Discharging), PowerMode::Critical);
-        assert_eq!(t.derive(10.0, ChargeState::Discharging), PowerMode::Critical); // inclusive
+        assert_eq!(
+            t.derive(10.0, ChargeState::Discharging),
+            PowerMode::Critical
+        ); // inclusive
     }
 
     #[test]
@@ -257,7 +271,13 @@ mod tests {
     #[test]
     fn ingest_records_battery_and_mode_facts() {
         let (ctrl, world) = controller();
-        let status = ctrl.ingest(&reading(8.0, ChargeState::Discharging), 1_000, crate::memory::world::Origin::Observed).unwrap();
+        let status = ctrl
+            .ingest(
+                &reading(8.0, ChargeState::Discharging),
+                1_000,
+                crate::memory::world::Origin::Observed,
+            )
+            .unwrap();
         assert_eq!(status.mode, PowerMode::Critical);
 
         let battery = world.current("power.battery").unwrap().unwrap();
@@ -273,14 +293,21 @@ mod tests {
     #[test]
     fn full_pack_is_normal_not_charging() {
         let (ctrl, _world) = controller();
-        let status = ctrl.ingest(&reading(100.0, ChargeState::Full), 1_000, crate::memory::world::Origin::Observed).unwrap();
+        let status = ctrl
+            .ingest(
+                &reading(100.0, ChargeState::Full),
+                1_000,
+                crate::memory::world::Origin::Observed,
+            )
+            .unwrap();
         assert_eq!(status.mode, PowerMode::Normal);
     }
 
     #[test]
     fn reading_roundtrips() {
         let r = reading(50.0, ChargeState::Discharging);
-        let back: BatteryReading = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        let back: BatteryReading =
+            serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(back, r);
     }
 

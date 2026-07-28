@@ -171,7 +171,12 @@ fn extract_urls(text: &str) -> Vec<String> {
 /// Unicode lowercasing can change byte offsets).
 fn download_language(text: &str) -> Option<String> {
     const PATTERNS: [&str; 6] = [
-        "download", "curl ", "wget ", "fetch from", "install from", "pip install",
+        "download",
+        "curl ",
+        "wget ",
+        "fetch from",
+        "install from",
+        "pip install",
     ];
     let lower = text.to_lowercase();
     for p in PATTERNS {
@@ -190,7 +195,9 @@ fn download_language(text: &str) -> Option<String> {
 /// Minimal URL host extraction without pulling in a full URL crate.
 mod url {
     pub fn host_of(url: &str) -> Option<String> {
-        let rest = url.strip_prefix("https://").or(url.strip_prefix("http://"))?;
+        let rest = url
+            .strip_prefix("https://")
+            .or(url.strip_prefix("http://"))?;
         let host = rest.split(['/', '?', '#']).next()?;
         let host = host.split('@').next_back()?; // drop userinfo
         let host = host.split(':').next()?; // drop port
@@ -537,10 +544,7 @@ mod tests {
             url::host_of("https://evil.example.com/p.sh"),
             Some("evil.example.com".into())
         );
-        assert_eq!(
-            url::host_of("http://h.io:8080/x"),
-            Some("h.io".into())
-        );
+        assert_eq!(url::host_of("http://h.io:8080/x"), Some("h.io".into()));
         assert_eq!(url::host_of("not a url"), None);
     }
 

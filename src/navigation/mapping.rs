@@ -113,9 +113,13 @@ mod tests {
     fn free_beam_does_not_erase_known_obstacle() {
         let mut g = grid();
         g.set(5, 0, Cell::Occupied); // a known wall cell
-        // a beam that overshoots past it (no hit) must not clear it
+                                     // a beam that overshoots past it (no hit) must not clear it
         integrate_beam(&mut g, 0.5, 0.5, 0.0, 0.0, 8.0, 8.0);
-        assert_eq!(g.get(5, 0), Cell::Occupied, "obstacle survives a passing free beam");
+        assert_eq!(
+            g.get(5, 0),
+            Cell::Occupied,
+            "obstacle survives a passing free beam"
+        );
     }
 
     #[test]

@@ -136,7 +136,10 @@ impl ClosedLoopServo {
             .apply(&cmd, now_ms)
             .await
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        Ok(StepOutcome::Adjusted { measured, commanded })
+        Ok(StepOutcome::Adjusted {
+            measured,
+            commanded,
+        })
     }
 }
 
@@ -148,7 +151,11 @@ mod tests {
     use serde_json::json;
 
     fn pcontroller() -> PController {
-        PController { kp: 0.5, tolerance: 1.0, max_step: 30.0 }
+        PController {
+            kp: 0.5,
+            tolerance: 1.0,
+            max_step: 30.0,
+        }
     }
 
     #[test]
@@ -173,8 +180,12 @@ mod tests {
         limit.value_min = Some(0);
         limit.value_max = Some(180);
         let movement = Arc::new(
-            MovementController::new("n1", Arc::new(SafetyGate::new(vec![limit])), Arc::new(LoggingActuatorSink))
-                .with_world_memory(Arc::clone(world)),
+            MovementController::new(
+                "n1",
+                Arc::new(SafetyGate::new(vec![limit])),
+                Arc::new(LoggingActuatorSink),
+            )
+            .with_world_memory(Arc::clone(world)),
         );
         ClosedLoopServo::new(
             movement,
@@ -196,9 +207,14 @@ mod tests {
     #[tokio::test]
     async fn settled_when_already_at_target() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        world.observe("sensor.arm_angle", json!({"value": 90.0}), 1, 1, "sim").unwrap();
+        world
+            .observe("sensor.arm_angle", json!({"value": 90.0}), 1, 1, "sim")
+            .unwrap();
         let s = servo(&world);
-        assert_eq!(s.step(90.0, 1_000).await.unwrap(), StepOutcome::Settled { measured: 90.0 });
+        assert_eq!(
+            s.step(90.0, 1_000).await.unwrap(),
+            StepOutcome::Settled { measured: 90.0 }
+        );
     }
 
     #[tokio::test]
@@ -206,7 +222,9 @@ mod tests {
         // Simulated plant: a perfect actuator — after each commanded angle, the
         // feedback entity reports exactly the commanded value next tick.
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        world.observe("sensor.arm_angle", json!({"value": 0.0}), 0, 0, "sim").unwrap();
+        world
+            .observe("sensor.arm_angle", json!({"value": 0.0}), 0, 0, "sim")
+            .unwrap();
         let s = servo(&world);
 
         let target = 90.0;
@@ -241,7 +259,9 @@ mod tests {
         // Target beyond the gate's max (180) forces a commanded angle the gate
         // refuses once the loop pushes past the limit.
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        world.observe("sensor.arm_angle", json!({"value": 179.0}), 0, 0, "sim").unwrap();
+        world
+            .observe("sensor.arm_angle", json!({"value": 179.0}), 0, 0, "sim")
+            .unwrap();
         let s = servo(&world);
         // target 300 → commanded = 179 + clamp(0.5*121,30) = 209 > 180 → gate refuses
         assert!(s.step(300.0, 1_000).await.is_err());

@@ -31,7 +31,11 @@ const CANDIDATES: &[(&str, &str, &str)] = &[
     // (provider name, env var, default model)
     ("anthropic", "ANTHROPIC_API_KEY", "claude-sonnet-4-5"),
     ("openai", "OPENAI_API_KEY", "gpt-4o"),
-    ("openrouter", "OPENROUTER_API_KEY", "anthropic/claude-sonnet-4.5"),
+    (
+        "openrouter",
+        "OPENROUTER_API_KEY",
+        "anthropic/claude-sonnet-4.5",
+    ),
 ];
 
 /// The local option, tried last and only when nothing else is configured.
@@ -41,7 +45,11 @@ const LOCAL: (&str, &str) = ("ollama", "llama3.2");
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
     /// A provider key was found in the environment.
-    FromEnv { provider: String, var: String, model: String },
+    FromEnv {
+        provider: String,
+        var: String,
+        model: String,
+    },
     /// No key anywhere; fall back to a local endpoint that needs none.
     LocalFallback { provider: String, model: String },
 }
@@ -166,7 +174,10 @@ mod tests {
     fn an_empty_or_whitespace_key_does_not_count() {
         // `export ANTHROPIC_API_KEY=` is a very common way to end up with a set-but-empty
         // variable, and treating it as configured produces a 401 instead of guidance.
-        let (r, cfg) = resolve(env_of(&[("ANTHROPIC_API_KEY", "   "), ("OPENAI_API_KEY", "sk-x")]));
+        let (r, cfg) = resolve(env_of(&[
+            ("ANTHROPIC_API_KEY", "   "),
+            ("OPENAI_API_KEY", "sk-x"),
+        ]));
         assert_eq!(cfg.name, "openai");
         assert!(matches!(r, Resolution::FromEnv { .. }));
     }

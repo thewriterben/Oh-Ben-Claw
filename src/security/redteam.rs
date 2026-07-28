@@ -166,7 +166,10 @@ mod tests {
                     v.contains(&scenario.target),
                     "variant lost the target token: {v}"
                 );
-                assert!(v.contains(&scenario.injection), "variant lost the injection");
+                assert!(
+                    v.contains(&scenario.injection),
+                    "variant lost the injection"
+                );
             }
         }
     }

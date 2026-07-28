@@ -109,7 +109,11 @@ pub enum MissionStatus {
     /// No mission loaded.
     Idle,
     /// Executing step `step` of `total` (`label` names the step kind).
-    Running { step: usize, total: usize, label: String },
+    Running {
+        step: usize,
+        total: usize,
+        label: String,
+    },
     /// All steps completed.
     Completed { id: String },
     /// A guard tripped (or an explicit abort).
@@ -184,7 +188,11 @@ impl MissionRunner {
         st.status = if total == 0 {
             MissionStatus::Completed { id }
         } else {
-            MissionStatus::Running { step: 0, total, label: "pending".to_string() }
+            MissionStatus::Running {
+                step: 0,
+                total,
+                label: "pending".to_string(),
+            }
         };
     }
 
@@ -199,7 +207,10 @@ impl MissionRunner {
     }
 
     fn is_terminal(status: &MissionStatus) -> bool {
-        matches!(status, MissionStatus::Completed { .. } | MissionStatus::Aborted { .. } | MissionStatus::Idle)
+        matches!(
+            status,
+            MissionStatus::Completed { .. } | MissionStatus::Aborted { .. } | MissionStatus::Idle
+        )
     }
 
     /// Abort the active mission with a reason (halts navigation if present).
@@ -207,8 +218,15 @@ impl MissionRunner {
         let reason = reason.into();
         let id = {
             let mut st = self.lock();
-            let id = st.mission.as_ref().map(|m| m.id.clone()).unwrap_or_default();
-            st.status = MissionStatus::Aborted { id: id.clone(), reason: reason.clone() };
+            let id = st
+                .mission
+                .as_ref()
+                .map(|m| m.id.clone())
+                .unwrap_or_default();
+            st.status = MissionStatus::Aborted {
+                id: id.clone(),
+                reason: reason.clone(),
+            };
             id
         };
         if let Some(nav) = &self.nav {
@@ -259,11 +277,18 @@ impl MissionRunner {
         match step {
             MissionStep::NavigateTo { .. } => {
                 // Arrived ⇒ the navigation suite clears the goal. No nav ⇒ instant.
-                self.nav.as_ref().map(|n| n.current_goal().is_none()).unwrap_or(true)
+                self.nav
+                    .as_ref()
+                    .map(|n| n.current_goal().is_none())
+                    .unwrap_or(true)
             }
             MissionStep::Wait { ms } => now.saturating_sub(step_start) >= *ms,
             MissionStep::Speak { .. } | MissionStep::Record { .. } => true, // one-shot
-            MissionStep::AwaitState { entity, field, equals } => self
+            MissionStep::AwaitState {
+                entity,
+                field,
+                equals,
+            } => self
                 .world
                 .current(entity)
                 .ok()
@@ -284,7 +309,11 @@ impl MissionRunner {
         match step {
             MissionStep::NavigateTo { x, y, tolerance } => {
                 if let Some(nav) = &self.nav {
-                    let goal = NavGoal { x: *x, y: *y, tolerance: *tolerance };
+                    let goal = NavGoal {
+                        x: *x,
+                        y: *y,
+                        tolerance: *tolerance,
+                    };
                     if nav.has_grid() {
                         let _ = nav.plan_to(goal, now)?; // best-effort planned route
                     } else {
@@ -299,7 +328,8 @@ impl MissionRunner {
                 }
             }
             MissionStep::Record { entity, value } => {
-                self.world.observe(entity, value.clone(), now, now, &self.source)?;
+                self.world
+                    .observe(entity, value.clone(), now, now, &self.source)?;
             }
             MissionStep::Wait { .. } | MissionStep::AwaitState { .. } => {}
         }
@@ -310,7 +340,9 @@ impl MissionRunner {
         let status = self.status();
         let body = serde_json::to_value(&status).unwrap_or(Value::Null);
         let now = now_or_zero();
-        let _ = self.world.observe("mission.status", body, now, now, &self.source);
+        let _ = self
+            .world
+            .observe("mission.status", body, now, now, &self.source);
     }
 
     /// Advance the mission by at most one step. Guards are checked first; a
@@ -333,10 +365,15 @@ impl MissionRunner {
                 return Ok(st.status.clone());
             }
             if let Some(reason) = self.tripped_guard(&mission) {
-                st.status = MissionStatus::Aborted { id: mission.id.clone(), reason: reason.clone() };
+                st.status = MissionStatus::Aborted {
+                    id: mission.id.clone(),
+                    reason: reason.clone(),
+                };
                 Decision::Abort(reason)
             } else if st.step >= mission.steps.len() {
-                st.status = MissionStatus::Completed { id: mission.id.clone() };
+                st.status = MissionStatus::Completed {
+                    id: mission.id.clone(),
+                };
                 Decision::Complete(mission.id.clone())
             } else {
                 let step = mission.steps[st.step].clone();
@@ -403,8 +440,8 @@ fn now_or_zero() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use crate::agent::reflex::Cmp;
+    use serde_json::json;
 
     fn runner() -> (MissionRunner, Arc<WorldMemory>) {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
@@ -416,7 +453,10 @@ mod tests {
         let mut t = 0u64;
         for _ in 0..budget {
             let s = r.tick(t).await.unwrap();
-            if matches!(s, MissionStatus::Completed { .. } | MissionStatus::Aborted { .. }) {
+            if matches!(
+                s,
+                MissionStatus::Completed { .. } | MissionStatus::Aborted { .. }
+            ) {
                 return s;
             }
             t += step_ms;
@@ -430,14 +470,23 @@ mod tests {
         r.start(Mission {
             id: "demo".into(),
             steps: vec![
-                MissionStep::Record { entity: "m.a".into(), value: json!(1) },
+                MissionStep::Record {
+                    entity: "m.a".into(),
+                    value: json!(1),
+                },
                 MissionStep::Wait { ms: 1_000 },
-                MissionStep::Record { entity: "m.b".into(), value: json!(2) },
+                MissionStep::Record {
+                    entity: "m.b".into(),
+                    value: json!(2),
+                },
             ],
             guards: vec![],
         });
         let end = run_to_end(&r, 500, 50).await;
-        assert!(matches!(end, MissionStatus::Completed { .. }), "got {end:?}");
+        assert!(
+            matches!(end, MissionStatus::Completed { .. }),
+            "got {end:?}"
+        );
         assert_eq!(world.current("m.a").unwrap().unwrap().value, json!(1));
         assert_eq!(world.current("m.b").unwrap().unwrap().value, json!(2));
     }
@@ -474,8 +523,15 @@ mod tests {
         r.start(Mission {
             id: "wait-go".into(),
             steps: vec![
-                MissionStep::AwaitState { entity: "flag".into(), field: None, equals: "go".into() },
-                MissionStep::Record { entity: "done".into(), value: json!(true) },
+                MissionStep::AwaitState {
+                    entity: "flag".into(),
+                    field: None,
+                    equals: "go".into(),
+                },
+                MissionStep::Record {
+                    entity: "done".into(),
+                    value: json!(true),
+                },
             ],
             guards: vec![],
         });
@@ -488,7 +544,10 @@ mod tests {
         // set the flag → mission unblocks and completes
         world.observe("flag", json!("go"), 10, 10, "ext").unwrap();
         let end = run_to_end(&r, 1, 20).await;
-        assert!(matches!(end, MissionStatus::Completed { .. }), "got {end:?}");
+        assert!(
+            matches!(end, MissionStatus::Completed { .. }),
+            "got {end:?}"
+        );
         assert_eq!(world.current("done").unwrap().unwrap().value, json!(true));
     }
 
@@ -499,7 +558,11 @@ mod tests {
             id: "x".into(),
             steps: vec![MissionStep::Wait { ms: 10 }],
             guards: vec![Guard {
-                abort_when: Condition::Sensor { entity: "absent".into(), op: Cmp::Gt, value: 1.0 },
+                abort_when: Condition::Sensor {
+                    entity: "absent".into(),
+                    op: Cmp::Gt,
+                    value: 1.0,
+                },
                 reason: "never".into(),
             }],
         });
@@ -512,8 +575,15 @@ mod tests {
         let m = Mission {
             id: "m".into(),
             steps: vec![
-                MissionStep::NavigateTo { x: 1.0, y: 2.0, tolerance: 0.5 },
-                MissionStep::Speak { text: "hi".into(), voice: None },
+                MissionStep::NavigateTo {
+                    x: 1.0,
+                    y: 2.0,
+                    tolerance: 0.5,
+                },
+                MissionStep::Speak {
+                    text: "hi".into(),
+                    voice: None,
+                },
             ],
             guards: vec![],
         };

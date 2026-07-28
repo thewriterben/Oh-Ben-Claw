@@ -139,7 +139,8 @@ impl TaintPool {
     /// Boundary-aware number match: `99` must not fire on `199` or `9.9`.
     fn find_number(&self, token: &str) -> Option<String> {
         let boundary = |c: Option<char>| {
-            c.map(|c| !c.is_ascii_alphanumeric() && c != '.').unwrap_or(true)
+            c.map(|c| !c.is_ascii_alphanumeric() && c != '.')
+                .unwrap_or(true)
         };
         let chunks = self.chunks.lock().unwrap_or_else(|p| p.into_inner());
         for chunk in chunks.iter() {
@@ -260,7 +261,10 @@ mod tests {
     #[test]
     fn short_strings_and_clean_args_pass() {
         let pool = pool_with("the weather in Oslo is sunny today");
-        assert!(scan_args(&json!({"unit": "on"}), &pool).is_none(), "len<4 skipped");
+        assert!(
+            scan_args(&json!({"unit": "on"}), &pool).is_none(),
+            "len<4 skipped"
+        );
         assert!(
             scan_args(&json!({"city": "Bergen", "pin": 17}), &pool).is_none(),
             "values not present in content pass"
@@ -270,8 +274,7 @@ mod tests {
     #[test]
     fn nested_paths_are_reported() {
         let pool = pool_with("target: living-room-lock");
-        let hit =
-            scan_args(&json!({"config": {"targets": ["living-room-lock"]}}), &pool).unwrap();
+        let hit = scan_args(&json!({"config": {"targets": ["living-room-lock"]}}), &pool).unwrap();
         assert_eq!(hit.arg_path, "config.targets[0]");
     }
 

@@ -413,7 +413,13 @@ pub fn record_subject_counts(
         // So the counter says "unknown support", which is true, and is inert to every
         // sweep. An accumulator is the case where an in-list does not fit; the mechanism
         // is for facts computed from a bounded set of current readings.
-        world.observe(&key, json!({ "value": next }), ingested_at_ms, ingested_at_ms, source)?;
+        world.observe(
+            &key,
+            json!({ "value": next }),
+            ingested_at_ms,
+            ingested_at_ms,
+            source,
+        )?;
         out.push(next);
     }
     Ok(out)
@@ -464,7 +470,13 @@ pub fn recount_subjects(
             .and_then(|f| f.value.get("value").and_then(|v| v.as_u64()))
             .unwrap_or(0);
         if old != truth {
-            world.observe(&key, json!({ "value": truth }), ingested_at_ms, ingested_at_ms, source)?;
+            world.observe(
+                &key,
+                json!({ "value": truth }),
+                ingested_at_ms,
+                ingested_at_ms,
+                source,
+            )?;
             fixed.push((subject.to_string(), old, truth));
         }
     }
@@ -494,8 +506,14 @@ mod recount_tests {
                 .unwrap();
             }
         }
-        w.observe("vision.count.red_fox", json!({ "value": 12 }), 1_000, 1_000, "clawcam")
-            .unwrap();
+        w.observe(
+            "vision.count.red_fox",
+            json!({ "value": 12 }),
+            1_000,
+            1_000,
+            "clawcam",
+        )
+        .unwrap();
 
         let fixed = recount_subjects(&w, 9_000, "clawcam").unwrap();
         assert_eq!(fixed, vec![("red_fox".to_string(), 12, 3)]);
@@ -504,7 +522,10 @@ mod recount_tests {
             json!(3)
         );
         // Corrected, not erased: what we used to think is still answerable.
-        assert_eq!(w.at("vision.count.red_fox", 5_000).unwrap().unwrap().value["value"], json!(12));
+        assert_eq!(
+            w.at("vision.count.red_fox", 5_000).unwrap().unwrap().value["value"],
+            json!(12)
+        );
 
         // Idempotent.
         assert!(recount_subjects(&w, 10_000, "clawcam").unwrap().is_empty());
@@ -516,8 +537,14 @@ mod recount_tests {
         // tell each write was a separate report. Collapsing them would invent a merge.
         let w = WorldMemory::open_in_memory().unwrap();
         for i in 0..3 {
-            w.observe("vision.subject.coyote", json!({ "n": i }), 1_000 + i, 1_000 + i, "clawcam")
-                .unwrap();
+            w.observe(
+                "vision.subject.coyote",
+                json!({ "n": i }),
+                1_000 + i,
+                1_000 + i,
+                "clawcam",
+            )
+            .unwrap();
         }
         let fixed = recount_subjects(&w, 9_000, "clawcam").unwrap();
         assert_eq!(fixed, vec![("coyote".to_string(), 0, 3)]);
@@ -558,15 +585,18 @@ mod dedup_tests {
         assert_eq!(w.count().unwrap(), 3);
 
         for tick in 1..=5 {
-            let again = ingest_clawcam_detections(&w, &batch, 1_000 + tick * 60_000, "clawcam")
-                .unwrap();
+            let again =
+                ingest_clawcam_detections(&w, &batch, 1_000 + tick * 60_000, "clawcam").unwrap();
             assert!(again.is_empty(), "poll {tick} re-recorded a known event");
         }
         assert_eq!(w.count().unwrap(), 3, "five more polls wrote nothing");
 
         // And the belief keeps its original age, which is what stops a freshness-keyed
         // reflex escalating on July data forever.
-        let deer = w.current("vision.subject.white_tailed_deer").unwrap().unwrap();
+        let deer = w
+            .current("vision.subject.white_tailed_deer")
+            .unwrap()
+            .unwrap();
         assert_eq!(deer.ingested_at, 1_000);
     }
 
@@ -617,7 +647,13 @@ mod dedup_tests {
 mod tests {
     use super::*;
 
-    fn det(event: &str, species: Option<&str>, conf: f64, review: &str, ran_at: Option<&str>) -> ClawCamDetection {
+    fn det(
+        event: &str,
+        species: Option<&str>,
+        conf: f64,
+        review: &str,
+        ran_at: Option<&str>,
+    ) -> ClawCamDetection {
         ClawCamDetection {
             event_id: event.to_string(),
             device_id: Some("node-1".to_string()),
@@ -631,7 +667,10 @@ mod tests {
 
     #[test]
     fn subject_prefers_species_then_label() {
-        assert_eq!(subject_entity(&det("e", Some("Deer"), 0.9, "unreviewed", None)), "vision.subject.deer");
+        assert_eq!(
+            subject_entity(&det("e", Some("Deer"), 0.9, "unreviewed", None)),
+            "vision.subject.deer"
+        );
         let mut d = det("e", None, 0.9, "unreviewed", None);
         d.top_label = Some("Wild Boar".to_string());
         assert_eq!(subject_entity(&d), "vision.subject.wild_boar");
@@ -640,7 +679,13 @@ mod tests {
     #[test]
     fn ingest_records_current_fact_with_review_state() {
         let world = WorldMemory::open_in_memory().unwrap();
-        let dets = vec![det("evt-1", Some("deer"), 0.91, "verified", Some("2026-06-05T12:00:00Z"))];
+        let dets = vec![det(
+            "evt-1",
+            Some("deer"),
+            0.91,
+            "verified",
+            Some("2026-06-05T12:00:00Z"),
+        )];
         let entities = ingest_clawcam_detections(&world, &dets, 9_999, "clawcam").unwrap();
         assert_eq!(entities, vec!["vision.subject.deer"]);
 
@@ -668,14 +713,26 @@ mod tests {
         let world = WorldMemory::open_in_memory().unwrap();
         ingest_clawcam_detections(
             &world,
-            &[det("e1", Some("deer"), 0.8, "unreviewed", Some("2026-06-05T12:00:00Z"))],
+            &[det(
+                "e1",
+                Some("deer"),
+                0.8,
+                "unreviewed",
+                Some("2026-06-05T12:00:00Z"),
+            )],
             1,
             "clawcam",
         )
         .unwrap();
         ingest_clawcam_detections(
             &world,
-            &[det("e2", Some("deer"), 0.95, "verified", Some("2026-06-06T12:00:00Z"))],
+            &[det(
+                "e2",
+                Some("deer"),
+                0.95,
+                "verified",
+                Some("2026-06-06T12:00:00Z"),
+            )],
             2,
             "clawcam",
         )
@@ -732,16 +789,27 @@ mod tests {
         });
         let ents = ingest_tool_result(&world, &tr, 5, "clawcam").unwrap();
         assert_eq!(ents, vec!["vision.subject.bird"]);
-        assert_eq!(world.current("vision.subject.bird").unwrap().unwrap().valid_from, 5);
+        assert_eq!(
+            world
+                .current("vision.subject.bird")
+                .unwrap()
+                .unwrap()
+                .valid_from,
+            5
+        );
     }
 
     #[test]
     fn tool_result_error_or_empty_ingests_nothing() {
         let world = WorldMemory::open_in_memory().unwrap();
         let err = serde_json::json!({"ok": false, "error": "no inference result"});
-        assert!(ingest_tool_result(&world, &err, 1, "clawcam").unwrap().is_empty());
+        assert!(ingest_tool_result(&world, &err, 1, "clawcam")
+            .unwrap()
+            .is_empty());
         let empty = serde_json::json!({"ok": true, "count": 0, "results": []});
-        assert!(ingest_tool_result(&world, &empty, 1, "clawcam").unwrap().is_empty());
+        assert!(ingest_tool_result(&world, &empty, 1, "clawcam")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

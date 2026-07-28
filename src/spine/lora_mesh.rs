@@ -38,7 +38,12 @@ pub struct LoraMeshConfig {
 
 impl Default for LoraMeshConfig {
     fn default() -> Self {
-        Self { region: "US".to_string(), freq_mhz: 915.0, max_payload: 230, node_num: 0 }
+        Self {
+            region: "US".to_string(),
+            freq_mhz: 915.0,
+            max_payload: 230,
+            node_num: 0,
+        }
     }
 }
 
@@ -62,7 +67,13 @@ impl MeshFrame {
     /// Encode to compact bytes for transmission.
     pub fn encode(&self) -> Vec<u8> {
         let v = match self {
-            MeshFrame::Heartbeat { node, x, y, battery, mode } => {
+            MeshFrame::Heartbeat {
+                node,
+                x,
+                y,
+                battery,
+                mode,
+            } => {
                 let mut m = serde_json::Map::new();
                 m.insert("t".into(), json!("hb"));
                 m.insert("n".into(), json!(node));
@@ -92,7 +103,11 @@ impl MeshFrame {
                 x: v.get("x").and_then(Value::as_f64),
                 y: v.get("y").and_then(Value::as_f64),
                 battery: v.get("b").and_then(Value::as_f64),
-                mode: v.get("m").and_then(Value::as_str).unwrap_or("unknown").to_string(),
+                mode: v
+                    .get("m")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
             }),
             "as" => Some(MeshFrame::Assign {
                 node: v.get("n")?.as_str()?.to_string(),
@@ -113,7 +128,13 @@ impl MeshFrame {
     /// unchanged. `None` for non-heartbeat frames.
     pub fn to_node_state(&self, now_ms: u64) -> Option<NodeState> {
         match self {
-            MeshFrame::Heartbeat { node, x, y, battery, mode } => Some(NodeState {
+            MeshFrame::Heartbeat {
+                node,
+                x,
+                y,
+                battery,
+                mode,
+            } => Some(NodeState {
                 id: node.clone(),
                 x: *x,
                 y: *y,
@@ -206,7 +227,12 @@ impl LoraMeshSpine {
 
     /// Send a coordinator assignment over the mesh.
     pub async fn send_assignment(&self, node: &str, x: f64, y: f64) -> anyhow::Result<()> {
-        self.send_frame(&MeshFrame::Assign { node: node.to_string(), x, y }).await
+        self.send_frame(&MeshFrame::Assign {
+            node: node.to_string(),
+            x,
+            y,
+        })
+        .await
     }
 
     pub fn config(&self) -> &LoraMeshConfig {
@@ -244,8 +270,16 @@ pub async fn send_assignment_frame<R: MeshRadio + ?Sized>(
     id: u64,
     ttl: u8,
 ) -> bool {
-    let frame = MeshFrame::Assign { node: node.to_string(), x, y };
-    let bytes = if ttl > 0 { relay::originate(&frame, id, ttl) } else { frame.encode() };
+    let frame = MeshFrame::Assign {
+        node: node.to_string(),
+        x,
+        y,
+    };
+    let bytes = if ttl > 0 {
+        relay::originate(&frame, id, ttl)
+    } else {
+        frame.encode()
+    };
     radio.transmit(&bytes).await.is_ok()
 }
 
@@ -295,7 +329,10 @@ pub mod relay {
 
     impl MeshRelay {
         pub fn new() -> Self {
-            Self { seen: Mutex::new(VecDeque::new()), cap: 512 }
+            Self {
+                seen: Mutex::new(VecDeque::new()),
+                cap: 512,
+            }
         }
 
         /// Record `id`; returns `true` if it is newly seen, `false` if a duplicate.
@@ -315,15 +352,24 @@ pub mod relay {
         /// and whether (and what) to rebroadcast.
         pub fn on_receive(&self, bytes: &[u8]) -> RelayDecision {
             let Ok(v) = serde_json::from_slice::<Value>(bytes) else {
-                return RelayDecision { process_local: false, rebroadcast: None };
+                return RelayDecision {
+                    process_local: false,
+                    rebroadcast: None,
+                };
             };
             // Bare frame (no relay envelope): single-hop, process, never rebroadcast.
             let Some(id) = v.get("i").and_then(Value::as_u64) else {
-                return RelayDecision { process_local: true, rebroadcast: None };
+                return RelayDecision {
+                    process_local: true,
+                    rebroadcast: None,
+                };
             };
             if !self.mark_seen(id) {
                 // Already flooded through here — drop to break the loop.
-                return RelayDecision { process_local: false, rebroadcast: None };
+                return RelayDecision {
+                    process_local: false,
+                    rebroadcast: None,
+                };
             }
             let ttl = v.get("h").and_then(Value::as_u64).unwrap_or(0);
             let rebroadcast = if ttl > 0 {
@@ -335,7 +381,10 @@ pub mod relay {
             } else {
                 None
             };
-            RelayDecision { process_local: true, rebroadcast }
+            RelayDecision {
+                process_local: true,
+                rebroadcast,
+            }
         }
     }
 
@@ -396,7 +445,12 @@ mod serial {
                 .open_native_async()
                 .with_context(|| format!("failed to open LoRa serial port {port}"))?;
             let (rd, wr) = tokio::io::split(serial);
-            Ok((Self { writer: Mutex::new(wr) }, rd))
+            Ok((
+                Self {
+                    writer: Mutex::new(wr),
+                },
+                rd,
+            ))
         }
     }
 
@@ -482,7 +536,9 @@ mod tests {
     }
     impl LoopbackRadio {
         fn new() -> Self {
-            Self { sent: Mutex::new(Vec::new()) }
+            Self {
+                sent: Mutex::new(Vec::new()),
+            }
         }
         fn last(&self) -> Option<Vec<u8>> {
             self.sent.lock().unwrap().last().cloned()
@@ -511,7 +567,11 @@ mod tests {
 
     #[test]
     fn assignment_frame_round_trips() {
-        let f = MeshFrame::Assign { node: "rover-2".into(), x: 9.5, y: 0.5 };
+        let f = MeshFrame::Assign {
+            node: "rover-2".into(),
+            x: 9.5,
+            y: 0.5,
+        };
         assert_eq!(MeshFrame::decode(&f.encode()).unwrap(), f);
     }
 
@@ -532,16 +592,28 @@ mod tests {
         // Coordinator with the off-grid outbox enabled; one idle node reports in.
         let coord = Coordinator::new().with_assignment_outbox();
         coord.report(idle_node("rover-a", 1_000));
-        coord.add_task(crate::fleet::Task { id: "t".into(), x: 5.0, y: 6.0, min_battery: 0.0 });
+        coord.add_task(crate::fleet::Task {
+            id: "t".into(),
+            x: 5.0,
+            y: 6.0,
+            min_battery: 0.0,
+        });
         // A tick allocates the task -> the intent lands in the outbox.
-        assert_eq!(coord.tick(2_000), vec![("t".to_string(), "rover-a".to_string())]);
+        assert_eq!(
+            coord.tick(2_000),
+            vec![("t".to_string(), "rover-a".to_string())]
+        );
 
         // Broadcasting drains the outbox into MeshFrame::Assign frames on the radio.
         let radio = LoopbackRadio::new();
         assert_eq!(broadcast_outbox(&radio, &coord).await, 1);
         assert_eq!(
             MeshFrame::decode(&radio.last().unwrap()).unwrap(),
-            MeshFrame::Assign { node: "rover-a".into(), x: 5.0, y: 6.0 }
+            MeshFrame::Assign {
+                node: "rover-a".into(),
+                x: 5.0,
+                y: 6.0
+            }
         );
         // Drained: a second broadcast sends nothing.
         assert_eq!(broadcast_outbox(&radio, &coord).await, 0);
@@ -550,7 +622,12 @@ mod tests {
     #[test]
     fn a_bare_frame_is_processed_but_never_relayed() {
         let relay = relay::MeshRelay::new();
-        let bytes = MeshFrame::Assign { node: "r".into(), x: 1.0, y: 2.0 }.encode();
+        let bytes = MeshFrame::Assign {
+            node: "r".into(),
+            x: 1.0,
+            y: 2.0,
+        }
+        .encode();
         let d = relay.on_receive(&bytes);
         assert!(d.process_local);
         assert!(d.rebroadcast.is_none());
@@ -559,7 +636,11 @@ mod tests {
     #[test]
     fn a_relayed_frame_floods_then_dedups() {
         let relay = relay::MeshRelay::new();
-        let origin = MeshFrame::Assign { node: "r".into(), x: 1.0, y: 2.0 };
+        let origin = MeshFrame::Assign {
+            node: "r".into(),
+            x: 1.0,
+            y: 2.0,
+        };
         let bytes = relay::originate(&origin, 42, 2);
         // First hearing: process locally + rebroadcast with hops decremented to 1.
         let d = relay.on_receive(&bytes);
@@ -578,13 +659,17 @@ mod tests {
     #[test]
     fn a_relayed_frame_with_no_hops_left_is_the_last_stop() {
         let relay = relay::MeshRelay::new();
-        let bytes = relay::originate(&MeshFrame::Heartbeat {
-            node: "n".into(),
-            x: None,
-            y: None,
-            battery: None,
-            mode: "idle".into(),
-        }, 7, 0);
+        let bytes = relay::originate(
+            &MeshFrame::Heartbeat {
+                node: "n".into(),
+                x: None,
+                y: None,
+                battery: None,
+                mode: "idle".into(),
+            },
+            7,
+            0,
+        );
         let d = relay.on_receive(&bytes);
         assert!(d.process_local, "still ingested at the final hop");
         assert!(d.rebroadcast.is_none(), "ttl 0 → no further flooding");
@@ -605,8 +690,16 @@ mod tests {
         let rebc = ingest_line_relayed(&bytes, &coord, &relay, 5_000);
         assert!(rebc.is_some(), "hops remain, so caller should rebroadcast");
         // The heartbeat was bridged: the node is now auctionable.
-        coord.add_task(crate::fleet::Task { id: "t".into(), x: 2.0, y: 3.0, min_battery: 0.0 });
-        assert_eq!(coord.auction_tick(6_000), vec![("t".to_string(), "rover-z".to_string())]);
+        coord.add_task(crate::fleet::Task {
+            id: "t".into(),
+            x: 2.0,
+            y: 3.0,
+            min_battery: 0.0,
+        });
+        assert_eq!(
+            coord.auction_tick(6_000),
+            vec![("t".to_string(), "rover-z".to_string())]
+        );
     }
 
     #[tokio::test]
@@ -614,7 +707,12 @@ mod tests {
         // Default coordinator (no outbox) collects nothing — single-brain pays zero.
         let coord = Coordinator::new();
         coord.report(idle_node("rover-a", 1_000));
-        coord.add_task(crate::fleet::Task { id: "t".into(), x: 5.0, y: 6.0, min_battery: 0.0 });
+        coord.add_task(crate::fleet::Task {
+            id: "t".into(),
+            x: 5.0,
+            y: 6.0,
+            min_battery: 0.0,
+        });
         coord.tick(2_000);
         let radio = LoopbackRadio::new();
         assert_eq!(broadcast_outbox(&radio, &coord).await, 0);
@@ -629,13 +727,20 @@ mod tests {
             battery: Some(88.0),
             mode: "normal".into(),
         };
-        assert!(f.encoded_len() < 230, "heartbeat is {} bytes", f.encoded_len());
+        assert!(
+            f.encoded_len() < 230,
+            "heartbeat is {} bytes",
+            f.encoded_len()
+        );
     }
 
     #[tokio::test]
     async fn spine_transmits_a_heartbeat_through_the_radio() {
         let radio = Arc::new(LoopbackRadio::new());
-        let spine = LoraMeshSpine::new(Arc::clone(&radio) as Arc<dyn MeshRadio>, LoraMeshConfig::default());
+        let spine = LoraMeshSpine::new(
+            Arc::clone(&radio) as Arc<dyn MeshRadio>,
+            LoraMeshConfig::default(),
+        );
         spine
             .send_heartbeat("rover-1", Some(1.0), Some(2.0), Some(50.0), "normal")
             .await
@@ -658,12 +763,24 @@ mod tests {
     async fn an_oversized_frame_is_refused() {
         let radio = Arc::new(LoopbackRadio::new());
         // a tiny payload cap forces the refusal path
-        let cfg = LoraMeshConfig { max_payload: 16, ..Default::default() };
+        let cfg = LoraMeshConfig {
+            max_payload: 16,
+            ..Default::default()
+        };
         let spine = LoraMeshSpine::new(radio, cfg);
         let err = spine
-            .send_heartbeat("a-very-long-node-name-that-will-not-fit", Some(1.0), Some(2.0), Some(3.0), "normal")
+            .send_heartbeat(
+                "a-very-long-node-name-that-will-not-fit",
+                Some(1.0),
+                Some(2.0),
+                Some(3.0),
+                "normal",
+            )
             .await;
-        assert!(err.is_err(), "oversized frame must be refused, not truncated");
+        assert!(
+            err.is_err(),
+            "oversized frame must be refused, not truncated"
+        );
     }
 
     #[test]
@@ -681,7 +798,13 @@ mod tests {
         assert_eq!(state.battery, Some(64.0));
         assert_eq!(state.last_seen_ms, 1_000);
         // an assignment is not a node report
-        assert!(MeshFrame::Assign { node: "x".into(), x: 0.0, y: 0.0 }.to_node_state(1).is_none());
+        assert!(MeshFrame::Assign {
+            node: "x".into(),
+            x: 0.0,
+            y: 0.0
+        }
+        .to_node_state(1)
+        .is_none());
     }
 
     #[test]
@@ -696,14 +819,26 @@ mod tests {
         };
         assert!(ingest_line(&hb.encode(), &coord, 1_000));
         // the node is now known: a task at the origin is auctioned to it
-        coord.add_task(crate::fleet::Task { id: "t".into(), x: 0.0, y: 0.0, min_battery: 0.0 });
-        assert_eq!(coord.auction_tick(1_000), vec![("t".to_string(), "rover-a".to_string())]);
+        coord.add_task(crate::fleet::Task {
+            id: "t".into(),
+            x: 0.0,
+            y: 0.0,
+            min_battery: 0.0,
+        });
+        assert_eq!(
+            coord.auction_tick(1_000),
+            vec![("t".to_string(), "rover-a".to_string())]
+        );
     }
 
     #[test]
     fn assignments_and_garbage_lines_are_not_node_reports() {
         let coord = Coordinator::new();
-        let asn = MeshFrame::Assign { node: "x".into(), x: 1.0, y: 2.0 };
+        let asn = MeshFrame::Assign {
+            node: "x".into(),
+            x: 1.0,
+            y: 2.0,
+        };
         assert!(!ingest_line(&asn.encode(), &coord, 1));
         assert!(!ingest_line(b"not a frame", &coord, 1));
     }

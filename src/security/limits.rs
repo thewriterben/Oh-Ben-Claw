@@ -107,9 +107,16 @@ pub enum SafetyViolation {
     /// The pin is not in the rule's allow-list.
     PinNotAllowed { pin: i64 },
     /// The value is outside the permitted range.
-    ValueOutOfRange { value: i64, min: Option<i64>, max: Option<i64> },
+    ValueOutOfRange {
+        value: i64,
+        min: Option<i64>,
+        max: Option<i64>,
+    },
     /// The action fired again before the minimum interval elapsed.
-    RateLimited { min_interval_ms: u64, since_last_ms: u64 },
+    RateLimited {
+        min_interval_ms: u64,
+        since_last_ms: u64,
+    },
 }
 
 impl std::fmt::Display for SafetyViolation {
@@ -119,9 +126,15 @@ impl std::fmt::Display for SafetyViolation {
                 write!(f, "safety: pin {pin} not in allow-list")
             }
             SafetyViolation::ValueOutOfRange { value, min, max } => {
-                write!(f, "safety: value {value} out of range (min={min:?}, max={max:?})")
+                write!(
+                    f,
+                    "safety: value {value} out of range (min={min:?}, max={max:?})"
+                )
             }
-            SafetyViolation::RateLimited { min_interval_ms, since_last_ms } => {
+            SafetyViolation::RateLimited {
+                min_interval_ms,
+                since_last_ms,
+            } => {
                 write!(
                     f,
                     "safety: rate limit ({since_last_ms}ms since last, min {min_interval_ms}ms)"
