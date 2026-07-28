@@ -740,6 +740,37 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 Err(e) => tracing::warn!(source, "liveness: retirement failed: {e}"),
             }
         }
+
+        // Retention. The fourth and last way a belief stops being held, and the only one
+        // that comes from a rule rather than from the world: an agent's own note is never
+        // superseded (nothing rewrites that entity), never orphaned (the agent does not
+        // stop existing), and never undercut (an assertion rests on nothing recorded).
+        // Without a policy it stays believed forever — the bench store carried six such
+        // notes from an investigation that had concluded ten days earlier.
+        //
+        // Runs after liveness so a note already withdrawn for a better reason keeps that
+        // reason. Empty config does nothing at all, which is the intended default.
+        if !config.perception.expiry.is_empty() {
+            let policies = &config.perception.expiry;
+            match oh_ben_claw::memory::expiry::expire(world, policies, now) {
+                Ok(out) => {
+                    for why in &out.rejected {
+                        // Loud, because a retention rule that quietly does nothing is how
+                        // you find out a year later that nothing ever expired.
+                        tracing::error!("[[perception.expiry]] policy rejected: {why}");
+                    }
+                    if !out.is_empty() {
+                        info!(
+                            expired = out.expired.len(),
+                            unsupported = out.unsupported.len(),
+                            policies = policies.len(),
+                            "retention: beliefs aged out of currency"
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!("retention sweep failed: {e}"),
+            }
+        }
     }
 
     // Movement subsystem: expose the safety-bounded `move_actuator` tool to the

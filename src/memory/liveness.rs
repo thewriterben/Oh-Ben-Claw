@@ -178,22 +178,45 @@ pub fn stopped(
         }
     }
 
-    // Walk out transitively. A belief that loses its justification is itself no longer
-    // a justification, so the beliefs resting on *it* have to go too — Doyle's
-    // dependency-directed backtracking, and the reason a one-hop version would have been
-    // a half-measure. The mesh chain is three deep:
-    //
-    //     mesh.<node>  →  mesh.<node>.health  →  .escalation  →  mesh.escalated_count
-    //
-    // so retiring the gateway with one-hop propagation would close the rollups, mark
-    // health unsupported, and leave the escalations and the count standing — the exact
-    // bug, one level further down.
-    //
-    // Breadth-first with a seen-set. The set is what makes this terminate: `derived_from`
-    // is not schema-constrained to be acyclic, and a cycle (however it got written) must
-    // not become an infinite loop inside a startup path.
-    let mut frontier: Vec<i64> = sweep.closed.clone();
-    let mut seen: Vec<i64> = sweep.closed.clone();
+    let (unsupported, skipped) = cascade(world, &sweep.closed, now_ms, &unsupported_tag)?;
+    sweep.unsupported = unsupported;
+    sweep.skipped = skipped;
+    Ok(sweep)
+}
+
+/// Withdraw everything that rested on `seeds`, transitively.
+///
+/// A belief that loses its justification is itself no longer a justification, so the
+/// beliefs resting on *it* have to go too — Doyle's dependency-directed backtracking, and
+/// the reason a one-hop version would have been a half-measure. The mesh chain is three
+/// deep:
+///
+/// ```text
+/// mesh.<node>  →  mesh.<node>.health  →  .escalation  →  mesh.escalated_count
+/// ```
+///
+/// so retiring the gateway with one-hop propagation would close the rollups, mark health
+/// unsupported, and leave the escalations and the count standing — the exact bug, one
+/// level further down.
+///
+/// Breadth-first with a seen-set. The set is what makes this terminate: `derived_from` is
+/// not schema-constrained to be acyclic, and a cycle (however it got written) must not
+/// become an infinite loop inside a startup path.
+///
+/// Returns `(withdrawn, skipped)`. Shared with expiry rather than reimplemented there:
+/// two copies of a graph walk drift, and the one that drifts is always the one without
+/// the cycle guard.
+pub(crate) fn cascade(
+    world: &WorldMemory,
+    seeds: &[i64],
+    now_ms: u64,
+    tag: &Closure,
+) -> Result<(Vec<i64>, Vec<i64>)> {
+    let mut withdrawn = Vec::new();
+    let mut skipped = Vec::new();
+    let mut frontier: Vec<i64> = seeds.to_vec();
+    let mut seen: Vec<i64> = seeds.to_vec();
+
     while !frontier.is_empty() {
         let mut next: Vec<i64> = Vec::new();
         for id in &frontier {
@@ -202,36 +225,34 @@ pub fn stopped(
                     continue;
                 }
                 seen.push(dep.id);
-                if sweep.closed.contains(&dep.id) {
-                    // The dead source's own rollup, already closed directly above.
-                    // Common, and worth naming: a component that derives a fact usually
-                    // writes it under its own source label, so retiring that source
-                    // retracts the rollup without the in-list being consulted at all.
-                    // The in-list earns its keep when the derived belief belongs to a
-                    // *different* source than its inputs — the case no amount of source
-                    // bookkeeping can reach.
+                if seeds.contains(&dep.id) {
+                    // Already closed directly by the caller. Common, and worth naming: a
+                    // component that derives a fact usually writes it under its own
+                    // source label, so retiring that source retracts the rollup without
+                    // the in-list being consulted at all. The in-list earns its keep when
+                    // the derived belief belongs to a *different* source than its inputs
+                    // — the case no amount of source bookkeeping can reach.
                     next.push(dep.id);
                     continue;
                 }
                 if dep.valid_to.is_some() {
-                    // Already closed by someone else. Still traversed: whatever rested
-                    // on it is no better supported for the retraction having come from
+                    // Already closed by someone else. Still traversed: whatever rested on
+                    // it is no better supported for the retraction having come from
                     // elsewhere.
                     next.push(dep.id);
                     continue;
                 }
-                if world.close_fact(dep.id, now_ms, &unsupported_tag)? {
-                    sweep.unsupported.push(dep.id);
+                if world.close_fact(dep.id, now_ms, tag)? {
+                    withdrawn.push(dep.id);
                     next.push(dep.id);
                 } else {
-                    sweep.skipped.push(dep.id);
+                    skipped.push(dep.id);
                 }
             }
         }
         frontier = next;
     }
-
-    Ok(sweep)
+    Ok((withdrawn, skipped))
 }
 
 /// Whether `source` is already marked as having stopped.

@@ -201,6 +201,14 @@ pub enum Closure {
     /// Withdrawn because something it was derived from is no longer believed — the
     /// undercutting case. Names the source whose retirement started the walk.
     Unsupported(String),
+    /// Withdrawn because a declared retention policy says a belief of this kind is no
+    /// longer current. Names the policy's entity prefix.
+    ///
+    /// Distinct from the other two on purpose. Those are consequences of the world
+    /// changing; this is a consequence of a rule someone wrote, and an operator looking
+    /// at a withdrawal should be able to tell "the camera went away" from "we decided
+    /// notes like this stop counting after a week".
+    Expired(String),
 }
 
 impl Closure {
@@ -210,6 +218,7 @@ impl Closure {
             Closure::Open | Closure::Superseded => None,
             Closure::SourceStopped(s) => Some(format!("source-stopped:{s}")),
             Closure::Unsupported(s) => Some(format!("unsupported:{s}")),
+            Closure::Expired(p) => Some(format!("expired:{p}")),
         }
     }
 
@@ -226,6 +235,7 @@ impl Closure {
             Some(t) => match t.split_once(':') {
                 Some(("source-stopped", s)) => Closure::SourceStopped(s.to_string()),
                 Some(("unsupported", s)) => Closure::Unsupported(s.to_string()),
+                Some(("expired", p)) => Closure::Expired(p.to_string()),
                 _ => Closure::Superseded,
             },
             None => Closure::Superseded,
@@ -234,7 +244,10 @@ impl Closure {
 
     /// Whether this closure was a withdrawal rather than a supersession.
     pub fn is_withdrawal(&self) -> bool {
-        matches!(self, Closure::SourceStopped(_) | Closure::Unsupported(_))
+        matches!(
+            self,
+            Closure::SourceStopped(_) | Closure::Unsupported(_) | Closure::Expired(_)
+        )
     }
 }
 
@@ -679,6 +692,45 @@ impl WorldMemory {
         let mut stmt = conn.prepare(&sql)?;
         let facts = stmt
             .query_map(params![source], |row| {
+                Ok(Self::row_to_fact(
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(facts)
+    }
+
+    /// Currently-believed facts whose entity starts with `prefix`.
+    ///
+    /// `LIKE` with an escaped prefix rather than string matching in Rust: a retention
+    /// policy scans this on a schedule, and pulling every open fact back to filter it
+    /// here would make the cost of a narrow policy the same as a broad one.
+    pub fn open_facts_with_prefix(&self, prefix: &str) -> Result<Vec<Fact>> {
+        let conn = self.conn.lock().unwrap();
+        // `_` and `%` in an entity prefix are literal, not wildcards. Without the escape
+        // a policy for `mesh_` would also match `mesha`, `meshb`, and so on.
+        let pattern = format!(
+            "{}%",
+            prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+        );
+        let sql = format!(
+            "SELECT {} FROM world_facts
+             WHERE valid_to IS NULL AND entity LIKE ?1 ESCAPE '\\'
+             ORDER BY id ASC",
+            Self::COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let facts = stmt
+            .query_map(params![pattern], |row| {
                 Ok(Self::row_to_fact(
                     row.get(0)?,
                     row.get(1)?,

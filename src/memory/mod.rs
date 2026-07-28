@@ -19,6 +19,7 @@
 //! | [`image`] | Multimodal image storage and retrieval |
 
 pub mod embed;
+pub mod expiry;
 pub mod heartbeat;
 pub mod image;
 pub mod journal;
