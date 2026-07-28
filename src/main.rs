@@ -2346,8 +2346,33 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         // Build the full gateway state with all subsystems (reusing the shared
         // observability context so reflex/safing fire counts appear in /metrics).
         let obs = Arc::clone(&obs);
-        let sched = scheduler::Scheduler::new(&config.agent.name)
-            .unwrap_or_else(|_| scheduler::Scheduler::new("obc").unwrap());
+        // Scheduler::new takes a *path*, not a name. Passing the agent name
+        // created a relative file in the process's working directory -- and
+        // then `.unwrap()`ed the fallback, so the whole agent panicked on
+        // startup whenever that directory wasn't writable. Every service
+        // manager runs with a working directory the user doesn't control
+        // (Task Scheduler uses System32), which made this fatal for any
+        // unattended start. Resolve a real path in the data directory.
+        let sched_path = directories::ProjectDirs::from("com", "thewriterben", "oh-ben-claw")
+            .map(|d| d.data_dir().join("scheduler.db"))
+            .unwrap_or_else(|| std::path::PathBuf::from("scheduler.db"));
+        if let Some(parent) = sched_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let sched = match scheduler::Scheduler::new(&sched_path.to_string_lossy()) {
+            Ok(s) => s,
+            Err(e) => {
+                // In-memory keeps the gateway serving; scheduled tasks simply
+                // don't survive a restart. Better than refusing to start.
+                tracing::warn!(
+                    path = %sched_path.display(),
+                    error = %e,
+                    "scheduler database unavailable - falling back to in-memory (tasks will not persist)"
+                );
+                scheduler::Scheduler::new(":memory:")
+                    .expect("in-memory scheduler cannot fail")
+            }
+        };
         let mut gs = gateway::GatewayState::new(config.gateway.clone())
             .with_agent(handle.clone())
             .with_memory(Arc::clone(&memory))
@@ -2420,7 +2445,20 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 Some(state)
             }
             Err(e) => {
-                tracing::warn!("Gateway failed to bind: {}", e);
+                // This used to be a bare warning, and the agent carried on
+                // running with no API at all: the process list looked healthy,
+                // the logs looked nearly normal, and nothing answered on the
+                // port. The usual cause is a restart racing the outgoing
+                // process for the socket, so name that explicitly rather than
+                // leaving the operator to infer it from an OS error code.
+                tracing::error!(
+                    host = %config.gateway.host,
+                    port = config.gateway.port,
+                    error = %e,
+                    "GATEWAY FAILED TO BIND - the agent is running with no API. \
+                     Usually the port is still held by a previous instance \
+                     (wait for it to exit) or taken by another service."
+                );
                 None
             }
         }
