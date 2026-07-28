@@ -193,8 +193,19 @@ impl CommsController {
                 "source": reading.source,
             });
             world.observe(&entity, value, now_ms, now_ms, &self.source)?;
+            // The aggregate rests on every link fact it summarises, not only the one
+            // that just arrived — a mode of "online" depends on the links that are down
+            // as much as on the one that is up. Read them back rather than tracking ids,
+            // because `self.lock()` holds in-memory link state and the store holds the
+            // beliefs; the in-list has to name the beliefs.
+            let mut support: Vec<i64> = Vec::new();
+            for name in self.lock().keys() {
+                if let Ok(Some(f)) = world.current(&format!("link.{name}")) {
+                    support.push(f.id);
+                }
+            }
             let net = json!({ "mode": net_mode.as_str(), "links": self.lock().len() });
-            world.observe("net.mode", net, now_ms, now_ms, &self.source)?;
+            world.observe_derived_from("net.mode", net, now_ms, now_ms, &self.source, &support)?;
         }
 
         Ok(LinkStatus {

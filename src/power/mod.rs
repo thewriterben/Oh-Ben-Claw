@@ -188,9 +188,26 @@ impl PowerController {
                 "mode": mode.as_str(),
                 "source": reading.source,
             });
-            world.observe_as("power.battery", battery, now_ms, now_ms, &self.source, origin)?;
+            let battery_fact =
+                world.observe_as("power.battery", battery, now_ms, now_ms, &self.source, origin)?;
             let mode_fact = json!({ "mode": mode.as_str(), "soc_pct": reading.soc_pct });
-            world.observe_as("power.mode", mode_fact, now_ms, now_ms, &self.source, origin)?;
+            // The mode is computed from the reading immediately above, so it says so.
+            //
+            // `observe_as_derived_from`, not `observe_derived_from`: the latter forces
+            // `Origin::Derived`, and a battery level can arrive from an agent tool call
+            // rather than off a wire. An asserted reading must yield an asserted mode, or
+            // the reflex trust gate — which excludes `Asserted` precisely so a language
+            // model cannot drive safing — would start accepting it. Recording support
+            // must not quietly launder provenance.
+            world.observe_as_derived_from(
+                "power.mode",
+                mode_fact,
+                now_ms,
+                now_ms,
+                &self.source,
+                origin,
+                &[battery_fact.id],
+            )?;
         }
         Ok(PowerStatus {
             soc_pct: reading.soc_pct,

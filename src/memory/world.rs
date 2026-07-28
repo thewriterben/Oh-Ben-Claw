@@ -509,6 +509,42 @@ impl WorldMemory {
         self.insert(entity, value, valid_from, ingested_at, source, Origin::Derived, Some(one))
     }
 
+    /// Record support **and** an explicit origin.
+    ///
+    /// [`WorldMemory::observe_derived_from`] forces [`Origin::Derived`], which is right
+    /// for a framework rollup computed from framework facts. It is wrong — and unsafe —
+    /// wherever origin has to travel with the content.
+    ///
+    /// The case that forced this: `power.mode` is computed from `power.battery`, and the
+    /// power suite writes both with the origin of the *reading*, because a battery level
+    /// can arrive from an agent tool call rather than off a wire. A reading the agent
+    /// asserted yields an asserted mode, and the reflex engine's trust gate
+    /// ([`OriginSet::EVIDENCE`]) then declines to act on it. Recording support with
+    /// `observe_derived_from` would have relabelled that mode `Derived`, which *is* in
+    /// the evidence set — quietly reopening the path where an agent's claim drives
+    /// physical safing, which is the exact hazard the gate exists to close.
+    ///
+    /// Support and origin answer different questions. Adding the first must not silently
+    /// overwrite the second.
+    #[allow(clippy::too_many_arguments)]
+    pub fn observe_as_derived_from(
+        &self,
+        entity: &str,
+        value: Value,
+        valid_from: u64,
+        ingested_at: u64,
+        source: &str,
+        origin: Origin,
+        derived_from: &[i64],
+    ) -> Result<Fact> {
+        let one = if derived_from.is_empty() {
+            Vec::new()
+        } else {
+            vec![derived_from.to_vec()]
+        };
+        self.insert(entity, value, valid_from, ingested_at, source, origin, Some(one))
+    }
+
     /// Record a belief supported by any one of several **alternative** justifications.
     ///
     /// Use this when a belief is independently corroborated: two sensors that each
@@ -1145,6 +1181,45 @@ mod tests {
 
         let (with, total) = w.support_coverage().unwrap();
         assert_eq!((with, total), (0, 2), "coverage names the blind spot");
+    }
+
+    #[test]
+    fn recording_support_does_not_launder_provenance() {
+        // The hazard found while extending coverage. `power.mode` is computed from
+        // `power.battery`, and the power suite writes both with the origin of the
+        // *reading* — a battery level can arrive from an agent tool call rather than off
+        // a wire. `observe_derived_from` forces `Derived`, which is inside
+        // `OriginSet::EVIDENCE`, so using it here would have turned an agent's claim into
+        // something the reflex trust gate accepts and acts on.
+        let w = WorldMemory::open_in_memory().unwrap();
+        let reading = w
+            .observe_as("power.battery", json!({"soc": 8}), 1_000, 1_000, "power", Origin::Asserted)
+            .unwrap();
+
+        let laundered = w
+            .observe_derived_from("wrong.mode", json!("critical"), 1_100, 1_100, "power", &[reading.id])
+            .unwrap();
+        assert_eq!(laundered.origin, Origin::Derived);
+        assert!(
+            OriginSet::EVIDENCE.accepts(laundered.origin),
+            "this is the escalation the API must make it hard to reach for"
+        );
+
+        let honest = w
+            .observe_as_derived_from(
+                "power.mode",
+                json!("critical"),
+                1_100,
+                1_100,
+                "power",
+                reading.origin,
+                &[reading.id],
+            )
+            .unwrap();
+        assert_eq!(honest.origin, Origin::Asserted, "origin travels with the content");
+        assert!(!OriginSet::EVIDENCE.accepts(honest.origin), "still not evidence");
+        // And support was recorded all the same — the two are independent.
+        assert_eq!(honest.derived_from, Some(vec![vec![reading.id]]));
     }
 
     #[test]
