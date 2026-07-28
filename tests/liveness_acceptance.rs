@@ -285,6 +285,41 @@ fn a_candidate_retention_policy_reports_what_it_would_take() {
     assert!(due(&w, &policies, now).unwrap().len() == would.len());
 }
 
+/// What the agent actually sees, rendered from the real store.
+///
+/// Unit tests render preambles from stores they built. This renders one from whatever is
+/// really there, which is the only way to find out whether the caps are set anywhere near
+/// right — 24 facts is a guess until you see it against 45 open beliefs and 13
+/// withdrawals.
+#[test]
+fn the_world_preamble_against_the_real_store() {
+    let Some((w, _)) = store("preamble") else {
+        eprintln!("skipped: set OBC_ACCEPTANCE_WORLD_DB to a *copy* of a world.db");
+        return;
+    };
+    use oh_ben_claw::agent::world_context::{render, WorldContextConfig};
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_millis() as u64;
+    let cfg = WorldContextConfig::default();
+    let out = render(&w, &cfg, now).expect("a non-empty store renders something");
+
+    println!("\n----- begin preamble ({} chars) -----", out.chars().count());
+    println!("{out}");
+    println!("----- end preamble -----\n");
+
+    assert!(out.chars().count() <= cfg.max_chars, "hard cap holds on real data");
+    assert!(out.contains("World state"));
+    // The legend has to survive truncation, or a model sees origins with nothing telling
+    // it what they mean.
+    assert!(
+        out.contains("is not evidence"),
+        "the origin legend must not be the thing that gets cut"
+    );
+}
+
 #[test]
 fn the_phantom_rows_are_reported_even_though_this_cannot_close_them() {
     // The July 17 orphans: an agent note that discovery misread as a node, plus the

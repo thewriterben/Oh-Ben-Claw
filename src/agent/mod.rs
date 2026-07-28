@@ -16,6 +16,7 @@ pub mod reflexion;
 pub mod safing;
 pub mod streaming;
 pub mod system2;
+pub mod world_context;
 pub use edge::{EdgeAgent, EdgeAgentBuilder};
 pub use handle::{AgentEvent, AgentHandle};
 #[allow(unused_imports)]
@@ -71,6 +72,12 @@ pub struct Agent {
     safety: Option<Arc<SafetyGate>>,
     /// Track 0: tamper-evident audit log of physical-action decisions.
     auditor: Option<Arc<Mutex<ActionAuditor>>>,
+    /// World memory, for the state preamble. Read-only from here: the agent's own
+    /// writes go through the `world_memory` tool, which stamps provenance the agent
+    /// cannot forge.
+    world: Option<Arc<crate::memory::world::WorldMemory>>,
+    /// How much of that state to render, and which.
+    world_context: world_context::WorldContextConfig,
     /// Phase 16: when attached, each run is captured as an `Episode` for
     /// experiential self-improvement.
     trajectory: Option<Arc<TrajectoryStore>>,
@@ -122,6 +129,11 @@ impl Agent {
             obs: None,
             safety: None,
             auditor: None,
+            // Off until wired: an agent built without world memory sees exactly what it
+            // saw before, so this cannot change behaviour for a caller that has not
+            // asked for it.
+            world: None,
+            world_context: world_context::WorldContextConfig::default(),
             trajectory: None,
             trust: None,
             approval: None,
@@ -149,6 +161,22 @@ impl Agent {
     /// tool calls (pin allow-list, value range, rate).
     pub fn with_safety_gate(mut self, gate: Arc<SafetyGate>) -> Self {
         self.safety = Some(gate);
+        self
+    }
+
+    /// Let the agent see what it currently believes about the physical world.
+    ///
+    /// Without this, [`Agent::build_context`] is the system prompt and the last 50
+    /// messages and nothing else — the world model exists, and the thing reasoning on
+    /// top of it cannot see any of it. It can query `world_memory`, but only if
+    /// something prompts it to, and nothing does.
+    pub fn with_world_context(
+        mut self,
+        world: Arc<crate::memory::world::WorldMemory>,
+        cfg: world_context::WorldContextConfig,
+    ) -> Self {
+        self.world = Some(world);
+        self.world_context = cfg;
         self
     }
 
@@ -676,6 +704,24 @@ impl Agent {
             role: ChatRole::System,
             content: self.config.system_prompt.clone(),
         });
+
+        // What it currently believes about the world — a separate system message, not
+        // appended to the prompt. Two reasons. The prompt is who the agent is and is
+        // stable; this is what is true right now and changes every turn, and splicing
+        // them makes the standing instruction look as perishable as a sensor reading.
+        // It also keeps the boundary visible to anyone reading a transcript.
+        if let Some(world) = &self.world {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            if let Some(state) = world_context::render(world, &self.world_context, now) {
+                messages.push(ChatMessage {
+                    role: ChatRole::System,
+                    content: state,
+                });
+            }
+        }
 
         // Recent conversation history
         let history = self

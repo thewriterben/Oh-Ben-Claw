@@ -1293,6 +1293,14 @@ pub struct PerceptionConfig {
     /// ```
     #[serde(default)]
     pub expiry: Vec<crate::memory::expiry::ExpiryPolicy>,
+    /// What the agent is shown about its own world model — `[perception.context]`.
+    ///
+    /// Until this existed, `build_context` was the system prompt plus the last 50
+    /// messages and nothing else: the world model and the thing reasoning on top of it
+    /// were not connected. Defaults are deliberately modest (24 facts, 5 withdrawals,
+    /// a 2400-character hard cap) because this renders on every turn.
+    #[serde(default)]
+    pub context: crate::agent::world_context::WorldContextConfig,
 }
 
 /// Vision-driven reflex + foresight rules (`[perception.vision_rules]`). Detections
