@@ -35,34 +35,6 @@ fn norm(s: &str) -> String {
     s.replace("\r\n", "\n").trim_end().to_string()
 }
 
-/// Blank out the two sub-agent fields the two planners do not yet agree on.
-///
-/// **This is a stated hole in the gate, not a rounding of it.** Rendering is aligned
-/// and enforced byte for byte; *role assignment* is not. Given the same hardware the
-/// two implementations pick different tool sets — Rust gives the vision agent
-/// `["camera_capture", "sensor_read"]`, the TypeScript port gives it
-/// `["camera_capture", "vision_analyze"]` — and write different role prose. That is a
-/// real disagreement about what the deployment does, and it was invisible until this
-/// fixture existed.
-///
-/// Masking it here is the ratchet: everything else is locked now, the divergence has
-/// a name and a reproduction, and closing it is a change to the assignment logic
-/// rather than to the emitters. What is NOT acceptable is widening this mask.
-fn mask_unaligned_assignment_fields(s: &str) -> String {
-    s.lines()
-        .map(|l| {
-            if l.starts_with("role = \"") || l.starts_with("tools = [") {
-                "<<assignment field: see mask_unaligned_assignment_fields>>"
-            } else {
-                l
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim_end()
-        .to_string()
-}
-
 fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|e| {
         panic!(
@@ -146,6 +118,12 @@ fn deployment_toml_is_paste_ready_for_the_runtime() {
 /// the TypeScript port emitted `[fleet.lora_serial]`, `[memory]` and different
 /// `[agent]` keys, and nothing noticed. A gate narrower than its claim is worse than
 /// no gate, because people stop checking the part it does not cover.
+///
+/// It briefly carried a mask over the `role` and `tools` lines of
+/// `[[orchestrator.agents]]`, because the two planners assigned different tool
+/// sets to the same hardware. The mask shipped with an expiry assertion on the
+/// TypeScript side — a test that failed the moment the divergence went away. It
+/// fired, so the mask is gone and this is a straight comparison.
 #[test]
 fn config_toml_matches_golden() {
     let dir = fixtures_dir().join("deployment/nanopi");
@@ -160,20 +138,11 @@ fn config_toml_matches_golden() {
         eprintln!("blessed {}", expected_path.display());
     }
 
-    // The golden is byte-exact and blessed from this side, so this half is a
-    // straight comparison; the mask exists for the TypeScript side, which cannot
-    // yet match the assignment fields. Asserting both here keeps the two suites
-    // comparing the same thing.
     assert_eq!(
         norm(&read(&expected_path)),
         norm(&rendered),
         "config TOML drifted from the golden — if intentional, re-bless \
          and sync the generator's fixture copy"
-    );
-    assert_eq!(
-        mask_unaligned_assignment_fields(&read(&expected_path)),
-        mask_unaligned_assignment_fields(&rendered),
-        "masked comparison must also hold — if this fails the mask itself is wrong"
     );
 }
 

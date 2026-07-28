@@ -51,16 +51,19 @@ impl DeploymentPlanner {
                  manages conversation context, and delegates specialised tasks.",
                 host_name
             ),
+            // Every name here is a tool the agent actually registers. `file_read`,
+            // `file_write`, `http_get` and `memory_note` were not — the real ones are
+            // `file`, `http` and `memory` — so a generated config named four tools
+            // that do not exist, in the agent that coordinates all the others.
             tools: vec![
                 "spawn_agent".to_string(),
                 "delegate_task".to_string(),
                 "list_agents".to_string(),
                 "stop_agent".to_string(),
                 "shell".to_string(),
-                "file_read".to_string(),
-                "file_write".to_string(),
-                "http_get".to_string(),
-                "memory_note".to_string(),
+                "file".to_string(),
+                "http".to_string(),
+                "memory".to_string(),
             ],
             config_snippet: String::new(),
             position: None,
@@ -68,8 +71,14 @@ impl DeploymentPlanner {
 
         // ── Vision agent ──────────────────────────────────────────────────────
         let vision_items = inventory.items_with_capability("camera_capture");
-        if !vision_items.is_empty() {
-            let item = vision_items[0];
+        // An item the user explicitly marked `Vision` beats the first one that merely
+        // has a camera; several boards carry `camera_capture` incidentally.
+        let vision_pick = vision_items
+            .iter()
+            .find(|i| i.role == ItemRole::Vision)
+            .or_else(|| vision_items.first())
+            .copied();
+        if let Some(item) = vision_pick {
             assignments.push(AgentAssignment {
                 name: "vision-agent".to_string(),
                 role: NodeRole::VisionAgent,
@@ -79,9 +88,11 @@ impl DeploymentPlanner {
                      context, detects objects and scenes, and reports findings to the orchestrator.",
                     item.name
                 ),
+                // The node captures, the host analyses. `sensor_read` had nothing to
+                // do with the role description this agent is given.
                 tools: vec![
                     "camera_capture".to_string(),
-                    "sensor_read".to_string(),
+                    "vision_analyze".to_string(),
                 ],
                 config_snippet: format!(
                     "# vision-agent peripheral\n[[peripherals.boards]]\nboard = \"{}\"\ntransport = \"{}\"{}",
@@ -119,7 +130,7 @@ impl DeploymentPlanner {
                 ),
                 tools: vec![
                     "audio_sample".to_string(),
-                    "sensor_read".to_string(),
+                    "audio_transcribe".to_string(),
                 ],
                 config_snippet: format!(
                     "# audio-agent peripheral\n[[peripherals.boards]]\nboard = \"{}\"\ntransport = \"{}\"{}",
@@ -145,7 +156,11 @@ impl DeploymentPlanner {
         if !display_items.is_empty() {
             let item = display_items[0];
             let has_touch = item.has_capability("touch");
-            let has_speaker = item.has_capability("audio_sample");
+            // `audio_sample` is the MICROPHONE capability; `audio_output` is the
+            // speaker. Checking the former described a board that can only listen as
+            // one that "plays synthesised speech through the integrated speaker" —
+            // the TypeScript port had already found and fixed this.
+            let has_speaker = item.has_capability("audio_output");
             assignments.push(AgentAssignment {
                 name: "speech-display-agent".to_string(),
                 role: NodeRole::SpeechDisplayAgent,
@@ -158,8 +173,8 @@ impl DeploymentPlanner {
                     if has_speaker { ", and plays synthesised speech through the integrated speaker" } else { "" }
                 ),
                 tools: vec![
-                    "sensor_read".to_string(),
                     "gpio_write".to_string(),
+                    "speak".to_string(),
                 ],
                 config_snippet: format!(
                     "# speech-display-agent peripheral\n[[peripherals.boards]]\nboard = \"{}\"\ntransport = \"{}\"{}",
@@ -213,16 +228,15 @@ impl DeploymentPlanner {
                 role: NodeRole::SensingAgent,
                 hardware_item: hw_name.to_string(),
                 role_description: format!(
-                    "Environmental sensing specialist. Reads temperature, humidity, and \
-                     other environmental data from sensors attached to {}. Logs readings \
-                     and triggers alerts when thresholds are exceeded.",
+                    "Environmental sensing specialist running on {}. Reads temperature, \
+                     humidity, and other sensor data, and forwards readings to the \
+                     orchestrator.",
                     hw_name
                 ),
                 tools: vec![
                     "sensor_read".to_string(),
                     "i2c_read".to_string(),
                     "gpio_read".to_string(),
-                    "memory_note".to_string(),
                 ],
                 config_snippet: String::new(),
                 position: None,

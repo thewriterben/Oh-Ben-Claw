@@ -50,22 +50,22 @@ routing = "manual"
 [[orchestrator.agents]]
 name = "vision-agent"
 role = "Vision specialist running on xiao-esp32s3-sense. Captures images, analyses visual context, detects objects and scenes, and reports findings to the orchestrator."
-tools = ["camera_capture", "sensor_read"]
+tools = ["camera_capture", "vision_analyze"]
 
 [[orchestrator.agents]]
 name = "audio-agent"
 role = "Audio specialist running on sipeed-6plus1-mic-array. Captures microphone audio, performs speech-to-text transcription, detects wake words, and forwards transcriptions to the orchestrator."
-tools = ["audio_sample", "sensor_read"]
+tools = ["audio_sample", "audio_transcribe"]
 
 [[orchestrator.agents]]
 name = "speech-display-agent"
-role = "Display and speech output specialist running on waveshare-esp32-s3-touch-lcd-2.1. Renders text and status information on the display, accepts touch input, and plays synthesised speech through the integrated speaker."
-tools = ["sensor_read", "gpio_write"]
+role = "Display and speech output specialist running on waveshare-esp32-s3-touch-lcd-2.1. Renders text and status information on the display, accepts touch input."
+tools = ["gpio_write", "speak"]
 
 [[orchestrator.agents]]
 name = "sensing-agent"
-role = "Environmental sensing specialist. Reads temperature, humidity, and other environmental data from sensors attached to nanopi-neo3. Logs readings and triggers alerts when thresholds are exceeded."
-tools = ["sensor_read", "i2c_read", "gpio_read", "memory_note"]
+role = "Environmental sensing specialist running on nanopi-neo3. Reads temperature, humidity, and other sensor data, and forwards readings to the orchestrator."
+tools = ["sensor_read", "i2c_read", "gpio_read"]
 
 [spine]
 kind = "mqtt"
