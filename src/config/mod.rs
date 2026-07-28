@@ -8,6 +8,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub mod first_run;
 pub mod secret;
 pub use secret::SecretString;
 
@@ -2333,14 +2334,31 @@ impl Config {
             }
         }
 
-        tracing::warn!(
-            "No config file found at {:?} (or ~/.oh-ben-claw/config.toml) - using \
-             built-in defaults, which use the `{}` provider. Set OBC_CONFIG or \
-             pass --config to load a specific file.",
-            config_path,
-            Self::default().provider.name,
+        // No config: choose the provider whose key is actually present rather than
+        // insisting on the compiled-in default. See `first_run` for why this only
+        // happens here — an explicit config is a stated intention and is never
+        // second-guessed.
+        let (resolution, provider) = first_run::resolve_from_env();
+        match &resolution {
+            first_run::Resolution::FromEnv { provider: p, var, model } => tracing::info!(
+                provider = %p, model = %model, from = %var,
+                "No config file — using the provider whose API key is set. \
+                 Write ~/.oh-ben-claw/config.toml to pin this."
+            ),
+            first_run::Resolution::LocalFallback { provider: p, model } => tracing::warn!(
+                provider = %p, model = %model,
+                "{}", first_run::guidance()
+            ),
+        }
+        tracing::debug!(
+            "No config file at {:?} or ~/.oh-ben-claw/config.toml; \
+             set OBC_CONFIG or pass --config to load a specific file.",
+            config_path
         );
-        Ok(Self::default())
+        Ok(Config {
+            provider,
+            ..Self::default()
+        })
     }
 
     /// `~/.oh-ben-claw/config.toml` - the documented location, kept on the

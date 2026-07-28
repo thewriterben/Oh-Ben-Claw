@@ -1,0 +1,141 @@
+# Open Body Control — example configuration
+#
+# Copy to ~/.oh-ben-claw/config.toml and edit. Everything here has a working
+# default; the file exists so you can see what is adjustable, not because you
+# need all of it.
+#
+# YOU MAY NOT NEED THIS FILE AT ALL. With no config, OBC looks at which provider
+# key is in your environment and uses that one:
+#
+#     export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY, OPENROUTER_API_KEY
+#     obc start
+#
+# With no key anywhere it falls back to a local Ollama, which needs none. Write
+# this file when you want to pin a choice rather than have one inferred.
+
+[agent]
+name = "obc"
+
+# The one string that says what this agent is for. With no purpose here, the
+# agent infers one from whatever the recent conversation happens to be about —
+# which is how an agent ends up describing itself as whatever subsystem it was
+# last asked about.
+#
+# You do NOT need to describe the world here. Current beliefs — what the sensors
+# report, with provenance and age, plus anything recently withdrawn and why —
+# are supplied to the model separately on every turn. See [perception.context].
+system_prompt = """
+You are OBC, an agent with a body: microcontroller nodes, sensors and cameras
+you can read and command.
+
+Answer directly and concisely. Reach for a tool when the answer depends on the
+current state of the machine or the mesh; otherwise just answer. Confirm before
+writing files, running shell commands, or changing configuration.
+"""
+
+# ── Brain ────────────────────────────────────────────────────────────────────
+[provider]
+# "anthropic" | "openai" | "openrouter" | "ollama" | "compatible"
+name = "anthropic"
+
+# MODEL IDS MOVE. This is the first line to change if the provider returns a
+# 404 or "unknown model" — it is a snapshot of what was current when this file
+# was written, not a guarantee.
+model = "claude-sonnet-4-5"
+
+# api_key is deliberately NOT set here.
+#
+# Leave it unset and export ANTHROPIC_API_KEY / OPENAI_API_KEY /
+# OPENROUTER_API_KEY instead. An inline key works and warns at startup: this is
+# the file people paste into issues, commit to repositories, and hand over when
+# asking for help, and a credential in it leaves with the file.
+# api_key = "sk-..."
+
+temperature = 0.7
+
+# Ordered fallbacks, tried in turn when the primary fails. Worth having: an
+# agent with reflexes keeps reacting when its brain is unreachable, but it
+# cannot reason, and a second provider is cheaper than an outage.
+# [[provider.fallbacks]]
+# name = "openai"
+# model = "gpt-4o"
+
+# Running locally instead — no key, no per-token cost, and a smaller model:
+# [provider]
+# name = "ollama"
+# model = "llama3.2"
+# base_url = "http://localhost:11434/api/chat"
+
+[provider.retry]
+max_attempts = 3
+initial_backoff_ms = 500
+
+# ── Perception ───────────────────────────────────────────────────────────────
+[perception]
+# The temporal world model: bitemporal facts with provenance, a support graph,
+# and four ways a belief can stop being held. Off by default; most of what makes
+# this an embodied agent rather than a chatbot depends on it.
+world_memory = true
+
+# What the agent is shown about its own beliefs, every turn. Costs context —
+# roughly 2 KB at these settings — and is the difference between an agent that
+# knows what it believes and one that must think to ask.
+[perception.context]
+enabled = true
+max_facts = 24
+max_withdrawals = 5
+max_chars = 2400
+# include = ["mesh.", "trail."]   # restrict to prefixes; empty = everything
+
+# Retention: the only way to withdraw a belief that nothing else can reach.
+# An agent's own notes are never superseded (nothing rewrites that entity),
+# never orphaned (the agent does not stop existing), and never undercut (an
+# assertion rests on nothing recorded). Without a policy they are believed
+# forever. Nothing expires unless you say so.
+#
+# [[perception.expiry]]
+# prefix = "incident."
+# max_age_ms = 604800000       # 7 days, measured from when it was recorded
+# origins = ["asserted"]       # the agent's own conclusions, never a reading
+
+# ── Reflexes ─────────────────────────────────────────────────────────────────
+# System 1: fast local rules over world state that act without waking the model.
+[reflex]
+enabled = true
+safing = true
+interval_ms = 1000
+max_escalations_per_min = 6
+
+# System 2: escalations wake the model, novelty-gated so a standing condition
+# does not wake it forever.
+[system2]
+enabled = true
+novelty_window_ms = 600000
+max_wakes_per_hour = 6
+
+# ── Safety (Track 0) ─────────────────────────────────────────────────────────
+# Deterministic, model-independent limits on physical actuation. These are
+# enforced in code before any command reaches hardware — not instructions to
+# the model, which can be argued out of.
+[safety]
+enabled = true
+# audit_key = "..."            # HMAC key for the tamper-evident action log
+dynamic_trust = true
+taint_mode = "warn"
+
+# NOTE the plural. `[[safety.limit]]` parses as an unknown key and silently
+# leaves the gate with zero limits — which is why unknown keys under [safety]
+# are now a hard error rather than a shrug.
+# [[safety.limits]]
+# node_id = "obc-esp32-s3-001"
+# tool = "gpio_write"
+# allowed_pins = [12, 13]
+# value_min = 0
+# value_max = 1
+# min_interval_ms = 500
+
+# ── Gateway ──────────────────────────────────────────────────────────────────
+[gateway]
+enabled = true
+host = "127.0.0.1"
+port = 8090
