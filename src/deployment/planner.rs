@@ -346,7 +346,7 @@ impl DeploymentPlanner {
         out.push_str("# Uncomment to pin one instead:\n");
         out.push_str("# [provider]\n");
         out.push_str("# name = \"anthropic\"\n");
-        out.push_str("# model = \"claude-sonnet-4-5\"\n\n");
+        out.push_str("# model = \"claude-sonnet-5\"\n\n");
 
         // [peripherals]
         out.push_str("[peripherals]\n");

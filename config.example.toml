@@ -62,7 +62,7 @@ name = "anthropic"
 # MODEL IDS MOVE. This is the first line to change if the provider returns a
 # 404 or "unknown model" — it is a snapshot of what was current when this file
 # was written, not a guarantee.
-model = "claude-sonnet-4-5"
+model = "claude-sonnet-5"
 
 # api_key is deliberately NOT set here.
 #

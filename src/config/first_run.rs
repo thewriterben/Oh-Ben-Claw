@@ -18,6 +18,17 @@
 //! upstream. The mitigation is that the chosen model is logged at startup and named in
 //! `config.example.toml` as the first thing to change — a wrong guess should be one
 //! obvious edit, not a mystery.
+//!
+//! What *is* enforced is that the guess is made in one place. The same identifier
+//! appears in `config.example.toml`, in the config the deployment planner emits, and
+//! in both reference bodies; before `the_pinned_model_appears_everywhere_it_should`
+//! existed they could be updated separately, so a careful edit here left three copies
+//! of the old value in the files a new user actually reads.
+//!
+//! Checked 2026-07-28 against the Anthropic model list: `claude-sonnet-5` is current,
+//! retirement not before 2027-06-30. The previous pin, `claude-sonnet-4-5`, was still
+//! callable but two generations back with its retirement window opening 2026-09-29 —
+//! which for a first-run default is a 404 with a two-month fuse.
 
 use super::{ProviderConfig, SecretString};
 
@@ -29,12 +40,12 @@ use super::{ProviderConfig, SecretString};
 /// the one most likely to be chosen.
 const CANDIDATES: &[(&str, &str, &str)] = &[
     // (provider name, env var, default model)
-    ("anthropic", "ANTHROPIC_API_KEY", "claude-sonnet-4-5"),
+    ("anthropic", "ANTHROPIC_API_KEY", "claude-sonnet-5"),
     ("openai", "OPENAI_API_KEY", "gpt-4o"),
     (
         "openrouter",
         "OPENROUTER_API_KEY",
-        "anthropic/claude-sonnet-4.5",
+        "anthropic/claude-sonnet-5",
     ),
 ];
 
@@ -199,6 +210,39 @@ mod tests {
         let (_, cfg) = resolve(env_of(&[("ANTHROPIC_API_KEY", "sk-ant-secret")]));
         assert!(cfg.api_key.is_none());
         assert!(!format!("{cfg:?}").contains("secret"));
+    }
+
+    /// One pinned identifier, in one place.
+    ///
+    /// This is the coupling that keeps going wrong. The same model string has to
+    /// appear in `config.example.toml` (both repos), in the config the deployment
+    /// planner emits, and in the reference bodies — and every previous update
+    /// changed some of them. A stale copy is not a cosmetic problem: it is the
+    /// value a new user is told to uncomment.
+    #[test]
+    fn the_pinned_model_appears_everywhere_it_should() {
+        let pinned = CANDIDATES
+            .iter()
+            .find(|(p, _, _)| *p == "anthropic")
+            .map(|(_, _, m)| *m)
+            .expect("an anthropic candidate");
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+        let example =
+            std::fs::read_to_string(root.join("config.example.toml")).expect("config.example.toml");
+        assert!(
+            example.contains(&format!("model = \"{pinned}\"")),
+            "config.example.toml pins a different model than first_run"
+        );
+
+        // The planner's emitted config offers the same identifier to uncomment.
+        let inv = crate::deployment::inventory::HardwareInventory::nanopi_scenario();
+        let emitted = crate::deployment::planner::DeploymentPlanner::plan(&inv).config_toml;
+        assert!(
+            emitted.contains(&format!("# model = \"{pinned}\"")),
+            "the generated config suggests a different model than first_run"
+        );
     }
 
     #[test]
