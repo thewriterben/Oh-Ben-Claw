@@ -1,0 +1,10 @@
+﻿# Revisions to skip when running `git blame`. Enable with:
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Only whole-tree mechanical reformats belong here. A commit in this file is one
+# that changed no behaviour, so hiding it from blame loses nothing; a commit that
+# changed behaviour must never be added, because hiding it loses the reason.
+
+# style: cargo fmt --all, for the first time
+a5b96b54b8b10d2ed760aab57fc8704dfd2437d1
