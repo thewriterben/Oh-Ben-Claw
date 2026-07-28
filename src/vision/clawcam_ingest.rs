@@ -384,6 +384,20 @@ pub fn record_subject_counts(
             .and_then(|f| f.value.get("value").and_then(|v| v.as_u64()))
             .unwrap_or(0);
         let next = prev + 1;
+        // Deliberately written with *no* in-list, unlike every other derived fact in the
+        // codebase. A running total's real support is every detection that ever
+        // incremented it — 5,110 of them for white-tailed deer on the bench store — and
+        // the honest encoding of that is either an unusable list or a chain of 5,110
+        // links, each fact resting on its predecessor. Walking such a chain is one
+        // `dependents` query per link, at startup, before the gateway binds.
+        //
+        // Recording `[prev]` alone would be worse than nothing: it looks like support
+        // while carrying almost none of the actual dependency, and it would let a single
+        // retraction thousands of links back unwind the whole history in a boot path.
+        //
+        // So the counter says "unknown support", which is true, and is inert to every
+        // sweep. An accumulator is the case where an in-list does not fit; the mechanism
+        // is for facts computed from a bounded set of current readings.
         world.observe(&key, json!({ "value": next }), ingested_at_ms, ingested_at_ms, source)?;
         out.push(next);
     }
