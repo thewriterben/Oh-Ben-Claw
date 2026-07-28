@@ -456,25 +456,42 @@ pub async fn tick(
     // watches `mesh.escalated_count` and escalates to System 2. Recomputed after the
     // decisions above and written only on change (so a plain number, not churn).
     if !views.is_empty() {
-        let escalated_count = views
-            .iter()
-            .filter(|v| {
-                world
-                    .current(&format!("mesh.{}.escalation", v.node))
-                    .ok()
-                    .flatten()
-                    .and_then(|f| f.value.get("status").and_then(|s| s.as_str()).map(|s| s == "escalated"))
-                    .unwrap_or(false)
-            })
-            .count() as u64;
+        // Record *what the count was computed from* — the JTMS in-list. This loop
+        // already read every per-node escalation fact and used to throw the ids away,
+        // which is precisely why a disabled supervisor could leave `escalated_count = 2`
+        // standing with nothing underneath it while the reflex kept firing on it.
+        //
+        // Every escalation fact consulted goes in the list, not only the escalated ones:
+        // a count of 1 depends on the nodes that were *not* escalated just as much as on
+        // the one that was — change either and the number changes.
+        //
+        // When no node has an escalation fact yet the list is empty, which claims the
+        // count is self-standing. It very nearly is: all that is under it then is the
+        // supervisor having run, and that becomes explicit support once source-liveness
+        // markers land.
+        let mut support: Vec<i64> = Vec::new();
+        let mut escalated_count: u64 = 0;
+        for v in &views {
+            if let Some(f) = world
+                .current(&format!("mesh.{}.escalation", v.node))
+                .ok()
+                .flatten()
+            {
+                if f.value.get("status").and_then(|s| s.as_str()) == Some("escalated") {
+                    escalated_count += 1;
+                }
+                support.push(f.id);
+            }
+        }
         let prev = world.current("mesh.escalated_count").ok().flatten().and_then(|f| f.value.as_u64());
         if prev != Some(escalated_count) {
-            let _ = world.observe(
+            let _ = world.observe_derived_from(
                 "mesh.escalated_count",
                 json!(escalated_count),
                 now_ms,
                 now_ms,
                 "mesh-supervisor",
+                &support,
             );
         }
     }
@@ -743,6 +760,37 @@ mod tests {
                 && matches!(f.action, Action::Escalate { .. })),
             "mesh health drives a reflex escalation"
         );
+    }
+
+    #[tokio::test]
+    async fn the_count_records_the_escalation_facts_it_was_computed_from() {
+        // The July bench bug in miniature. `mesh.escalated_count = 2` outlived the
+        // supervisor that computed it because nothing recorded what it rested on. Now
+        // the count carries its in-list, so "what did I believe because of this node?"
+        // is a walk rather than an archaeology exercise.
+        let world = WorldMemory::open_in_memory().unwrap();
+        world.observe_as("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, SOURCE, Origin::Observed).unwrap();
+        world
+            .observe("mesh.n.health", json!({ "status": "offline" }), 1_000, 1_000, "test")
+            .unwrap();
+        let mut c = esc_cfg();
+        c.recover = None;
+
+        tick(&world, None, &c, 30_000).await;
+
+        let esc = world.current("mesh.n.escalation").unwrap().unwrap();
+        let count = world.current("mesh.escalated_count").unwrap().unwrap();
+        assert_eq!(count.value.as_u64(), Some(1));
+        assert_eq!(
+            count.derived_from,
+            Some(vec![esc.id]),
+            "the count names the escalation fact under it"
+        );
+        // And the edge is walkable from the other end — this is the query that was
+        // impossible before: what rests on this node's escalation?
+        let deps = world.dependents(esc.id).unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].entity, "mesh.escalated_count");
     }
 
     #[tokio::test]
