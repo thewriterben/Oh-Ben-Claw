@@ -83,11 +83,20 @@ impl PoseFuser {
         let mut sin = 0.0;
         let mut cos = 0.0;
         let mut used = 0usize;
+        // The readings this pose is actually made of. A weighted mean is the clearest
+        // case there is for a conjunctive in-list: change or withdraw any contributing
+        // reading and *this number* is wrong. It does not mean pose becomes unknowable
+        // when a sensor dies — the next tick fuses whatever is left — it means the value
+        // computed from the dead sensor stops being the one we believe.
+        let mut support: Vec<i64> = Vec::new();
 
         for s in &self.sources {
-            let x = self.world.current(&s.x_entity)?.and_then(|f| value_of(&f.value));
-            let y = self.world.current(&s.y_entity)?.and_then(|f| value_of(&f.value));
-            let h = self.world.current(&s.heading_entity)?.and_then(|f| value_of(&f.value));
+            let fx = self.world.current(&s.x_entity)?;
+            let fy = self.world.current(&s.y_entity)?;
+            let fh = self.world.current(&s.heading_entity)?;
+            let x = fx.as_ref().and_then(|f| value_of(&f.value));
+            let y = fy.as_ref().and_then(|f| value_of(&f.value));
+            let h = fh.as_ref().and_then(|f| value_of(&f.value));
             if let (Some(x), Some(y), Some(h)) = (x, y, h) {
                 let w = s.weight.max(0.0);
                 if w == 0.0 {
@@ -100,6 +109,9 @@ impl PoseFuser {
                 sin += w * r.sin();
                 cos += w * r.cos();
                 used += 1;
+                // Only the sources that contributed. A zero-weighted or incomplete
+                // source is not part of what this pose rests on.
+                support.extend([&fx, &fy, &fh].into_iter().flatten().map(|f| f.id));
             }
         }
 
@@ -114,15 +126,17 @@ impl PoseFuser {
         };
 
         let (ex, ey, eh) = &self.out;
-        self.world.observe(ex, json!({ "value": fused.x, "sources": used }), now_ms, now_ms, &self.source)?;
-        self.world.observe(ey, json!({ "value": fused.y, "sources": used }), now_ms, now_ms, &self.source)?;
-        self.world.observe(eh, json!({ "value": fused.heading_deg, "sources": used }), now_ms, now_ms, &self.source)?;
-        self.world.observe(
+        let src = &self.source;
+        self.world.observe_derived_from(ex, json!({ "value": fused.x, "sources": used }), now_ms, now_ms, src, &support)?;
+        self.world.observe_derived_from(ey, json!({ "value": fused.y, "sources": used }), now_ms, now_ms, src, &support)?;
+        self.world.observe_derived_from(eh, json!({ "value": fused.heading_deg, "sources": used }), now_ms, now_ms, src, &support)?;
+        self.world.observe_derived_from(
             "nav.pose_fused",
             json!({ "x": fused.x, "y": fused.y, "heading_deg": fused.heading_deg, "sources": used }),
             now_ms,
             now_ms,
-            &self.source,
+            src,
+            &support,
         )?;
         Ok(Some(fused))
     }
@@ -152,6 +166,10 @@ mod tests {
         assert!((p.x - 2.5).abs() < 1e-9);
         // fused pose written to the canonical entity the localizer reads
         let fact = world.current("sensor.pos_x").unwrap().unwrap();
+        assert!(
+            fact.derived_from.as_ref().is_some_and(|s| !s.is_empty()),
+            "a fused pose must name the readings it was fused from"
+        );
         assert!((fact.value["value"].as_f64().unwrap() - 2.5).abs() < 1e-9);
     }
 
