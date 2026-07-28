@@ -371,6 +371,20 @@ impl WorldMemory {
         if !has_closed_reason {
             conn.execute_batch("ALTER TABLE world_facts ADD COLUMN closed_reason TEXT;")?;
         }
+
+        // Partial index over the support graph. `dependents` cannot use an index for the
+        // `json_each` membership test itself, but it does not need to look at rows with
+        // no in-list at all — they are excluded by definition. On a real store that is
+        // almost everything: the bench store carries support on a few facts out of
+        // 23,000, so restricting the scan to indexed rows is close to a 10,000× cut in
+        // rows visited per walk step. That ratio matters because a sweep walks once per
+        // frontier fact, at startup, before the gateway binds.
+        //
+        // Created after the column so a store that predates it gets both in one open.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_world_support
+                 ON world_facts(id) WHERE derived_from IS NOT NULL;",
+        )?;
         Ok(())
     }
 
@@ -618,10 +632,12 @@ impl WorldMemory {
     /// putting that policy here would bake in `a·b` semantics for everyone.
     pub fn dependents(&self, id: i64) -> Result<Vec<Fact>> {
         let conn = self.conn.lock().unwrap();
-        // json_each over a NULL column yields no rows, so the NULL case needs no guard.
+        // The `IS NOT NULL` predicate is not redundant with `json_each` returning no
+        // rows for NULL — it is what lets SQLite use the partial index and skip the rows
+        // that could never match. Removing it is silently correct and quadratically slow.
         let sql = format!(
             "SELECT {} FROM world_facts f
-             WHERE EXISTS (
+             WHERE f.derived_from IS NOT NULL AND EXISTS (
                  SELECT 1 FROM json_each(f.derived_from) WHERE json_each.value = ?1
              )
              ORDER BY f.id ASC",
