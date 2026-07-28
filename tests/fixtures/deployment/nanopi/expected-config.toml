@@ -16,7 +16,7 @@ max_tool_iterations = 20
 # Uncomment to pin one instead:
 # [provider]
 # name = "anthropic"
-# model = "claude-sonnet-4-5"
+# model = "claude-sonnet-5"
 
 [peripherals]
 enabled = true
