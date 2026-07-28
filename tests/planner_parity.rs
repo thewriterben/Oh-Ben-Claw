@@ -16,6 +16,7 @@
 
 use oh_ben_claw::config::DeploymentConfig;
 use oh_ben_claw::deployment::inventory::HardwareInventory;
+use oh_ben_claw::deployment::planner::DeploymentPlanner;
 use oh_ben_claw::geo::Site;
 use oh_ben_claw::siteplan::{plan_site, PlacementSpec};
 use serde::Deserialize;
@@ -32,6 +33,34 @@ fn bless() -> bool {
 
 fn norm(s: &str) -> String {
     s.replace("\r\n", "\n").trim_end().to_string()
+}
+
+/// Blank out the two sub-agent fields the two planners do not yet agree on.
+///
+/// **This is a stated hole in the gate, not a rounding of it.** Rendering is aligned
+/// and enforced byte for byte; *role assignment* is not. Given the same hardware the
+/// two implementations pick different tool sets — Rust gives the vision agent
+/// `["camera_capture", "sensor_read"]`, the TypeScript port gives it
+/// `["camera_capture", "vision_analyze"]` — and write different role prose. That is a
+/// real disagreement about what the deployment does, and it was invisible until this
+/// fixture existed.
+///
+/// Masking it here is the ratchet: everything else is locked now, the divergence has
+/// a name and a reproduction, and closing it is a change to the assignment logic
+/// rather than to the emitters. What is NOT acceptable is widening this mask.
+fn mask_unaligned_assignment_fields(s: &str) -> String {
+    s.lines()
+        .map(|l| {
+            if l.starts_with("role = \"") || l.starts_with("tools = [") {
+                "<<assignment field: see mask_unaligned_assignment_fields>>"
+            } else {
+                l
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
 }
 
 fn read(path: &Path) -> String {
@@ -104,6 +133,89 @@ fn deployment_toml_is_paste_ready_for_the_runtime() {
     assert_eq!(first.transport, inv.items[0].transport);
     assert_eq!(first.role, inv.items[0].role.to_string());
     assert_eq!(first.accessories, inv.items[0].accessories);
+}
+
+// ── Deployment: inventory.json → expected-config.toml ─────────────────────────
+
+/// The **whole** generated config, not just the `[deployment]` block.
+///
+/// This fixture exists because its absence hid a real divergence. The goldens used
+/// to cover `[deployment]` and the site plan only, so "three implementations produce
+/// byte-identical output" was true of what was fixtured and false of the sections a
+/// user actually pastes: this side emitted `[edge]` and a hardcoded `[provider]`,
+/// the TypeScript port emitted `[fleet.lora_serial]`, `[memory]` and different
+/// `[agent]` keys, and nothing noticed. A gate narrower than its claim is worse than
+/// no gate, because people stop checking the part it does not cover.
+#[test]
+fn config_toml_matches_golden() {
+    let dir = fixtures_dir().join("deployment/nanopi");
+    let inv_path = dir.join("inventory.json");
+    let expected_path = dir.join("expected-config.toml");
+
+    let inv: HardwareInventory = serde_json::from_str(&read(&inv_path)).unwrap();
+    let rendered = DeploymentPlanner::plan(&inv).config_toml;
+
+    if bless() {
+        write(&expected_path, &rendered);
+        eprintln!("blessed {}", expected_path.display());
+    }
+
+    // The golden is byte-exact and blessed from this side, so this half is a
+    // straight comparison; the mask exists for the TypeScript side, which cannot
+    // yet match the assignment fields. Asserting both here keeps the two suites
+    // comparing the same thing.
+    assert_eq!(
+        norm(&read(&expected_path)),
+        norm(&rendered),
+        "config TOML drifted from the golden — if intentional, re-bless \
+         and sync the generator's fixture copy"
+    );
+    assert_eq!(
+        mask_unaligned_assignment_fields(&read(&expected_path)),
+        mask_unaligned_assignment_fields(&rendered),
+        "masked comparison must also hold — if this fails the mask itself is wrong"
+    );
+}
+
+/// Every key the config emits is one the runtime actually reads.
+///
+/// The reason this is a test rather than a review habit: the root `Config` does not
+/// reject unknown keys, so a key that is not in the schema parses cleanly and does
+/// nothing. Three had accumulated that way — `[memory] backend`/`path`,
+/// `accessories` on a board entry, and `datasheet_dir`, whose only consumer was
+/// deleted — all of them in the first config a new user ever reads.
+#[test]
+fn the_generated_config_parses_into_the_real_runtime_types() {
+    let inv = HardwareInventory::nanopi_scenario();
+    let toml_src = DeploymentPlanner::plan(&inv).config_toml;
+
+    let parsed: oh_ben_claw::config::Config =
+        toml::from_str(&toml_src).expect("generated config parses into Config");
+
+    assert_eq!(parsed.agent.name, "nanopi-neo3-reference-deployment");
+    assert!(parsed.peripherals.enabled);
+    assert_eq!(parsed.peripherals.boards.len(), inv.items.len());
+    assert!(parsed.deployment.enabled);
+
+    // No [provider] is emitted, so this is the compiled-in default rather than a
+    // vendor the planner chose — which is the point: first-run resolution picks the
+    // provider whose key is set, and a hardcoded one here would override it.
+    assert!(
+        !toml_src.contains("\n[provider]"),
+        "provider must stay commented"
+    );
+
+    // Keys that parsed cleanly and did nothing, now asserted absent.
+    for dead in ["[memory]", "datasheet_dir", "accessories = ["] {
+        assert!(
+            !toml_src
+                .split("[deployment]")
+                .next()
+                .unwrap()
+                .contains(dead),
+            "dead key {dead} is back in the config preamble"
+        );
+    }
 }
 
 // ── Siteplan: case.json → expected-site.toml ──────────────────────────────────
