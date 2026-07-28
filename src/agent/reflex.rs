@@ -69,6 +69,14 @@ pub struct Snapshot {
     pub nums: HashMap<String, f64>,
     /// Entity → raw fact value (for categorical `State` matching).
     pub vals: HashMap<String, Value>,
+    /// Entity → row id of the fact this snapshot read.
+    ///
+    /// The identity of the evidence, as distinct from its value. Two snapshots can agree
+    /// on every value and still be different observations, or agree on the id and be the
+    /// same observation read twice — and only the second is a reason not to act again.
+    /// Empty for snapshots built by value alone; a rule that needs it will simply not
+    /// find its entities and will not suppress.
+    pub ids: HashMap<String, i64>,
 }
 
 impl Snapshot {
@@ -82,6 +90,7 @@ impl Snapshot {
         Self {
             nums,
             vals: HashMap::new(),
+            ids: HashMap::new(),
         }
     }
 }
@@ -189,6 +198,30 @@ pub struct ReflexRule {
     /// `debounce_ms` is enforced.
     #[serde(default)]
     pub max_rate_hz: Option<f64>,
+    /// Only fire again when the *evidence* changed, not merely when the clock allowed it.
+    ///
+    /// Debounce is a rate limit: it asks "has enough time passed?" and, for a condition
+    /// that stays true, the answer is eventually always yes. A rule watching a standing
+    /// state therefore re-fires forever at the debounce interval, on the same facts.
+    /// Measured here: the vision rules escalated to the 30B reasoner every hour on
+    /// detections from 6 July, indefinitely, because "a verified person was detected"
+    /// never stopped being true.
+    ///
+    /// With this set, the rule also requires the *ids* of the facts satisfying it to
+    /// differ from the ids at its last fire. Same rows, no fire — nothing new happened,
+    /// whatever the clock says. New detection, new row, fires immediately (subject to
+    /// debounce).
+    ///
+    /// **Opt-in, and it must stay that way.** A safing rule *should* keep firing while a
+    /// dangerous state holds: "the battery is still critical" is worth repeating, and
+    /// suppressing it because the reading has not changed is precisely the wrong
+    /// behaviour. This is for rules that report events, not for rules that hold a
+    /// condition.
+    ///
+    /// A snapshot with no ids (built by value alone, e.g. on a node) never suppresses —
+    /// missing evidence identity is not evidence of sameness.
+    #[serde(default)]
+    pub fire_on_change: bool,
 }
 
 impl ReflexRule {
@@ -219,6 +252,12 @@ pub struct FiredReflex {
 pub struct ReflexEngine {
     rules: Vec<ReflexRule>,
     last_fire: Mutex<HashMap<String, u64>>,
+    /// Per rule, the fact ids that satisfied it when it last fired.
+    ///
+    /// Only consulted for rules with [`ReflexRule::fire_on_change`]. Kept separate from
+    /// `last_fire` so a rule that does not opt in pays nothing and behaves exactly as
+    /// before.
+    last_evidence: Mutex<HashMap<String, Vec<i64>>>,
     trusted: crate::memory::world::OriginSet,
 }
 
@@ -250,6 +289,7 @@ impl ReflexEngine {
         Self {
             rules,
             last_fire: Mutex::new(HashMap::new()),
+            last_evidence: Mutex::new(HashMap::new()),
             trusted: crate::memory::world::OriginSet::EVIDENCE,
         }
     }
@@ -284,6 +324,28 @@ impl ReflexEngine {
                     if now_ms.saturating_sub(last) < min_interval {
                         continue;
                     }
+                }
+            }
+            // Evidence check, after debounce and before recording the fire. Debounce
+            // asks whether enough time has passed; this asks whether anything happened.
+            // A standing condition answers yes to the first forever and no to the second.
+            if rule.fire_on_change {
+                let mut entities = HashSet::new();
+                rule.when.collect_entities(&mut entities);
+                let mut ids: Vec<i64> = entities
+                    .iter()
+                    .filter_map(|e| snapshot.ids.get(e).copied())
+                    .collect();
+                ids.sort_unstable();
+                // No ids at all means the snapshot cannot speak to identity — on a node,
+                // or in a value-only test. Missing evidence identity is not evidence of
+                // sameness, so it must not suppress.
+                if !ids.is_empty() {
+                    let mut ev = self.last_evidence.lock().unwrap_or_else(|p| p.into_inner());
+                    if ev.get(&rule.id) == Some(&ids) {
+                        continue;
+                    }
+                    ev.insert(rule.id.clone(), ids);
                 }
             }
             guard.insert(rule.id.clone(), now_ms);
@@ -337,6 +399,10 @@ impl ReflexEngine {
                 if let Some(v) = fact_to_f64(&fact.value) {
                     snapshot.nums.insert(entity.clone(), v);
                 }
+                // Carry the row id alongside the value. Two ticks reading the same row
+                // are the same observation; two ticks reading different rows with equal
+                // values are not. Only `fire_on_change` rules consult it.
+                snapshot.ids.insert(entity.clone(), fact.id);
                 snapshot.vals.insert(entity, fact.value);
             }
         }
@@ -674,6 +740,7 @@ mod tests {
             then: Action::Escalate { reason: "x".into() },
             debounce_ms: 0,
             max_rate_hz: None,
+            fire_on_change: false,
         };
         let e = ReflexEngine::new(vec![rule]);
         let ents = e.referenced_entities();
@@ -840,6 +907,71 @@ mod tests {
         Snapshot::from_nums(pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect())
     }
 
+    fn rule_on_change(id: &str, entity: &str) -> ReflexRule {
+        ReflexRule {
+            id: id.to_string(),
+            when: Condition::Sensor {
+                entity: entity.to_string(),
+                op: Cmp::Gt,
+                value: 0.0,
+            },
+            then: Action::Escalate { reason: "seen".to_string() },
+            debounce_ms: 0,
+            max_rate_hz: None,
+            fire_on_change: true,
+        }
+    }
+
+    #[test]
+    fn fire_on_change_does_not_re_fire_on_the_same_fact() {
+        // The bench failure: a condition that stays true re-fires at every debounce
+        // interval, forever, on the same evidence. Debounce asks whether enough time has
+        // passed; this asks whether anything happened.
+        use crate::memory::world::{Origin, WorldMemory};
+        let w = WorldMemory::open_in_memory().unwrap();
+        w.observe_as("vision.hits", json!(1), 1_000, 1_000, "clawcam", Origin::Observed)
+            .unwrap();
+
+        let e = ReflexEngine::new(vec![rule_on_change("r", "vision.hits")]);
+        assert_eq!(e.tick(&w, 1_000).unwrap().len(), 1, "first sighting fires");
+        for t in 1..6 {
+            assert!(
+                e.tick(&w, 1_000 + t * 3_600_000).unwrap().is_empty(),
+                "hour {t}: re-fired on evidence that had not changed"
+            );
+        }
+
+        // A genuinely new observation is a new row, and fires at once.
+        w.observe_as("vision.hits", json!(2), 9_000, 9_000, "clawcam", Origin::Observed)
+            .unwrap();
+        assert_eq!(e.tick(&w, 9_000).unwrap().len(), 1, "new evidence fires");
+    }
+
+    #[test]
+    fn a_rule_without_the_flag_still_re_fires_on_a_standing_condition() {
+        // Safing depends on this. "The battery is still critical" is worth repeating,
+        // and suppressing it because the reading has not changed is exactly backwards.
+        use crate::memory::world::{Origin, WorldMemory};
+        let w = WorldMemory::open_in_memory().unwrap();
+        w.observe_as("power.critical", json!(1), 1_000, 1_000, "power", Origin::Observed)
+            .unwrap();
+        let mut rule = rule_on_change("safe", "power.critical");
+        rule.fire_on_change = false;
+        let e = ReflexEngine::new(vec![rule]);
+        assert_eq!(e.tick(&w, 1_000).unwrap().len(), 1);
+        assert_eq!(e.tick(&w, 2_000).unwrap().len(), 1, "still critical, still says so");
+    }
+
+    #[test]
+    fn a_snapshot_without_ids_never_suppresses() {
+        // Value-only snapshots (a node, a simulation) cannot speak to evidence identity.
+        // Missing identity is not evidence of sameness, so it must not silence a rule.
+        let e = ReflexEngine::new(vec![rule_on_change("r", "x")]);
+        let s = snap(&[("x", 1.0)]);
+        assert_eq!(e.evaluate(&s, 1_000).len(), 1);
+        assert_eq!(e.evaluate(&s, 2_000).len(), 1, "no ids, no suppression");
+    }
+
     fn snap_vals(pairs: &[(&str, Value)]) -> Snapshot {
         let mut s = Snapshot::new();
         for (k, v) in pairs {
@@ -910,6 +1042,7 @@ mod tests {
             },
             debounce_ms: 0,
             max_rate_hz: None,
+            fire_on_change: false,
         };
         let e = ReflexEngine::new(vec![rule]);
         assert_eq!(e.tick(&world, 2_000).unwrap().len(), 1);
@@ -930,6 +1063,7 @@ mod tests {
             },
             debounce_ms: 500,
             max_rate_hz: None,
+            fire_on_change: false,
         }
     }
 
@@ -1015,6 +1149,7 @@ mod tests {
             },
             debounce_ms: 0,
             max_rate_hz: None,
+            fire_on_change: false,
         };
         let e = ReflexEngine::new(vec![rule]);
         let fired = e.evaluate(&snap(&[("motion", 1.0)]), 1);
@@ -1232,6 +1367,7 @@ mod tests {
             },
             debounce_ms: 0,
             max_rate_hz: None,
+            fire_on_change: false,
         };
         let sink = Arc::new(MockSink::default());
         let sink_dyn: Arc<dyn ActionSink> = sink.clone();

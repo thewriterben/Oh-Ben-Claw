@@ -71,6 +71,16 @@ pub fn vision_security_rules(opts: &VisionRuleOptions) -> Vec<ReflexRule> {
             },
             debounce_ms: opts.debounce_ms,
             max_rate_hz: None,
+            // A sighting is an event, not a standing condition. "A verified person was
+            // detected" stays true forever once it is true, so a purely time-debounced
+            // rule escalates to the reasoner every debounce interval, indefinitely, on
+            // the same detection — measured on the bench: hourly wakes of the 30B model
+            // on images from 6 July. Fire when there is a *new* detection.
+            //
+            // Deliberately not applied to the safing rules below or in `safing.rs`:
+            // "the battery is still critical" is worth repeating, and suppressing it
+            // because the reading has not changed is exactly backwards.
+            fire_on_change: true,
         });
         if let Some(node) = &opts.capture_node {
             rules.push(ReflexRule {
@@ -82,6 +92,9 @@ pub fn vision_security_rules(opts: &VisionRuleOptions) -> Vec<ReflexRule> {
                 },
                 debounce_ms: opts.debounce_ms,
                 max_rate_hz: None,
+                // Same reasoning: re-capturing on a detection already captured is a
+                // camera command issued for nothing.
+                fire_on_change: true,
             });
         }
     }
@@ -163,6 +176,7 @@ pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
             },
             debounce_ms: opts.debounce_ms,
             max_rate_hz: None,
+            fire_on_change: false,
         },
         ReflexRule {
             id: "vision-anomaly-spike".to_string(),
@@ -183,6 +197,7 @@ pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
             },
             debounce_ms: opts.debounce_ms,
             max_rate_hz: None,
+            fire_on_change: false,
         },
         ReflexRule {
             id: "vision-calibration-drift".to_string(),
@@ -204,6 +219,7 @@ pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
             },
             debounce_ms: opts.debounce_ms,
             max_rate_hz: None,
+            fire_on_change: false,
         },
     ]
 }
