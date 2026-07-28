@@ -271,6 +271,27 @@ impl DeploymentPlanner {
     }
 
     /// Render the TOML configuration snippet for the deployment.
+    /// Render the TOML configuration for the deployment.
+    ///
+    /// # This output is fixtured, byte for byte
+    ///
+    /// The TypeScript port in the deployment generator must produce exactly these
+    /// bytes for the same inventory, and `parity/fixtures/deployment/*/expected-config.toml`
+    /// in OBC-Prime holds both to it. Before that fixture existed the two had quietly
+    /// diverged into different *sections*: this side emitted `[edge]` and a hardcoded
+    /// `[provider]`, that side emitted `[fleet.lora_serial]`, `[memory]` and the
+    /// `[deployment]` block, and the drift gate saw none of it because the goldens
+    /// only covered `[deployment]`.
+    ///
+    /// # Every key here exists in the agent's config schema
+    ///
+    /// That is the rule that settled the merge, and it is not a style preference —
+    /// the root `Config` does not reject unknown keys, so a key that is not in the
+    /// schema parses cleanly and does nothing. Three such keys were found while
+    /// merging (`[memory] backend`/`path`, `accessories` on a board entry,
+    /// `datasheet_dir`, whose only consumer was deleted). A generated config is the
+    /// first one a user ever reads; it should not contain instructions the runtime
+    /// ignores.
     fn render_config(
         inventory: &HardwareInventory,
         assignments: &[AgentAssignment],
@@ -284,74 +305,57 @@ impl DeploymentPlanner {
         // [agent]
         out.push_str("[agent]\n");
         out.push_str(&format!(
-            "name = \"Oh-Ben-Claw ({})\"\n",
-            inventory.scenario_name
+            "name = \"{}\"\n",
+            Self::slug(&inventory.scenario_name)
         ));
         out.push_str(
             "system_prompt = \"\"\"\n\
-            You are Oh-Ben-Claw, an advanced multi-device AI assistant deployed on a\n\
-            hardware swarm. You can see, hear, sense, and display information through\n\
-            your connected peripheral agents. Coordinate them efficiently.\n\
+            You are an embodied agent deployed on a hardware swarm. You can see, hear,\n\
+            sense and act through your connected peripheral nodes. Reach for a tool when\n\
+            the answer depends on the current state of the machine; otherwise just answer.\n\
+            Confirm before any command that moves hardware.\n\
             \"\"\"\n",
         );
-        out.push_str("max_tool_iterations = 15\n\n");
+        out.push_str("max_tool_iterations = 20\n\n");
 
-        // [provider]
-        out.push_str("[provider]\n");
-        out.push_str("name = \"openai\"\n");
-        out.push_str("model = \"gpt-4o\"\n");
-        out.push_str("# api_key = \"sk-...\"  # Or set OPENAI_API_KEY\n\n");
-
-        // [spine]
-        out.push_str("[spine]\n");
-        out.push_str("kind = \"mqtt\"\n");
-        out.push_str("host = \"localhost\"\n");
-        out.push_str("port = 1883\n");
-        out.push_str("tool_timeout_secs = 30\n\n");
-
-        // [edge] — for native host boards
-        if host_board == "nanopi-neo3" || host_board.starts_with("raspberry-pi") {
-            out.push_str("[edge]\n");
-            out.push_str("enabled = true\n");
-            out.push_str("max_history_messages = 20\n");
-            out.push_str("max_tool_iterations = 5\n");
-            out.push_str("p2p_enabled = true\n\n");
-        }
+        // [provider] — commented on purpose.
+        //
+        // A hardcoded vendor here overrides first-run resolution, which exists so that
+        // someone holding an ANTHROPIC_API_KEY is not told OPENAI_API_KEY is missing.
+        // Pinning is a choice the reader makes; this offers it rather than making it.
+        out.push_str(
+            "# Brain: export ANTHROPIC_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY and\n",
+        );
+        out.push_str(
+            "# the agent uses that provider. No key anywhere falls back to a local Ollama.\n",
+        );
+        out.push_str("# Uncomment to pin one instead:\n");
+        out.push_str("# [provider]\n");
+        out.push_str("# name = \"anthropic\"\n");
+        out.push_str("# model = \"claude-sonnet-4-5\"\n\n");
 
         // [peripherals]
         out.push_str("[peripherals]\n");
-        out.push_str("enabled = true\n");
-        out.push_str("datasheet_dir = \"docs/datasheets\"\n\n");
+        out.push_str("enabled = true\n\n");
 
-        // [[peripherals.boards]] for each non-host item
         for item in &inventory.items {
-            if item.role == ItemRole::Host {
-                // Host is native, just emit the native board entry
-                out.push_str("[[peripherals.boards]]\n");
-                out.push_str(&format!("board = \"{}\"\n", item.board_name));
-                out.push_str("transport = \"native\"\n");
-                if !item.accessories.is_empty() {
-                    out.push_str(&format!("# accessories: {}\n", item.accessories.join(", ")));
-                }
-                out.push('\n');
-            } else {
-                out.push_str("[[peripherals.boards]]\n");
-                out.push_str(&format!("board = \"{}\"\n", item.board_name));
-                out.push_str(&format!("transport = \"{}\"\n", item.transport));
-                if item.transport == "serial" {
-                    out.push_str(&format!(
-                        "path = \"{}\"  # adjust to actual port\n",
-                        item.path.as_deref().unwrap_or("/dev/ttyUSB0")
-                    ));
-                    out.push_str("baud = 115200\n");
-                } else if item.transport == "mqtt" {
-                    out.push_str(&format!(
-                        "node_id = \"{}\"\n",
-                        item.node_id.as_deref().unwrap_or(&item.name)
-                    ));
-                }
-                out.push('\n');
+            out.push_str("[[peripherals.boards]]\n");
+            out.push_str(&format!("board = \"{}\"\n", item.board_name));
+            out.push_str(&format!("transport = \"{}\"\n", item.transport));
+            if item.transport == "serial" {
+                out.push_str(&format!(
+                    "path = \"{}\"  # adjust to the port your board enumerates as\n",
+                    item.path.as_deref().unwrap_or("/dev/ttyUSB0")
+                ));
+                out.push_str("baud = 115200\n");
             }
+            if let Some(node_id) = item.node_id.as_deref() {
+                out.push_str(&format!("node_id = \"{}\"\n", node_id));
+            }
+            // Accessories are deliberately not emitted here: PeripheralBoardConfig has
+            // no such field. They reach the runtime through [[deployment.hardware]],
+            // which does carry them and is what the planner reads back.
+            out.push('\n');
         }
 
         // [orchestrator]
@@ -383,8 +387,95 @@ impl DeploymentPlanner {
             }
         }
 
+        // [spine] — only when something is not on the host itself.
+        if inventory.items.iter().any(|i| i.transport != "native") {
+            out.push_str("[spine]\n");
+            out.push_str("kind = \"mqtt\"\n");
+            out.push_str("host = \"localhost\"\n");
+            out.push_str("port = 1883\n");
+            out.push_str("tool_timeout_secs = 30\n\n");
+        }
+
+        // [edge] — small single-board hosts get the reduced limits.
+        if host_board == "nanopi-neo3" || host_board.starts_with("raspberry-pi") {
+            out.push_str("[edge]\n");
+            out.push_str("enabled = true\n");
+            out.push_str("max_history_messages = 20\n");
+            out.push_str("max_tool_iterations = 5\n");
+            out.push_str("p2p_enabled = true\n\n");
+        }
+
+        // [fleet] — LoRa mesh coordination, when the inventory can actually carry it.
+        if inventory
+            .feature_desires
+            .iter()
+            .any(|d| matches!(d, FeatureDesire::WirelessMesh))
+        {
+            out.push_str("[fleet]\n");
+            out.push_str("enabled = true\n\n");
+
+            // No transport filter: a LoRa board reached over MQTT still needs the
+            // serial bridge described, and  falls back to the usual device
+            // path. Requiring "serial" here silently dropped the block for boards
+            // the user had every reason to expect it for.
+            if let Some(lora) = inventory
+                .items
+                .iter()
+                .find(|i| i.has_capability("lora") || i.has_capability("mesh"))
+            {
+                out.push_str(
+                    "# Serial LoRa-mesh node (firmware/lora-node). Set the real device path.\n",
+                );
+                out.push_str("[fleet.lora_serial]\n");
+                out.push_str(&format!(
+                    "port = \"{}\"\n",
+                    lora.path.as_deref().unwrap_or("/dev/ttyUSB0")
+                ));
+                out.push_str("baud = 115200\n");
+                out.push_str("relay_hops = 3\n\n");
+            }
+        }
+
+        // Persistent memory needs no config block. Saying where the database goes is
+        // the useful part, and it is the question people actually ask.
+        if inventory
+            .feature_desires
+            .iter()
+            .any(|d| matches!(d, FeatureDesire::PersistentMemory))
+        {
+            out.push_str(
+                "# Persistent memory is on by default; the database lives in the data root\n",
+            );
+            out.push_str(
+                "# (platform-specific). Set OBC_DATA_DIR, or [paths].data_dir, to move it —\n",
+            );
+            out.push_str(
+                "# and give a second agent on the same machine its own, or they share one\n",
+            );
+            out.push_str("# database and one set of standing approval grants.\n\n");
+        }
+
+        out.push_str(&inventory.to_deployment_toml());
+
         out
     }
+
+    /// `"Trailwatch Camera"` → `"trailwatch-camera"`.
+    ///
+    /// The TypeScript port does `.toLowerCase().replace(/\s+/g, "-")`, and this has
+    /// to match it byte for byte, so it collapses runs of whitespace rather than
+    /// mapping each space.
+    fn slug(name: &str) -> String {
+        name.to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join("-")
+    }
+
+    // The role description is emitted whole. The TypeScript port used to take
+    // `.split(".")[0]`, which truncates at the *first* full stop — and board names
+    // carry version dots, so "running on waveshare-esp32-s3-touch-lcd-2.1" became
+    // "...-lcd-2". Matching that would have made the parity gate enforce a bug.
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
