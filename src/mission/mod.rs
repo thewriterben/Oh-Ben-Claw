@@ -21,7 +21,7 @@ use crate::audio::suite::AudioController;
 use crate::memory::world::WorldMemory;
 use crate::navigation::{NavController, NavGoal};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
@@ -362,6 +362,10 @@ impl MissionRunner {
         match decision {
             Decision::NoOp(s) => Ok(s),
             Decision::Abort(reason) => {
+                // The reason is already in MissionStatus::Aborted and therefore in world
+                // memory. Say it out loud too: a guard tripping is the one mission event an
+                // operator wants to see without going and querying for it.
+                tracing::warn!(reason = %reason, "mission aborted by guard; halting navigation");
                 if let Some(nav) = &self.nav {
                     let _ = nav.halt(now).await;
                 }
@@ -377,7 +381,8 @@ impl MissionRunner {
                 self.record_status();
                 Ok(self.status())
             }
-            Decision::Complete(_) => {
+            Decision::Complete(id) => {
+                tracing::info!(mission = %id, "mission complete; halting navigation");
                 if let Some(nav) = &self.nav {
                     let _ = nav.halt(now).await;
                 }
@@ -398,6 +403,7 @@ fn now_or_zero() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use crate::agent::reflex::Cmp;
 
     fn runner() -> (MissionRunner, Arc<WorldMemory>) {

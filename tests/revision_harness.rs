@@ -230,7 +230,7 @@ fn revision_scorecard() {
     }
 
     println!("\n  belief-revision conformance — {} scenarios\n", SCENARIOS.len());
-    println!("  {:<12} {:<32} {:>5} {:>6}  {}", "family", "scenario", "over", "under", "");
+    println!("  {:<12} {:<32} {:>5} {:>6}  result", "family", "scenario", "over", "under");
     let mut last = "";
     for (family, name, over, under, ok) in &rows {
         let fam = if family == last { "" } else { last = family; family.as_str() };

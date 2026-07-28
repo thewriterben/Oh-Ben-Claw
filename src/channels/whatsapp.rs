@@ -31,7 +31,7 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -299,7 +299,6 @@ async fn send_text(state: &WaState, to: &str, text: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn whatsapp_config_missing_tokens_returns_none() {

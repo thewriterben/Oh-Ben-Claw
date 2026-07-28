@@ -11,6 +11,11 @@
 //! Only text messages from private chats and groups are processed.  Media and
 //! commands other than `/start`, `/help`, and `/clear` are ignored.
 
+// Wire-format types: fields mirror the platform's webhook payload and exist to
+// document what arrives, even where this code does not read them. Deleting them
+// would make the struct a worse description of the wire than the vendor's own docs.
+// Scoped to this file deliberately — the crate root carries no blanket allow.
+#![allow(dead_code)]
 use crate::agent::Agent;
 use crate::channels::typing::TypingTask;
 use crate::channels::utils::chunk_text;

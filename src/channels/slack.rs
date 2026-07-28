@@ -15,13 +15,18 @@
 //!    (`xoxb-…`) into `channels.slack.bot_token` / `SLACK_BOT_TOKEN`.
 //! 5. Subscribe to the `app_mention` and `message.im` bot events.
 
+// Wire-format types: fields mirror the platform's webhook payload and exist to
+// document what arrives, even where this code does not read them. Deleting them
+// would make the struct a worse description of the wire than the vendor's own docs.
+// Scoped to this file deliberately — the crate root carries no blanket allow.
+#![allow(dead_code)]
 use crate::agent::Agent;
 use crate::channels::typing::TypingTask;
 use crate::channels::utils::chunk_text;
 use crate::config::{ProviderConfig, SlackConfig};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::time::Duration;

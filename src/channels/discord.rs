@@ -22,7 +22,7 @@ use crate::channels::utils::chunk_text;
 use crate::config::{DiscordConfig, ProviderConfig};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};

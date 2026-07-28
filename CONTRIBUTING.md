@@ -54,9 +54,6 @@ By participating in this project, you agree to abide by our [Code of Conduct](CO
 # Core agent (default features: hardware + mqtt-spine)
 cargo build --workspace --exclude obc-esp32-s3
 
-# With terminal dashboard
-cargo build --workspace --exclude obc-esp32-s3 --features dashboard
-
 # NanoPi Neo3 cross-compile (from Linux/macOS)
 cargo build \
   --target aarch64-unknown-linux-gnu \

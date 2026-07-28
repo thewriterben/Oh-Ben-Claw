@@ -20,9 +20,14 @@
 //! - The `chat.db` polling approach may miss messages if the database is
 //!   heavily locked; the poll interval is configurable (default 2 s).
 
+// Wire-format types: fields mirror the platform's webhook payload and exist to
+// document what arrives, even where this code does not read them. Deleting them
+// would make the struct a worse description of the wire than the vendor's own docs.
+// Scoped to this file deliberately — the crate root carries no blanket allow.
+#![allow(dead_code)]
 use crate::agent::Agent;
 use crate::config::{IMessageConfig, ProviderConfig};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::sync::Arc;
 
 // ── Channel ───────────────────────────────────────────────────────────────────
@@ -255,7 +260,6 @@ fn imessage_db_path() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn imessage_disabled_returns_none() {

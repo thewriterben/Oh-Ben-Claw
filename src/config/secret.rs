@@ -92,7 +92,10 @@ mod tests {
     fn a_struct_holding_one_is_safe_to_debug() {
         // The actual hazard: not printing the secret directly, but printing something
         // that contains it. This is the case `#[derive(Debug)]` on a config gets wrong.
+        // Read only by the derived Debug, which `dead_code` does not count as a use.
+        // That is the whole point of the test — narrow allow, stated reason.
         #[derive(Debug)]
+        #[allow(dead_code)]
         struct Holder {
             name: String,
             key: Option<SecretString>,

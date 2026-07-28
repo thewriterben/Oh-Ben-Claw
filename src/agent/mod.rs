@@ -1250,7 +1250,6 @@ impl AgentResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::MemoryStore;
     use crate::security::limits::{SafetyGate, SafetyLimit};
     use crate::tools::traits::BlastRadius;
     use serde_json::json;

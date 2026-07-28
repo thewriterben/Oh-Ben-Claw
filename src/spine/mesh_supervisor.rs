@@ -18,7 +18,7 @@
 
 use crate::config::MeshSupervisorConfig;
 use crate::memory::world::{Origin, WorldMemory};
-use crate::spine::lora_gateway::{CommandSink, NodeCommand, SOURCE};
+use crate::spine::lora_gateway::{CommandSink, NodeCommand};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -571,6 +571,7 @@ pub async fn tick(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spine::lora_gateway::SOURCE;
     use std::sync::Mutex;
 
     fn cfg(recover: Option<&str>) -> MeshSupervisorConfig {
