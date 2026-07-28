@@ -31,7 +31,7 @@
 - [Supported Hardware](#supported-hardware)
 - [Getting Started](#getting-started)
 - [Configuration](#configuration)
-- [Personality Files](#personality-files)
+- [Heartbeat File](#heartbeat-file)
 - [Browser Automation](#browser-automation)
 - [Deployment Scheme Generator](#deployment-scheme-generator)
 - [CLI Reference](#cli-reference)
@@ -192,9 +192,9 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 
 **MCP Integration** exposes all tools as a Model Context Protocol server (stdio + HTTP/SSE, dual-mode for the 2026 spec) and imports tools from external MCP servers. **A2A Protocol** implements Google's Agent-to-Agent v1.0 for cross-platform agent interop.
 
-**Operations** — `oh-ben-claw doctor` health checks (now including subsystem/safing coherence), real-time **TUI dashboard** (`--features dashboard`), token **cost tracking** with persistent budgets, **observability** (metrics + spans), event lifecycle **hooks**, scheduled tasks, encrypted secrets **vault**, node **pairing** (HMAC-SHA256), tamper-evident **audit chain**, and sandboxed tool execution (`native` / `docker` / `wasm` runtimes).
+**Operations** — `oh-ben-claw doctor` health checks (now including subsystem/safing coherence), token **cost tracking** with persistent budgets, **observability** (metrics + spans), scheduled tasks, encrypted secrets **vault**, node **pairing** (HMAC-SHA256), tamper-evident **audit chain**, and sandboxed tool execution (`native` / `docker` / `wasm` runtimes).
 
-**Personality & Memory** — editable `SOUL.md` / `USER.md` personality files, proactive `HEARTBEAT.md` task dispatch, a human-readable daily journal, a vector store for RAG, and a hardware-datasheet RAG (`datasheet_search`).
+**Memory** — a bitemporal world model with provenance, a support graph and four ways a belief can be withdrawn (supersession, source liveness, dependency withdrawal, retention); proactive `HEARTBEAT.md` task dispatch; a human-readable daily journal; and a vector store.
 
 ---
 
@@ -245,9 +245,6 @@ cd Oh-Ben-Claw
 
 # Build the core agent (hardware + MQTT features enabled by default)
 cargo build --release
-
-# Optional: build with terminal dashboard
-cargo build --release --features dashboard
 
 # Run the setup wizard
 ./target/release/oh-ben-claw setup
@@ -384,17 +381,14 @@ Channels, browser, ClawHub, cost, runtime, multimodal, and proxy sections are un
 
 ---
 
-## Personality Files
+## Heartbeat File
 
-Instead of editing `system_prompt` in `config.toml`, drop plain Markdown files in `~/.oh-ben-claw/`:
+`~/.oh-ben-claw/HEARTBEAT.md` is a plain Markdown task list; uncompleted items
+trigger the agent on a schedule.
 
-| File | Purpose |
-|------|---------|
-| `SOUL.md` | Agent personality — overrides `[agent].system_prompt` when present |
-| `USER.md` | User profile — appended to the system prompt as a "User Profile" section |
-| `HEARTBEAT.md` | Proactive task list — uncompleted items trigger the agent on a schedule |
-
-**`~/.oh-ben-claw/HEARTBEAT.md`** example (the agent checks this on a schedule):
+Say what the agent is for in `[agent].system_prompt` — see `config.example.toml`.
+You do not need to describe the world there: current beliefs, with provenance
+and age, are supplied to the model on every turn.
 ```markdown
 # My Tasks
 
@@ -458,7 +452,6 @@ Commands:
 Options:
   -c, --config <PATH>   Path to config file [default: ~/.oh-ben-claw/config.toml]
   -v, --verbose         Enable verbose logging
-  --dashboard           Launch the terminal TUI dashboard (requires --features dashboard)
   -h, --help            Print help
   -V, --version         Print version
 ```
@@ -552,16 +545,13 @@ Oh-Ben-Claw/
 │   ├── channels/       # Telegram, Discord, Feishu, IRC, Signal, Matrix, …
 │   ├── config/         # Configuration schema and loading (Config::validate)
 │   ├── cost/           # Token cost tracking and budget enforcement
-│   ├── dashboard/      # Real-time terminal TUI (--features dashboard)
 │   ├── deployment/     # Hardware-driven deployment scheme generator
 │   ├── doctor/         # System diagnostics (oh-ben-claw doctor)
 │   ├── gateway/        # REST/WebSocket API gateway (Axum)
-│   ├── hooks/          # Event lifecycle hooks
 │   ├── mcp/            # Model Context Protocol client/server (dual-mode)
 │   ├── observability/  # Metrics, spans, OpenTelemetry
 │   ├── peripherals/    # Hardware drivers + registry SSOT
 │   ├── providers/      # LLM provider adapters + failover + retry
-│   ├── rag/            # Datasheet retrieval
 │   ├── runtime/        # Sandboxed tool execution (native + docker + wasm)
 │   ├── a2a/            # A2A protocol client and server
 │   ├── scheduler/      # Scheduled tasks and cron jobs

@@ -19,6 +19,11 @@
 //! The bot ignores its own messages using the `@user:server` ID returned by
 //! `/whoami`.
 
+// Wire-format types: fields mirror the platform's webhook payload and exist to
+// document what arrives, even where this code does not read them. Deleting them
+// would make the struct a worse description of the wire than the vendor's own docs.
+// Scoped to this file deliberately — the crate root carries no blanket allow.
+#![allow(dead_code)]
 use crate::agent::Agent;
 use crate::channels::utils::chunk_text;
 use crate::config::{MatrixConfig, ProviderConfig};
@@ -360,7 +365,6 @@ impl MatrixChannel {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn matrix_config_missing_tokens_returns_none() {

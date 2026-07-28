@@ -29,7 +29,6 @@ pub use traits::{Tool, ToolResult};
 /// if Chrome/Chromium is running with `--remote-debugging-port=9222`.
 pub fn default_tools() -> Vec<Box<dyn Tool>> {
     use builtin::browser::all_browser_tools;
-    use std::sync::Arc;
 
     let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
     let cdp_url = std::env::var("OBC_BROWSER_CDP_URL").ok();

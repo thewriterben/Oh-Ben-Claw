@@ -11,10 +11,20 @@ import re
 import sys
 from pathlib import Path
 
-SRC = Path(sys.argv[1] if len(sys.argv) > 1 else ".") / "src"
+ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
+SRC = ROOT / "src"
 
 mods = sorted(p.name for p in SRC.iterdir() if p.is_dir())
+
+# Scan tests/ and examples/ too. An earlier version looked only at src/ and reported
+# `a2a` as unreferenced; tests/evals.rs pins its wire shape as a release gate. An
+# integration test is a consumer, and the one most likely to be the ONLY consumer of a
+# protocol surface that has not shipped yet — precisely the case this is meant to find.
 files = list(SRC.rglob("*.rs"))
+for extra in ("tests", "examples", "benches"):
+    d = ROOT / extra
+    if d.is_dir():
+        files += list(d.rglob("*.rs"))
 
 rows = []
 for m in mods:

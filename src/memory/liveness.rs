@@ -65,7 +65,7 @@
 use anyhow::Result;
 use serde_json::json;
 
-use super::world::{Closure, Fact, Origin, Support, WorldMemory};
+use super::world::{Closure, Origin, WorldMemory};
 
 /// The source label liveness facts are written under.
 ///
@@ -325,6 +325,7 @@ pub fn sweep_silent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::world::Support;
     use serde_json::json;
 
     /// The bench bug, reproduced and then fixed, in the shape it actually occurred:

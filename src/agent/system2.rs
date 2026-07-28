@@ -21,7 +21,7 @@
 //!    records the wake + outcome back into world memory
 //!    (`system2.last_wake`), closing the perceive → reflex → reason loop.
 
-use crate::agent::reflex::{Action, ActionSink};
+use crate::agent::reflex::ActionSink;
 use crate::memory::world::WorldMemory;
 use crate::movement::MovementCommand;
 use async_trait::async_trait;

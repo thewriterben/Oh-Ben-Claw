@@ -62,9 +62,10 @@ fn a_burst_split_at_every_possible_boundary_still_yields_both_commands() {
 /// will happily accept lines the radio cannot send.
 #[test]
 fn the_payload_budget_still_fits_one_radio_frame() {
-    assert!(
-        MAX_PAYLOAD + spine::HEADER <= 255,
-        "MAX_PAYLOAD + header must fit an SX1262 frame; got {}",
-        MAX_PAYLOAD + spine::HEADER
-    );
+    const {
+        assert!(
+            MAX_PAYLOAD + spine::HEADER <= 255,
+            "MAX_PAYLOAD + header must fit an SX1262 frame"
+        );
+    }
 }

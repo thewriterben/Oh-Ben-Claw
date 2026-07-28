@@ -17,11 +17,9 @@
 //!
 //! Both patterns use the existing `Provider` trait and work with any LLM.
 
-use crate::config::ProviderConfig;
 use crate::providers::{ChatMessage, ChatRole, Provider};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::sync::Arc;
 
 // ── Reflexion ─────────────────────────────────────────────────────────────────

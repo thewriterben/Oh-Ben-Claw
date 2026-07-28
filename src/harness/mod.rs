@@ -23,7 +23,7 @@ use crate::memory::world::WorldMemory;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 // ── Verification checks ───────────────────────────────────────────────────────

@@ -125,9 +125,6 @@ console = "0.15"
 # Glob patterns
 glob = "0.3"
 
-# Terminal dashboard (optional — requires ratatui feature)
-ratatui = { version = "0.30", default-features = false, features = ["crossterm"], optional = true }
-crossterm = { version = "0.28", default-features = false, features = ["events"], optional = true }
 
 # System info
 libc = { version = "0.2", default-features = false }
@@ -152,7 +149,6 @@ peripheral-rpi = ["rppal"]
 peripheral-nanopi = []
 peripheral-stm32 = []
 gui = []
-dashboard = ["ratatui", "crossterm"]
 # Dense retrieval leg for episode memory: local ONNX embeddings (fastembed).
 # Off by default so ordinary builds/CI stay light; enable at build time with
 # `--features semantic` and at runtime with `[self_improvement].semantic`.

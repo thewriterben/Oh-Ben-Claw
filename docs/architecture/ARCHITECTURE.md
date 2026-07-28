@@ -57,17 +57,15 @@ Peripheral nodes are the sensory and motor organs of the system. Each node runs 
 | Subsystem | Location | Purpose |
 |---|---|---|
 | Security | `src/security/` | Policy engine, HMAC pairing, encrypted vault |
-| Memory | `src/memory/` | SQLite, personality, heartbeat, journal, image, vector |
+| Memory | `src/memory/` | SQLite, bitemporal world model, heartbeat, journal, image, vector |
 | Channels | `src/channels/` | Telegram, Discord, Slack, Feishu, IRC, Signal, Matrix, … |
 | Providers | `src/providers/` | LLM adapters, failover, retry |
 | Tools | `src/tools/` | Shell, file, HTTP, browser, OTA, vision, audio, hardware |
 | Deployment | `src/deployment/` | Hardware inventory, planner, swarm (Phase 13) |
 | MCP | `src/mcp/` | Model Context Protocol client + server |
 | Skill Forge | `src/skill_forge/` | Community skill registry (ClawHub) |
-| RAG | `src/rag/` | Hardware datasheet retrieval |
 | Vision | `src/vision/` | Camera → LLM vision → action pipeline |
 | Audio | `src/audio/` | Microphone → STT → agent → TTS pipeline |
-| Dashboard | `src/dashboard/` | Ratatui TUI dashboard (optional feature) |
 | A2A | `src/a2a/` | Agent-to-Agent protocol (Google A2A) for inter-agent interoperability |
 | Streaming | `src/agent/streaming.rs` | Streaming tool call accumulation and response building |
 
@@ -205,8 +203,6 @@ Oh-Ben-Claw is built on top of the [ZeroClaw](https://github.com/zeroclaw-labs/z
 | Vision pipeline | ✗ | ✅ |
 | Audio pipeline | ✗ | ✅ |
 | Sensor fusion | ✗ | ✅ |
-| TUI dashboard | ✗ | ✅ (Ratatui) |
-| Personality files | ✗ | ✅ SOUL.md / USER.md |
 | Proactive tasks | ✗ | ✅ HEARTBEAT.md |
 | ClawHub registry | ✗ | ✅ |
 | Model failover | ✗ | ✅ |

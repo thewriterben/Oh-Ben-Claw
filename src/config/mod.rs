@@ -1001,37 +1001,6 @@ impl ProxyConfig {
     }
 }
 
-// ── Personality Configuration (new in Phase 11) ───────────────────────────────
-
-/// Configuration for the personality file system.
-///
-/// Inspired by [MimiClaw](https://github.com/memovai/mimiclaw)'s approach of
-/// storing the agent's personality in editable Markdown files (`SOUL.md` for
-/// the agent's personality and `USER.md` for the user profile).
-///
-/// By default both files live in `~/.oh-ben-claw/` (next to `memory.db`).
-/// Set custom paths here if you want to keep them elsewhere (e.g. in a shared
-/// config management repository).
-///
-/// ```toml
-/// [personality]
-/// soul_path = "/home/alice/.oh-ben-claw/SOUL.md"   # optional override
-/// user_path = "/home/alice/.oh-ben-claw/USER.md"   # optional override
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PersonalityConfig {
-    /// Custom path to the SOUL.md agent personality file.
-    ///
-    /// When unset the default data-dir path (`~/.oh-ben-claw/SOUL.md`) is used.
-    #[serde(default)]
-    pub soul_path: Option<String>,
-    /// Custom path to the USER.md user profile file.
-    ///
-    /// When unset the default data-dir path (`~/.oh-ben-claw/USER.md`) is used.
-    #[serde(default)]
-    pub user_path: Option<String>,
-}
-
 // ── Phase 12 config ───────────────────────────────────────────────────────────
 
 /// Configuration for the browser automation subsystem (Phase 12).
@@ -2214,9 +2183,6 @@ pub struct Config {
     /// HTTP proxy for outbound requests (new in Phase 11).
     #[serde(default)]
     pub proxy: ProxyConfig,
-    /// Personality file configuration — SOUL.md and USER.md (new in Phase 11).
-    #[serde(default)]
-    pub personality: PersonalityConfig,
     /// Browser automation configuration (new in Phase 12).
     #[serde(default)]
     pub browser: BrowserConfig,
@@ -2838,17 +2804,9 @@ mod tests {
     }
 
     #[test]
-    fn personality_config_default_is_empty() {
-        let config = PersonalityConfig::default();
-        assert!(config.soul_path.is_none());
-        assert!(config.user_path.is_none());
-    }
-
-    #[test]
-    fn root_config_has_proxy_and_personality_fields() {
+    fn root_config_has_proxy_field() {
         let config = Config::default();
         assert!(!config.proxy.enabled);
-        assert!(config.personality.soul_path.is_none());
     }
 
     // ── Phase 12 tests ─────────────────────────────────────────────────────────
