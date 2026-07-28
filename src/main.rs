@@ -741,6 +741,25 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             }
         }
 
+        // Repair the subject counters, once, at boot. They are accumulators, so the
+        // damage from a non-idempotent ingest compounds instead of washing out:
+        // `prev + 1` per poll per event turned 50 detections into a deer count of 5,376.
+        // Ingest is idempotent now, which stops the bleeding but cannot undo it — only a
+        // recount from distinct event ids can.
+        //
+        // Cheap and idempotent: after the first correcting boot it finds every counter
+        // already right and writes nothing, so it stays as a self-healing check rather
+        // than becoming a migration someone has to remember to run.
+        match oh_ben_claw::vision::clawcam_ingest::recount_subjects(world, now, "clawcam") {
+            Ok(fixed) if !fixed.is_empty() => {
+                for (subject, old, new) in &fixed {
+                    info!(subject, old, new, "subject count corrected from distinct events");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("subject recount failed: {e}"),
+        }
+
         // Retention. The fourth and last way a belief stops being held, and the only one
         // that comes from a rule rather than from the world: an agent's own note is never
         // superseded (nothing rewrites that entity), never orphaned (the agent does not
