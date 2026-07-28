@@ -118,7 +118,8 @@ pub fn guidance() -> String {
     format!(
         "No provider configured. Set one of {} and OBC will use it, or run a local \
          Ollama (no key needed) and OBC will fall back to it. To pin a specific \
-         provider or model, write ~/.oh-ben-claw/config.toml — see config.example.toml.",
+         provider or model, write a config.toml — see config.example.toml for where \
+         it goes.",
         vars.join(", ")
     )
 }

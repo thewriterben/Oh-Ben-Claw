@@ -2304,7 +2304,9 @@ impl Config {
             let config: Self = toml::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("config parse error in {explicit}: {e}"))?;
             tracing::info!("Loaded config from {:?} (explicit)", path);
-            return Ok(config.published());
+            return Ok(config
+                .with_provider_from_env_if_absent(&content)
+                .published());
         }
         // A config beside the data. This is what makes a relocated instance
         // self-contained: `OBC_DATA_DIR=/srv/obc/b obc start` picks up b's config, b's
@@ -2315,7 +2317,9 @@ impl Config {
             let config: Self = toml::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", rooted.display()))?;
             tracing::info!("Loaded config from {:?} (data root)", rooted);
-            return Ok(config.published());
+            return Ok(config
+                .with_provider_from_env_if_absent(&content)
+                .published());
         }
 
         let config_path = Self::default_config_path()?;
@@ -2323,7 +2327,9 @@ impl Config {
             let content = std::fs::read_to_string(&config_path)?;
             let config: Self = toml::from_str(&content)?;
             tracing::info!("Loaded config from {:?}", config_path);
-            return Ok(config.published());
+            return Ok(config
+                .with_provider_from_env_if_absent(&content)
+                .published());
         }
 
         // `~/.oh-ben-claw/config.toml` is where the documentation, the setup
@@ -2341,7 +2347,9 @@ impl Config {
                     anyhow::anyhow!("config parse error in {}: {e}", home.display())
                 })?;
                 tracing::info!("Loaded config from {:?} (home)", home);
-                return Ok(config.published());
+                return Ok(config
+                    .with_provider_from_env_if_absent(&content)
+                    .published());
             }
         }
 
@@ -2375,6 +2383,49 @@ impl Config {
             ..Self::default()
         }
         .published())
+    }
+
+    /// Fill in the provider from the environment when the file did not name one.
+    ///
+    /// An explicit config is a stated intention and is never second-guessed — but a
+    /// file with no `[provider]` table has not stated one. Before this, `serde`'s
+    /// `default` quietly supplied `openai`/`gpt-4o`, so a config that deliberately
+    /// left the brain unspecified produced "No API key found for provider 'openai'"
+    /// at someone who had exported `ANTHROPIC_API_KEY`. Both reference bodies and
+    /// every config the deployment generator emits omit `[provider]` on purpose, so
+    /// this was the common case, not the exotic one.
+    ///
+    /// The test is `provider.name`, not the presence of a `[provider]` table. Writing
+    /// `[provider.retry]` to tune backoff creates that table without choosing a
+    /// vendor, and the first draft of this — checking for the table — meant a body
+    /// that tuned retry silently opted out of environment resolution and got
+    /// `openai` again. What matters is whether a provider was *named*.
+    fn with_provider_from_env_if_absent(mut self, raw: &str) -> Self {
+        let names_provider = toml::from_str::<toml::Value>(raw)
+            .ok()
+            .and_then(|v| v.get("provider").and_then(|p| p.get("name")).cloned())
+            .is_some();
+        if names_provider {
+            return self;
+        }
+        let (resolution, provider) = first_run::resolve_from_env();
+        match &resolution {
+            first_run::Resolution::FromEnv {
+                provider: p,
+                var,
+                model,
+            } => tracing::info!(
+                provider = %p, model = %model, from = %var,
+                "Config names no [provider]; using the one whose API key is set"
+            ),
+            first_run::Resolution::LocalFallback { provider: p, model } => tracing::warn!(
+                provider = %p, model = %model,
+                "Config names no [provider], and no API key is set. {}",
+                first_run::guidance()
+            ),
+        }
+        self.provider = provider;
+        self
     }
 
     /// Publish `[paths].data_dir` so every subsystem resolves the same root, and
@@ -2679,6 +2730,46 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    // ── An absent [provider] is not a stated one ──────────────────────────────
+
+    #[test]
+    fn a_config_without_a_provider_table_takes_one_from_the_environment() {
+        // Both reference bodies and every config the deployment generator emits omit
+        // [provider] deliberately, so serde's `default` was handing them openai/gpt-4o
+        // and then complaining about a missing OPENAI_API_KEY.
+        let raw = "[agent]\nname = \"benchtop\"\n";
+        let cfg: super::Config = toml::from_str(raw).unwrap();
+        std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-test");
+        let cfg = cfg.with_provider_from_env_if_absent(raw);
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        assert_eq!(cfg.provider.name, "anthropic");
+    }
+
+    #[test]
+    fn tuning_retry_does_not_count_as_choosing_a_provider() {
+        // Found by running a reference body: `[provider.retry]` creates a `provider`
+        // table, so a first version of this that looked for the table silently opted
+        // the body out of resolution and handed it `openai` again. The question is
+        // whether a provider was *named*.
+        let raw = "[provider.retry]\nmax_retries = 2\n";
+        let cfg: super::Config = toml::from_str(raw).unwrap();
+        std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-test");
+        let cfg = cfg.with_provider_from_env_if_absent(raw);
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        assert_eq!(cfg.provider.name, "anthropic");
+    }
+
+    #[test]
+    fn a_named_provider_is_never_overridden() {
+        let raw = "[provider]\nname = \"ollama\"\nmodel = \"llama3.2\"\n";
+        let cfg: super::Config = toml::from_str(raw).unwrap();
+        std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-test");
+        let cfg = cfg.with_provider_from_env_if_absent(raw);
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        assert_eq!(cfg.provider.name, "ollama");
+        assert_eq!(cfg.provider.model, "llama3.2");
+    }
+
     use super::*;
 
     #[test]
