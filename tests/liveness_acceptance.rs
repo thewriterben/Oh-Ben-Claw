@@ -224,17 +224,52 @@ fn a_candidate_retention_policy_reports_what_it_would_take() {
         },
     ];
 
-    // A timestamp comfortably past any bench data, so age is not the variable under test.
-    let now = 2_000_000_000_000u64;
+    // Wall-clock, and this matters more than it looks.
+    //
+    // An earlier version passed a far-future timestamp "so age is not the variable under
+    // test" — which quietly turned the question from *what expires now* into *what would
+    // eventually expire*. It listed six facts; the real sweep took three, because the
+    // other three notes had been rewritten hours earlier and were nowhere near seven days
+    // old. The report was not wrong so much as answering a different question, which is
+    // worse, because it looked like an answer to this one.
+    //
+    // Age is the variable under test. A dry run whose clock is not the clock the real
+    // sweep will use is not a dry run.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_millis() as u64;
     let would = due(&w, &policies, now).expect("dry run");
-    println!("  would expire {} facts:", would.len());
+    println!("  would expire {} facts (as of now):", would.len());
     for f in &would {
         println!(
-            "    #{:<6} {:<34} {:<9} {}",
+            "    #{:<6} {:<38} age {:>6.2} d  {}",
             f.id,
             f.entity,
-            f.source,
-            f.value.to_string().chars().take(60).collect::<String>()
+            (now.saturating_sub(f.ingested_at)) as f64 / 86_400_000.0,
+            f.value.to_string().chars().take(48).collect::<String>()
+        );
+    }
+
+    // What the policies cover but is not yet old enough — the other half of the answer,
+    // and the half whose absence made the first report misleading.
+    let mut safe_for_now = Vec::new();
+    for p in &policies {
+        for f in w.open_facts_with_prefix(&p.prefix).unwrap() {
+            if f.origin == oh_ben_claw::memory::world::Origin::Asserted
+                && !would.iter().any(|x| x.id == f.id)
+            {
+                safe_for_now.push((f.id, f.entity.clone(), now.saturating_sub(f.ingested_at)));
+            }
+        }
+    }
+    println!("  in scope but too young ({}):", safe_for_now.len());
+    for (id, entity, age) in &safe_for_now {
+        println!(
+            "    #{:<6} {:<38} age {:>6.2} d",
+            id,
+            entity,
+            *age as f64 / 86_400_000.0
         );
     }
 
