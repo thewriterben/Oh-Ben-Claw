@@ -869,7 +869,8 @@ mod tests {
         assert_eq!(body["success"], json!(false));
         assert_eq!(body["tool"], json!("mesh_command"));
         assert_eq!(
-            body["error"], json!("safety: pin 99 not in allow-list"),
+            body["error"],
+            json!("safety: pin 99 not in allow-list"),
             "the caller must be able to see why: {body}"
         );
     }
@@ -883,7 +884,9 @@ mod tests {
             &ToolResult::err("requires operator approval (autonomy is supervised)"),
         );
         assert!(
-            body["error"].as_str().is_some_and(|e| e.contains("approval")),
+            body["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("approval")),
             "an approval refusal is distinguishable from a node refusal: {body}"
         );
     }

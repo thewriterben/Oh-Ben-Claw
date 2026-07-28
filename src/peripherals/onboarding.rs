@@ -32,7 +32,10 @@ pub struct VendorAllowlist {
 impl VendorAllowlist {
     /// Build an allowlist from an explicit set of vendor IDs.
     pub fn new(vids: impl IntoIterator<Item = u16>) -> Self {
-        Self { allowed: vids.into_iter().collect(), allow_unknown: false }
+        Self {
+            allowed: vids.into_iter().collect(),
+            allow_unknown: false,
+        }
     }
 
     /// The default policy: trust exactly the vendors present in the hardware

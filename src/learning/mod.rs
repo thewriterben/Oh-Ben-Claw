@@ -95,13 +95,22 @@ pub struct RuleMiner {
 
 impl Default for RuleMiner {
     fn default() -> Self {
-        Self { lookback_ms: 5_000, min_support: 2, min_confidence: 0.6, candidates: Vec::new() }
+        Self {
+            lookback_ms: 5_000,
+            min_support: 2,
+            min_confidence: 0.6,
+            candidates: Vec::new(),
+        }
     }
 }
 
 impl RuleMiner {
     /// Find the timestamps where `outcome` *becomes* true (false→true transitions).
-    fn outcome_events(&self, world: &WorldMemory, outcome: &OutcomeSpec) -> anyhow::Result<Vec<u64>> {
+    fn outcome_events(
+        &self,
+        world: &WorldMemory,
+        outcome: &OutcomeSpec,
+    ) -> anyhow::Result<Vec<u64>> {
         let hist = world.history(&outcome.entity)?;
         let mut events = Vec::new();
         let mut prev_bad = false;
@@ -116,7 +125,11 @@ impl RuleMiner {
     }
 
     /// Mine antecedent rule proposals for the given outcome.
-    pub fn mine(&self, world: &WorldMemory, outcome: &OutcomeSpec) -> anyhow::Result<Vec<ProposedRule>> {
+    pub fn mine(
+        &self,
+        world: &WorldMemory,
+        outcome: &OutcomeSpec,
+    ) -> anyhow::Result<Vec<ProposedRule>> {
         let events = self.outcome_events(world, outcome)?;
         if events.len() < self.min_support {
             return Ok(Vec::new());
@@ -151,7 +164,10 @@ impl RuleMiner {
             let (op, threshold) = if pmean >= gmean {
                 (Cmp::Ge, pre.iter().cloned().fold(f64::INFINITY, f64::min))
             } else {
-                (Cmp::Le, pre.iter().cloned().fold(f64::NEG_INFINITY, f64::max))
+                (
+                    Cmp::Le,
+                    pre.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+                )
             };
             // Specificity: how often the condition holds away from any event.
             let mut bg_pos = 0usize;
@@ -221,7 +237,12 @@ pub struct ProposalStore {
 impl ProposalStore {
     /// A store writing approved rules into `active` (the foresight engine's buffer).
     pub fn new(active: Arc<Mutex<Vec<ForesightRule>>>) -> Self {
-        Self { pending: Mutex::new(Vec::new()), active, horizon_ms: 60_000, debounce_ms: 30_000 }
+        Self {
+            pending: Mutex::new(Vec::new()),
+            active,
+            horizon_ms: 60_000,
+            debounce_ms: 30_000,
+        }
     }
 
     /// Set the horizon/debounce applied to approved learned rules.
@@ -241,7 +262,10 @@ impl ProposalStore {
         let mut added = 0;
         for rule in mined {
             if !guard.iter().any(|p| p.rule.id == rule.id) {
-                guard.push(Proposal { rule, status: ProposalStatus::Pending });
+                guard.push(Proposal {
+                    rule,
+                    status: ProposalStatus::Pending,
+                });
                 added += 1;
             }
         }
@@ -296,7 +320,9 @@ mod tests {
     use serde_json::json;
 
     fn obs(world: &WorldMemory, entity: &str, t: u64, v: f64) {
-        world.observe(entity, json!({ "value": v }), t, t, "test").unwrap();
+        world
+            .observe(entity, json!({ "value": v }), t, t, "test")
+            .unwrap();
     }
 
     /// History where `x` spikes high just before each `alarm` event, and `y` is
@@ -304,14 +330,27 @@ mod tests {
     fn scenario() -> Arc<WorldMemory> {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         // alarm: 0→1 at t=1000, 2000, 3000
-        for &(t, v) in &[(0, 0.0), (1_000, 1.0), (1_100, 0.0), (2_000, 1.0), (2_100, 0.0), (3_000, 1.0)] {
+        for &(t, v) in &[
+            (0, 0.0),
+            (1_000, 1.0),
+            (1_100, 0.0),
+            (2_000, 1.0),
+            (2_100, 0.0),
+            (3_000, 1.0),
+        ] {
             obs(&world, "alarm", t, v);
         }
         // x: high (80) just before each event, low (10) otherwise
         for &(t, v) in &[
-            (500, 10.0), (950, 80.0), (1_050, 10.0),
-            (1_500, 10.0), (1_950, 80.0), (2_050, 10.0),
-            (2_500, 10.0), (2_950, 80.0), (3_050, 10.0),
+            (500, 10.0),
+            (950, 80.0),
+            (1_050, 10.0),
+            (1_500, 10.0),
+            (1_950, 80.0),
+            (2_050, 10.0),
+            (2_500, 10.0),
+            (2_950, 80.0),
+            (3_050, 10.0),
         ] {
             obs(&world, "x", t, v);
         }
@@ -332,7 +371,11 @@ mod tests {
     }
 
     fn outcome() -> OutcomeSpec {
-        OutcomeSpec { entity: "alarm".into(), op: Cmp::Ge, threshold: 1.0 }
+        OutcomeSpec {
+            entity: "alarm".into(),
+            op: Cmp::Ge,
+            threshold: 1.0,
+        }
     }
 
     #[test]
@@ -340,7 +383,9 @@ mod tests {
         let world = scenario();
         let proposals = miner().mine(&world, &outcome()).unwrap();
         // x is proposed (high before the alarm); y is not (flat → low specificity)
-        assert!(proposals.iter().any(|p| p.entity == "x" && p.op == Cmp::Ge && (p.threshold - 80.0).abs() < 1e-6));
+        assert!(proposals
+            .iter()
+            .any(|p| p.entity == "x" && p.op == Cmp::Ge && (p.threshold - 80.0).abs() < 1e-6));
         assert!(!proposals.iter().any(|p| p.entity == "y"));
         let xp = proposals.iter().find(|p| p.entity == "x").unwrap();
         assert_eq!(xp.support, 3);
@@ -363,7 +408,13 @@ mod tests {
         let mined = miner().mine(&world, &outcome()).unwrap();
         assert!(store.ingest(mined) >= 1);
 
-        let id = store.list().into_iter().find(|p| p.rule.entity == "x").unwrap().rule.id;
+        let id = store
+            .list()
+            .into_iter()
+            .find(|p| p.rule.entity == "x")
+            .unwrap()
+            .rule
+            .id;
         // pending until approved — nothing active yet
         assert_eq!(store.active_count(), 0);
         assert!(store.approve(&id));
@@ -381,11 +432,22 @@ mod tests {
         let active = Arc::new(Mutex::new(Vec::new()));
         let store = ProposalStore::new(Arc::clone(&active));
         store.ingest(miner().mine(&world, &outcome()).unwrap());
-        let id = store.list().into_iter().find(|p| p.rule.entity == "x").unwrap().rule.id;
+        let id = store
+            .list()
+            .into_iter()
+            .find(|p| p.rule.entity == "x")
+            .unwrap()
+            .rule
+            .id;
         assert!(store.reject(&id));
         assert_eq!(store.active_count(), 0);
         assert!(matches!(
-            store.list().into_iter().find(|p| p.rule.id == id).unwrap().status,
+            store
+                .list()
+                .into_iter()
+                .find(|p| p.rule.id == id)
+                .unwrap()
+                .status,
             ProposalStatus::Rejected
         ));
     }

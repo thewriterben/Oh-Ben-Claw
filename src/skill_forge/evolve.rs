@@ -74,7 +74,11 @@ fn append_log(path: &PathBuf, entry: &EvolutionEntry) {
     }
     if let Ok(line) = serde_json::to_string(entry) {
         use std::io::Write;
-        match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             Ok(mut f) => {
                 let _ = writeln!(f, "{line}");
             }
@@ -348,7 +352,11 @@ mod tests {
         }
     }
 
-    fn evolver(dir: &PathBuf, traj: Arc<TrajectoryStore>, replies: Vec<&str>) -> DescriptionEvolver {
+    fn evolver(
+        dir: &PathBuf,
+        traj: Arc<TrajectoryStore>,
+        replies: Vec<&str>,
+    ) -> DescriptionEvolver {
         DescriptionEvolver::new(
             SkillForge::new(dir),
             traj,
@@ -365,11 +373,17 @@ mod tests {
     async fn evolves_description_only_and_logs_diff() {
         let dir = tmp_dir("evolve");
         let forge = SkillForge::new(&dir);
-        forge.install_skill(&learned_manifest("learned_check")).unwrap();
+        forge
+            .install_skill(&learned_manifest("learned_check"))
+            .unwrap();
         let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
         traj.record(&usage_episode("learned_check")).unwrap();
 
-        let ev = evolver(&dir, traj, vec!["Fetch the current weather for the configured location."]);
+        let ev = evolver(
+            &dir,
+            traj,
+            vec!["Fetch the current weather for the configured location."],
+        );
         let report = ev.run_once().await.unwrap();
         assert_eq!(report.rewritten, vec!["learned_check".to_string()]);
 
@@ -379,7 +393,10 @@ mod tests {
             .into_iter()
             .find(|m| m.name == "learned_check")
             .unwrap();
-        assert_eq!(m.description, "Fetch the current weather for the configured location.");
+        assert_eq!(
+            m.description,
+            "Fetch the current weather for the configured location."
+        );
         // Safety invariants: only the description changed.
         assert_eq!(m.stage, RolloutStage::Simulate);
         assert!(m.enabled);
@@ -395,17 +412,28 @@ mod tests {
     async fn rejects_bad_proposals_and_skips_unused_skills() {
         let dir = tmp_dir("reject");
         let forge = SkillForge::new(&dir);
-        forge.install_skill(&learned_manifest("learned_used")).unwrap();
-        forge.install_skill(&learned_manifest("learned_unused")).unwrap();
+        forge
+            .install_skill(&learned_manifest("learned_used"))
+            .unwrap();
+        forge
+            .install_skill(&learned_manifest("learned_unused"))
+            .unwrap();
         let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
         traj.record(&usage_episode("learned_used")).unwrap();
 
         // Identical proposal → rejected; unused skill → never asked.
-        let ev = evolver(&dir, traj, vec!["Learned from a successful run: check the weather"]);
+        let ev = evolver(
+            &dir,
+            traj,
+            vec!["Learned from a successful run: check the weather"],
+        );
         let report = ev.run_once().await.unwrap();
         assert!(report.rewritten.is_empty());
         assert_eq!(report.skipped, 2);
-        assert!(!dir.join("skill_evolution.jsonl").exists(), "no change → no log entry");
+        assert!(
+            !dir.join("skill_evolution.jsonl").exists(),
+            "no change → no log entry"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -413,7 +441,9 @@ mod tests {
     async fn revert_restores_previous_description() {
         let dir = tmp_dir("revert");
         let forge = SkillForge::new(&dir);
-        forge.install_skill(&learned_manifest("learned_check")).unwrap();
+        forge
+            .install_skill(&learned_manifest("learned_check"))
+            .unwrap();
         let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
         traj.record(&usage_episode("learned_check")).unwrap();
 
@@ -442,9 +472,15 @@ mod tests {
             sanitize_proposal("```text\nNew description.\n```", old).as_deref(),
             Some("New description.")
         );
-        assert_eq!(sanitize_proposal("\"Quoted.\"", old).as_deref(), Some("Quoted."));
+        assert_eq!(
+            sanitize_proposal("\"Quoted.\"", old).as_deref(),
+            Some("Quoted.")
+        );
         assert!(sanitize_proposal("", old).is_none());
         assert!(sanitize_proposal(old, old).is_none(), "unchanged rejected");
-        assert!(sanitize_proposal(&"x".repeat(400), old).is_none(), "too long rejected");
+        assert!(
+            sanitize_proposal(&"x".repeat(400), old).is_none(),
+            "too long rejected"
+        );
     }
 }

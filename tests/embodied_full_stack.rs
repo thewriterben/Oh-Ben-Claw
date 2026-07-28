@@ -44,13 +44,25 @@ fn rover_gate() -> SafetyGate {
 }
 
 fn set_pose(world: &WorldMemory, x: f64, y: f64, h: f64, t: u64) {
-    world.observe("sensor.pos_x", json!({ "value": x }), t, t, "slam").unwrap();
-    world.observe("sensor.pos_y", json!({ "value": y }), t, t, "slam").unwrap();
-    world.observe("sensor.heading", json!({ "value": h }), t, t, "slam").unwrap();
+    world
+        .observe("sensor.pos_x", json!({ "value": x }), t, t, "slam")
+        .unwrap();
+    world
+        .observe("sensor.pos_y", json!({ "value": y }), t, t, "slam")
+        .unwrap();
+    world
+        .observe("sensor.heading", json!({ "value": h }), t, t, "slam")
+        .unwrap();
 }
 
 fn battery(soc: f64, charging: ChargeState) -> BatteryReading {
-    BatteryReading { soc_pct: soc, voltage: None, current_a: None, charging, source: None }
+    BatteryReading {
+        soc_pct: soc,
+        voltage: None,
+        current_a: None,
+        charging,
+        source: None,
+    }
 }
 
 #[tokio::test]
@@ -59,8 +71,12 @@ async fn full_stack_mission_runs_then_safing_preempts_and_recovers() {
 
     // ── Movement + navigation (with an occupancy grid) ────────────────────────
     let movement = Arc::new(
-        MovementController::new("rover", Arc::new(rover_gate()), Arc::new(LoggingActuatorSink))
-            .with_world_memory(Arc::clone(&world)),
+        MovementController::new(
+            "rover",
+            Arc::new(rover_gate()),
+            Arc::new(LoggingActuatorSink),
+        )
+        .with_world_memory(Arc::clone(&world)),
     );
     let grid = Arc::new(Mutex::new(OccupancyGrid::new(0.0, 0.0, 1.0, 10, 10)));
     let nav = Arc::new(
@@ -75,19 +91,32 @@ async fn full_stack_mission_runs_then_safing_preempts_and_recovers() {
 
     // ── Reflex + safing (in-process load-shedding) ────────────────────────────
     let safing_state = Arc::new(SafingState::new());
-    let opts = SafingOptions { debounce_ms: 1, ..Default::default() };
+    let opts = SafingOptions {
+        debounce_ms: 1,
+        ..Default::default()
+    };
     let engine = ReflexEngine::new(standard_safing_rules(&opts));
-    let sink: Arc<dyn ActionSink> =
-        Arc::new(SafingSink::new(Arc::clone(&safing_state), Arc::new(LoggingActionSink)));
+    let sink: Arc<dyn ActionSink> = Arc::new(SafingSink::new(
+        Arc::clone(&safing_state),
+        Arc::new(LoggingActionSink),
+    ));
     let reflex = ReflexController::new(engine, Arc::clone(&world), sink);
 
     // ── Mission sequencer (deliberation), guarded on battery critical ─────────
-    let mission_runner = Arc::new(MissionRunner::new(Arc::clone(&world)).with_nav(Arc::clone(&nav)));
+    let mission_runner =
+        Arc::new(MissionRunner::new(Arc::clone(&world)).with_nav(Arc::clone(&nav)));
     let mission = Mission {
         id: "cross-room".into(),
         steps: vec![
-            MissionStep::NavigateTo { x: 9.5, y: 0.5, tolerance: 0.3 },
-            MissionStep::Record { entity: "mission.reached".into(), value: json!(true) },
+            MissionStep::NavigateTo {
+                x: 9.5,
+                y: 0.5,
+                tolerance: 0.3,
+            },
+            MissionStep::Record {
+                entity: "mission.reached".into(),
+                value: json!(true),
+            },
         ],
         guards: vec![Guard {
             abort_when: Condition::State {
@@ -106,7 +135,13 @@ async fn full_stack_mission_runs_then_safing_preempts_and_recovers() {
     set_pose(&world, 0.5, 0.5, 0.0, 1_000);
 
     // ── Phase A: healthy battery, mission starts and plans around the wall ────
-    power.ingest(&battery(85.0, ChargeState::Discharging), 1_000, oh_ben_claw::memory::world::Origin::Observed).unwrap();
+    power
+        .ingest(
+            &battery(85.0, ChargeState::Discharging),
+            1_000,
+            oh_ben_claw::memory::world::Origin::Observed,
+        )
+        .unwrap();
     reflex.tick_and_dispatch(1_000).await.unwrap();
     assert!(!safing_state.shed_load(), "no shedding while healthy");
 
@@ -116,33 +151,66 @@ async fn full_stack_mission_runs_then_safing_preempts_and_recovers() {
         matches!(status, MissionStatus::Running { ref label, .. } if label == "navigate_to"),
         "mission should be navigating, got {status:?}"
     );
-    assert!(nav.remaining() >= 2, "the route should detour around the wall");
+    assert!(
+        nav.remaining() >= 2,
+        "the route should detour around the wall"
+    );
 
     // A real, Track 0–bounded steer/drive command is issued toward the route.
     nav.step_toward_goal(1_000).await.unwrap();
-    assert!(world.current("actuator.drive").unwrap().is_some(), "gated actuation occurred");
+    assert!(
+        world.current("actuator.drive").unwrap().is_some(),
+        "gated actuation occurred"
+    );
 
     // ── Phase B: battery low → safing engages in-process load-shedding ────────
-    power.ingest(&battery(15.0, ChargeState::Discharging), 2_000, oh_ben_claw::memory::world::Origin::Observed).unwrap();
+    power
+        .ingest(
+            &battery(15.0, ChargeState::Discharging),
+            2_000,
+            oh_ben_claw::memory::world::Origin::Observed,
+        )
+        .unwrap();
     reflex.tick_and_dispatch(2_000).await.unwrap();
     assert!(safing_state.shed_load(), "low battery engages shed_load");
     // mission keeps running — low is not yet the abort condition
     let s = mission_runner.tick(2_000).await.unwrap();
-    assert!(matches!(s, MissionStatus::Running { .. }), "mission still running at low, got {s:?}");
+    assert!(
+        matches!(s, MissionStatus::Running { .. }),
+        "mission still running at low, got {s:?}"
+    );
 
     // ── Phase C: battery critical → mission guard preempts + halts ────────────
-    power.ingest(&battery(5.0, ChargeState::Discharging), 3_000, oh_ben_claw::memory::world::Origin::Observed).unwrap();
+    power
+        .ingest(
+            &battery(5.0, ChargeState::Discharging),
+            3_000,
+            oh_ben_claw::memory::world::Origin::Observed,
+        )
+        .unwrap();
     reflex.tick_and_dispatch(3_000).await.unwrap(); // power-critical escalation fires
     let s = mission_runner.tick(3_000).await.unwrap();
     assert!(
         matches!(s, MissionStatus::Aborted { ref reason, .. } if reason.contains("battery")),
         "guard should abort the mission, got {s:?}"
     );
-    assert!(nav.current_goal().is_none(), "abort halts navigation (goal cleared)");
-    assert!(world.current("mission.reached").unwrap().is_none(), "mission never reached its goal");
+    assert!(
+        nav.current_goal().is_none(),
+        "abort halts navigation (goal cleared)"
+    );
+    assert!(
+        world.current("mission.reached").unwrap().is_none(),
+        "mission never reached its goal"
+    );
 
     // ── Phase D: recharge → safing recovers automatically ─────────────────────
-    power.ingest(&battery(95.0, ChargeState::Charging), 4_000, oh_ben_claw::memory::world::Origin::Observed).unwrap();
+    power
+        .ingest(
+            &battery(95.0, ChargeState::Charging),
+            4_000,
+            oh_ben_claw::memory::world::Origin::Observed,
+        )
+        .unwrap();
     reflex.tick_and_dispatch(4_000).await.unwrap();
     assert!(!safing_state.shed_load(), "recharge releases shed_load");
 }

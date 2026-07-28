@@ -79,21 +79,28 @@ pub fn parse_gateway_line(line: &str) -> Option<GatewayFrame> {
     let seq: u8 = leading(field_after(rest, "seq=")?, |c| c.is_ascii_digit())
         .parse()
         .ok()?;
-    let rssi: i32 = leading(field_after(rest, "rssi=")?, |c| c == '-' || c.is_ascii_digit())
-        .parse()
-        .ok()?;
+    let rssi: i32 = leading(field_after(rest, "rssi=")?, |c| {
+        c == '-' || c.is_ascii_digit()
+    })
+    .parse()
+    .ok()?;
     // Compact JSON never contains " : " (space-colon-space), so it's a safe split.
     // Real console lines end with an ANSI color-reset (`\x1b[0m`) AFTER the
     // payload — trailing escape bytes break serde_json, so cut at the first ESC
     // (bench-caught 2026-07-17: every frame silently failed to ingest).
-    let payload = rest.split_once(" : ").map(|(_, p)| {
-        p.split('\u{1b}').next().unwrap_or("").trim().to_string()
-    })?;
+    let payload = rest
+        .split_once(" : ")
+        .map(|(_, p)| p.split('\u{1b}').next().unwrap_or("").trim().to_string())?;
     if payload.is_empty() {
         return None;
     }
 
-    Some(GatewayFrame { src, seq, rssi_dbm: rssi, payload })
+    Some(GatewayFrame {
+        src,
+        seq,
+        rssi_dbm: rssi,
+        payload,
+    })
 }
 
 /// A decoded ClawCam field summary — the compact camera-on-mesh payload (see the ClawCam
@@ -119,14 +126,24 @@ pub fn parse_clawcam_summary(payload: &str) -> Option<ClawCamSummary> {
         return None;
     }
     let mut s = ClawCamSummary {
-        device_id: String::new(), ts: None, total: 0, species: Vec::new(),
-        temperature_c: None, battery_percent: None, rssi: None,
+        device_id: String::new(),
+        ts: None,
+        total: 0,
+        species: Vec::new(),
+        temperature_c: None,
+        battery_percent: None,
+        rssi: None,
     };
     let mut have_dev = false;
     for kv in it {
-        let Some((k, v)) = kv.split_once('=') else { continue };
+        let Some((k, v)) = kv.split_once('=') else {
+            continue;
+        };
         match k {
-            "dev" => { s.device_id = v.to_string(); have_dev = true; }
+            "dev" => {
+                s.device_id = v.to_string();
+                have_dev = true;
+            }
             "ts" => s.ts = v.parse().ok(),
             "det" => s.total = v.parse().unwrap_or(0),
             "sp" => {
@@ -179,7 +196,10 @@ pub fn ingest_gateway_line(line: &str, world: &WorldMemory, now_ms: u64) -> Opti
 
 /// Ingest a node's own JSON payload as `mesh.<node_id>.<type>` + a `mesh.<node_id>` rollup.
 fn ingest_node_json(
-    frame: &GatewayFrame, payload: Value, world: &WorldMemory, now_ms: u64,
+    frame: &GatewayFrame,
+    payload: Value,
+    world: &WorldMemory,
+    now_ms: u64,
 ) -> GatewayIngest {
     let node_id = payload
         .get("node_id")
@@ -230,14 +250,21 @@ fn ingest_node_json(
         Origin::Observed,
     );
 
-    GatewayIngest { node_id, msg_type, rssi_dbm: frame.rssi_dbm }
+    GatewayIngest {
+        node_id,
+        msg_type,
+        rssi_dbm: frame.rssi_dbm,
+    }
 }
 
 /// Ingest a ClawCam field summary heard over the mesh (G2) as `clawcam.<device>.field`
 /// (the full summary + mesh envelope) plus a compact `clawcam.<device>` rollup — so an
 /// off-grid camera's counts/conditions land in the brain's world model.
 fn ingest_clawcam_summary(
-    frame: &GatewayFrame, s: ClawCamSummary, world: &WorldMemory, now_ms: u64,
+    frame: &GatewayFrame,
+    s: ClawCamSummary,
+    world: &WorldMemory,
+    now_ms: u64,
 ) -> GatewayIngest {
     let dev = s.device_id.clone();
     let species: Vec<Value> = s
@@ -261,7 +288,13 @@ fn ingest_clawcam_summary(
             "rssi_dbm": frame.rssi_dbm,
         },
     });
-    let _ = world.observe(&format!("clawcam.{dev}.field"), field, now_ms, now_ms, SOURCE);
+    let _ = world.observe(
+        &format!("clawcam.{dev}.field"),
+        field,
+        now_ms,
+        now_ms,
+        SOURCE,
+    );
 
     let rollup = json!({
         "total": s.total,
@@ -272,7 +305,11 @@ fn ingest_clawcam_summary(
     });
     let _ = world.observe(&format!("clawcam.{dev}"), rollup, now_ms, now_ms, SOURCE);
 
-    GatewayIngest { node_id: dev, msg_type: "clawcam_field".to_string(), rssi_dbm: frame.rssi_dbm }
+    GatewayIngest {
+        node_id: dev,
+        msg_type: "clawcam_field".to_string(),
+        rssi_dbm: frame.rssi_dbm,
+    }
 }
 
 // ── Outbound: host → node commands over the mesh (return path) ───────────────────
@@ -306,7 +343,12 @@ impl NodeCommand {
         cmd: impl Into<String>,
         args: Value,
     ) -> Self {
-        Self { to: to.into(), id: id.into(), cmd: cmd.into(), args }
+        Self {
+            to: to.into(),
+            id: id.into(),
+            cmd: cmd.into(),
+            args,
+        }
     }
 
     /// Encode to the single newline-free line the gateway will carry over LoRa and
@@ -571,17 +613,21 @@ mod tests {
         let f = parse_gateway_line(line).expect("line with snr= parses");
         assert_eq!(f.src, 0xD8);
         assert_eq!(f.seq, 11);
-        assert_eq!(f.rssi_dbm, -10, "rssi is still read correctly with a field after it");
         assert_eq!(
-            f.payload,
-            "{\"node_id\":\"gw-D8\",\"type\":\"gw_keepalive\",\"seq\":11}",
+            f.rssi_dbm, -10,
+            "rssi is still read correctly with a field after it"
+        );
+        assert_eq!(
+            f.payload, "{\"node_id\":\"gw-D8\",\"type\":\"gw_keepalive\",\"seq\":11}",
             "the payload split still lands after the new field"
         );
     }
 
     #[test]
     fn ignores_tx_relay_keepalive_and_boot_lines() {
-        assert!(parse_gateway_line("SPINE ► (uart) seq=5 (34 B) {\"type\":\"link_state\"}").is_none());
+        assert!(
+            parse_gateway_line("SPINE ► (uart) seq=5 (34 B) {\"type\":\"link_state\"}").is_none()
+        );
         assert!(parse_gateway_line("SPINE ⇒ relay src=28 seq=30 ttl=1").is_none());
         assert!(parse_gateway_line("SPINE ► (keepalive) seq=3").is_none());
         assert!(parse_gateway_line("SPINE ◄ malformed frame (5 B)").is_none());
@@ -601,9 +647,15 @@ mod tests {
             .current("mesh.obc-esp32-s3-001.reflex")
             .unwrap()
             .expect("per-type fact exists");
-        assert_eq!(f.value.get("rule").and_then(|v| v.as_str()), Some("safe-link-offline"));
         assert_eq!(
-            f.value.get("_mesh").and_then(|m| m.get("rssi_dbm")).and_then(|v| v.as_i64()),
+            f.value.get("rule").and_then(|v| v.as_str()),
+            Some("safe-link-offline")
+        );
+        assert_eq!(
+            f.value
+                .get("_mesh")
+                .and_then(|m| m.get("rssi_dbm"))
+                .and_then(|v| v.as_i64()),
             Some(-42)
         );
         assert_eq!(f.source, SOURCE);
@@ -613,8 +665,14 @@ mod tests {
             .current("mesh.obc-esp32-s3-001")
             .unwrap()
             .expect("rollup fact exists");
-        assert_eq!(link.value.get("rssi_dbm").and_then(|v| v.as_i64()), Some(-42));
-        assert_eq!(link.value.get("last_type").and_then(|v| v.as_str()), Some("reflex"));
+        assert_eq!(
+            link.value.get("rssi_dbm").and_then(|v| v.as_i64()),
+            Some(-42)
+        );
+        assert_eq!(
+            link.value.get("last_type").and_then(|v| v.as_str()),
+            Some("reflex")
+        );
     }
 
     #[test]
@@ -629,7 +687,9 @@ mod tests {
     #[test]
     fn a_non_json_payload_is_not_ingested() {
         let world = WorldMemory::open_in_memory().unwrap();
-        assert!(ingest_gateway_line("SPINE ◄ src=28 seq=1 rssi=-5 dBm : not json", &world, 1).is_none());
+        assert!(
+            ingest_gateway_line("SPINE ◄ src=28 seq=1 rssi=-5 dBm : not json", &world, 1).is_none()
+        );
     }
 
     #[test]
@@ -645,9 +705,17 @@ mod tests {
         let v: Value = serde_json::from_str(&line).unwrap();
         // The node's request parser reads id/cmd/args; `to` is the routing field.
         assert_eq!(v.get("id").and_then(Value::as_str), Some("req-7"));
-        assert_eq!(v.get("to").and_then(Value::as_str), Some("obc-esp32-s3-001"));
+        assert_eq!(
+            v.get("to").and_then(Value::as_str),
+            Some("obc-esp32-s3-001")
+        );
         assert_eq!(v.get("cmd").and_then(Value::as_str), Some("gpio_write"));
-        assert_eq!(v.get("args").and_then(|a| a.get("pin")).and_then(Value::as_i64), Some(3));
+        assert_eq!(
+            v.get("args")
+                .and_then(|a| a.get("pin"))
+                .and_then(Value::as_i64),
+            Some(3)
+        );
     }
 
     /// In-memory sink that records every command it's asked to send (for tests).
@@ -664,7 +732,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_sink_forwards_the_encoded_command() {
-        let sink = MockSink { sent: std::sync::Mutex::new(Vec::new()) };
+        let sink = MockSink {
+            sent: std::sync::Mutex::new(Vec::new()),
+        };
         let cmd = NodeCommand::new("node-a", "id-1", "sensor_read", json!({ "kind": "dht22" }));
         sink.send_command(&cmd).await.unwrap();
         let sent = sink.sent.lock().unwrap();
@@ -710,10 +780,19 @@ mod tests {
             .unwrap()
             .expect("field fact exists");
         assert_eq!(f.value.get("total").and_then(|v| v.as_u64()), Some(40));
-        assert_eq!(f.value.get("temperature_c").and_then(|v| v.as_f64()), Some(14.5));
-        assert_eq!(f.value.get("node_rssi").and_then(|v| v.as_f64()), Some(-97.0));
         assert_eq!(
-            f.value.get("_mesh").and_then(|m| m.get("rssi_dbm")).and_then(|v| v.as_i64()),
+            f.value.get("temperature_c").and_then(|v| v.as_f64()),
+            Some(14.5)
+        );
+        assert_eq!(
+            f.value.get("node_rssi").and_then(|v| v.as_f64()),
+            Some(-97.0)
+        );
+        assert_eq!(
+            f.value
+                .get("_mesh")
+                .and_then(|m| m.get("rssi_dbm"))
+                .and_then(|v| v.as_i64()),
             Some(-95)
         );
         let sp = f.value.get("species").and_then(|v| v.as_array()).unwrap();
@@ -721,10 +800,16 @@ mod tests {
         assert_eq!(sp[0].get("count").and_then(|v| v.as_u64()), Some(20));
 
         // Rollup answers "how much activity, and is the camera OK?".
-        let r = world.current("clawcam.north-ridge-01").unwrap().expect("rollup");
+        let r = world
+            .current("clawcam.north-ridge-01")
+            .unwrap()
+            .expect("rollup");
         assert_eq!(r.value.get("total").and_then(|v| v.as_u64()), Some(40));
         assert_eq!(
-            r.value.get("top_species").and_then(|t| t.get("subject")).and_then(|v| v.as_str()),
+            r.value
+                .get("top_species")
+                .and_then(|t| t.get("subject"))
+                .and_then(|v| v.as_str()),
             Some("deer")
         );
     }

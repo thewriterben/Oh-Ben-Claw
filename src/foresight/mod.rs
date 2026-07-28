@@ -62,7 +62,11 @@ impl Forecast {
     /// `None` if flat, moving away, or already past on the wrong side.
     pub fn time_to_threshold(&self, threshold: f64) -> Option<u64> {
         if self.rate_per_ms == 0.0 {
-            return if self.current == threshold { Some(0) } else { None };
+            return if self.current == threshold {
+                Some(0)
+            } else {
+                None
+            };
         }
         let t = (threshold - self.current) / self.rate_per_ms;
         if t.is_finite() && t >= 0.0 {
@@ -189,12 +193,22 @@ impl Forecaster {
         }
         // Per-point weights: newest weight 1, older decays by `decay^age`.
         // (decay == 1.0 ⇒ all weights 1 ⇒ ordinary least squares.)
-        let w: Vec<f64> = (0..n).map(|i| self.decay.powi((n - 1 - i) as i32)).collect();
+        let w: Vec<f64> = (0..n)
+            .map(|i| self.decay.powi((n - 1 - i) as i32))
+            .collect();
         let wsum: f64 = w.iter().sum();
         let tm = pts.iter().zip(&w).map(|((t, _), wi)| wi * t).sum::<f64>() / wsum;
         let vm = pts.iter().zip(&w).map(|((_, v), wi)| wi * v).sum::<f64>() / wsum;
-        let num: f64 = pts.iter().zip(&w).map(|((t, v), wi)| wi * (t - tm) * (v - vm)).sum();
-        let den: f64 = pts.iter().zip(&w).map(|((t, _), wi)| wi * (t - tm).powi(2)).sum();
+        let num: f64 = pts
+            .iter()
+            .zip(&w)
+            .map(|((t, v), wi)| wi * (t - tm) * (v - vm))
+            .sum();
+        let den: f64 = pts
+            .iter()
+            .zip(&w)
+            .map(|((t, _), wi)| wi * (t - tm).powi(2))
+            .sum();
         let slope = if den != 0.0 { num / den } else { 0.0 };
         Ok(Some(Forecast {
             current,
@@ -310,7 +324,10 @@ impl ForesightEngine {
             }
         }
         guard.insert(rule.id.clone(), now_ms);
-        fired.push(FiredReflex { rule_id: rule.id.clone(), action: rule.then.clone() });
+        fired.push(FiredReflex {
+            rule_id: rule.id.clone(),
+            action: rule.then.clone(),
+        });
     }
 
     /// Evaluate all static and approved-learned rules; returns what fired.
@@ -340,8 +357,17 @@ pub struct ForesightController {
 }
 
 impl ForesightController {
-    pub fn new(engine: ForesightEngine, world: Arc<WorldMemory>, sink: Arc<dyn ActionSink>) -> Self {
-        Self { engine, world, sink, escalation_budget: None }
+    pub fn new(
+        engine: ForesightEngine,
+        world: Arc<WorldMemory>,
+        sink: Arc<dyn ActionSink>,
+    ) -> Self {
+        Self {
+            engine,
+            world,
+            sink,
+            escalation_budget: None,
+        }
     }
 
     pub fn with_escalation_budget(mut self, budget: EscalationBudget) -> Self {
@@ -355,12 +381,17 @@ impl ForesightController {
         let fired = self.engine.evaluate(&self.world, now_ms);
         for f in &fired {
             match &f.action {
-                Action::GpioWrite { node_id, pin, value } => {
-                    self.sink.gpio_write(node_id, *pin, *value).await?
-                }
+                Action::GpioWrite {
+                    node_id,
+                    pin,
+                    value,
+                } => self.sink.gpio_write(node_id, *pin, *value).await?,
                 Action::Publish { topic, payload } => self.sink.publish(topic, payload).await?,
                 Action::Escalate { reason } => {
-                    let allowed = self.escalation_budget.as_ref().is_none_or(|b| b.allow(now_ms));
+                    let allowed = self
+                        .escalation_budget
+                        .as_ref()
+                        .is_none_or(|b| b.allow(now_ms));
                     if allowed {
                         self.sink.escalate(reason).await?;
                     } else {
@@ -382,7 +413,9 @@ mod tests {
     fn world_with_series(entity: &str, pts: &[(u64, f64)]) -> Arc<WorldMemory> {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         for &(t, v) in pts {
-            world.observe(entity, json!({ "value": v }), t, t, "sensor").unwrap();
+            world
+                .observe(entity, json!({ "value": v }), t, t, "sensor")
+                .unwrap();
         }
         world
     }
@@ -394,7 +427,14 @@ mod tests {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         for (t, v) in [(0u64, 100.0), (1_000, 80.0), (2_000, 60.0)] {
             world
-                .observe_as("power.battery", json!({ "value": v }), t, t, "power-driver", Origin::Observed)
+                .observe_as(
+                    "power.battery",
+                    json!({ "value": v }),
+                    t,
+                    t,
+                    "power-driver",
+                    Origin::Observed,
+                )
                 .unwrap();
         }
         let baseline = Forecaster::default()
@@ -406,14 +446,24 @@ mod tests {
 
         // Now an agent asserts the battery is fine. The trend must not move.
         world
-            .observe_as("power.battery", json!({ "value": 100.0 }), 3_000, 3_000, "agent", Origin::Asserted)
+            .observe_as(
+                "power.battery",
+                json!({ "value": 100.0 }),
+                3_000,
+                3_000,
+                "agent",
+                Origin::Asserted,
+            )
             .unwrap();
         let after = Forecaster::default()
             .forecast(&world, "power.battery")
             .unwrap()
             .expect("still a forecast");
         assert_eq!(after.samples, 3, "the assertion was not fitted");
-        assert_eq!(after.excluded_samples, 1, "and its exclusion is reported, not silent");
+        assert_eq!(
+            after.excluded_samples, 1,
+            "and its exclusion is reported, not silent"
+        );
         assert!(
             (after.rate_per_ms - baseline.rate_per_ms).abs() < 1e-12,
             "an agent's opinion cannot flatten a real decline: {} vs {}",
@@ -428,11 +478,21 @@ mod tests {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         for (t, v) in [(0u64, 10.0), (1_000, 20.0)] {
             world
-                .observe_as("guess.thing", json!({ "value": v }), t, t, "agent", Origin::Asserted)
+                .observe_as(
+                    "guess.thing",
+                    json!({ "value": v }),
+                    t,
+                    t,
+                    "agent",
+                    Origin::Asserted,
+                )
                 .unwrap();
         }
         assert!(
-            Forecaster::default().forecast(&world, "guess.thing").unwrap().is_none(),
+            Forecaster::default()
+                .forecast(&world, "guess.thing")
+                .unwrap()
+                .is_none(),
             "predicting the future of an agent's own claims is not foresight"
         );
     }
@@ -441,7 +501,10 @@ mod tests {
     fn fits_declining_trend_and_predicts_crossing() {
         // battery: 100 → 80 → 60 over 0..2s ⇒ rate -20/s
         let world = world_with_series("power.soc", &[(0, 100.0), (1_000, 80.0), (2_000, 60.0)]);
-        let fc = Forecaster::default().forecast(&world, "power.soc").unwrap().unwrap();
+        let fc = Forecaster::default()
+            .forecast(&world, "power.soc")
+            .unwrap()
+            .unwrap();
         assert!((fc.current - 60.0).abs() < 1e-9);
         assert!((fc.rate_per_s() - (-20.0)).abs() < 1e-6);
         // predict 1s ahead → ~40
@@ -464,8 +527,15 @@ mod tests {
             (5_000, 74.0),
         ];
         let world = world_with_series("power.soc", &series);
-        let ols = Forecaster::default().forecast(&world, "power.soc").unwrap().unwrap();
-        let ewls = Forecaster::default().with_decay(0.5).forecast(&world, "power.soc").unwrap().unwrap();
+        let ols = Forecaster::default()
+            .forecast(&world, "power.soc")
+            .unwrap()
+            .unwrap();
+        let ewls = Forecaster::default()
+            .with_decay(0.5)
+            .forecast(&world, "power.soc")
+            .unwrap()
+            .unwrap();
         assert!(
             ewls.rate_per_s() < ols.rate_per_s(),
             "EWLS tracks the recent steeper decline: ewls {} < ols {}",
@@ -482,15 +552,25 @@ mod tests {
     #[test]
     fn decay_one_matches_ordinary_least_squares() {
         let world = world_with_series("x", &[(0, 100.0), (1_000, 80.0), (2_000, 60.0)]);
-        let ols = Forecaster::default().forecast(&world, "x").unwrap().unwrap();
-        let same = Forecaster::default().with_decay(1.0).forecast(&world, "x").unwrap().unwrap();
+        let ols = Forecaster::default()
+            .forecast(&world, "x")
+            .unwrap()
+            .unwrap();
+        let same = Forecaster::default()
+            .with_decay(1.0)
+            .forecast(&world, "x")
+            .unwrap()
+            .unwrap();
         assert!((ols.rate_per_ms - same.rate_per_ms).abs() < 1e-12);
     }
 
     #[test]
     fn stable_or_rising_series_has_no_downward_crossing() {
         let world = world_with_series("x", &[(0, 50.0), (1_000, 50.0), (2_000, 50.0)]);
-        let fc = Forecaster::default().forecast(&world, "x").unwrap().unwrap();
+        let fc = Forecaster::default()
+            .forecast(&world, "x")
+            .unwrap()
+            .unwrap();
         assert_eq!(fc.rate_per_ms, 0.0);
         assert_eq!(fc.time_to_threshold(10.0), None); // flat, never reaches
     }
@@ -505,12 +585,18 @@ mod tests {
             op: Cmp::Le,
             threshold: 10.0,
             horizon_ms: 60_000,
-            then: Action::Escalate { reason: "battery predicted critical — return to base".into() },
+            then: Action::Escalate {
+                reason: "battery predicted critical — return to base".into(),
+            },
             debounce_ms: 0,
         };
         let engine = ForesightEngine::new(vec![rule]);
         let fired = engine.evaluate(&world, 1_000);
-        assert_eq!(fired.len(), 1, "should fire predictively while still above threshold");
+        assert_eq!(
+            fired.len(),
+            1,
+            "should fire predictively while still above threshold"
+        );
         assert!(matches!(fired[0].action, Action::Escalate { .. }));
         // and the prediction is recorded
         let pred = world.current("foresight.power.soc").unwrap().unwrap();
@@ -543,7 +629,9 @@ mod tests {
             op: Cmp::Ge,
             threshold: 80.0,
             horizon_ms: 1_000,
-            then: Action::Escalate { reason: "overheat".into() },
+            then: Action::Escalate {
+                reason: "overheat".into(),
+            },
             debounce_ms: 0,
         };
         let engine = ForesightEngine::new(vec![rule]);
@@ -560,7 +648,9 @@ mod tests {
             op: Cmp::Le,
             threshold: 10.0,
             horizon_ms: 60_000,
-            then: Action::Escalate { reason: "learned".into() },
+            then: Action::Escalate {
+                reason: "learned".into(),
+            },
             debounce_ms: 0,
         }]));
         let engine = ForesightEngine::new(vec![]).with_learned_rules(learned);
@@ -580,7 +670,8 @@ mod tests {
             then: Action::Escalate { reason: "x".into() },
             debounce_ms: 5_000,
         };
-        let back: ForesightRule = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        let back: ForesightRule =
+            serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(back, r);
     }
 }

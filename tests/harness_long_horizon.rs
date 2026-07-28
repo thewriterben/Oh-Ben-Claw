@@ -212,7 +212,9 @@ async fn long_horizon_routine_survives_crash_with_no_duplicate_actuation() {
 
     // ── Boot 1: start the routine; the door objective actuates + verifies.
     let harness = fx.boot();
-    let mut record = harness.initialize("routine", Fixture::objectives()).unwrap();
+    let mut record = harness
+        .initialize("routine", Fixture::objectives())
+        .unwrap();
     let out = harness.run_once(&mut record).await.unwrap();
     assert_eq!(out, PassOutcome::Advanced("open-door".to_string()));
     assert_eq!(record.objectives[0].status, ObjectiveStatus::Done);
@@ -228,7 +230,9 @@ async fn long_horizon_routine_survives_crash_with_no_duplicate_actuation() {
 
     // ── Boot 2 (reboot): initializer must resume from disk, not restart.
     let harness = fx.boot();
-    let mut record = harness.initialize("routine", Fixture::objectives()).unwrap();
+    let mut record = harness
+        .initialize("routine", Fixture::objectives())
+        .unwrap();
     assert_eq!(record.run_count, 2, "resume, not a fresh mission");
     assert_eq!(
         record.objectives[0].status,
@@ -311,25 +315,38 @@ async fn failed_resume_verification_reopens_and_completes() {
     // Crash state: door objective in-flight, but the door is still closed
     // (the crash happened BEFORE the actuator fired).
     let harness = fx.boot();
-    let mut record = harness.initialize("routine", Fixture::objectives()).unwrap();
+    let mut record = harness
+        .initialize("routine", Fixture::objectives())
+        .unwrap();
     record.objectives[0].status = ObjectiveStatus::InFlight;
     ProgressStore::new(&fx.store_dir).save(&record).unwrap();
     drop(harness);
 
     let harness = fx.boot();
     let mut record = harness.initialize("routine", vec![]).unwrap();
-    assert_eq!(record.objectives[0].status, ObjectiveStatus::NeedsVerification);
+    assert_eq!(
+        record.objectives[0].status,
+        ObjectiveStatus::NeedsVerification
+    );
 
     // Pass 1: verification says door=closed → reopened, not failed.
     harness.run_once(&mut record).await.unwrap();
     assert_eq!(record.objectives[0].status, ObjectiveStatus::Pending);
     assert_eq!(record.objectives[0].attempts, 1);
-    assert_eq!(fx.fired.load(Ordering::SeqCst), 0, "verification never actuates");
+    assert_eq!(
+        fx.fired.load(Ordering::SeqCst),
+        0,
+        "verification never actuates"
+    );
 
     // Pass 2: the worker re-runs the objective for real this time.
     harness.run_once(&mut record).await.unwrap();
     assert_eq!(record.objectives[0].status, ObjectiveStatus::Done);
-    assert_eq!(fx.fired.load(Ordering::SeqCst), 1, "actuated exactly once overall");
+    assert_eq!(
+        fx.fired.load(Ordering::SeqCst),
+        1,
+        "actuated exactly once overall"
+    );
 
     std::fs::remove_dir_all(&fx.store_dir).ok();
 }

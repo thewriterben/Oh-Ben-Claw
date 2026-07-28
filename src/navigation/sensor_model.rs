@@ -39,7 +39,12 @@ pub struct BeamModelParams {
 
 impl Default for BeamModelParams {
     fn default() -> Self {
-        Self { sigma_hit: 0.2, z_hit: 0.95, z_rand: 0.05, max_range: 20.0 }
+        Self {
+            sigma_hit: 0.2,
+            z_hit: 0.95,
+            z_rand: 0.05,
+            max_range: 20.0,
+        }
     }
 }
 
@@ -130,7 +135,11 @@ impl LikelihoodField {
         }
 
         // Convert cell-distances to world units and saturate.
-        let sat_cells = if res > 0.0 { saturation / res } else { saturation };
+        let sat_cells = if res > 0.0 {
+            saturation / res
+        } else {
+            saturation
+        };
         for v in &mut d {
             *v = (*v).min(sat_cells) * res;
         }
@@ -164,7 +173,12 @@ impl LikelihoodField {
     /// distance to the nearest obstacle looked up, and the per-beam likelihood
     /// accumulated in log-space (stable across many beams). Out-of-range beams
     /// carry no endpoint and are skipped.
-    pub fn scan_log_likelihood(&self, pose: Pose2, beams: &[(f64, f64)], params: &BeamModelParams) -> f64 {
+    pub fn scan_log_likelihood(
+        &self,
+        pose: Pose2,
+        beams: &[(f64, f64)],
+        params: &BeamModelParams,
+    ) -> f64 {
         let mut log_l = 0.0;
         for &(bearing_deg, range) in beams {
             if range <= 0.0 || range >= params.max_range {
@@ -212,7 +226,10 @@ mod tests {
         let near = f.distance_at(4.0, 2.0); // ~1 m from the wall
         let far = f.distance_at(1.0, 2.0); // ~4 m from the wall
         assert!(on_wall < 0.6, "near-zero on the wall, got {on_wall}");
-        assert!(near > on_wall && far > near, "distance grows away: {on_wall} < {near} < {far}");
+        assert!(
+            near > on_wall && far > near,
+            "distance grows away: {on_wall} < {near} < {far}"
+        );
     }
 
     #[test]
@@ -234,7 +251,12 @@ mod tests {
     fn correct_pose_explains_the_scan_better_than_a_wrong_one() {
         let g = walled_grid();
         let f = LikelihoodField::from_grid(&g, 5.0);
-        let params = BeamModelParams { sigma_hit: 0.3, z_hit: 0.95, z_rand: 0.05, max_range: 20.0 };
+        let params = BeamModelParams {
+            sigma_hit: 0.3,
+            z_hit: 0.95,
+            z_rand: 0.05,
+            max_range: 20.0,
+        };
 
         // Truth: robot at (2,5) facing east (+x); the wall is ~3 m ahead at x≈5.
         // A single forward beam of range 3 lands on the wall.
@@ -244,6 +266,9 @@ mod tests {
 
         let l_true = f.scan_log_likelihood(truth, &beams, &params);
         let l_wrong = f.scan_log_likelihood(wrong, &beams, &params);
-        assert!(l_true > l_wrong, "correct heading scores higher: {l_true} > {l_wrong}");
+        assert!(
+            l_true > l_wrong,
+            "correct heading scores higher: {l_true} > {l_wrong}"
+        );
     }
 }

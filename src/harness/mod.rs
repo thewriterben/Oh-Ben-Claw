@@ -161,7 +161,13 @@ impl ProgressStore {
     fn path(&self, mission: &str) -> PathBuf {
         let safe: String = mission
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         self.dir.join(format!("{safe}.json"))
     }
@@ -327,12 +333,14 @@ impl Harness {
     /// Run one verification check through the safety chokepoint.
     async fn check_passes(&self, check: &HarnessCheck) -> bool {
         match check {
-            HarnessCheck::ToolContains { tool, args, contains } => {
-                match self.agent.execute_tool_direct(tool, args.clone()).await {
-                    Ok(r) if r.success => r.output.contains(contains),
-                    _ => false,
-                }
-            }
+            HarnessCheck::ToolContains {
+                tool,
+                args,
+                contains,
+            } => match self.agent.execute_tool_direct(tool, args.clone()).await {
+                Ok(r) if r.success => r.output.contains(contains),
+                _ => false,
+            },
             HarnessCheck::Command { cmd, expect_exit } => {
                 crate::skill_forge::improve::run_host_command(cmd).await == *expect_exit
             }
@@ -556,7 +564,11 @@ mod tests {
     fn tally_and_settled() {
         let mut rec = record(
             "m",
-            vec![objective("a", vec![]), objective("b", vec![]), objective("c", vec![])],
+            vec![
+                objective("a", vec![]),
+                objective("b", vec![]),
+                objective("c", vec![]),
+            ],
         );
         rec.objectives[0].status = ObjectiveStatus::Done;
         rec.objectives[1].status = ObjectiveStatus::Failed;

@@ -50,15 +50,22 @@ impl ModelRegistry {
             // local before remote, then lower priority first
             b.local.cmp(&a.local).then(a.priority.cmp(&b.priority))
         });
-        Self { models, health: Mutex::new(HashMap::new()), recheck_after_ms }
+        Self {
+            models,
+            health: Mutex::new(HashMap::new()),
+            recheck_after_ms,
+        }
     }
 
     /// Record the result of a health probe against `model`.
     pub fn record_health(&self, model: &str, healthy: bool, now_ms: u64) {
-        self.health
-            .lock()
-            .unwrap()
-            .insert(model.to_string(), Health { healthy, checked_at_ms: now_ms });
+        self.health.lock().unwrap().insert(
+            model.to_string(),
+            Health {
+                healthy,
+                checked_at_ms: now_ms,
+            },
+        );
     }
 
     /// Select the preferred model usable right now: the highest-ordered candidate
@@ -66,8 +73,8 @@ impl ModelRegistry {
     pub fn select(&self, now_ms: u64) -> Option<&ModelEntry> {
         let health = self.health.lock().unwrap();
         let idx = self.models.iter().position(|m| match health.get(&m.name) {
-            None => true,                       // never probed → optimistically try
-            Some(h) if h.healthy => true,       // known good
+            None => true,                 // never probed → optimistically try
+            Some(h) if h.healthy => true, // known good
             Some(h) => now_ms.saturating_sub(h.checked_at_ms) >= self.recheck_after_ms, // stale → retry
         });
         drop(health);
@@ -118,7 +125,10 @@ pub fn flatten_candidates(primary: &ProviderConfig) -> Vec<ProviderConfig> {
 /// Build a [`ModelRegistry`] from an ordered candidate list (index = priority).
 pub fn registry_from_providers(configs: &[ProviderConfig], recheck_after_ms: u64) -> ModelRegistry {
     ModelRegistry::new(
-        configs.iter().enumerate().map(|(i, c)| ModelEntry::from_provider(c, i as u32)),
+        configs
+            .iter()
+            .enumerate()
+            .map(|(i, c)| ModelEntry::from_provider(c, i as u32)),
         recheck_after_ms,
     )
 }
@@ -139,7 +149,12 @@ mod tests {
     use super::*;
 
     fn entry(name: &str, local: bool, priority: u32) -> ModelEntry {
-        ModelEntry { name: name.into(), endpoint: format!("http://{name}"), local, priority }
+        ModelEntry {
+            name: name.into(),
+            endpoint: format!("http://{name}"),
+            local,
+            priority,
+        }
     }
 
     fn registry() -> ModelRegistry {
@@ -172,9 +187,17 @@ mod tests {
     fn a_stale_unhealthy_mark_is_retried_not_cached_forever() {
         let r = registry();
         r.record_health("llama3.2", false, 1_000); // marked down at t=1s
-        assert_eq!(r.select(2_000).unwrap().name, "gpt-4o", "still on fallback while fresh");
+        assert_eq!(
+            r.select(2_000).unwrap().name,
+            "gpt-4o",
+            "still on fallback while fresh"
+        );
         // after the recheck window the local model is eligible again
-        assert_eq!(r.select(12_000).unwrap().name, "llama3.2", "stale mark → retry local");
+        assert_eq!(
+            r.select(12_000).unwrap().name,
+            "llama3.2",
+            "stale mark → retry local"
+        );
     }
 
     #[test]
@@ -183,7 +206,10 @@ mod tests {
         for m in ["llama3.2", "gpt-4o", "claude"] {
             r.record_health(m, false, 1_000);
         }
-        assert!(r.select(2_000).is_none(), "no usable model while all are freshly down");
+        assert!(
+            r.select(2_000).is_none(),
+            "no usable model while all are freshly down"
+        );
         // but once stale, selection resumes (local first)
         assert_eq!(r.select(12_000).unwrap().name, "llama3.2");
     }
@@ -203,26 +229,46 @@ mod tests {
 
     #[test]
     fn ollama_and_loopback_are_local() {
-        assert!(ModelEntry::from_provider(&provider("ollama", "llama3.2", Some("http://localhost:11434")), 0).local);
-        assert!(ModelEntry::from_provider(&provider("compat", "m", Some("http://127.0.0.1:8080")), 0).local);
+        assert!(
+            ModelEntry::from_provider(
+                &provider("ollama", "llama3.2", Some("http://localhost:11434")),
+                0
+            )
+            .local
+        );
+        assert!(
+            ModelEntry::from_provider(&provider("compat", "m", Some("http://127.0.0.1:8080")), 0)
+                .local
+        );
         assert!(!ModelEntry::from_provider(&provider("openai", "gpt-4o", None), 0).local);
     }
 
     #[test]
     fn flatten_pulls_primary_and_fallbacks() {
         let mut primary = provider("openai", "gpt-4o", None);
-        primary.fallbacks = vec![provider("ollama", "llama3.2", Some("http://localhost:11434"))];
+        primary.fallbacks = vec![provider(
+            "ollama",
+            "llama3.2",
+            Some("http://localhost:11434"),
+        )];
         let flat = flatten_candidates(&primary);
         assert_eq!(flat.len(), 2);
         assert_eq!(flat[0].model, "gpt-4o");
-        assert!(flat[0].fallbacks.is_empty(), "the primary keeps no nested fallbacks");
+        assert!(
+            flat[0].fallbacks.is_empty(),
+            "the primary keeps no nested fallbacks"
+        );
         assert_eq!(flat[1].model, "llama3.2");
     }
 
     #[test]
     fn selection_prefers_the_local_fallback_over_a_cloud_primary() {
         let mut primary = provider("openai", "gpt-4o", None);
-        primary.fallbacks = vec![provider("ollama", "llama3.2", Some("http://localhost:11434"))];
+        primary.fallbacks = vec![provider(
+            "ollama",
+            "llama3.2",
+            Some("http://localhost:11434"),
+        )];
         let candidates = flatten_candidates(&primary);
         let registry = registry_from_providers(&candidates, 60_000);
         let chosen = select_provider(&candidates, &registry, 0).unwrap();
@@ -232,7 +278,11 @@ mod tests {
     #[test]
     fn selection_falls_back_to_cloud_when_local_is_down() {
         let mut primary = provider("openai", "gpt-4o", None);
-        primary.fallbacks = vec![provider("ollama", "llama3.2", Some("http://localhost:11434"))];
+        primary.fallbacks = vec![provider(
+            "ollama",
+            "llama3.2",
+            Some("http://localhost:11434"),
+        )];
         let candidates = flatten_candidates(&primary);
         let registry = registry_from_providers(&candidates, 60_000);
         registry.record_health("llama3.2", false, 1_000);

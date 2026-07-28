@@ -431,8 +431,7 @@ impl TrajectoryStore {
                         .unwrap_or(std::cmp::Ordering::Equal)
                         .then(candidates[b.1].ts_ms.cmp(&candidates[a.1].ts_ms))
                 });
-                let leg: Vec<usize> =
-                    scored.into_iter().take(LEG_DEPTH).map(|(_, i)| i).collect();
+                let leg: Vec<usize> = scored.into_iter().take(LEG_DEPTH).map(|(_, i)| i).collect();
                 if !leg.is_empty() {
                     legs.push(leg);
                 }
@@ -493,7 +492,10 @@ impl TrajectoryStore {
             bucket.total_ms += ep.duration_ms.unwrap_or(0);
             bucket.total_tokens_est += ep.tokens_est.unwrap_or(0);
         }
-        Ok(EfficiencyStats { with_learned: with, without_learned: without })
+        Ok(EfficiencyStats {
+            with_learned: with,
+            without_learned: without,
+        })
     }
 }
 
@@ -525,9 +527,9 @@ pub struct EfficiencyStats {
 
 /// English function words that carry no task meaning (kept deliberately small).
 const STOPWORDS: &[&str] = &[
-    "the", "and", "for", "are", "was", "has", "had", "its", "not", "with", "this", "that",
-    "from", "into", "onto", "then", "than", "will", "can", "you", "your", "our", "all",
-    "please", "some", "any",
+    "the", "and", "for", "are", "was", "has", "had", "its", "not", "with", "this", "that", "from",
+    "into", "onto", "then", "than", "will", "can", "you", "your", "our", "all", "please", "some",
+    "any",
 ];
 
 /// Lowercased alphanumeric tokens of length ≥ 3, minus stopwords.
@@ -612,8 +614,10 @@ mod tests {
         let s = TrajectoryStore::open_in_memory()
             .unwrap()
             .with_embedder(Box::new(MockEmbedder));
-        s.record(&ep("d1", "unlock the entrance", Outcome::Success, 1)).unwrap();
-        s.record(&ep("w1", "fetch the forecast", Outcome::Success, 2)).unwrap();
+        s.record(&ep("d1", "unlock the entrance", Outcome::Success, 1))
+            .unwrap();
+        s.record(&ep("w1", "fetch the forecast", Outcome::Success, 2))
+            .unwrap();
 
         // "open the door" shares NO ≥3-char content tokens with either
         // objective — only the dense leg can surface the right episode.
@@ -625,8 +629,15 @@ mod tests {
     #[test]
     fn fts_leg_matches_and_hybrid_stays_deterministic() {
         let s = TrajectoryStore::open_in_memory().unwrap();
-        s.record(&ep("a", "calibrate the pan tilt camera mount", Outcome::Success, 1)).unwrap();
-        s.record(&ep("b", "water the tomato plants", Outcome::Success, 2)).unwrap();
+        s.record(&ep(
+            "a",
+            "calibrate the pan tilt camera mount",
+            Outcome::Success,
+            1,
+        ))
+        .unwrap();
+        s.record(&ep("b", "water the tomato plants", Outcome::Success, 2))
+            .unwrap();
         let first = s.similar("calibrate camera", 5).unwrap();
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].id, "a");
@@ -641,7 +652,8 @@ mod tests {
     #[test]
     fn fts_query_syntax_is_neutralized() {
         let s = TrajectoryStore::open_in_memory().unwrap();
-        s.record(&ep("a", "check the weather", Outcome::Success, 1)).unwrap();
+        s.record(&ep("a", "check the weather", Outcome::Success, 1))
+            .unwrap();
         // FTS5 operators / broken quotes in the objective must not error.
         let hits = s.similar("weather\" OR (NEAR *", 5).unwrap();
         assert_eq!(hits.len(), 1, "sanitized query still matches by token");
@@ -662,7 +674,8 @@ mod tests {
         s.record(&plain).unwrap();
 
         // No measurement → excluded from stats entirely.
-        s.record(&ep("unmeasured", "x", Outcome::Success, 3)).unwrap();
+        s.record(&ep("unmeasured", "x", Outcome::Success, 3))
+            .unwrap();
 
         let stats = s.efficiency_stats().unwrap();
         assert_eq!(stats.with_learned.runs, 1);
@@ -701,7 +714,8 @@ mod tests {
     fn successful_since_filters_outcome_and_time() {
         let s = TrajectoryStore::open_in_memory().unwrap();
         s.record(&ep("ok-old", "a", Outcome::Success, 100)).unwrap();
-        s.record(&ep("ok-new", "b", Outcome::Success, 2_000)).unwrap();
+        s.record(&ep("ok-new", "b", Outcome::Success, 2_000))
+            .unwrap();
         s.record(&ep("fail", "c", Outcome::Failure, 2_000)).unwrap();
         let res = s.successful_since(1_000).unwrap();
         assert_eq!(res.len(), 1);
@@ -711,8 +725,10 @@ mod tests {
     #[test]
     fn similar_matches_objective_substring() {
         let s = TrajectoryStore::open_in_memory().unwrap();
-        s.record(&ep("e1", "Run the morning routine", Outcome::Success, 1)).unwrap();
-        s.record(&ep("e2", "shut down for the night", Outcome::Success, 2)).unwrap();
+        s.record(&ep("e1", "Run the morning routine", Outcome::Success, 1))
+            .unwrap();
+        s.record(&ep("e2", "shut down for the night", Outcome::Success, 2))
+            .unwrap();
         let hits = s.similar("morning", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "e1");
@@ -721,9 +737,17 @@ mod tests {
     #[test]
     fn similar_ranks_by_overlap_and_filters_unrelated() {
         let s = TrajectoryStore::open_in_memory().unwrap();
-        s.record(&ep("close", "check the weather in Oslo", Outcome::Success, 1)).unwrap();
-        s.record(&ep("closer", "check the weather", Outcome::Success, 2)).unwrap();
-        s.record(&ep("far", "unlock the front door", Outcome::Success, 3)).unwrap();
+        s.record(&ep(
+            "close",
+            "check the weather in Oslo",
+            Outcome::Success,
+            1,
+        ))
+        .unwrap();
+        s.record(&ep("closer", "check the weather", Outcome::Success, 2))
+            .unwrap();
+        s.record(&ep("far", "unlock the front door", Outcome::Success, 3))
+            .unwrap();
         let hits = s.similar("check the weather", 10).unwrap();
         assert_eq!(hits.len(), 2, "unrelated episode filtered out");
         assert_eq!(hits[0].id, "closer", "exact-overlap objective ranks first");
@@ -733,7 +757,8 @@ mod tests {
     #[test]
     fn similar_excludes_failures() {
         let s = TrajectoryStore::open_in_memory().unwrap();
-        s.record(&ep("f", "check the weather", Outcome::Failure, 1)).unwrap();
+        s.record(&ep("f", "check the weather", Outcome::Failure, 1))
+            .unwrap();
         assert!(s.similar("check the weather", 10).unwrap().is_empty());
     }
 

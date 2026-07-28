@@ -38,12 +38,23 @@ async fn off_grid_simulated_nodes_coordinate_over_lora_mesh() {
     // 1. Two nodes must pass bring-up before we trust them on the fleet.
     let a = SimulatedNode::healthy("rover-a", "lilygo-t-beam");
     let b = SimulatedNode::healthy("rover-b", "rak4631");
-    assert!(a.run_bringup().await.all_passed(), "rover-a failed bring-up");
-    assert!(b.run_bringup().await.all_passed(), "rover-b failed bring-up");
+    assert!(
+        a.run_bringup().await.all_passed(),
+        "rover-a failed bring-up"
+    );
+    assert!(
+        b.run_bringup().await.all_passed(),
+        "rover-b failed bring-up"
+    );
 
     // 2. Each node broadcasts a heartbeat over the (loopback) LoRa mesh.
-    let radio = Arc::new(CaptureRadio { sent: Mutex::new(Vec::new()) });
-    let spine = LoraMeshSpine::new(Arc::clone(&radio) as Arc<dyn MeshRadio>, LoraMeshConfig::default());
+    let radio = Arc::new(CaptureRadio {
+        sent: Mutex::new(Vec::new()),
+    });
+    let spine = LoraMeshSpine::new(
+        Arc::clone(&radio) as Arc<dyn MeshRadio>,
+        LoraMeshConfig::default(),
+    );
     spine
         .send_heartbeat("rover-a", Some(0.0), Some(0.0), Some(80.0), "normal")
         .await
@@ -64,7 +75,12 @@ async fn off_grid_simulated_nodes_coordinate_over_lora_mesh() {
 
     // A task next to rover-b is auctioned to it — fleet coordination with no
     // WiFi and no broker, over the same logic that runs on MQTT.
-    coord.add_task(Task { id: "t1".into(), x: 9.0, y: 0.0, min_battery: 0.0 });
+    coord.add_task(Task {
+        id: "t1".into(),
+        x: 9.0,
+        y: 0.0,
+        min_battery: 0.0,
+    });
     let awards = coord.auction_tick(1_000);
     assert_eq!(awards, vec![("t1".to_string(), "rover-b".to_string())]);
 }
@@ -81,12 +97,24 @@ async fn a_node_that_fails_bringup_is_not_trusted() {
     let coord = Coordinator::new();
     if report.all_passed() {
         // (not reached) — the node would be reported here
-        let radio = Arc::new(CaptureRadio { sent: Mutex::new(Vec::new()) });
-        let spine =
-            LoraMeshSpine::new(radio as Arc<dyn MeshRadio>, LoraMeshConfig::default());
-        spine.send_heartbeat("rover-x", Some(0.0), Some(0.0), Some(50.0), "normal").await.unwrap();
+        let radio = Arc::new(CaptureRadio {
+            sent: Mutex::new(Vec::new()),
+        });
+        let spine = LoraMeshSpine::new(radio as Arc<dyn MeshRadio>, LoraMeshConfig::default());
+        spine
+            .send_heartbeat("rover-x", Some(0.0), Some(0.0), Some(50.0), "normal")
+            .await
+            .unwrap();
     }
-    coord.add_task(Task { id: "t".into(), x: 0.0, y: 0.0, min_battery: 0.0 });
+    coord.add_task(Task {
+        id: "t".into(),
+        x: 0.0,
+        y: 0.0,
+        min_battery: 0.0,
+    });
     // No healthy node was reported, so the task finds no taker.
-    assert!(coord.auction_tick(1_000).is_empty(), "untrusted node must not get work");
+    assert!(
+        coord.auction_tick(1_000).is_empty(),
+        "untrusted node must not get work"
+    );
 }

@@ -458,7 +458,14 @@ impl WorldMemory {
         ingested_at: u64,
         source: &str,
     ) -> Result<Fact> {
-        self.observe_as(entity, value, valid_from, ingested_at, source, Origin::Derived)
+        self.observe_as(
+            entity,
+            value,
+            valid_from,
+            ingested_at,
+            source,
+            Origin::Derived,
+        )
     }
 
     /// Record an observation with an explicit [`Origin`].
@@ -506,7 +513,15 @@ impl WorldMemory {
         } else {
             vec![derived_from.to_vec()]
         };
-        self.insert(entity, value, valid_from, ingested_at, source, Origin::Derived, Some(one))
+        self.insert(
+            entity,
+            value,
+            valid_from,
+            ingested_at,
+            source,
+            Origin::Derived,
+            Some(one),
+        )
     }
 
     /// Record support **and** an explicit origin.
@@ -542,7 +557,15 @@ impl WorldMemory {
         } else {
             vec![derived_from.to_vec()]
         };
-        self.insert(entity, value, valid_from, ingested_at, source, origin, Some(one))
+        self.insert(
+            entity,
+            value,
+            valid_from,
+            ingested_at,
+            source,
+            origin,
+            Some(one),
+        )
     }
 
     /// Record a belief supported by any one of several **alternative** justifications.
@@ -567,8 +590,20 @@ impl WorldMemory {
         // Drop empty alternatives: one of them would be trivially satisfied and would
         // silently make the belief unconditional, which is the opposite of what a caller
         // listing several supports means.
-        let alts: Vec<Vec<i64>> = justifications.iter().filter(|j| !j.is_empty()).cloned().collect();
-        self.insert(entity, value, valid_from, ingested_at, source, Origin::Derived, Some(alts))
+        let alts: Vec<Vec<i64>> = justifications
+            .iter()
+            .filter(|j| !j.is_empty())
+            .cloned()
+            .collect();
+        self.insert(
+            entity,
+            value,
+            valid_from,
+            ingested_at,
+            source,
+            Origin::Derived,
+            Some(alts),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -822,7 +857,10 @@ impl WorldMemory {
         // a policy for `mesh_` would also match `mesha`, `meshb`, and so on.
         let pattern = format!(
             "{}%",
-            prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+            prefix
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
         );
         let sql = format!(
             "SELECT {} FROM world_facts
@@ -1105,8 +1143,15 @@ mod tests {
         w.observe("a.b", json!(1), 1_000, 1_000, "whoever").unwrap();
         assert_eq!(w.current("a.b").unwrap().unwrap().origin, Origin::Derived);
 
-        w.observe_as("c.d", json!(2), 1_000, 1_000, "lora-gateway", Origin::Observed)
-            .unwrap();
+        w.observe_as(
+            "c.d",
+            json!(2),
+            1_000,
+            1_000,
+            "lora-gateway",
+            Origin::Observed,
+        )
+        .unwrap();
         assert_eq!(w.current("c.d").unwrap().unwrap().origin, Origin::Observed);
     }
 
@@ -1117,8 +1162,12 @@ mod tests {
         // Collapsing them would make an invalidation sweep either inert or catastrophic.
         let w = WorldMemory::open_in_memory().unwrap();
 
-        w.observe("unknown.support", json!(1), 1_000, 1_000, "legacy").unwrap();
-        assert_eq!(w.current("unknown.support").unwrap().unwrap().derived_from, None);
+        w.observe("unknown.support", json!(1), 1_000, 1_000, "legacy")
+            .unwrap();
+        assert_eq!(
+            w.current("unknown.support").unwrap().unwrap().derived_from,
+            None
+        );
 
         w.observe_derived_from("premise", json!(1), 1_000, 1_000, "rule", &[])
             .unwrap();
@@ -1129,8 +1178,15 @@ mod tests {
         );
 
         // observe_as still records nothing — an explicit origin is not a claim about support.
-        w.observe_as("obs", json!(1), 1_000, 1_000, "lora-gateway", Origin::Observed)
-            .unwrap();
+        w.observe_as(
+            "obs",
+            json!(1),
+            1_000,
+            1_000,
+            "lora-gateway",
+            Origin::Observed,
+        )
+        .unwrap();
         assert_eq!(w.current("obs").unwrap().unwrap().derived_from, None);
     }
 
@@ -1140,10 +1196,24 @@ mod tests {
         // When one reading's source goes away we must be able to find the rollup.
         let w = WorldMemory::open_in_memory().unwrap();
         let n1 = w
-            .observe_as("mesh.n1.rssi", json!(-90), 1_000, 1_000, "lora-gateway", Origin::Observed)
+            .observe_as(
+                "mesh.n1.rssi",
+                json!(-90),
+                1_000,
+                1_000,
+                "lora-gateway",
+                Origin::Observed,
+            )
             .unwrap();
         let n2 = w
-            .observe_as("mesh.n2.rssi", json!(-70), 1_000, 1_000, "lora-gateway", Origin::Observed)
+            .observe_as(
+                "mesh.n2.rssi",
+                json!(-70),
+                1_000,
+                1_000,
+                "lora-gateway",
+                Origin::Observed,
+            )
             .unwrap();
         let roll = w
             .observe_derived_from(
@@ -1174,9 +1244,17 @@ mod tests {
         // Fail-closed. A row that might depend on n1 but never said so must not be
         // swept: under-retracting is recoverable, retracting the store is not.
         let w = WorldMemory::open_in_memory().unwrap();
-        let n1 = w.observe("mesh.n1.rssi", json!(-90), 1_000, 1_000, "lora").unwrap();
-        w.observe("probably.related", json!(true), 1_100, 1_100, "mesh-supervisor")
+        let n1 = w
+            .observe("mesh.n1.rssi", json!(-90), 1_000, 1_000, "lora")
             .unwrap();
+        w.observe(
+            "probably.related",
+            json!(true),
+            1_100,
+            1_100,
+            "mesh-supervisor",
+        )
+        .unwrap();
         assert!(w.dependents(n1.id).unwrap().is_empty());
 
         let (with, total) = w.support_coverage().unwrap();
@@ -1193,11 +1271,25 @@ mod tests {
         // something the reflex trust gate accepts and acts on.
         let w = WorldMemory::open_in_memory().unwrap();
         let reading = w
-            .observe_as("power.battery", json!({"soc": 8}), 1_000, 1_000, "power", Origin::Asserted)
+            .observe_as(
+                "power.battery",
+                json!({"soc": 8}),
+                1_000,
+                1_000,
+                "power",
+                Origin::Asserted,
+            )
             .unwrap();
 
         let laundered = w
-            .observe_derived_from("wrong.mode", json!("critical"), 1_100, 1_100, "power", &[reading.id])
+            .observe_derived_from(
+                "wrong.mode",
+                json!("critical"),
+                1_100,
+                1_100,
+                "power",
+                &[reading.id],
+            )
             .unwrap();
         assert_eq!(laundered.origin, Origin::Derived);
         assert!(
@@ -1216,8 +1308,15 @@ mod tests {
                 &[reading.id],
             )
             .unwrap();
-        assert_eq!(honest.origin, Origin::Asserted, "origin travels with the content");
-        assert!(!OriginSet::EVIDENCE.accepts(honest.origin), "still not evidence");
+        assert_eq!(
+            honest.origin,
+            Origin::Asserted,
+            "origin travels with the content"
+        );
+        assert!(
+            !OriginSet::EVIDENCE.accepts(honest.origin),
+            "still not evidence"
+        );
         // And support was recorded all the same — the two are independent.
         assert_eq!(honest.derived_from, Some(vec![vec![reading.id]]));
     }
@@ -1267,8 +1366,10 @@ mod tests {
         // current/at/history all share one column list; a mismatch there would silently
         // shift every field by one, so check the value as well as the origin.
         let w = WorldMemory::open_in_memory().unwrap();
-        w.observe_as("x.y", json!({"v": 1}), 1_000, 1_000, "s1", Origin::Observed).unwrap();
-        w.observe_as("x.y", json!({"v": 2}), 2_000, 2_000, "s2", Origin::Asserted).unwrap();
+        w.observe_as("x.y", json!({"v": 1}), 1_000, 1_000, "s1", Origin::Observed)
+            .unwrap();
+        w.observe_as("x.y", json!({"v": 2}), 2_000, 2_000, "s2", Origin::Asserted)
+            .unwrap();
 
         let cur = w.current("x.y").unwrap().unwrap();
         assert_eq!(cur.origin, Origin::Asserted);
@@ -1294,7 +1395,11 @@ mod tests {
         assert_eq!(Origin::parse("instructed"), Origin::Instructed);
         assert_eq!(Origin::parse("asserted"), Origin::Asserted);
         assert_eq!(Origin::parse(""), Origin::Asserted);
-        assert_eq!(Origin::parse("OBSERVED"), Origin::Asserted, "no case-insensitive uplift");
+        assert_eq!(
+            Origin::parse("OBSERVED"),
+            Origin::Asserted,
+            "no case-insensitive uplift"
+        );
         assert_eq!(Origin::parse("trusted"), Origin::Asserted);
     }
 
@@ -1324,22 +1429,38 @@ mod tests {
         }
 
         let w = WorldMemory::open(&path).unwrap();
-        assert_eq!(w.current("mesh.n1").unwrap().unwrap().origin, Origin::Observed);
-        assert_eq!(w.current("mesh.n1.health").unwrap().unwrap().origin, Origin::Derived);
+        assert_eq!(
+            w.current("mesh.n1").unwrap().unwrap().origin,
+            Origin::Observed
+        );
+        assert_eq!(
+            w.current("mesh.n1.health").unwrap().unwrap().origin,
+            Origin::Derived
+        );
         // The phantom note from the 2026-07-17 incident, classified correctly in hindsight.
         assert_eq!(
             w.current("mesh.escalation_status").unwrap().unwrap().origin,
             Origin::Asserted
         );
         // Unknown source keeps the fail-closed default rather than guessing upward.
-        assert_eq!(w.current("odd.thing").unwrap().unwrap().origin, Origin::Asserted);
+        assert_eq!(
+            w.current("odd.thing").unwrap().unwrap().origin,
+            Origin::Asserted
+        );
 
         // Re-opening must not re-run the ALTER (it would error) or re-backfill.
         drop(w);
         let w2 = WorldMemory::open(&path).unwrap();
-        w2.observe_as("new.fact", json!(1), 2, 2, "x", Origin::Instructed).unwrap();
-        assert_eq!(w2.current("new.fact").unwrap().unwrap().origin, Origin::Instructed);
-        assert_eq!(w2.current("mesh.n1").unwrap().unwrap().origin, Origin::Observed);
+        w2.observe_as("new.fact", json!(1), 2, 2, "x", Origin::Instructed)
+            .unwrap();
+        assert_eq!(
+            w2.current("new.fact").unwrap().unwrap().origin,
+            Origin::Instructed
+        );
+        assert_eq!(
+            w2.current("mesh.n1").unwrap().unwrap().origin,
+            Origin::Observed
+        );
 
         drop(w2);
         let _ = std::fs::remove_file(&path);
@@ -1348,7 +1469,8 @@ mod tests {
     #[test]
     fn observe_and_current() {
         let w = WorldMemory::open_in_memory().unwrap();
-        w.observe("living_room.temp", json!(21.5), 1_000, 1_000, "node-1").unwrap();
+        w.observe("living_room.temp", json!(21.5), 1_000, 1_000, "node-1")
+            .unwrap();
         let f = w.current("living_room.temp").unwrap().unwrap();
         assert_eq!(f.value, json!(21.5));
         assert_eq!(f.valid_to, None);
@@ -1358,8 +1480,10 @@ mod tests {
     #[test]
     fn second_observation_closes_the_first() {
         let w = WorldMemory::open_in_memory().unwrap();
-        w.observe("front_door.lock", json!("locked"), 1_000, 1_000, "n").unwrap();
-        w.observe("front_door.lock", json!("unlocked"), 2_000, 2_000, "n").unwrap();
+        w.observe("front_door.lock", json!("locked"), 1_000, 1_000, "n")
+            .unwrap();
+        w.observe("front_door.lock", json!("unlocked"), 2_000, 2_000, "n")
+            .unwrap();
 
         // current is the latest, still open
         let cur = w.current("front_door.lock").unwrap().unwrap();
@@ -1377,15 +1501,28 @@ mod tests {
     #[test]
     fn at_returns_time_correct_fact() {
         let w = WorldMemory::open_in_memory().unwrap();
-        w.observe("room.occupied", json!(false), 0, 0, "pir").unwrap();
-        w.observe("room.occupied", json!(true), 1_000, 1_000, "pir").unwrap();
-        w.observe("room.occupied", json!(false), 2_000, 2_000, "pir").unwrap();
+        w.observe("room.occupied", json!(false), 0, 0, "pir")
+            .unwrap();
+        w.observe("room.occupied", json!(true), 1_000, 1_000, "pir")
+            .unwrap();
+        w.observe("room.occupied", json!(false), 2_000, 2_000, "pir")
+            .unwrap();
 
-        assert_eq!(w.at("room.occupied", 500).unwrap().unwrap().value, json!(false));
-        assert_eq!(w.at("room.occupied", 1_500).unwrap().unwrap().value, json!(true));
-        assert_eq!(w.at("room.occupied", 2_500).unwrap().unwrap().value, json!(false));
+        assert_eq!(
+            w.at("room.occupied", 500).unwrap().unwrap().value,
+            json!(false)
+        );
+        assert_eq!(
+            w.at("room.occupied", 1_500).unwrap().unwrap().value,
+            json!(true)
+        );
+        assert_eq!(
+            w.at("room.occupied", 2_500).unwrap().unwrap().value,
+            json!(false)
+        );
         // a fact that starts later is not yet valid earlier
-        w.observe("later.entity", json!(1), 5_000, 5_000, "s").unwrap();
+        w.observe("later.entity", json!(1), 5_000, 5_000, "s")
+            .unwrap();
         assert!(w.at("later.entity", 4_999).unwrap().is_none());
         assert!(w.at("later.entity", 5_000).unwrap().is_some());
         // unknown entity
@@ -1400,7 +1537,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("obc-world-derived-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        for (name, extra_col) in [("pre-origin.db", ""), ("post-origin.db", ", origin TEXT NOT NULL DEFAULT 'asserted'")] {
+        for (name, extra_col) in [
+            ("pre-origin.db", ""),
+            (
+                "post-origin.db",
+                ", origin TEXT NOT NULL DEFAULT 'asserted'",
+            ),
+        ] {
             let path = dir.join(name);
             let _ = std::fs::remove_file(&path);
             {
@@ -1429,8 +1572,11 @@ mod tests {
             // Re-opening must not re-run the ALTER (it would error).
             drop(w);
             let w2 = WorldMemory::open(&path).unwrap();
-            let n = w2.observe_as("s", json!(1), 2, 2, "lora", Origin::Observed).unwrap();
-            w2.observe_derived_from("roll", json!(1), 3, 3, "sup", &[n.id]).unwrap();
+            let n = w2
+                .observe_as("s", json!(1), 2, 2, "lora", Origin::Observed)
+                .unwrap();
+            w2.observe_derived_from("roll", json!(1), 3, 3, "sup", &[n.id])
+                .unwrap();
             assert_eq!(w2.dependents(n.id).unwrap().len(), 1);
             assert_eq!(w2.support_coverage().unwrap(), (1, 3));
         }

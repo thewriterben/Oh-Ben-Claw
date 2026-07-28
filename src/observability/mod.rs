@@ -613,7 +613,10 @@ impl ReconcilingExporter {
                 }
                 Err(_) => {
                     self.online.store(false, Ordering::Relaxed);
-                    return ExportOutcome::Buffered { delivered, buffered: self.buffered() };
+                    return ExportOutcome::Buffered {
+                        delivered,
+                        buffered: self.buffered(),
+                    };
                 }
             }
         }
@@ -648,7 +651,10 @@ mod tests {
     }
     impl ToggleSink {
         fn new(online: bool) -> Self {
-            Self { online: AtomicBool::new(online), received: Mutex::new(Vec::new()) }
+            Self {
+                online: AtomicBool::new(online),
+                received: Mutex::new(Vec::new()),
+            }
         }
         fn set_online(&self, on: bool) {
             self.online.store(on, Ordering::Relaxed);
@@ -674,9 +680,13 @@ mod tests {
         let reg = MetricsRegistry::new();
         reg.counter("x").inc();
         let sink = Arc::new(ToggleSink::new(false));
-        let exp = ReconcilingExporter::new(Arc::clone(&reg), Arc::clone(&sink) as Arc<dyn MetricSink>);
+        let exp =
+            ReconcilingExporter::new(Arc::clone(&reg), Arc::clone(&sink) as Arc<dyn MetricSink>);
         let out = exp.export_now().await;
-        assert!(matches!(out, ExportOutcome::Buffered { .. }), "offline ⇒ buffered, not error");
+        assert!(
+            matches!(out, ExportOutcome::Buffered { .. }),
+            "offline ⇒ buffered, not error"
+        );
         assert!(!exp.is_online());
         assert_eq!(exp.buffered(), 1);
         assert_eq!(sink.batches(), 0, "nothing reached the offline collector");
@@ -686,7 +696,8 @@ mod tests {
     async fn reconnect_flushes_the_backlog() {
         let reg = MetricsRegistry::new();
         let sink = Arc::new(ToggleSink::new(false));
-        let exp = ReconcilingExporter::new(Arc::clone(&reg), Arc::clone(&sink) as Arc<dyn MetricSink>);
+        let exp =
+            ReconcilingExporter::new(Arc::clone(&reg), Arc::clone(&sink) as Arc<dyn MetricSink>);
         reg.counter("x").inc();
         exp.export_now().await; // buffered (offline)
         exp.export_now().await; // buffered again
@@ -703,8 +714,9 @@ mod tests {
     async fn buffer_is_bounded_and_counts_drops() {
         let reg = MetricsRegistry::new();
         let sink = Arc::new(ToggleSink::new(false));
-        let exp = ReconcilingExporter::new(Arc::clone(&reg), Arc::clone(&sink) as Arc<dyn MetricSink>)
-            .with_buffer(2);
+        let exp =
+            ReconcilingExporter::new(Arc::clone(&reg), Arc::clone(&sink) as Arc<dyn MetricSink>)
+                .with_buffer(2);
         for _ in 0..5 {
             exp.export_now().await;
         }

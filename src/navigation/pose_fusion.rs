@@ -63,7 +63,12 @@ impl PoseFuser {
     }
 
     /// Override the fused-pose output entities.
-    pub fn with_output(mut self, x: impl Into<String>, y: impl Into<String>, heading: impl Into<String>) -> Self {
+    pub fn with_output(
+        mut self,
+        x: impl Into<String>,
+        y: impl Into<String>,
+        heading: impl Into<String>,
+    ) -> Self {
         self.out = (x.into(), y.into(), heading.into());
         self
     }
@@ -127,9 +132,30 @@ impl PoseFuser {
 
         let (ex, ey, eh) = &self.out;
         let src = &self.source;
-        self.world.observe_derived_from(ex, json!({ "value": fused.x, "sources": used }), now_ms, now_ms, src, &support)?;
-        self.world.observe_derived_from(ey, json!({ "value": fused.y, "sources": used }), now_ms, now_ms, src, &support)?;
-        self.world.observe_derived_from(eh, json!({ "value": fused.heading_deg, "sources": used }), now_ms, now_ms, src, &support)?;
+        self.world.observe_derived_from(
+            ex,
+            json!({ "value": fused.x, "sources": used }),
+            now_ms,
+            now_ms,
+            src,
+            &support,
+        )?;
+        self.world.observe_derived_from(
+            ey,
+            json!({ "value": fused.y, "sources": used }),
+            now_ms,
+            now_ms,
+            src,
+            &support,
+        )?;
+        self.world.observe_derived_from(
+            eh,
+            json!({ "value": fused.heading_deg, "sources": used }),
+            now_ms,
+            now_ms,
+            src,
+            &support,
+        )?;
         self.world.observe_derived_from(
             "nav.pose_fused",
             json!({ "x": fused.x, "y": fused.y, "heading_deg": fused.heading_deg, "sources": used }),
@@ -147,9 +173,33 @@ mod tests {
     use super::*;
 
     fn put(world: &WorldMemory, prefix: &str, x: f64, y: f64, h: f64, t: u64) {
-        world.observe(&format!("sensor.{prefix}_x"), json!({"value": x}), t, t, "src").unwrap();
-        world.observe(&format!("sensor.{prefix}_y"), json!({"value": y}), t, t, "src").unwrap();
-        world.observe(&format!("sensor.{prefix}_heading"), json!({"value": h}), t, t, "src").unwrap();
+        world
+            .observe(
+                &format!("sensor.{prefix}_x"),
+                json!({"value": x}),
+                t,
+                t,
+                "src",
+            )
+            .unwrap();
+        world
+            .observe(
+                &format!("sensor.{prefix}_y"),
+                json!({"value": y}),
+                t,
+                t,
+                "src",
+            )
+            .unwrap();
+        world
+            .observe(
+                &format!("sensor.{prefix}_heading"),
+                json!({"value": h}),
+                t,
+                t,
+                "src",
+            )
+            .unwrap();
     }
 
     #[test]
@@ -159,7 +209,10 @@ mod tests {
         put(&world, "gps", 10.0, 0.0, 0.0, 1_000);
         // odom weight 3, gps weight 1 → fused x = (3*0 + 1*10)/4 = 2.5
         let fuser = PoseFuser::new(
-            vec![PoseSource::with_prefix("odom", 3.0), PoseSource::with_prefix("gps", 1.0)],
+            vec![
+                PoseSource::with_prefix("odom", 3.0),
+                PoseSource::with_prefix("gps", 1.0),
+            ],
             Arc::clone(&world),
         );
         let p = fuser.fuse(2_000).unwrap().unwrap();
@@ -179,7 +232,10 @@ mod tests {
         put(&world, "a", 0.0, 0.0, 350.0, 1_000);
         put(&world, "b", 0.0, 0.0, 10.0, 1_000);
         let fuser = PoseFuser::new(
-            vec![PoseSource::with_prefix("a", 1.0), PoseSource::with_prefix("b", 1.0)],
+            vec![
+                PoseSource::with_prefix("a", 1.0),
+                PoseSource::with_prefix("b", 1.0),
+            ],
             Arc::clone(&world),
         );
         let p = fuser.fuse(2_000).unwrap().unwrap();
@@ -190,7 +246,10 @@ mod tests {
     #[test]
     fn no_sources_present_returns_none() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        let fuser = PoseFuser::new(vec![PoseSource::with_prefix("odom", 1.0)], Arc::clone(&world));
+        let fuser = PoseFuser::new(
+            vec![PoseSource::with_prefix("odom", 1.0)],
+            Arc::clone(&world),
+        );
         assert!(fuser.fuse(1_000).unwrap().is_none());
     }
 
@@ -198,11 +257,18 @@ mod tests {
     fn partial_source_is_skipped() {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         // only x/y for odom, missing heading → odom skipped; gps complete → used
-        world.observe("sensor.odom_x", json!({"value": 5.0}), 1, 1, "s").unwrap();
-        world.observe("sensor.odom_y", json!({"value": 5.0}), 1, 1, "s").unwrap();
+        world
+            .observe("sensor.odom_x", json!({"value": 5.0}), 1, 1, "s")
+            .unwrap();
+        world
+            .observe("sensor.odom_y", json!({"value": 5.0}), 1, 1, "s")
+            .unwrap();
         put(&world, "gps", 1.0, 2.0, 90.0, 1_000);
         let fuser = PoseFuser::new(
-            vec![PoseSource::with_prefix("odom", 1.0), PoseSource::with_prefix("gps", 1.0)],
+            vec![
+                PoseSource::with_prefix("odom", 1.0),
+                PoseSource::with_prefix("gps", 1.0),
+            ],
             Arc::clone(&world),
         );
         let p = fuser.fuse(2_000).unwrap().unwrap();

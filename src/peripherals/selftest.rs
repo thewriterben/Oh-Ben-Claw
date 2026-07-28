@@ -29,10 +29,18 @@ pub struct SelfTestResult {
 
 impl SelfTestResult {
     pub fn pass(name: impl Into<String>) -> Self {
-        Self { name: name.into(), passed: true, detail: None }
+        Self {
+            name: name.into(),
+            passed: true,
+            detail: None,
+        }
     }
     pub fn fail(name: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self { name: name.into(), passed: false, detail: Some(detail.into()) }
+        Self {
+            name: name.into(),
+            passed: false,
+            detail: Some(detail.into()),
+        }
     }
 }
 
@@ -56,7 +64,13 @@ impl BringupReport {
     /// A one-line human summary (`"rover-1 (esp32-s3): 2/3 checks passed"`).
     pub fn summary(&self) -> String {
         let passed = self.results.iter().filter(|r| r.passed).count();
-        format!("{} ({}): {}/{} checks passed", self.node_id, self.board, passed, self.results.len())
+        format!(
+            "{} ({}): {}/{} checks passed",
+            self.node_id,
+            self.board,
+            passed,
+            self.results.len()
+        )
     }
 }
 
@@ -130,7 +144,11 @@ impl NodeSelfTest for SimulatedNode {
                 }
             })
             .collect();
-        BringupReport { node_id: self.node_id.clone(), board: self.board.clone(), results }
+        BringupReport {
+            node_id: self.node_id.clone(),
+            board: self.board.clone(),
+            results,
+        }
     }
 }
 
@@ -162,7 +180,10 @@ mod tests {
     async fn summary_reports_the_pass_ratio() {
         let node = SimulatedNode::healthy("n", "rp2040").with_failing_check("link_up");
         let s = node.run_bringup().await.summary();
-        assert!(s.contains("n (rp2040)"), "summary names the node + board: {s}");
+        assert!(
+            s.contains("n (rp2040)"),
+            "summary names the node + board: {s}"
+        );
         assert!(s.contains("2/3"), "summary shows the pass ratio: {s}");
     }
 

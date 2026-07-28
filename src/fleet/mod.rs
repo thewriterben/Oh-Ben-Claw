@@ -27,7 +27,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const HEARTBEAT_FILTER: &str = "obc/fleet/heartbeat/+";
 
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn dist2(a: (f64, f64), b: (f64, f64)) -> f64 {
@@ -88,7 +91,10 @@ impl FleetRegistry {
     }
 
     pub fn online_count(&self, now_ms: u64, stale_ms: u64) -> usize {
-        self.nodes.values().filter(|n| n.online(now_ms, stale_ms)).count()
+        self.nodes
+            .values()
+            .filter(|n| n.online(now_ms, stale_ms))
+            .count()
     }
 
     fn set_busy(&mut self, id: &str, busy: bool) {
@@ -111,7 +117,12 @@ pub struct Task {
 
 /// Allocates a task to the best available node: the nearest *online, idle* node
 /// with sufficient battery and a known position.
-pub fn allocate(registry: &FleetRegistry, task: &Task, now_ms: u64, stale_ms: u64) -> Option<String> {
+pub fn allocate(
+    registry: &FleetRegistry,
+    task: &Task,
+    now_ms: u64,
+    stale_ms: u64,
+) -> Option<String> {
     registry
         .nodes()
         .filter(|n| n.online(now_ms, stale_ms) && !n.busy)
@@ -345,10 +356,17 @@ impl Coordinator {
             let mut options: Vec<(f64, f64)> = frontiers
                 .iter()
                 .copied()
-                .filter(|f| claimed.iter().all(|c| dist2(*f, *c) >= self.min_separation.powi(2)))
+                .filter(|f| {
+                    claimed
+                        .iter()
+                        .all(|c| dist2(*f, *c) >= self.min_separation.powi(2))
+                })
                 .collect();
             options.sort_by(|a, b| dist2(*a, (nx, ny)).total_cmp(&dist2(*b, (nx, ny))));
-            if let Some(target) = options.into_iter().find(|f| plan(grid, (nx, ny), *f).is_some()) {
+            if let Some(target) = options
+                .into_iter()
+                .find(|f| plan(grid, (nx, ny), *f).is_some())
+            {
                 self.registry().set_busy(&id, true);
                 self.claims().insert(id.clone(), target);
                 self.enqueue_assignment(&id, target.0, target.1);
@@ -362,7 +380,14 @@ impl Coordinator {
                         &self.source,
                     );
                 }
-                assigned.push((id, NavGoal { x: target.0, y: target.1, tolerance: 0.5 }));
+                assigned.push((
+                    id,
+                    NavGoal {
+                        x: target.0,
+                        y: target.1,
+                        tolerance: 0.5,
+                    },
+                ));
             }
         }
         self.record_status(now_ms);
@@ -440,8 +465,10 @@ impl Coordinator {
             }
         }
         // Requeue tasks that found no eligible node this round.
-        let remaining: VecDeque<Task> =
-            tasks.into_iter().filter(|t| !awarded.contains(&t.id)).collect();
+        let remaining: VecDeque<Task> = tasks
+            .into_iter()
+            .filter(|t| !awarded.contains(&t.id))
+            .collect();
         *self.pending() = remaining;
         self.record_status(now_ms);
         awards
@@ -506,7 +533,11 @@ pub fn spine_heartbeat_handler(coord: Arc<Coordinator>) -> MessageHandler {
             x: v.get("x").and_then(Value::as_f64),
             y: v.get("y").and_then(Value::as_f64),
             battery: v.get("battery").and_then(Value::as_f64),
-            mode: v.get("mode").and_then(Value::as_str).unwrap_or("unknown").to_string(),
+            mode: v
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
             busy: false,
             last_seen_ms: now_ms(),
         });
@@ -526,8 +557,14 @@ pub fn assignment_payload(goal: &NavGoal) -> Value {
 }
 
 /// Publish an assignment back to a node over the spine (`obc/fleet/assign/{node}`).
-pub async fn publish_assignment(spine: &SpineClient, node: &str, goal: &NavGoal) -> anyhow::Result<()> {
-    spine.publish(&assignment_topic(node), &assignment_payload(goal)).await
+pub async fn publish_assignment(
+    spine: &SpineClient,
+    node: &str,
+    goal: &NavGoal,
+) -> anyhow::Result<()> {
+    spine
+        .publish(&assignment_topic(node), &assignment_payload(goal))
+        .await
 }
 
 #[cfg(test)]
@@ -551,7 +588,12 @@ mod tests {
         let mut reg = FleetRegistry::new();
         reg.upsert(node("a", 0.0, 0.0, 80.0, 1_000));
         reg.upsert(node("b", 10.0, 0.0, 80.0, 1_000));
-        let task = Task { id: "t1".into(), x: 9.0, y: 0.0, min_battery: 0.0 };
+        let task = Task {
+            id: "t1".into(),
+            x: 9.0,
+            y: 0.0,
+            min_battery: 0.0,
+        };
         assert_eq!(allocate(&reg, &task, 1_000, 30_000).as_deref(), Some("b"));
     }
 
@@ -564,9 +606,17 @@ mod tests {
         reg.upsert(busy);
         reg.upsert(node("low", 0.0, 0.0, 5.0, 100_000));
         reg.upsert(node("ok", 20.0, 0.0, 90.0, 100_000));
-        let task = Task { id: "t".into(), x: 0.0, y: 0.0, min_battery: 20.0 };
+        let task = Task {
+            id: "t".into(),
+            x: 0.0,
+            y: 0.0,
+            min_battery: 20.0,
+        };
         // only "ok" qualifies despite being farthest
-        assert_eq!(allocate(&reg, &task, 100_000, 30_000).as_deref(), Some("ok"));
+        assert_eq!(
+            allocate(&reg, &task, 100_000, 30_000).as_deref(),
+            Some("ok")
+        );
     }
 
     #[test]
@@ -575,21 +625,39 @@ mod tests {
         let coord = Coordinator::new().with_world_memory(Arc::clone(&world));
         coord.report(node("a", 0.0, 0.0, 80.0, 1_000));
         coord.report(node("b", 10.0, 0.0, 80.0, 1_000));
-        coord.add_task(Task { id: "t1".into(), x: 9.0, y: 0.0, min_battery: 0.0 });
+        coord.add_task(Task {
+            id: "t1".into(),
+            x: 9.0,
+            y: 0.0,
+            min_battery: 0.0,
+        });
 
         let made = coord.tick(1_000);
         assert_eq!(made, vec![("t1".to_string(), "b".to_string())]);
         // b is now busy → a second task goes to a
-        coord.add_task(Task { id: "t2".into(), x: 0.0, y: 0.0, min_battery: 0.0 });
+        coord.add_task(Task {
+            id: "t2".into(),
+            x: 0.0,
+            y: 0.0,
+            min_battery: 0.0,
+        });
         let made = coord.tick(1_000);
         assert_eq!(made, vec![("t2".to_string(), "a".to_string())]);
         // assignment + status recorded
-        assert_eq!(world.current("fleet.assignment.t1").unwrap().unwrap().value["node"], "b");
+        assert_eq!(
+            world.current("fleet.assignment.t1").unwrap().unwrap().value["node"],
+            "b"
+        );
         assert!(world.current("fleet.status").unwrap().is_some());
 
         // completing t1 frees b
         assert!(coord.complete("t1"));
-        coord.add_task(Task { id: "t3".into(), x: 10.0, y: 0.0, min_battery: 0.0 });
+        coord.add_task(Task {
+            id: "t3".into(),
+            x: 10.0,
+            y: 0.0,
+            min_battery: 0.0,
+        });
         let made = coord.tick(1_000);
         assert_eq!(made, vec![("t3".to_string(), "b".to_string())]);
     }
@@ -598,7 +666,12 @@ mod tests {
     fn unallocatable_task_stays_queued() {
         let coord = Coordinator::new();
         // no nodes → task can't be placed, stays queued
-        coord.add_task(Task { id: "t".into(), x: 0.0, y: 0.0, min_battery: 0.0 });
+        coord.add_task(Task {
+            id: "t".into(),
+            x: 0.0,
+            y: 0.0,
+            min_battery: 0.0,
+        });
         assert!(coord.tick(1_000).is_empty());
         // a node appears → next tick places it
         coord.report(node("a", 0.0, 0.0, 50.0, 1_000));
@@ -641,12 +714,27 @@ mod tests {
         reg.upsert(node("a", 0.0, 0.0, 90.0, 1_000));
         reg.upsert(node("b", 10.0, 0.0, 90.0, 1_000));
         let tasks = vec![
-            Task { id: "t1".into(), x: 5.0, y: 0.0, min_battery: 0.0 },
-            Task { id: "t2".into(), x: 9.0, y: 0.0, min_battery: 0.0 },
+            Task {
+                id: "t1".into(),
+                x: 5.0,
+                y: 0.0,
+                min_battery: 0.0,
+            },
+            Task {
+                id: "t2".into(),
+                x: 9.0,
+                y: 0.0,
+                min_battery: 0.0,
+            },
         ];
-        let awards: HashMap<String, String> =
-            auction_allocate(&reg, &tasks, 1_000, 30_000).into_iter().collect();
-        assert_eq!(awards.get("t2").map(String::as_str), Some("b"), "near task → near node");
+        let awards: HashMap<String, String> = auction_allocate(&reg, &tasks, 1_000, 30_000)
+            .into_iter()
+            .collect();
+        assert_eq!(
+            awards.get("t2").map(String::as_str),
+            Some("b"),
+            "near task → near node"
+        );
         assert_eq!(awards.get("t1").map(String::as_str), Some("a"));
     }
 
@@ -655,7 +743,12 @@ mod tests {
         let mut reg = FleetRegistry::new();
         reg.upsert(node("a", 0.0, 0.0, 10.0, 1_000)); // closest but low battery
         reg.upsert(node("b", 5.0, 0.0, 90.0, 1_000));
-        let tasks = vec![Task { id: "hot".into(), x: 0.0, y: 0.0, min_battery: 50.0 }];
+        let tasks = vec![Task {
+            id: "hot".into(),
+            x: 0.0,
+            y: 0.0,
+            min_battery: 50.0,
+        }];
         let awards = auction_allocate(&reg, &tasks, 1_000, 30_000);
         assert_eq!(awards, vec![("hot".to_string(), "b".to_string())]);
     }
@@ -666,15 +759,29 @@ mod tests {
         let coord = Coordinator::new().with_world_memory(Arc::clone(&world));
         coord.report(node("a", 0.0, 0.0, 80.0, 1_000));
         // two tasks, one node → one awarded, one requeued
-        coord.add_task(Task { id: "t1".into(), x: 1.0, y: 0.0, min_battery: 0.0 });
-        coord.add_task(Task { id: "t2".into(), x: 2.0, y: 0.0, min_battery: 0.0 });
+        coord.add_task(Task {
+            id: "t1".into(),
+            x: 1.0,
+            y: 0.0,
+            min_battery: 0.0,
+        });
+        coord.add_task(Task {
+            id: "t2".into(),
+            x: 2.0,
+            y: 0.0,
+            min_battery: 0.0,
+        });
         let awards = coord.auction_tick(1_000);
         assert_eq!(awards.len(), 1, "one node can take one task");
         assert_eq!(awards[0].1, "a");
         // the assignment was recorded via the auction path
         let won = &awards[0].0;
         assert_eq!(
-            world.current(&format!("fleet.assignment.{won}")).unwrap().unwrap().value["via"],
+            world
+                .current(&format!("fleet.assignment.{won}"))
+                .unwrap()
+                .unwrap()
+                .value["via"],
             "auction"
         );
         // a second node arrives → the requeued task is placed next tick
@@ -694,7 +801,9 @@ mod tests {
         handler("obc/fleet/heartbeat/rover-7", &payload);
         let status = coord.status(now_ms());
         let nodes = status["nodes"].as_array().unwrap();
-        assert!(nodes.iter().any(|n| n["id"] == "rover-7" && n["battery"] == 72.0));
+        assert!(nodes
+            .iter()
+            .any(|n| n["id"] == "rover-7" && n["battery"] == 72.0));
     }
 
     #[test]

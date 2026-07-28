@@ -13,9 +13,9 @@
 //! - `history`  — full bitemporal history of `sensor.{quantity}`.
 //! - `anomalies`— every quantity currently out-of-range or stale.
 
+use crate::memory::world::Origin;
 use crate::memory::world::WorldMemory;
 use crate::sensing::{Sample, SensingController};
-use crate::memory::world::Origin;
 use crate::tools::traits::{RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};

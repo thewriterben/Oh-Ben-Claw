@@ -25,7 +25,10 @@ use tokio::sync::Mutex;
 /// * `clawcam/cmd/arm`     → `set_device_state { device_id, state }`
 /// * `clawcam/cmd/alert_rule` → `create_alert_rule { …payload }`
 pub fn map_command(topic: &str, payload: &Value) -> Option<(String, Value)> {
-    let node = payload.get("node").or_else(|| payload.get("device_id")).cloned();
+    let node = payload
+        .get("node")
+        .or_else(|| payload.get("device_id"))
+        .cloned();
     match topic {
         "clawcam/cmd/capture" => Some(("capture_now".to_string(), json!({ "device_id": node }))),
         "clawcam/cmd/arm" => Some((
@@ -84,8 +87,11 @@ mod tests {
 
     #[test]
     fn arm_topic_maps_to_set_device_state() {
-        let (tool, args) =
-            map_command("clawcam/cmd/arm", &json!({ "node": "cam-2", "state": "armed" })).unwrap();
+        let (tool, args) = map_command(
+            "clawcam/cmd/arm",
+            &json!({ "node": "cam-2", "state": "armed" }),
+        )
+        .unwrap();
         assert_eq!(tool, "set_device_state");
         assert_eq!(args["device_id"], "cam-2");
         assert_eq!(args["state"], "armed");
@@ -107,7 +113,8 @@ mod tests {
 
     #[test]
     fn device_id_alias_is_accepted() {
-        let (_, args) = map_command("clawcam/cmd/capture", &json!({ "device_id": "cam-9" })).unwrap();
+        let (_, args) =
+            map_command("clawcam/cmd/capture", &json!({ "device_id": "cam-9" })).unwrap();
         assert_eq!(args["device_id"], "cam-9");
     }
 }

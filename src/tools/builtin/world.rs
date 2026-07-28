@@ -234,7 +234,10 @@ mod tests {
         // The reason rides in `error`, not `output` — a refusal has to say why, or the
         // caller just sees `success: false` and guesses (bench, 2026-07-17).
         let why = r.error.unwrap_or_default();
-        assert!(why.contains("incident."), "points at a safe namespace: {why}");
+        assert!(
+            why.contains("incident."),
+            "points at a safe namespace: {why}"
+        );
 
         // A note *about* the mesh, filed outside the namespace, is fine.
         let ok = t
@@ -272,7 +275,10 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert!(r.success, "not an error — there is nothing wrong with asking");
+        assert!(
+            r.success,
+            "not an error — there is nothing wrong with asking"
+        );
         assert!(r.output.contains("Unchanged"), "{}", r.output);
 
         // The point of the whole check: the belief's age is unchanged, so it can still
@@ -291,8 +297,15 @@ mod tests {
         }))
         .await
         .unwrap();
-        assert_eq!(mem.current("site.gate").unwrap().unwrap().value["state"], json!("closed"));
-        assert_eq!(mem.history("site.gate").unwrap().len(), 2, "supersession intact");
+        assert_eq!(
+            mem.current("site.gate").unwrap().unwrap().value["state"],
+            json!("closed")
+        );
+        assert_eq!(
+            mem.history("site.gate").unwrap().len(),
+            2,
+            "supersession intact"
+        );
     }
 
     #[tokio::test]
@@ -311,8 +324,15 @@ mod tests {
             .await
             .unwrap();
         assert!(r.success);
-        assert!(r.output.contains(r#""source":"agent""#), "stamped, not claimed: {}", r.output);
-        assert!(!r.output.contains("\"source\":\"lora-gateway\""), "the claim is not honoured");
+        assert!(
+            r.output.contains(r#""source":"agent""#),
+            "stamped, not claimed: {}",
+            r.output
+        );
+        assert!(
+            !r.output.contains("\"source\":\"lora-gateway\""),
+            "the claim is not honoured"
+        );
     }
 
     #[tokio::test]
@@ -330,8 +350,15 @@ mod tests {
             .await
             .unwrap();
         assert!(r.success);
-        assert!(r.output.contains(r#""source":"agent""#), "provenance is the agent");
-        assert!(r.output.contains(r#""reported_by":"pir""#), "attribution preserved: {}", r.output);
+        assert!(
+            r.output.contains(r#""source":"agent""#),
+            "provenance is the agent"
+        );
+        assert!(
+            r.output.contains(r#""reported_by":"pir""#),
+            "attribution preserved: {}",
+            r.output
+        );
     }
 
     #[tokio::test]

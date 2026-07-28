@@ -130,7 +130,11 @@ impl TtsSpeechSink {
 
     /// The output file path for an utterance at `at_ms`.
     pub fn out_path(&self, at_ms: u64) -> String {
-        format!("{}/obc_tts_{}.mp3", self.out_dir.trim_end_matches('/'), at_ms)
+        format!(
+            "{}/obc_tts_{}.mp3",
+            self.out_dir.trim_end_matches('/'),
+            at_ms
+        )
     }
 }
 
@@ -271,7 +275,13 @@ mod tests {
     #[test]
     fn high_confidence_event_is_reliable_and_recorded() {
         let (ctrl, world) = controller();
-        let c = ctrl.observe(&heard("mic0", Some("lights on"), None, 0.92), 1_000, crate::memory::world::Origin::Observed).unwrap();
+        let c = ctrl
+            .observe(
+                &heard("mic0", Some("lights on"), None, 0.92),
+                1_000,
+                crate::memory::world::Origin::Observed,
+            )
+            .unwrap();
         assert!(c.reliable);
         let fact = world.current("audio.mic0").unwrap().unwrap();
         assert_eq!(fact.value["text"], "lights on");
@@ -282,7 +292,13 @@ mod tests {
     #[test]
     fn low_confidence_event_is_unreliable_but_still_recorded() {
         let (ctrl, world) = controller();
-        let c = ctrl.observe(&heard("mic0", Some("maybe?"), None, 0.3), 1_000, crate::memory::world::Origin::Observed).unwrap();
+        let c = ctrl
+            .observe(
+                &heard("mic0", Some("maybe?"), None, 0.3),
+                1_000,
+                crate::memory::world::Origin::Observed,
+            )
+            .unwrap();
         assert!(!c.reliable);
         let fact = world.current("audio.mic0").unwrap().unwrap();
         assert_eq!(fact.value["reliable"], false);
@@ -291,7 +307,12 @@ mod tests {
     #[test]
     fn sound_event_label_is_recorded() {
         let (ctrl, world) = controller();
-        ctrl.observe(&heard("mic0", None, Some("alarm"), 0.99), 1_000, crate::memory::world::Origin::Observed).unwrap();
+        ctrl.observe(
+            &heard("mic0", None, Some("alarm"), 0.99),
+            1_000,
+            crate::memory::world::Origin::Observed,
+        )
+        .unwrap();
         let fact = world.current("audio.mic0").unwrap().unwrap();
         assert_eq!(fact.value["label"], "alarm");
     }
@@ -308,8 +329,7 @@ mod tests {
 
     #[test]
     fn heard_event_defaults_confidence_to_one() {
-        let e: HeardEvent =
-            serde_json::from_str(r#"{"stream":"mic0","text":"hi"}"#).unwrap();
+        let e: HeardEvent = serde_json::from_str(r#"{"stream":"mic0","text":"hi"}"#).unwrap();
         assert_eq!(e.confidence, 1.0);
     }
 
@@ -324,17 +344,27 @@ mod tests {
     fn tts_sink_out_path_is_stable() {
         let sink = TtsSpeechSink::new("/tmp/obc/");
         assert_eq!(sink.out_path(42), "/tmp/obc/obc_tts_42.mp3"); // trailing slash trimmed
-        assert_eq!(TtsSpeechSink::new("/var/audio").out_path(7), "/var/audio/obc_tts_7.mp3");
+        assert_eq!(
+            TtsSpeechSink::new("/var/audio").out_path(7),
+            "/var/audio/obc_tts_7.mp3"
+        );
     }
 
     #[tokio::test]
     async fn spine_speech_sink_is_best_effort_when_disconnected() {
         use crate::config::SpineConfig;
-        let spine = Arc::new(crate::spine::SpineClient::new(SpineConfig::default(), "test"));
+        let spine = Arc::new(crate::spine::SpineClient::new(
+            SpineConfig::default(),
+            "test",
+        ));
         let sink = SpineSpeechSink::new(spine);
         // An unconnected spine fails the publish, but the sink logs and returns Ok
         // so a reflex/agent that spoke is never broken by a transient outage.
-        let u = Utterance { text: "hello".into(), voice: "nova".into(), at_ms: 1 };
+        let u = Utterance {
+            text: "hello".into(),
+            voice: "nova".into(),
+            at_ms: 1,
+        };
         assert!(sink.speak(&u).await.is_ok());
     }
 }

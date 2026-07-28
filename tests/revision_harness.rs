@@ -50,10 +50,24 @@ struct Scenario {
 /// whose grounds are gone.
 fn chain_1(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
     let base = w
-        .observe_as("cam.motion", true.into(), 1_000, 1_000, "clawcam", Origin::Observed)
+        .observe_as(
+            "cam.motion",
+            true.into(),
+            1_000,
+            1_000,
+            "clawcam",
+            Origin::Observed,
+        )
         .unwrap();
     let derived = w
-        .observe_derived_from("notify.activity", 1.into(), 1_100, 1_100, "notifier", &[base.id])
+        .observe_derived_from(
+            "notify.activity",
+            1.into(),
+            1_100,
+            1_100,
+            "notifier",
+            &[base.id],
+        )
         .unwrap();
     ("clawcam", [base.id, derived.id].into_iter().collect())
 }
@@ -61,30 +75,70 @@ fn chain_1(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
 /// Depth 3 — the mesh shape. One-hop propagation would leave the last two standing.
 fn chain_3(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
     let rollup = w
-        .observe_as("mesh.n", 1.into(), 1_000, 1_000, "lora-gateway", Origin::Observed)
+        .observe_as(
+            "mesh.n",
+            1.into(),
+            1_000,
+            1_000,
+            "lora-gateway",
+            Origin::Observed,
+        )
         .unwrap();
     let health = w
         .observe_derived_from("mesh.n.health", 0.into(), 1_100, 1_100, "sup", &[rollup.id])
         .unwrap();
     let esc = w
-        .observe_derived_from("mesh.n.escalation", 1.into(), 1_200, 1_200, "sup", &[health.id])
+        .observe_derived_from(
+            "mesh.n.escalation",
+            1.into(),
+            1_200,
+            1_200,
+            "sup",
+            &[health.id],
+        )
         .unwrap();
     let count = w
-        .observe_derived_from("mesh.escalated_count", 1.into(), 1_300, 1_300, "sup", &[esc.id])
+        .observe_derived_from(
+            "mesh.escalated_count",
+            1.into(),
+            1_300,
+            1_300,
+            "sup",
+            &[esc.id],
+        )
         .unwrap();
-    ("lora-gateway", [rollup.id, health.id, esc.id, count.id].into_iter().collect())
+    (
+        "lora-gateway",
+        [rollup.id, health.id, esc.id, count.id]
+            .into_iter()
+            .collect(),
+    )
 }
 
 /// Depth 5, to check the walk does not stop at an arbitrary bound.
 fn chain_5(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
     let base = w
-        .observe_as("s.reading", 1.into(), 1_000, 1_000, "sensor", Origin::Observed)
+        .observe_as(
+            "s.reading",
+            1.into(),
+            1_000,
+            1_000,
+            "sensor",
+            Origin::Observed,
+        )
         .unwrap();
     let mut expect: BTreeSet<i64> = [base.id].into_iter().collect();
     let mut prev = base.id;
     for i in 0..5 {
         let f = w
-            .observe_derived_from(&format!("d{i}"), 1.into(), 1_100 + i, 1_100 + i, "calc", &[prev])
+            .observe_derived_from(
+                &format!("d{i}"),
+                1.into(),
+                1_100 + i,
+                1_100 + i,
+                "calc",
+                &[prev],
+            )
             .unwrap();
         expect.insert(f.id);
         prev = f.id;
@@ -95,7 +149,14 @@ fn chain_5(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
 /// Fan-out: several beliefs on one reading, all of which must go.
 fn fan_out(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
     let base = w
-        .observe_as("s.reading", 1.into(), 1_000, 1_000, "sensor", Origin::Observed)
+        .observe_as(
+            "s.reading",
+            1.into(),
+            1_000,
+            1_000,
+            "sensor",
+            Origin::Observed,
+        )
         .unwrap();
     let mut expect: BTreeSet<i64> = [base.id].into_iter().collect();
     for i in 0..4 {
@@ -109,8 +170,12 @@ fn fan_out(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
 
 /// Conjunctive: needs both, one dies, belief goes.
 fn conjunctive(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
-    let a = w.observe_as("a", 1.into(), 1_000, 1_000, "src-a", Origin::Observed).unwrap();
-    let b = w.observe_as("b", 1.into(), 1_000, 1_000, "src-b", Origin::Observed).unwrap();
+    let a = w
+        .observe_as("a", 1.into(), 1_000, 1_000, "src-a", Origin::Observed)
+        .unwrap();
+    let b = w
+        .observe_as("b", 1.into(), 1_000, 1_000, "src-b", Origin::Observed)
+        .unwrap();
     let both = w
         .observe_derived_from("stereo", 1.into(), 1_100, 1_100, "fusion", &[a.id, b.id])
         .unwrap();
@@ -120,19 +185,41 @@ fn conjunctive(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
 /// Corroborated: two alternative justifications, one dies, belief must SURVIVE.
 /// The over-retraction test.
 fn corroborated(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
-    let a = w.observe_as("a", 1.into(), 1_000, 1_000, "src-a", Origin::Observed).unwrap();
-    let b = w.observe_as("b", 1.into(), 1_000, 1_000, "src-b", Origin::Observed).unwrap();
-    w.observe_derived_from_any("either", 1.into(), 1_100, 1_100, "fusion", &[vec![a.id], vec![b.id]])
+    let a = w
+        .observe_as("a", 1.into(), 1_000, 1_000, "src-a", Origin::Observed)
         .unwrap();
+    let b = w
+        .observe_as("b", 1.into(), 1_000, 1_000, "src-b", Origin::Observed)
+        .unwrap();
+    w.observe_derived_from_any(
+        "either",
+        1.into(),
+        1_100,
+        1_100,
+        "fusion",
+        &[vec![a.id], vec![b.id]],
+    )
+    .unwrap();
     ("src-a", [a.id].into_iter().collect())
 }
 
 /// Corroborated, then both die. Must fall on the second.
 fn corroborated_both_die(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
-    let a = w.observe_as("a", 1.into(), 1_000, 1_000, "src-a", Origin::Observed).unwrap();
-    let b = w.observe_as("b", 1.into(), 1_000, 1_000, "src-a", Origin::Observed).unwrap();
+    let a = w
+        .observe_as("a", 1.into(), 1_000, 1_000, "src-a", Origin::Observed)
+        .unwrap();
+    let b = w
+        .observe_as("b", 1.into(), 1_000, 1_000, "src-a", Origin::Observed)
+        .unwrap();
     let either = w
-        .observe_derived_from_any("either", 1.into(), 1_100, 1_100, "fusion", &[vec![a.id], vec![b.id]])
+        .observe_derived_from_any(
+            "either",
+            1.into(),
+            1_100,
+            1_100,
+            "fusion",
+            &[vec![a.id], vec![b.id]],
+        )
         .unwrap();
     ("src-a", [a.id, b.id, either.id].into_iter().collect())
 }
@@ -140,16 +227,31 @@ fn corroborated_both_die(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
 /// Unknown support next to a dying source. Must be untouched — the fail-closed rule.
 fn unknown_support(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
     let base = w
-        .observe_as("s.reading", 1.into(), 1_000, 1_000, "sensor", Origin::Observed)
+        .observe_as(
+            "s.reading",
+            1.into(),
+            1_000,
+            1_000,
+            "sensor",
+            Origin::Observed,
+        )
         .unwrap();
-    w.observe("plausibly.related", 1.into(), 1_100, 1_100, "calc").unwrap();
+    w.observe("plausibly.related", 1.into(), 1_100, 1_100, "calc")
+        .unwrap();
     ("sensor", [base.id].into_iter().collect())
 }
 
 /// A self-standing log of record. Nothing upstream may undercut it.
 fn self_standing(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
     let base = w
-        .observe_as("s.reading", 1.into(), 1_000, 1_000, "sensor", Origin::Observed)
+        .observe_as(
+            "s.reading",
+            1.into(),
+            1_000,
+            1_000,
+            "sensor",
+            Origin::Observed,
+        )
         .unwrap();
     w.observe_derived_from("log.of.record", 1.into(), 1_100, 1_100, "notifier", &[])
         .unwrap();
@@ -161,20 +263,40 @@ fn cyclic(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
     let root = w
         .observe_as("root", 1.into(), 1_000, 1_000, "sensor", Origin::Observed)
         .unwrap();
-    let a = w.observe_derived_from("a", 1.into(), 1_100, 1_100, "calc", &[root.id]).unwrap();
-    let b = w.observe_derived_from("b", 1.into(), 1_200, 1_200, "calc", &[a.id]).unwrap();
+    let a = w
+        .observe_derived_from("a", 1.into(), 1_100, 1_100, "calc", &[root.id])
+        .unwrap();
+    let b = w
+        .observe_derived_from("b", 1.into(), 1_200, 1_200, "calc", &[a.id])
+        .unwrap();
     // a is rewritten to rest on b — the loop. The old `a` row is superseded, not open.
-    let a2 = w.observe_derived_from("a", 2.into(), 1_300, 1_300, "calc", &[b.id]).unwrap();
+    let a2 = w
+        .observe_derived_from("a", 2.into(), 1_300, 1_300, "calc", &[b.id])
+        .unwrap();
     ("sensor", [root.id, b.id, a2.id].into_iter().collect())
 }
 
 /// An unrelated source's beliefs must not be collateral damage.
 fn bystander(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
     let base = w
-        .observe_as("s.reading", 1.into(), 1_000, 1_000, "sensor", Origin::Observed)
+        .observe_as(
+            "s.reading",
+            1.into(),
+            1_000,
+            1_000,
+            "sensor",
+            Origin::Observed,
+        )
         .unwrap();
     let other = w
-        .observe_as("other.reading", 1.into(), 1_000, 1_000, "other", Origin::Observed)
+        .observe_as(
+            "other.reading",
+            1.into(),
+            1_000,
+            1_000,
+            "other",
+            Origin::Observed,
+        )
         .unwrap();
     w.observe_derived_from("other.derived", 1.into(), 1_100, 1_100, "calc", &[other.id])
         .unwrap();
@@ -182,17 +304,61 @@ fn bystander(w: &WorldMemory) -> (&'static str, BTreeSet<i64>) {
 }
 
 const SCENARIOS: &[Scenario] = &[
-    Scenario { family: "propagation", name: "chain depth 1", build: chain_1 },
-    Scenario { family: "propagation", name: "chain depth 3 (mesh shape)", build: chain_3 },
-    Scenario { family: "propagation", name: "chain depth 5", build: chain_5 },
-    Scenario { family: "propagation", name: "fan-out", build: fan_out },
-    Scenario { family: "semantics", name: "conjunctive (a·b)", build: conjunctive },
-    Scenario { family: "semantics", name: "corroborated survives (a+b)", build: corroborated },
-    Scenario { family: "semantics", name: "corroborated, both die", build: corroborated_both_die },
-    Scenario { family: "restraint", name: "unknown support untouched", build: unknown_support },
-    Scenario { family: "restraint", name: "self-standing untouched", build: self_standing },
-    Scenario { family: "restraint", name: "bystander source untouched", build: bystander },
-    Scenario { family: "robustness", name: "cycle terminates", build: cyclic },
+    Scenario {
+        family: "propagation",
+        name: "chain depth 1",
+        build: chain_1,
+    },
+    Scenario {
+        family: "propagation",
+        name: "chain depth 3 (mesh shape)",
+        build: chain_3,
+    },
+    Scenario {
+        family: "propagation",
+        name: "chain depth 5",
+        build: chain_5,
+    },
+    Scenario {
+        family: "propagation",
+        name: "fan-out",
+        build: fan_out,
+    },
+    Scenario {
+        family: "semantics",
+        name: "conjunctive (a·b)",
+        build: conjunctive,
+    },
+    Scenario {
+        family: "semantics",
+        name: "corroborated survives (a+b)",
+        build: corroborated,
+    },
+    Scenario {
+        family: "semantics",
+        name: "corroborated, both die",
+        build: corroborated_both_die,
+    },
+    Scenario {
+        family: "restraint",
+        name: "unknown support untouched",
+        build: unknown_support,
+    },
+    Scenario {
+        family: "restraint",
+        name: "self-standing untouched",
+        build: self_standing,
+    },
+    Scenario {
+        family: "restraint",
+        name: "bystander source untouched",
+        build: bystander,
+    },
+    Scenario {
+        family: "robustness",
+        name: "cycle terminates",
+        build: cyclic,
+    },
 ];
 
 #[test]
@@ -226,14 +392,31 @@ fn revision_scorecard() {
         }
         over_total += over.len();
         under_total += under.len();
-        rows.push((s.family.to_string(), s.name.to_string(), over.len(), under.len(), ok));
+        rows.push((
+            s.family.to_string(),
+            s.name.to_string(),
+            over.len(),
+            under.len(),
+            ok,
+        ));
     }
 
-    println!("\n  belief-revision conformance — {} scenarios\n", SCENARIOS.len());
-    println!("  {:<12} {:<32} {:>5} {:>6}  result", "family", "scenario", "over", "under");
+    println!(
+        "\n  belief-revision conformance — {} scenarios\n",
+        SCENARIOS.len()
+    );
+    println!(
+        "  {:<12} {:<32} {:>5} {:>6}  result",
+        "family", "scenario", "over", "under"
+    );
     let mut last = "";
     for (family, name, over, under, ok) in &rows {
-        let fam = if family == last { "" } else { last = family; family.as_str() };
+        let fam = if family == last {
+            ""
+        } else {
+            last = family;
+            family.as_str()
+        };
         println!(
             "  {:<12} {:<32} {:>5} {:>6}  {}",
             fam,
@@ -250,12 +433,16 @@ fn revision_scorecard() {
         over_total,
         under_total
     );
-    println!(
-        "  (conformance to the specification, not a benchmark score — see the module docs)\n"
-    );
+    println!("  (conformance to the specification, not a benchmark score — see the module docs)\n");
 
-    assert_eq!(over_total, 0, "over-retraction: beliefs withdrawn that should have stood");
-    assert_eq!(under_total, 0, "under-retraction: beliefs left standing without grounds");
+    assert_eq!(
+        over_total, 0,
+        "over-retraction: beliefs withdrawn that should have stood"
+    );
+    assert_eq!(
+        under_total, 0,
+        "under-retraction: beliefs left standing without grounds"
+    );
     assert_eq!(exact, SCENARIOS.len());
 }
 
@@ -273,23 +460,37 @@ fn lazy_staleness_scorecard() {
     }
 
     fn superseded_support(w: &WorldMemory) -> (i64, &'static str) {
-        let a = w.observe_as("a", 1.into(), 1_000, 1_000, "s", Origin::Observed).unwrap();
-        let d = w.observe_derived_from("d", 1.into(), 1_100, 1_100, "c", &[a.id]).unwrap();
-        w.observe_as("a", 2.into(), 1_200, 1_200, "s", Origin::Observed).unwrap();
+        let a = w
+            .observe_as("a", 1.into(), 1_000, 1_000, "s", Origin::Observed)
+            .unwrap();
+        let d = w
+            .observe_derived_from("d", 1.into(), 1_100, 1_100, "c", &[a.id])
+            .unwrap();
+        w.observe_as("a", 2.into(), 1_200, 1_200, "s", Origin::Observed)
+            .unwrap();
         (d.id, "ungrounded")
     }
     fn support_still_current(w: &WorldMemory) -> (i64, &'static str) {
-        let a = w.observe_as("a", 1.into(), 1_000, 1_000, "s", Origin::Observed).unwrap();
-        let d = w.observe_derived_from("d", 1.into(), 1_100, 1_100, "c", &[a.id]).unwrap();
+        let a = w
+            .observe_as("a", 1.into(), 1_000, 1_000, "s", Origin::Observed)
+            .unwrap();
+        let d = w
+            .observe_derived_from("d", 1.into(), 1_100, 1_100, "c", &[a.id])
+            .unwrap();
         (d.id, "grounded")
     }
     fn one_of_two_superseded(w: &WorldMemory) -> (i64, &'static str) {
-        let a = w.observe_as("a", 1.into(), 1_000, 1_000, "s", Origin::Observed).unwrap();
-        let b = w.observe_as("b", 1.into(), 1_000, 1_000, "s", Origin::Observed).unwrap();
+        let a = w
+            .observe_as("a", 1.into(), 1_000, 1_000, "s", Origin::Observed)
+            .unwrap();
+        let b = w
+            .observe_as("b", 1.into(), 1_000, 1_000, "s", Origin::Observed)
+            .unwrap();
         let d = w
             .observe_derived_from_any("d", 1.into(), 1_100, 1_100, "c", &[vec![a.id], vec![b.id]])
             .unwrap();
-        w.observe_as("a", 2.into(), 1_200, 1_200, "s", Origin::Observed).unwrap();
+        w.observe_as("a", 2.into(), 1_200, 1_200, "s", Origin::Observed)
+            .unwrap();
         (d.id, "grounded") // b still stands
     }
     fn no_in_list(w: &WorldMemory) -> (i64, &'static str) {
@@ -297,16 +498,33 @@ fn lazy_staleness_scorecard() {
         (d.id, "unknown")
     }
     fn premise(w: &WorldMemory) -> (i64, &'static str) {
-        let d = w.observe_derived_from("d", 1.into(), 1_100, 1_100, "c", &[]).unwrap();
+        let d = w
+            .observe_derived_from("d", 1.into(), 1_100, 1_100, "c", &[])
+            .unwrap();
         (d.id, "self-standing")
     }
 
     let cases = [
-        Case { name: "support superseded", build: superseded_support },
-        Case { name: "support still current", build: support_still_current },
-        Case { name: "one of two superseded", build: one_of_two_superseded },
-        Case { name: "no in-list recorded", build: no_in_list },
-        Case { name: "explicit premise", build: premise },
+        Case {
+            name: "support superseded",
+            build: superseded_support,
+        },
+        Case {
+            name: "support still current",
+            build: support_still_current,
+        },
+        Case {
+            name: "one of two superseded",
+            build: one_of_two_superseded,
+        },
+        Case {
+            name: "no in-list recorded",
+            build: no_in_list,
+        },
+        Case {
+            name: "explicit premise",
+            build: premise,
+        },
     ];
 
     println!("\n  lazy staleness — {} cases\n", cases.len());

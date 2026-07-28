@@ -329,7 +329,9 @@ impl SpineClient {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Spine not connected"))?;
         let bytes = serde_json::to_vec(payload)?;
-        client.publish(topic, QoS::AtLeastOnce, false, bytes).await?;
+        client
+            .publish(topic, QoS::AtLeastOnce, false, bytes)
+            .await?;
         Ok(())
     }
 
@@ -416,12 +418,27 @@ mod tests {
 
     #[test]
     fn topic_matching_handles_wildcards() {
-        assert!(topic_matches("obc/fleet/heartbeat/+", "obc/fleet/heartbeat/node-1"));
-        assert!(!topic_matches("obc/fleet/heartbeat/+", "obc/fleet/heartbeat/node-1/extra"));
-        assert!(!topic_matches("obc/fleet/heartbeat/+", "obc/fleet/assign/node-1"));
+        assert!(topic_matches(
+            "obc/fleet/heartbeat/+",
+            "obc/fleet/heartbeat/node-1"
+        ));
+        assert!(!topic_matches(
+            "obc/fleet/heartbeat/+",
+            "obc/fleet/heartbeat/node-1/extra"
+        ));
+        assert!(!topic_matches(
+            "obc/fleet/heartbeat/+",
+            "obc/fleet/assign/node-1"
+        ));
         assert!(topic_matches("obc/#", "obc/anything/at/all"));
-        assert!(topic_matches("obc/fleet/heartbeat/n1", "obc/fleet/heartbeat/n1"));
-        assert!(!topic_matches("obc/fleet/heartbeat/+", "obc/fleet/heartbeat"));
+        assert!(topic_matches(
+            "obc/fleet/heartbeat/n1",
+            "obc/fleet/heartbeat/n1"
+        ));
+        assert!(!topic_matches(
+            "obc/fleet/heartbeat/+",
+            "obc/fleet/heartbeat"
+        ));
     }
 
     #[test]

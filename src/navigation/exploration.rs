@@ -56,7 +56,11 @@ pub fn nearest_frontier_goal(
     for (cx, cy) in frontiers {
         let (gx, gy) = grid.cell_center(cx, cy);
         if plan(grid, pose, (gx, gy)).is_some() {
-            return Some(NavGoal { x: gx, y: gy, tolerance });
+            return Some(NavGoal {
+                x: gx,
+                y: gy,
+                tolerance,
+            });
         }
     }
     None

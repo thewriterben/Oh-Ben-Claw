@@ -46,7 +46,11 @@ impl AerialTelemetry {
     pub fn to_node_state(&self, frame: &GeoFrame, now_ms: u64) -> NodeState {
         let enu = frame.to_enu(self.position());
         let mode = if self.armed {
-            if self.mode.is_empty() { "flying".to_string() } else { self.mode.clone() }
+            if self.mode.is_empty() {
+                "flying".to_string()
+            } else {
+                self.mode.clone()
+            }
         } else {
             "idle".to_string()
         };
@@ -110,8 +114,13 @@ mod tests {
 
     fn drone(lat: f64, lon: f64, battery: f64, armed: bool) -> AerialTelemetry {
         AerialTelemetry {
-            id: "uav-1".into(), lat, lon, alt_m: 40.0,
-            battery_percent: battery, armed, mode: "AUTO".into(),
+            id: "uav-1".into(),
+            lat,
+            lon,
+            alt_m: 40.0,
+            battery_percent: battery,
+            armed,
+            mode: "AUTO".into(),
         }
     }
 
@@ -144,7 +153,9 @@ mod tests {
 
     #[test]
     fn flight_safe_ok_inside_and_charged() {
-        assert!(flight_safe(&drone(45.5, -122.6, 60.0, true), 20.0, Some(&square_site())).is_none());
+        assert!(
+            flight_safe(&drone(45.5, -122.6, 60.0, true), 20.0, Some(&square_site())).is_none()
+        );
     }
 
     #[test]

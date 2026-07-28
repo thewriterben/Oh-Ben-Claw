@@ -77,7 +77,10 @@ pub fn ingest_anomaly_report(
         return Ok(None);
     };
     let z = latest.get("z").and_then(Value::as_f64).unwrap_or(0.0);
-    let anomalous = latest.get("anomaly").and_then(Value::as_bool).unwrap_or(false);
+    let anomalous = latest
+        .get("anomaly")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let kind = if anomalous {
         latest
             .get("kind")
@@ -180,7 +183,10 @@ pub fn ingest_calibration_report(
     let Some(report) = extract_report(tool_result) else {
         return Ok(None);
     };
-    let reviewed = report.get("reviewed").and_then(Value::as_f64).unwrap_or(0.0);
+    let reviewed = report
+        .get("reviewed")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
     if reviewed <= 0.0 {
         return Ok(None);
     }
@@ -220,7 +226,8 @@ pub async fn poll_clawcam_analytics(
     for (tool, ingest) in [
         (
             "get_anomaly_report",
-            ingest_anomaly_report as fn(&WorldMemory, &Value, u64, &str) -> anyhow::Result<Option<String>>,
+            ingest_anomaly_report
+                as fn(&WorldMemory, &Value, u64, &str) -> anyhow::Result<Option<String>>,
         ),
         ("get_encounter_report", ingest_encounter_report),
         ("get_calibration_report", ingest_calibration_report),
@@ -276,7 +283,13 @@ mod tests {
     #[test]
     fn anomaly_latest_day_becomes_fact_with_signed_z() {
         let world = WorldMemory::open_in_memory().unwrap();
-        let out = ingest_anomaly_report(&world, &anomaly_result(-2.6, true, "drop"), 1_000, "clawcam").unwrap();
+        let out = ingest_anomaly_report(
+            &world,
+            &anomaly_result(-2.6, true, "drop"),
+            1_000,
+            "clawcam",
+        )
+        .unwrap();
         assert_eq!(out.as_deref(), Some(ANOMALY_ENTITY));
         let fact = world.current(ANOMALY_ENTITY).unwrap().unwrap();
         assert!((fact.value["value"].as_f64().unwrap() + 2.6).abs() < 1e-9);
@@ -306,9 +319,15 @@ mod tests {
     fn error_result_records_nothing() {
         let world = WorldMemory::open_in_memory().unwrap();
         let err = json!({"ok": false, "error": "boom"});
-        assert!(ingest_anomaly_report(&world, &err, 1_000, "clawcam").unwrap().is_none());
-        assert!(ingest_encounter_report(&world, &err, 1_000, "clawcam").unwrap().is_none());
-        assert!(ingest_calibration_report(&world, &err, 1_000, "clawcam").unwrap().is_none());
+        assert!(ingest_anomaly_report(&world, &err, 1_000, "clawcam")
+            .unwrap()
+            .is_none());
+        assert!(ingest_encounter_report(&world, &err, 1_000, "clawcam")
+            .unwrap()
+            .is_none());
+        assert!(ingest_calibration_report(&world, &err, 1_000, "clawcam")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -336,7 +355,9 @@ mod tests {
     fn zero_detection_encounter_report_records_nothing() {
         let world = WorldMemory::open_in_memory().unwrap();
         let result = json!({"ok": true, "report": {"total_encounters": 0, "total_detections": 0, "by_subject": {}}});
-        assert!(ingest_encounter_report(&world, &result, 2_000, "clawcam").unwrap().is_none());
+        assert!(ingest_encounter_report(&world, &result, 2_000, "clawcam")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -362,7 +383,9 @@ mod tests {
     fn unreviewed_calibration_records_nothing() {
         let world = WorldMemory::open_in_memory().unwrap();
         let result = json!({"ok": true, "report": {"reviewed": 0, "well_calibrated": true}});
-        assert!(ingest_calibration_report(&world, &result, 3_000, "clawcam").unwrap().is_none());
+        assert!(ingest_calibration_report(&world, &result, 3_000, "clawcam")
+            .unwrap()
+            .is_none());
     }
 
     #[test]

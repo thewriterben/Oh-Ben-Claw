@@ -524,15 +524,18 @@ impl A2AServer {
             "SendMessage" => self.handle_send_message(&params),
             "GetTask" => self.handle_get_task(&params),
             "CancelTask" => self.handle_cancel_task(&params),
-            "ListTasks" | "SendStreamingMessage" | "SubscribeToTask" | "GetExtendedAgentCard"
-            | "CreateTaskPushNotificationConfig" | "GetTaskPushNotificationConfig"
-            | "ListTaskPushNotificationConfigs" | "DeleteTaskPushNotificationConfig" => {
-                Err(json!({
-                    "code": error_codes::UNSUPPORTED_OPERATION,
-                    "message": format!("operation '{}' is not supported by this agent", req.method),
-                    "data": error_info("UNSUPPORTED_OPERATION"),
-                }))
-            }
+            "ListTasks"
+            | "SendStreamingMessage"
+            | "SubscribeToTask"
+            | "GetExtendedAgentCard"
+            | "CreateTaskPushNotificationConfig"
+            | "GetTaskPushNotificationConfig"
+            | "ListTaskPushNotificationConfigs"
+            | "DeleteTaskPushNotificationConfig" => Err(json!({
+                "code": error_codes::UNSUPPORTED_OPERATION,
+                "message": format!("operation '{}' is not supported by this agent", req.method),
+                "data": error_info("UNSUPPORTED_OPERATION"),
+            })),
             other => Err(json!({
                 "code": -32601,
                 "message": format!("Method not found: {other}"),
@@ -546,9 +549,9 @@ impl A2AServer {
     }
 
     fn handle_send_message(&mut self, params: &Value) -> Result<Value, Value> {
-        let message: Message = serde_json::from_value(params["message"].clone()).map_err(|e| {
-            json!({"code": -32602, "message": format!("invalid SendMessage params: {e}")})
-        })?;
+        let message: Message = serde_json::from_value(params["message"].clone()).map_err(
+            |e| json!({"code": -32602, "message": format!("invalid SendMessage params: {e}")}),
+        )?;
 
         if !message.parts.iter().all(Part::is_valid_oneof) {
             return Err(json!({

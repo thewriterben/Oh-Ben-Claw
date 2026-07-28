@@ -138,10 +138,7 @@ impl RolloutTracker {
 
     /// All records (for `skill list` / the gateway view).
     pub fn all(&self) -> HashMap<String, RolloutRecord> {
-        self.state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.state.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 }
 
@@ -283,7 +280,9 @@ mod tests {
     fn promote_requires_clean_record_and_no_failures() {
         let dir = tmp_dir("promote");
         let forge = SkillForge::new(&dir);
-        forge.install_skill(&simulate_manifest("learned_unlock")).unwrap();
+        forge
+            .install_skill(&simulate_manifest("learned_unlock"))
+            .unwrap();
         let tracker = tracker_in(&dir);
 
         // No record at all → refused.
@@ -328,9 +327,18 @@ mod tests {
         forge.install_skill(&m).unwrap();
         let tracker = tracker_in(&dir);
 
-        assert_eq!(demote(&forge, &tracker, "learned_x").unwrap(), RolloutStage::Supervised);
-        assert_eq!(demote(&forge, &tracker, "learned_x").unwrap(), RolloutStage::Simulate);
-        assert!(demote(&forge, &tracker, "learned_x").is_err(), "floor reached");
+        assert_eq!(
+            demote(&forge, &tracker, "learned_x").unwrap(),
+            RolloutStage::Supervised
+        );
+        assert_eq!(
+            demote(&forge, &tracker, "learned_x").unwrap(),
+            RolloutStage::Simulate
+        );
+        assert!(
+            demote(&forge, &tracker, "learned_x").is_err(),
+            "floor reached"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

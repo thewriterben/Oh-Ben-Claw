@@ -240,7 +240,11 @@ mod tests {
         assert_eq!(r.id, "vision-alert-person");
         assert!(matches!(r.then, Action::Escalate { .. }));
         match &r.when {
-            Condition::State { entity, field, equals } => {
+            Condition::State {
+                entity,
+                field,
+                equals,
+            } => {
                 assert_eq!(entity, "vision.subject.person");
                 assert_eq!(field.as_deref(), Some("review_state"));
                 assert_eq!(equals, "verified");
@@ -258,7 +262,10 @@ mod tests {
         };
         let rules = vision_security_rules(&opts);
         assert_eq!(rules.len(), 2, "escalate + capture");
-        let cap = rules.iter().find(|r| r.id == "vision-capture-person").unwrap();
+        let cap = rules
+            .iter()
+            .find(|r| r.id == "vision-capture-person")
+            .unwrap();
         match &cap.then {
             Action::Publish { topic, payload } => {
                 assert_eq!(topic, "clawcam/cmd/capture");
@@ -285,7 +292,10 @@ mod tests {
         let rules = vision_analytics_rules(&AnalyticsRuleOptions::default());
         assert_eq!(rules.len(), 3);
         // Drop rule: z <= -2.0 on the anomaly fact, escalating.
-        let drop = rules.iter().find(|r| r.id == "vision-anomaly-drop").unwrap();
+        let drop = rules
+            .iter()
+            .find(|r| r.id == "vision-anomaly-drop")
+            .unwrap();
         match &drop.when {
             Condition::Sensor { entity, op, value } => {
                 assert_eq!(entity, super::super::clawcam_analytics::ANOMALY_ENTITY);
@@ -296,7 +306,10 @@ mod tests {
         }
         assert!(matches!(drop.then, Action::Escalate { .. }));
         // Spike rule mirrors it at +z.
-        let spike = rules.iter().find(|r| r.id == "vision-anomaly-spike").unwrap();
+        let spike = rules
+            .iter()
+            .find(|r| r.id == "vision-anomaly-spike")
+            .unwrap();
         match &spike.when {
             Condition::Sensor { op, value, .. } => {
                 assert!(matches!(op, Cmp::Ge));
@@ -305,9 +318,16 @@ mod tests {
             other => panic!("expected a Sensor condition, got {other:?}"),
         }
         // Calibration rule matches the string "false" (the State contract).
-        let cal = rules.iter().find(|r| r.id == "vision-calibration-drift").unwrap();
+        let cal = rules
+            .iter()
+            .find(|r| r.id == "vision-calibration-drift")
+            .unwrap();
         match &cal.when {
-            Condition::State { entity, field, equals } => {
+            Condition::State {
+                entity,
+                field,
+                equals,
+            } => {
                 assert_eq!(entity, super::super::clawcam_analytics::CALIBRATION_ENTITY);
                 assert_eq!(field.as_deref(), Some("well_calibrated"));
                 assert_eq!(equals, "false");
@@ -327,18 +347,39 @@ mod tests {
         };
 
         let drop = reason("vision-anomaly-drop");
-        assert!(drop.contains("get_anomaly_report"), "drop names the anomaly tool");
-        assert!(drop.contains("get_node_health"), "drop points at camera health");
+        assert!(
+            drop.contains("get_anomaly_report"),
+            "drop names the anomaly tool"
+        );
+        assert!(
+            drop.contains("get_node_health"),
+            "drop points at camera health"
+        );
         assert!(drop.contains("Track-0"), "drop reaffirms the safety gate");
 
         let spike = reason("vision-anomaly-spike");
-        assert!(spike.contains("get_anomaly_report"), "spike names the anomaly tool");
-        assert!(spike.contains("get_site_report"), "spike points at the fuller picture");
+        assert!(
+            spike.contains("get_anomaly_report"),
+            "spike names the anomaly tool"
+        );
+        assert!(
+            spike.contains("get_site_report"),
+            "spike points at the fuller picture"
+        );
 
         let cal = reason("vision-calibration-drift");
-        assert!(cal.contains("get_calibration_report"), "calibration names its report");
-        assert!(cal.contains("get_review_queue"), "calibration points at the review backlog");
-        assert!(cal.contains("operator-gated"), "calibration keeps threshold changes gated");
+        assert!(
+            cal.contains("get_calibration_report"),
+            "calibration names its report"
+        );
+        assert!(
+            cal.contains("get_review_queue"),
+            "calibration points at the review backlog"
+        );
+        assert!(
+            cal.contains("operator-gated"),
+            "calibration keeps threshold changes gated"
+        );
     }
 
     #[test]
@@ -347,13 +388,16 @@ mod tests {
             z_alert: -3.0,
             ..Default::default()
         });
-        let drop = rules.iter().find(|r| r.id == "vision-anomaly-drop").unwrap();
-        let spike = rules.iter().find(|r| r.id == "vision-anomaly-spike").unwrap();
+        let drop = rules
+            .iter()
+            .find(|r| r.id == "vision-anomaly-drop")
+            .unwrap();
+        let spike = rules
+            .iter()
+            .find(|r| r.id == "vision-anomaly-spike")
+            .unwrap();
         match (&drop.when, &spike.when) {
-            (
-                Condition::Sensor { value: d, .. },
-                Condition::Sensor { value: s, .. },
-            ) => {
+            (Condition::Sensor { value: d, .. }, Condition::Sensor { value: s, .. }) => {
                 assert!((d + 3.0).abs() < 1e-9);
                 assert!((s - 3.0).abs() < 1e-9);
             }

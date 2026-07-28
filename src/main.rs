@@ -753,7 +753,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         match oh_ben_claw::vision::clawcam_ingest::recount_subjects(world, now, "clawcam") {
             Ok(fixed) if !fixed.is_empty() => {
                 for (subject, old, new) in &fixed {
-                    info!(subject, old, new, "subject count corrected from distinct events");
+                    info!(
+                        subject,
+                        old, new, "subject count corrected from distinct events"
+                    );
                 }
             }
             Ok(_) => {}
@@ -2148,10 +2151,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // belief has been withdrawn.
     if let Some(world) = &world_mem {
         if config.perception.context.enabled {
-            agent = agent.with_world_context(
-                Arc::clone(world),
-                config.perception.context.clone(),
-            );
+            agent = agent.with_world_context(Arc::clone(world), config.perception.context.clone());
             info!(
                 max_facts = config.perception.context.max_facts,
                 max_withdrawals = config.perception.context.max_withdrawals,
@@ -2504,8 +2504,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     error = %e,
                     "scheduler database unavailable - falling back to in-memory (tasks will not persist)"
                 );
-                scheduler::Scheduler::new(":memory:")
-                    .expect("in-memory scheduler cannot fail")
+                scheduler::Scheduler::new(":memory:").expect("in-memory scheduler cannot fail")
             }
         };
         let mut gs = gateway::GatewayState::new(config.gateway.clone())

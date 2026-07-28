@@ -111,7 +111,10 @@ fn compact(value: &serde_json::Value, budget: usize) -> String {
     };
     let s = s.replace(['\n', '\r'], " ");
     if s.chars().count() > budget {
-        format!("{}…", s.chars().take(budget.saturating_sub(1)).collect::<String>())
+        format!(
+            "{}…",
+            s.chars().take(budget.saturating_sub(1)).collect::<String>()
+        )
     } else {
         s
     }
@@ -199,7 +202,10 @@ pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Opt
             ));
         }
         if total_withdrawn > cfg.max_withdrawals {
-            withdrawals.push_str(&format!("_…and {} more._\n", total_withdrawn - cfg.max_withdrawals));
+            withdrawals.push_str(&format!(
+                "_…and {} more._\n",
+                total_withdrawn - cfg.max_withdrawals
+            ));
         }
         withdrawals.push_str(
             "\nThese were not contradicted — the grounds for them went away. Do not \
@@ -227,7 +233,10 @@ pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Opt
         // read as ten unrelated topics.
         let mut by_head: BTreeMap<&str, Vec<&Fact>> = BTreeMap::new();
         for f in &shown {
-            by_head.entry(f.entity.split('.').next().unwrap_or("")).or_default().push(f);
+            by_head
+                .entry(f.entity.split('.').next().unwrap_or(""))
+                .or_default()
+                .push(f);
         }
         let mut rendered = 0usize;
         'outer: for (head, group) in &by_head {
@@ -291,8 +300,15 @@ mod tests {
     #[test]
     fn beliefs_carry_origin_source_and_age() {
         let w = store();
-        w.observe_as("mesh.n1", json!({"rssi": -70}), 1_000, 1_000, "lora-gateway", Origin::Observed)
-            .unwrap();
+        w.observe_as(
+            "mesh.n1",
+            json!({"rssi": -70}),
+            1_000,
+            1_000,
+            "lora-gateway",
+            Origin::Observed,
+        )
+        .unwrap();
         let out = render(&w, &WorldContextConfig::default(), 61_000).unwrap();
         assert!(out.contains("`mesh.n1`"), "{out}");
         assert!(out.contains("observed"), "origin is shown: {out}");
@@ -305,11 +321,21 @@ mod tests {
         // The whole point of surfacing origin. A model that cannot tell a radio reading
         // from its own earlier guess will treat them alike.
         let w = store();
-        w.observe_as("incident.n1", json!("presumed lost"), 1_000, 1_000, "agent", Origin::Asserted)
-            .unwrap();
+        w.observe_as(
+            "incident.n1",
+            json!("presumed lost"),
+            1_000,
+            1_000,
+            "agent",
+            Origin::Asserted,
+        )
+        .unwrap();
         let out = render(&w, &WorldContextConfig::default(), 2_000).unwrap();
         assert!(out.contains("asserted"), "{out}");
-        assert!(out.contains("is not evidence"), "the legend explains it: {out}");
+        assert!(
+            out.contains("is not evidence"),
+            "the legend explains it: {out}"
+        );
     }
 
     #[test]
@@ -318,11 +344,31 @@ mod tests {
         // fact is merely absent, and absence reads as "never existed".
         let w = store();
         let esc = w
-            .observe("mesh.n.escalation", json!({"status": "escalated"}), 1_000, 1_000, "mesh-supervisor")
+            .observe(
+                "mesh.n.escalation",
+                json!({"status": "escalated"}),
+                1_000,
+                1_000,
+                "mesh-supervisor",
+            )
             .unwrap();
-        w.observe_derived_from("mesh.escalated_count", json!(1), 1_100, 1_100, "mesh-supervisor", &[esc.id])
-            .unwrap();
-        stopped(&w, "mesh-supervisor", Stopped::Retired, 2_000, "configured off").unwrap();
+        w.observe_derived_from(
+            "mesh.escalated_count",
+            json!(1),
+            1_100,
+            1_100,
+            "mesh-supervisor",
+            &[esc.id],
+        )
+        .unwrap();
+        stopped(
+            &w,
+            "mesh-supervisor",
+            Stopped::Retired,
+            2_000,
+            "configured off",
+        )
+        .unwrap();
 
         let out = render(&w, &WorldContextConfig::default(), 3_000).unwrap();
         assert!(out.contains("No longer believed"), "{out}");
@@ -339,10 +385,19 @@ mod tests {
         // A truncated view that looks complete is worse than no view.
         let w = store();
         for i in 0..40 {
-            w.observe(&format!("s.reading{i}"), json!(i), 1_000 + i, 1_000 + i, "sensor")
-                .unwrap();
+            w.observe(
+                &format!("s.reading{i}"),
+                json!(i),
+                1_000 + i,
+                1_000 + i,
+                "sensor",
+            )
+            .unwrap();
         }
-        let cfg = WorldContextConfig { max_facts: 5, ..Default::default() };
+        let cfg = WorldContextConfig {
+            max_facts: 5,
+            ..Default::default()
+        };
         let out = render(&w, &cfg, 2_000).unwrap();
         assert!(out.contains("35 further belief(s) not shown"), "{out}");
         assert!(out.contains("world_memory"), "and how to get them: {out}");
@@ -355,7 +410,10 @@ mod tests {
         let w = store();
         w.observe("old.thing", json!(1), 1_000, 1_000, "s").unwrap();
         w.observe("new.thing", json!(2), 9_000, 9_000, "s").unwrap();
-        let cfg = WorldContextConfig { max_facts: 1, ..Default::default() };
+        let cfg = WorldContextConfig {
+            max_facts: 1,
+            ..Default::default()
+        };
         let out = render(&w, &cfg, 10_000).unwrap();
         assert!(out.contains("new.thing"), "{out}");
         assert!(!out.contains("`old.thing`"), "{out}");
@@ -364,9 +422,14 @@ mod tests {
     #[test]
     fn the_include_list_scopes_both_halves() {
         let w = store();
-        w.observe("mesh.n1", json!(1), 1_000, 1_000, "lora").unwrap();
-        w.observe("kitchen.temp", json!(21), 1_000, 1_000, "sensor").unwrap();
-        let cfg = WorldContextConfig { include: vec!["mesh.".into()], ..Default::default() };
+        w.observe("mesh.n1", json!(1), 1_000, 1_000, "lora")
+            .unwrap();
+        w.observe("kitchen.temp", json!(21), 1_000, 1_000, "sensor")
+            .unwrap();
+        let cfg = WorldContextConfig {
+            include: vec!["mesh.".into()],
+            ..Default::default()
+        };
         let out = render(&w, &cfg, 2_000).unwrap();
         assert!(out.contains("mesh.n1"), "{out}");
         assert!(!out.contains("kitchen.temp"), "{out}");
@@ -378,7 +441,10 @@ mod tests {
         w.observe("a.b", json!(1), 1_000, 1_000, "src").unwrap();
         stopped(&w, "src", Stopped::Retired, 2_000, "off").unwrap();
         // Long after the fact: the withdrawal is old news and should not crowd the view.
-        let cfg = WorldContextConfig { withdrawal_window_ms: 1_000, ..Default::default() };
+        let cfg = WorldContextConfig {
+            withdrawal_window_ms: 1_000,
+            ..Default::default()
+        };
         let out = render(&w, &cfg, 900_000);
         assert!(out.is_none() || !out.unwrap().contains("No longer believed"));
     }
@@ -387,13 +453,29 @@ mod tests {
     fn the_character_cap_is_enforced_and_announced() {
         let w = store();
         for i in 0..30 {
-            w.observe(&format!("s.r{i}"), json!("x".repeat(200)), 1_000 + i, 1_000 + i, "sensor")
-                .unwrap();
+            w.observe(
+                &format!("s.r{i}"),
+                json!("x".repeat(200)),
+                1_000 + i,
+                1_000 + i,
+                "sensor",
+            )
+            .unwrap();
         }
-        let cfg = WorldContextConfig { max_chars: 900, ..Default::default() };
+        let cfg = WorldContextConfig {
+            max_chars: 900,
+            ..Default::default()
+        };
         let out = render(&w, &cfg, 2_000).unwrap();
-        assert!(out.chars().count() <= 900, "hard cap holds: {}", out.chars().count());
-        assert!(out.contains("not shown"), "and it says what it dropped: {out}");
+        assert!(
+            out.chars().count() <= 900,
+            "hard cap holds: {}",
+            out.chars().count()
+        );
+        assert!(
+            out.contains("not shown"),
+            "and it says what it dropped: {out}"
+        );
     }
 
     #[test]
@@ -405,29 +487,60 @@ mod tests {
         // dropped.
         let w = store();
         let doomed = w
-            .observe("mesh.escalated_count", json!(2), 1_000, 1_000, "mesh-supervisor")
+            .observe(
+                "mesh.escalated_count",
+                json!(2),
+                1_000,
+                1_000,
+                "mesh-supervisor",
+            )
             .unwrap();
         assert!(doomed.id > 0);
-        stopped(&w, "mesh-supervisor", Stopped::Retired, 1_500, "configured off").unwrap();
+        stopped(
+            &w,
+            "mesh-supervisor",
+            Stopped::Retired,
+            1_500,
+            "configured off",
+        )
+        .unwrap();
         // Now bury it under a large, verbose current-state list.
         for i in 0..40 {
-            w.observe(&format!("noise.r{i}"), json!("y".repeat(300)), 2_000 + i, 2_000 + i, "sensor")
-                .unwrap();
+            w.observe(
+                &format!("noise.r{i}"),
+                json!("y".repeat(300)),
+                2_000 + i,
+                2_000 + i,
+                "sensor",
+            )
+            .unwrap();
         }
 
-        let cfg = WorldContextConfig { max_chars: 1_200, ..Default::default() };
+        let cfg = WorldContextConfig {
+            max_chars: 1_200,
+            ..Default::default()
+        };
         let out = render(&w, &cfg, 3_000).unwrap();
         assert!(out.chars().count() <= 1_200);
-        assert!(out.contains("No longer believed"), "the section survives: {out}");
+        assert!(
+            out.contains("No longer believed"),
+            "the section survives: {out}"
+        );
         assert!(out.contains("mesh.escalated_count"), "{out}");
-        assert!(out.contains("not shown"), "and the facts are what got cut: {out}");
+        assert!(
+            out.contains("not shown"),
+            "and the facts are what got cut: {out}"
+        );
     }
 
     #[test]
     fn disabled_renders_nothing() {
         let w = store();
         w.observe("a.b", json!(1), 1_000, 1_000, "s").unwrap();
-        let cfg = WorldContextConfig { enabled: false, ..Default::default() };
+        let cfg = WorldContextConfig {
+            enabled: false,
+            ..Default::default()
+        };
         assert!(render(&w, &cfg, 2_000).is_none());
     }
 }

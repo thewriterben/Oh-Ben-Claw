@@ -47,7 +47,12 @@ fn a_heartbeat_over_the_spine_comes_back_as_an_assignment() {
     );
 
     // 2. A task near rover-a is auctioned to the nearest online idle node.
-    coord.add_task(Task { id: "t".into(), x: 1.0, y: 0.0, min_battery: 0.0 });
+    coord.add_task(Task {
+        id: "t".into(),
+        x: 1.0,
+        y: 0.0,
+        min_battery: 0.0,
+    });
     let awards = coord.auction_tick(now_ms());
     assert_eq!(awards, vec![("t".to_string(), "rover-a".to_string())]);
 
@@ -58,7 +63,11 @@ fn a_heartbeat_over_the_spine_comes_back_as_an_assignment() {
     let (node, x, y) = intents[0].clone();
     assert_eq!(node, "rover-a");
 
-    let goal = NavGoal { x, y, tolerance: 0.5 };
+    let goal = NavGoal {
+        x,
+        y,
+        tolerance: 0.5,
+    };
     assert_eq!(assignment_topic(&node), "obc/fleet/assign/rover-a");
     assert_eq!(
         assignment_payload(&goal),
@@ -76,6 +85,11 @@ fn a_malformed_heartbeat_payload_is_ignored() {
     handler("obc/fleet/heartbeat/", br#"{"x":1.0}"#); // empty node id
 
     // No node was registered, so a queued task finds nobody and stays queued.
-    coord.add_task(Task { id: "t".into(), x: 0.0, y: 0.0, min_battery: 0.0 });
+    coord.add_task(Task {
+        id: "t".into(),
+        x: 0.0,
+        y: 0.0,
+        min_battery: 0.0,
+    });
     assert!(coord.auction_tick(now_ms()).is_empty());
 }

@@ -81,7 +81,9 @@ pub fn power_critical_escalate(opts: &SafingOptions) -> ReflexRule {
         "safe-power-critical-escalate",
         state("power.mode", "mode", "critical"),
         Action::Escalate {
-            reason: format!("battery critical — entering low-power safing. {POWER_CRITICAL_PLAYBOOK}"),
+            reason: format!(
+                "battery critical — entering low-power safing. {POWER_CRITICAL_PLAYBOOK}"
+            ),
         },
         debounce(opts),
     )
@@ -533,7 +535,10 @@ mod tests {
                 );
             }
         }
-        assert!(checked >= 5, "expected every escalating rule to be covered, saw {checked}");
+        assert!(
+            checked >= 5,
+            "expected every escalating rule to be covered, saw {checked}"
+        );
     }
 
     #[test]
@@ -728,7 +733,7 @@ mod tests {
                     up: Some(false),
                     source: None,
                 },
-                1_000
+                1_000,
             )
             .unwrap();
 

@@ -223,7 +223,8 @@ mod tests {
 
     fn controller() -> (CommsController, Arc<WorldMemory>) {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        let ctrl = CommsController::new(LinkThresholds::default()).with_world_memory(Arc::clone(&world));
+        let ctrl =
+            CommsController::new(LinkThresholds::default()).with_world_memory(Arc::clone(&world));
         (ctrl, world)
     }
 
@@ -271,7 +272,10 @@ mod tests {
         let status = ctrl.ingest(&lte, 1_100).unwrap();
         assert_eq!(status.state, LinkState::Online);
         assert_eq!(status.net_mode, LinkState::Online);
-        assert_eq!(world.current("net.mode").unwrap().unwrap().value["mode"], "online");
+        assert_eq!(
+            world.current("net.mode").unwrap().unwrap().value["mode"],
+            "online"
+        );
     }
 
     #[test]
@@ -284,7 +288,10 @@ mod tests {
         lte.up = Some(false);
         let status = ctrl.ingest(&lte, 1_100).unwrap();
         assert_eq!(status.net_mode, LinkState::Offline);
-        assert_eq!(world.current("net.mode").unwrap().unwrap().value["mode"], "offline");
+        assert_eq!(
+            world.current("net.mode").unwrap().unwrap().value["mode"],
+            "offline"
+        );
     }
 
     #[test]

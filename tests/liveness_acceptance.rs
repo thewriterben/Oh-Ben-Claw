@@ -50,10 +50,15 @@ fn retiring_the_supervisor_retracts_what_it_left_standing() {
     println!("  open sources: {before_open:?}");
     println!("  support coverage: {:?}", w.support_coverage().unwrap());
 
-    let standing = w.open_facts_by_source(SUPERVISOR_SOURCE).expect("open facts");
+    let standing = w
+        .open_facts_by_source(SUPERVISOR_SOURCE)
+        .expect("open facts");
     println!("  open mesh-supervisor facts: {}", standing.len());
     for f in &standing {
-        println!("    #{} {} derived_from={:?}", f.id, f.entity, f.derived_from);
+        println!(
+            "    #{} {} derived_from={:?}",
+            f.id, f.entity, f.derived_from
+        );
     }
     // A store that has already been swept has nothing left to demonstrate on, and that
     // is the *expected* state of any store OBC has booted since this shipped. Skipping
@@ -98,12 +103,17 @@ fn retiring_the_supervisor_retracts_what_it_left_standing() {
     let last = hist.last().expect("history survives");
     assert_eq!(last.valid_to, Some(now), "closed, not deleted");
     assert!(
-        w.at("mesh.escalated_count", last.valid_from).unwrap().is_some(),
+        w.at("mesh.escalated_count", last.valid_from)
+            .unwrap()
+            .is_some(),
         "what we believed is still readable as of when we believed it"
     );
 
     // Every supervisor fact is gone, and only supervisor facts are.
-    assert!(w.open_facts_by_source(SUPERVISOR_SOURCE).unwrap().is_empty());
+    assert!(w
+        .open_facts_by_source(SUPERVISOR_SOURCE)
+        .unwrap()
+        .is_empty());
     for s in before_open.iter().filter(|s| *s != SUPERVISOR_SOURCE) {
         assert!(
             !w.open_facts_by_source(s).unwrap().is_empty(),
@@ -112,9 +122,15 @@ fn retiring_the_supervisor_retracts_what_it_left_standing() {
     }
 
     // The disappearance is written down, not inferred.
-    let marker = w.current(&entity_for(SUPERVISOR_SOURCE)).unwrap().expect("marker");
+    let marker = w
+        .current(&entity_for(SUPERVISOR_SOURCE))
+        .unwrap()
+        .expect("marker");
     assert_eq!(marker.value["state"], serde_json::json!("retired"));
-    assert!(marker.value["last_write_ms"].is_number(), "records when it last spoke");
+    assert!(
+        marker.value["last_write_ms"].is_number(),
+        "records when it last spoke"
+    );
     assert!(is_marked_stopped(&w, SUPERVISOR_SOURCE).unwrap());
 
     // Idempotent: a second boot with the supervisor still off changes nothing.
@@ -143,8 +159,14 @@ async fn a_real_tick_builds_the_chain_and_losing_the_radio_unwinds_it() {
     // "offline" and both nodes are already escalated, and it only writes on change. A
     // no-op tick is correct behaviour and useless as a test, which is a distinction an
     // earlier version of this test got wrong.
-    stopped(&w, SUPERVISOR_SOURCE, Stopped::Retired, 1_999_000_000_000, "boot: configured off")
-        .unwrap();
+    stopped(
+        &w,
+        SUPERVISOR_SOURCE,
+        Stopped::Retired,
+        1_999_000_000_000,
+        "boot: configured off",
+    )
+    .unwrap();
 
     let before = w.support_coverage().unwrap();
     println!("  support coverage before: {before:?}");
@@ -173,12 +195,25 @@ async fn a_real_tick_builds_the_chain_and_losing_the_radio_unwinds_it() {
         .current("mesh.escalated_count")
         .unwrap()
         .expect("a count after escalating long-dead nodes");
-    println!("  mesh.escalated_count = {} support={:?}", count.value, count.derived_from);
-    assert!(count.derived_from.is_some(), "the count did not declare its support");
+    println!(
+        "  mesh.escalated_count = {} support={:?}",
+        count.value, count.derived_from
+    );
+    assert!(
+        count.derived_from.is_some(),
+        "the count did not declare its support"
+    );
 
     // Now the radio goes away. The supervisor is untouched — still enabled, still
     // running. Everything it concluded rested on facts the gateway observed.
-    let sweep = stopped(&w, GATEWAY_SOURCE, Stopped::Retired, t0 + 400_000, "no COM port").unwrap();
+    let sweep = stopped(
+        &w,
+        GATEWAY_SOURCE,
+        Stopped::Retired,
+        t0 + 400_000,
+        "no COM port",
+    )
+    .unwrap();
     println!(
         "  retiring the radio: closed {} of its own, {} lost justification",
         sweep.closed.len(),
@@ -306,11 +341,17 @@ fn the_world_preamble_against_the_real_store() {
     let cfg = WorldContextConfig::default();
     let out = render(&w, &cfg, now).expect("a non-empty store renders something");
 
-    println!("\n----- begin preamble ({} chars) -----", out.chars().count());
+    println!(
+        "\n----- begin preamble ({} chars) -----",
+        out.chars().count()
+    );
     println!("{out}");
     println!("----- end preamble -----\n");
 
-    assert!(out.chars().count() <= cfg.max_chars, "hard cap holds on real data");
+    assert!(
+        out.chars().count() <= cfg.max_chars,
+        "hard cap holds on real data"
+    );
     assert!(out.contains("World state"));
     // The legend has to survive truncation, or a model sees origins with nothing telling
     // it what they mean.
@@ -335,7 +376,14 @@ fn the_phantom_rows_are_reported_even_though_this_cannot_close_them() {
         return;
     };
 
-    stopped(&w, SUPERVISOR_SOURCE, Stopped::Retired, 2_000_000_000_000, "off").unwrap();
+    stopped(
+        &w,
+        SUPERVISOR_SOURCE,
+        Stopped::Retired,
+        2_000_000_000_000,
+        "off",
+    )
+    .unwrap();
 
     let leftover: Vec<_> = w
         .entities()

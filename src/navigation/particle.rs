@@ -71,7 +71,13 @@ pub struct KldParams {
 
 impl Default for KldParams {
     fn default() -> Self {
-        Self { min: 50, max: 2000, epsilon: 0.05, z: 2.326, bin_size: 0.5 }
+        Self {
+            min: 50,
+            max: 2000,
+            epsilon: 0.05,
+            z: 2.326,
+            bin_size: 0.5,
+        }
     }
 }
 
@@ -114,7 +120,11 @@ impl ParticleFilter {
                 weight: w,
             })
             .collect();
-        Self { particles, rng, kld: None }
+        Self {
+            particles,
+            rng,
+            kld: None,
+        }
     }
 
     /// Enable **adaptive (KLD)** resampling — the particle count grows when the
@@ -176,7 +186,12 @@ impl ParticleFilter {
     /// each particle by how well its pose explains `beams` against the map `field`.
     /// This is the real range-sensor update — a misaligned pose makes its beams
     /// miss the mapped walls and its weight collapses.
-    pub fn update_scan(&mut self, field: &LikelihoodField, beams: &[(f64, f64)], params: &BeamModelParams) {
+    pub fn update_scan(
+        &mut self,
+        field: &LikelihoodField,
+        beams: &[(f64, f64)],
+        params: &BeamModelParams,
+    ) {
         // Per-particle log-likelihoods, stabilized by subtracting the max before
         // exponentiating (avoids underflow when many beams agree).
         let logs: Vec<f64> = self
@@ -240,7 +255,10 @@ impl ParticleFilter {
                 cum += self.particles[i].weight;
                 i += 1;
             }
-            new.push(Particle { pose: self.particles[i].pose, weight: 1.0 / n as f64 });
+            new.push(Particle {
+                pose: self.particles[i].pose,
+                weight: 1.0 / n as f64,
+            });
             u += step;
         }
         self.particles = new;
@@ -382,8 +400,20 @@ impl ParticleLocalizer {
     fn record(&self, now_ms: u64) {
         let Some(world) = &self.world else { return };
         let (pose, spread) = self.estimate();
-        let _ = world.observe("sensor.pos_x", json!({ "value": pose.x }), now_ms, now_ms, &self.source);
-        let _ = world.observe("sensor.pos_y", json!({ "value": pose.y }), now_ms, now_ms, &self.source);
+        let _ = world.observe(
+            "sensor.pos_x",
+            json!({ "value": pose.x }),
+            now_ms,
+            now_ms,
+            &self.source,
+        );
+        let _ = world.observe(
+            "sensor.pos_y",
+            json!({ "value": pose.y }),
+            now_ms,
+            now_ms,
+            &self.source,
+        );
         let _ = world.observe(
             "sensor.heading",
             json!({ "value": pose.theta.to_degrees() }),
@@ -402,7 +432,8 @@ impl ParticleLocalizer {
 
     /// Ingest a relative motion (odometry) and record the new belief.
     pub fn add_motion(&self, motion: RelPose, now_ms: u64) {
-        self.lock().predict(motion, self.trans_sigma, self.rot_sigma);
+        self.lock()
+            .predict(motion, self.trans_sigma, self.rot_sigma);
         self.record(now_ms);
     }
 
@@ -437,9 +468,20 @@ mod tests {
             pf.update_position(5.0, 0.0, 0.5);
         }
         let (est, spread) = pf.estimate();
-        assert!((est.x - 5.0).abs() < 0.5, "x converged near 5, got {}", est.x);
-        assert!((est.y - 0.0).abs() < 0.5, "y converged near 0, got {}", est.y);
-        assert!(spread < spread0, "uncertainty should shrink: {spread0} → {spread}");
+        assert!(
+            (est.x - 5.0).abs() < 0.5,
+            "x converged near 5, got {}",
+            est.x
+        );
+        assert!(
+            (est.y - 0.0).abs() < 0.5,
+            "y converged near 0, got {}",
+            est.y
+        );
+        assert!(
+            spread < spread0,
+            "uncertainty should shrink: {spread0} → {spread}"
+        );
     }
 
     #[test]
@@ -484,7 +526,12 @@ mod tests {
             g.set(12, cy, Cell::Occupied);
         }
         let field = LikelihoodField::from_grid(&g, 5.0);
-        let params = BeamModelParams { sigma_hit: 0.4, z_hit: 0.9, z_rand: 0.1, max_range: 20.0 };
+        let params = BeamModelParams {
+            sigma_hit: 0.4,
+            z_hit: 0.9,
+            z_rand: 0.1,
+            max_range: 20.0,
+        };
 
         // Truth: facing east at x=2, a forward beam of range 4 lands on the wall
         // (2 + 4 = 6). The likelihood is maximized when a particle's x ≈ 2.
@@ -502,7 +549,11 @@ mod tests {
             est0.x,
             est1.x
         );
-        assert!((est1.x - 2.0).abs() < 0.6, "converges near truth x=2, got {}", est1.x);
+        assert!(
+            (est1.x - 2.0).abs() < 0.6,
+            "converges near truth x=2, got {}",
+            est1.x
+        );
     }
 
     #[test]
@@ -510,27 +561,52 @@ mod tests {
         assert_eq!(kld_bound(1, 0.05, 2.326), 0);
         let few = kld_bound(2, 0.05, 2.326);
         let many = kld_bound(50, 0.05, 2.326);
-        assert!(many > few, "more bins ⇒ larger sample bound: {few} → {many}");
+        assert!(
+            many > few,
+            "more bins ⇒ larger sample bound: {few} → {many}"
+        );
     }
 
     #[test]
     fn kld_uses_few_particles_when_belief_is_concentrated() {
-        let params = KldParams { min: 20, max: 2000, epsilon: 0.05, z: 2.326, bin_size: 0.5 };
+        let params = KldParams {
+            min: 20,
+            max: 2000,
+            epsilon: 0.05,
+            z: 2.326,
+            bin_size: 0.5,
+        };
         // 500 particles in one tiny pocket, centered well inside a single bin (not
         // straddling a bin seam) → one occupied bin → collapses to the minimum.
-        let mut pf = ParticleFilter::new(500, Pose2::new(0.1, 0.1, 0.1), 0.01, 0.01, 1).with_kld(params);
+        let mut pf =
+            ParticleFilter::new(500, Pose2::new(0.1, 0.1, 0.1), 0.01, 0.01, 1).with_kld(params);
         pf.resample_kld();
-        assert!(pf.len() <= 40, "concentrated belief uses few particles, got {}", pf.len());
+        assert!(
+            pf.len() <= 40,
+            "concentrated belief uses few particles, got {}",
+            pf.len()
+        );
         assert!(pf.len() >= params.min);
     }
 
     #[test]
     fn kld_uses_many_particles_when_belief_is_spread() {
-        let params = KldParams { min: 20, max: 2000, epsilon: 0.05, z: 2.326, bin_size: 0.5 };
+        let params = KldParams {
+            min: 20,
+            max: 2000,
+            epsilon: 0.05,
+            z: 2.326,
+            bin_size: 0.5,
+        };
         // a broad belief occupies many bins → the count grows toward the max
-        let mut pf = ParticleFilter::new(800, Pose2::new(0.0, 0.0, 0.0), 6.0, 1.0, 2).with_kld(params);
+        let mut pf =
+            ParticleFilter::new(800, Pose2::new(0.0, 0.0, 0.0), 6.0, 1.0, 2).with_kld(params);
         pf.resample_kld();
-        assert!(pf.len() > 100, "spread belief uses many particles, got {}", pf.len());
+        assert!(
+            pf.len() > 100,
+            "spread belief uses many particles, got {}",
+            pf.len()
+        );
         assert!(pf.len() <= params.max);
     }
 }

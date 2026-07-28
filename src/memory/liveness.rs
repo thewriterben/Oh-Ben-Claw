@@ -367,7 +367,10 @@ mod tests {
     #[test]
     fn retiring_a_source_retracts_the_count_that_rested_on_it() {
         let (w, e1, _e2, count) = bench_store();
-        assert_eq!(w.current("mesh.escalated_count").unwrap().unwrap().value, json!(2));
+        assert_eq!(
+            w.current("mesh.escalated_count").unwrap().unwrap().value,
+            json!(2)
+        );
 
         let sweep = stopped(
             &w,
@@ -390,7 +393,10 @@ mod tests {
         assert!(sweep.unsupported.is_empty());
 
         // Undercut, not rebutted: nothing claims the count is now zero.
-        assert_eq!(w.at("mesh.escalated_count", 5_000).unwrap().unwrap().value, json!(2));
+        assert_eq!(
+            w.at("mesh.escalated_count", 5_000).unwrap().unwrap().value,
+            json!(2)
+        );
         assert_eq!(w.history("mesh.escalated_count").unwrap().len(), 1);
         assert_eq!(
             w.history("mesh.escalated_count").unwrap()[0].valid_to,
@@ -405,7 +411,14 @@ mod tests {
         // it concluded it from is gone.
         let w = WorldMemory::open_in_memory().unwrap();
         let reading = w
-            .observe_as("trail.cam1.motion", json!(true), 1_000, 1_000, "clawcam", Origin::Observed)
+            .observe_as(
+                "trail.cam1.motion",
+                json!(true),
+                1_000,
+                1_000,
+                "clawcam",
+                Origin::Observed,
+            )
             .unwrap();
         let alert = w
             .observe_derived_from(
@@ -424,7 +437,11 @@ mod tests {
         let sweep = stopped(&w, "clawcam", Stopped::Retired, 9_000, "camera unplugged").unwrap();
 
         assert_eq!(sweep.closed, vec![reading.id]);
-        assert_eq!(sweep.unsupported, vec![alert.id], "the walk crossed the source boundary");
+        assert_eq!(
+            sweep.unsupported,
+            vec![alert.id],
+            "the walk crossed the source boundary"
+        );
         assert!(w.current("notify.trail_activity").unwrap().is_none());
         assert!(w.current("notify.digest_due").unwrap().is_some());
     }
@@ -437,7 +454,14 @@ mod tests {
         // standing — the original bug, one level down.
         let w = WorldMemory::open_in_memory().unwrap();
         let rollup = w
-            .observe_as("mesh.n", json!({"seq": 7}), 1_000, 1_000, "lora-gateway", Origin::Observed)
+            .observe_as(
+                "mesh.n",
+                json!({"seq": 7}),
+                1_000,
+                1_000,
+                "lora-gateway",
+                Origin::Observed,
+            )
             .unwrap();
         let health = w
             .observe_derived_from(
@@ -493,10 +517,24 @@ mod tests {
         // the distinction would be decorative.
         let w = WorldMemory::open_in_memory().unwrap();
         let cam1 = w
-            .observe_as("gate.cam1.motion", json!(true), 1_000, 1_000, "clawcam", Origin::Observed)
+            .observe_as(
+                "gate.cam1.motion",
+                json!(true),
+                1_000,
+                1_000,
+                "clawcam",
+                Origin::Observed,
+            )
             .unwrap();
         let cam2 = w
-            .observe_as("gate.cam2.motion", json!(true), 1_000, 1_000, "clawcam-b", Origin::Observed)
+            .observe_as(
+                "gate.cam2.motion",
+                json!(true),
+                1_000,
+                1_000,
+                "clawcam-b",
+                Origin::Observed,
+            )
             .unwrap();
         let occupied = w
             .observe_derived_from_any(
@@ -510,7 +548,14 @@ mod tests {
             .unwrap();
         // A belief on the same evidence but needing *both* — the control.
         let stereo = w
-            .observe_derived_from("gate.depth", json!(2.4), 1_100, 1_100, "fusion", &[cam1.id, cam2.id])
+            .observe_derived_from(
+                "gate.depth",
+                json!(2.4),
+                1_100,
+                1_100,
+                "fusion",
+                &[cam1.id, cam2.id],
+            )
             .unwrap();
 
         let sweep = stopped(&w, "clawcam", Stopped::Retired, 9_000, "camera 1 unplugged").unwrap();
@@ -520,15 +565,29 @@ mod tests {
             w.current("gate.occupied").unwrap().is_some(),
             "corroborated belief must survive one source dying"
         );
-        assert!(sweep.skipped.contains(&occupied.id), "and the survival is reported");
-        assert_eq!(w.support_status(&w.current("gate.occupied").unwrap().unwrap()).unwrap(), Support::Grounded);
+        assert!(
+            sweep.skipped.contains(&occupied.id),
+            "and the survival is reported"
+        );
+        assert_eq!(
+            w.support_status(&w.current("gate.occupied").unwrap().unwrap())
+                .unwrap(),
+            Support::Grounded
+        );
 
         // The conjunctive one goes, because it genuinely needed both.
         assert!(w.current("gate.depth").unwrap().is_none());
         assert!(sweep.unsupported.contains(&stereo.id));
 
         // Kill the second camera and the corroborated belief finally falls.
-        let second = stopped(&w, "clawcam-b", Stopped::Retired, 10_000, "camera 2 unplugged").unwrap();
+        let second = stopped(
+            &w,
+            "clawcam-b",
+            Stopped::Retired,
+            10_000,
+            "camera 2 unplugged",
+        )
+        .unwrap();
         assert!(second.unsupported.contains(&occupied.id));
         assert!(w.current("gate.occupied").unwrap().is_none());
     }
@@ -539,13 +598,21 @@ mod tests {
         // to parse, and a single-justification write must keep producing the flat form —
         // migrating support is exactly the operation whose errors get walked.
         let w = WorldMemory::open_in_memory().unwrap();
-        let a = w.observe_as("a", json!(1), 1_000, 1_000, "s", Origin::Observed).unwrap();
-        let flat = w.observe_derived_from("flat", json!(1), 1_100, 1_100, "s", &[a.id]).unwrap();
+        let a = w
+            .observe_as("a", json!(1), 1_000, 1_000, "s", Origin::Observed)
+            .unwrap();
+        let flat = w
+            .observe_derived_from("flat", json!(1), 1_100, 1_100, "s", &[a.id])
+            .unwrap();
         let nested = w
             .observe_derived_from_any("nested", json!(1), 1_100, 1_100, "s", &[vec![a.id]])
             .unwrap();
         assert_eq!(flat.derived_from, nested.derived_from);
-        assert_eq!(w.dependents(a.id).unwrap().len(), 2, "both are found by the walk");
+        assert_eq!(
+            w.dependents(a.id).unwrap().len(),
+            2,
+            "both are found by the walk"
+        );
     }
 
     #[test]
@@ -554,7 +621,14 @@ mod tests {
         // written, a startup path must not spin on it.
         let w = WorldMemory::open_in_memory().unwrap();
         let root = w
-            .observe_as("root", json!(1), 1_000, 1_000, "lora-gateway", Origin::Observed)
+            .observe_as(
+                "root",
+                json!(1),
+                1_000,
+                1_000,
+                "lora-gateway",
+                Origin::Observed,
+            )
             .unwrap();
         let a = w
             .observe_derived_from("a", json!(1), 1_100, 1_100, "notifier", &[root.id])
@@ -578,7 +652,14 @@ mod tests {
         // call for opposite responses.
         let w = WorldMemory::open_in_memory().unwrap();
         let reading = w
-            .observe_as("trail.cam1.motion", json!(true), 1_000, 1_000, "clawcam", Origin::Observed)
+            .observe_as(
+                "trail.cam1.motion",
+                json!(true),
+                1_000,
+                1_000,
+                "clawcam",
+                Origin::Observed,
+            )
             .unwrap();
         w.observe_derived_from(
             "notify.trail_activity",
@@ -590,8 +671,15 @@ mod tests {
         )
         .unwrap();
         // An ordinary supersession, for contrast.
-        w.observe_as("trail.cam1.motion", json!(false), 1_200, 1_200, "clawcam", Origin::Observed)
-            .unwrap();
+        w.observe_as(
+            "trail.cam1.motion",
+            json!(false),
+            1_200,
+            1_200,
+            "clawcam",
+            Origin::Observed,
+        )
+        .unwrap();
 
         stopped(&w, "clawcam", Stopped::Retired, 9_000, "unplugged").unwrap();
 
@@ -617,28 +705,45 @@ mod tests {
         // operation, and eagerly chasing that would retract and recompute on every
         // sensor tick forever. So supersession is answered lazily instead.
         let alert = w.current("notify.trail_activity").unwrap().unwrap();
-        assert_eq!(Closure::of(&alert), Closure::Open, "still served by current()");
+        assert_eq!(
+            Closure::of(&alert),
+            Closure::Open,
+            "still served by current()"
+        );
         assert!(
             w.support_status(&alert).unwrap().has_failed(),
             "but its justification does not stand"
         );
         assert_eq!(
             w.support_status(&alert).unwrap(),
-            crate::memory::world::Support::Ungrounded { missing: vec![reading.id] },
+            crate::memory::world::Support::Ungrounded {
+                missing: vec![reading.id]
+            },
             "and it says which fact moved"
         );
         assert_eq!(w.ungrounded().unwrap().len(), 1);
 
         // The operator's query: what did we stop believing, and why.
         let withdrawn = w.withdrawn_since(0).unwrap();
-        assert_eq!(withdrawn.len(), 1, "only the reading; the supersession is not in here");
+        assert_eq!(
+            withdrawn.len(),
+            1,
+            "only the reading; the supersession is not in here"
+        );
         assert!(withdrawn.iter().all(|f| Closure::of(f).is_withdrawal()));
     }
 
     #[test]
     fn the_marker_says_when_the_source_last_spoke() {
         let (w, _, _, _) = bench_store();
-        stopped(&w, "mesh-supervisor", Stopped::Retired, 9_000, "switched off").unwrap();
+        stopped(
+            &w,
+            "mesh-supervisor",
+            Stopped::Retired,
+            9_000,
+            "switched off",
+        )
+        .unwrap();
 
         let m = w.current(&entity_for("mesh-supervisor")).unwrap().unwrap();
         assert_eq!(m.value["state"], json!("retired"));
@@ -668,9 +773,16 @@ mod tests {
         // invisible to the walk, even when it plainly relates to the dead source. Under-
         // retracting is recoverable; a sweep that emptied the store would not be.
         let w = WorldMemory::open_in_memory().unwrap();
-        w.observe("mesh.n.escalation", json!({"status": "escalated"}), 1_000, 1_000, "mesh-supervisor")
+        w.observe(
+            "mesh.n.escalation",
+            json!({"status": "escalated"}),
+            1_000,
+            1_000,
+            "mesh-supervisor",
+        )
+        .unwrap();
+        w.observe("some.rollup", json!(1), 1_000, 1_000, "notifier")
             .unwrap();
-        w.observe("some.rollup", json!(1), 1_000, 1_000, "notifier").unwrap();
 
         let sweep = stopped(&w, "mesh-supervisor", Stopped::Retired, 9_000, "off").unwrap();
         assert_eq!(sweep.unsupported, Vec::<i64>::new());
@@ -683,14 +795,30 @@ mod tests {
     #[test]
     fn facts_from_other_sources_are_left_alone() {
         let w = WorldMemory::open_in_memory().unwrap();
-        w.observe_as("mesh.n", json!({"seq": 1}), 1_000, 1_000, "lora-gateway", Origin::Observed)
-            .unwrap();
-        w.observe("mesh.n.health", json!({"status": "offline"}), 1_000, 1_000, "mesh-supervisor")
-            .unwrap();
+        w.observe_as(
+            "mesh.n",
+            json!({"seq": 1}),
+            1_000,
+            1_000,
+            "lora-gateway",
+            Origin::Observed,
+        )
+        .unwrap();
+        w.observe(
+            "mesh.n.health",
+            json!({"status": "offline"}),
+            1_000,
+            1_000,
+            "mesh-supervisor",
+        )
+        .unwrap();
 
         stopped(&w, "mesh-supervisor", Stopped::Retired, 9_000, "off").unwrap();
 
-        assert!(w.current("mesh.n").unwrap().is_some(), "the radio is still live");
+        assert!(
+            w.current("mesh.n").unwrap().is_some(),
+            "the radio is still live"
+        );
         assert!(w.current("mesh.n.health").unwrap().is_none());
     }
 

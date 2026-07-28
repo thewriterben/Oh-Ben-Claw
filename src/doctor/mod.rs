@@ -309,7 +309,9 @@ fn check_subsystems(config: &Config, results: &mut Vec<DiagResult>) {
 
     // Local TTS rendering needs an API key, else speech is silently skipped.
     if config.audio_suite.enabled && config.audio_suite.render_tts {
-        let key = std::env::var("OPENAI_API_KEY").map(|v| !v.is_empty()).unwrap_or(false);
+        let key = std::env::var("OPENAI_API_KEY")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
         if !key {
             results.push(DiagResult::warn(
                 "subsystems",
@@ -337,10 +339,7 @@ fn check_subsystems(config: &Config, results: &mut Vec<DiagResult>) {
         active.push("movement");
     }
     if active.is_empty() {
-        results.push(DiagResult::ok(
-            "subsystems",
-            "No capability suites enabled",
-        ));
+        results.push(DiagResult::ok("subsystems", "No capability suites enabled"));
     } else {
         results.push(DiagResult::ok(
             "subsystems",
@@ -348,10 +347,17 @@ fn check_subsystems(config: &Config, results: &mut Vec<DiagResult>) {
         ));
     }
     if config.reflex.enabled {
-        let safing = if config.reflex.safing { " + safing" } else { "" };
+        let safing = if config.reflex.safing {
+            " + safing"
+        } else {
+            ""
+        };
         results.push(DiagResult::ok(
             "subsystems",
-            format!("Reflex loop enabled ({} rules{safing})", config.reflex.rules.len()),
+            format!(
+                "Reflex loop enabled ({} rules{safing})",
+                config.reflex.rules.len()
+            ),
         ));
     }
 }

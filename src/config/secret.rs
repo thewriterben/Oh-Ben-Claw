@@ -105,8 +105,14 @@ mod tests {
             key: Some(SecretString::new("sk-ant-SENSITIVE")),
         };
         let printed = format!("{h:?}");
-        assert!(printed.contains("anthropic"), "non-secret fields still readable");
-        assert!(!printed.contains("SENSITIVE"), "but not this one: {printed}");
+        assert!(
+            printed.contains("anthropic"),
+            "non-secret fields still readable"
+        );
+        assert!(
+            !printed.contains("SENSITIVE"),
+            "but not this one: {printed}"
+        );
     }
 
     #[test]

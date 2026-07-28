@@ -67,9 +67,11 @@ impl ExpiryPolicy {
     /// quietly does nothing is how you find out a year later that nothing expired.
     pub fn validate(&self) -> Result<(), String> {
         if self.prefix.trim().is_empty() {
-            return Err("prefix is empty; a retention policy must name a namespace, \
+            return Err(
+                "prefix is empty; a retention policy must name a namespace, \
                         and an empty prefix would match the entire store"
-                .into());
+                    .into(),
+            );
         }
         if self.max_age_ms == 0 {
             return Err(format!(
@@ -79,7 +81,10 @@ impl ExpiryPolicy {
             ));
         }
         for o in &self.origins {
-            if !matches!(o.as_str(), "observed" | "derived" | "asserted" | "instructed") {
+            if !matches!(
+                o.as_str(),
+                "observed" | "derived" | "asserted" | "instructed"
+            ) {
                 return Err(format!(
                     "prefix '{}': unknown origin '{o}' (expected observed / derived / \
                      asserted / instructed)",
@@ -233,8 +238,15 @@ mod tests {
         )
         .unwrap();
         // A reading in the same era that must survive: not an assertion.
-        w.observe_as("trail.cam1.motion", json!(true), 1_000, 1_000, "clawcam", Origin::Observed)
-            .unwrap();
+        w.observe_as(
+            "trail.cam1.motion",
+            json!(true),
+            1_000,
+            1_000,
+            "clawcam",
+            Origin::Observed,
+        )
+        .unwrap();
         w
     }
 
@@ -279,25 +291,56 @@ mod tests {
         // must not age out the mesh itself — this is the 17 July phantom shape, where a
         // note and a node shared a namespace.
         let w = WorldMemory::open_in_memory().unwrap();
-        w.observe_as("mesh.escalation_status", json!({"status": "critical"}), 1_000, 1_000, "agent", Origin::Asserted)
-            .unwrap();
-        w.observe_as("mesh.n1", json!({"seq": 1}), 1_000, 1_000, "lora-gateway", Origin::Observed)
-            .unwrap();
+        w.observe_as(
+            "mesh.escalation_status",
+            json!({"status": "critical"}),
+            1_000,
+            1_000,
+            "agent",
+            Origin::Asserted,
+        )
+        .unwrap();
+        w.observe_as(
+            "mesh.n1",
+            json!({"seq": 1}),
+            1_000,
+            1_000,
+            "lora-gateway",
+            Origin::Observed,
+        )
+        .unwrap();
 
         let out = expire(&w, &[policy("mesh.", 10_000, &["asserted"])], 20_000).unwrap();
         assert_eq!(out.expired.len(), 1);
         assert!(w.current("mesh.escalation_status").unwrap().is_none());
-        assert!(w.current("mesh.n1").unwrap().is_some(), "the radio's evidence survives");
+        assert!(
+            w.current("mesh.n1").unwrap().is_some(),
+            "the radio's evidence survives"
+        );
     }
 
     #[test]
     fn expiring_a_belief_undercuts_what_rested_on_it() {
         let w = WorldMemory::open_in_memory().unwrap();
         let note = w
-            .observe_as("incident.n1", json!({"status": "lost"}), 1_000, 1_000, "agent", Origin::Asserted)
+            .observe_as(
+                "incident.n1",
+                json!({"status": "lost"}),
+                1_000,
+                1_000,
+                "agent",
+                Origin::Asserted,
+            )
             .unwrap();
         let plan = w
-            .observe_derived_from("plan.n1_replacement", json!({"step": 1}), 1_100, 1_100, "system2", &[note.id])
+            .observe_derived_from(
+                "plan.n1_replacement",
+                json!({"step": 1}),
+                1_100,
+                1_100,
+                "system2",
+                &[note.id],
+            )
             .unwrap();
 
         let out = expire(&w, &[policy("incident.", 10_000, &["asserted"])], 20_000).unwrap();
@@ -316,10 +359,20 @@ mod tests {
         // Expiring it would make a retired source look like it had never been retired,
         // and the next boot would "retire" it again against an already-clean store.
         let w = WorldMemory::open_in_memory().unwrap();
-        liveness::stopped(&w, "clawcam", liveness::Stopped::Retired, 1_000, "unplugged").unwrap();
+        liveness::stopped(
+            &w,
+            "clawcam",
+            liveness::Stopped::Retired,
+            1_000,
+            "unplugged",
+        )
+        .unwrap();
         let out = expire(&w, &[policy("source.", 10, &[])], 900_000).unwrap();
         assert!(out.expired.is_empty());
-        assert!(w.current(&liveness::entity_for("clawcam")).unwrap().is_some());
+        assert!(w
+            .current(&liveness::entity_for("clawcam"))
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -346,7 +399,10 @@ mod tests {
         let p = [policy("incident.", 10_000, &["asserted"])];
         let preview = due(&w, &p, 20_000).unwrap();
         assert_eq!(preview.len(), 2);
-        assert!(w.current("incident.gw-40").unwrap().is_some(), "dry run wrote nothing");
+        assert!(
+            w.current("incident.gw-40").unwrap().is_some(),
+            "dry run wrote nothing"
+        );
     }
 
     #[test]

@@ -100,16 +100,32 @@ impl BtSpec {
                 cursor: 0,
                 reactive: true,
             },
-            BtSpec::Parallel { children, success_threshold } => Bt::Parallel {
+            BtSpec::Parallel {
+                children,
+                success_threshold,
+            } => Bt::Parallel {
                 children: children.into_iter().map(BtSpec::compile).collect(),
                 threshold: success_threshold,
             },
             BtSpec::Invert { child } => Bt::Invert(Box::new(child.compile())),
-            BtSpec::Retry { n, child } => Bt::Retry { n, count: 0, child: Box::new(child.compile()) },
-            BtSpec::Repeat { n, child } => Bt::Repeat { n, count: 0, child: Box::new(child.compile()) },
+            BtSpec::Retry { n, child } => Bt::Retry {
+                n,
+                count: 0,
+                child: Box::new(child.compile()),
+            },
+            BtSpec::Repeat { n, child } => Bt::Repeat {
+                n,
+                count: 0,
+                child: Box::new(child.compile()),
+            },
             BtSpec::ForceSuccess { child } => Bt::ForceSuccess(Box::new(child.compile())),
             BtSpec::Condition { check } => Bt::Condition(check),
-            BtSpec::Action { step } => Bt::Action { step, entered: false, start_ms: 0, done: false },
+            BtSpec::Action { step } => Bt::Action {
+                step,
+                entered: false,
+                start_ms: 0,
+                done: false,
+            },
         }
     }
 }
@@ -125,22 +141,51 @@ pub struct BtContext<'a> {
 
 /// A compiled, stateful behavior tree.
 pub enum Bt {
-    Sequence { children: Vec<Bt>, cursor: usize, reactive: bool },
-    Fallback { children: Vec<Bt>, cursor: usize, reactive: bool },
-    Parallel { children: Vec<Bt>, threshold: usize },
+    Sequence {
+        children: Vec<Bt>,
+        cursor: usize,
+        reactive: bool,
+    },
+    Fallback {
+        children: Vec<Bt>,
+        cursor: usize,
+        reactive: bool,
+    },
+    Parallel {
+        children: Vec<Bt>,
+        threshold: usize,
+    },
     Invert(Box<Bt>),
-    Retry { n: u32, count: u32, child: Box<Bt> },
-    Repeat { n: u32, count: u32, child: Box<Bt> },
+    Retry {
+        n: u32,
+        count: u32,
+        child: Box<Bt>,
+    },
+    Repeat {
+        n: u32,
+        count: u32,
+        child: Box<Bt>,
+    },
     ForceSuccess(Box<Bt>),
     Condition(Condition),
-    Action { step: MissionStep, entered: bool, start_ms: u64, done: bool },
+    Action {
+        step: MissionStep,
+        entered: bool,
+        start_ms: u64,
+        done: bool,
+    },
 }
 
 impl Bt {
     /// Reset all runtime state to initial (for re-runs / retries).
     pub fn reset(&mut self) {
         match self {
-            Bt::Sequence { children, cursor, .. } | Bt::Fallback { children, cursor, .. } => {
+            Bt::Sequence {
+                children, cursor, ..
+            }
+            | Bt::Fallback {
+                children, cursor, ..
+            } => {
                 *cursor = 0;
                 children.iter_mut().for_each(Bt::reset);
             }
@@ -161,7 +206,11 @@ impl Bt {
     /// Tick the node once, returning its status.
     pub fn tick(&mut self, ctx: &BtContext, now: u64) -> Status {
         match self {
-            Bt::Sequence { children, cursor, reactive } => {
+            Bt::Sequence {
+                children,
+                cursor,
+                reactive,
+            } => {
                 if *reactive {
                     *cursor = 0;
                 }
@@ -178,7 +227,11 @@ impl Bt {
                 *cursor = 0;
                 Status::Success
             }
-            Bt::Fallback { children, cursor, reactive } => {
+            Bt::Fallback {
+                children,
+                cursor,
+                reactive,
+            } => {
                 if *reactive {
                     *cursor = 0;
                 }
@@ -195,8 +248,15 @@ impl Bt {
                 *cursor = 0;
                 Status::Failure
             }
-            Bt::Parallel { children, threshold } => {
-                let need = if *threshold == 0 { children.len() } else { *threshold };
+            Bt::Parallel {
+                children,
+                threshold,
+            } => {
+                let need = if *threshold == 0 {
+                    children.len()
+                } else {
+                    *threshold
+                };
                 let mut succ = 0;
                 let mut fail = 0;
                 for c in children.iter_mut() {
@@ -259,7 +319,12 @@ impl Bt {
                     Status::Failure
                 }
             }
-            Bt::Action { step, entered, start_ms, done } => {
+            Bt::Action {
+                step,
+                entered,
+                start_ms,
+                done,
+            } => {
                 if *done {
                     return Status::Success;
                 }
@@ -300,7 +365,11 @@ fn enter_action(step: &MissionStep, ctx: &BtContext, now: u64) {
     match step {
         MissionStep::NavigateTo { x, y, tolerance } => {
             if let Some(nav) = ctx.nav {
-                let goal = NavGoal { x: *x, y: *y, tolerance: *tolerance };
+                let goal = NavGoal {
+                    x: *x,
+                    y: *y,
+                    tolerance: *tolerance,
+                };
                 if nav.has_grid() {
                     let _ = nav.plan_to(goal, now);
                 } else {
@@ -320,7 +389,9 @@ fn enter_action(step: &MissionStep, ctx: &BtContext, now: u64) {
             }
         }
         MissionStep::Record { entity, value } => {
-            let _ = ctx.world.observe(entity, value.clone(), now, now, &ctx.source);
+            let _ = ctx
+                .world
+                .observe(entity, value.clone(), now, now, &ctx.source);
         }
         MissionStep::Wait { .. } | MissionStep::AwaitState { .. } => {}
     }
@@ -334,7 +405,11 @@ fn action_complete(step: &MissionStep, start_ms: u64, now: u64, ctx: &BtContext)
         }
         MissionStep::Wait { ms } => now.saturating_sub(start_ms) >= *ms,
         MissionStep::Speak { .. } | MissionStep::Record { .. } => true,
-        MissionStep::AwaitState { entity, field, equals } => ctx
+        MissionStep::AwaitState {
+            entity,
+            field,
+            equals,
+        } => ctx
             .world
             .current(entity)
             .ok()
@@ -414,17 +489,30 @@ mod tests {
     }
 
     fn record(entity: &str, v: i64) -> BtSpec {
-        BtSpec::Action { step: MissionStep::Record { entity: entity.into(), value: json!(v) } }
+        BtSpec::Action {
+            step: MissionStep::Record {
+                entity: entity.into(),
+                value: json!(v),
+            },
+        }
     }
     fn cond_ge(entity: &str, value: f64) -> BtSpec {
-        BtSpec::Condition { check: Condition::Sensor { entity: entity.into(), op: Cmp::Ge, value } }
+        BtSpec::Condition {
+            check: Condition::Sensor {
+                entity: entity.into(),
+                op: Cmp::Ge,
+                value,
+            },
+        }
     }
 
     #[test]
     fn sequence_runs_all_then_succeeds() {
         let world = ctx_world();
         let r = runner(
-            BtSpec::Sequence { children: vec![record("a", 1), record("b", 2)] },
+            BtSpec::Sequence {
+                children: vec![record("a", 1), record("b", 2)],
+            },
             &world,
         );
         // record actions complete in one tick each (memory sequence advances)
@@ -438,7 +526,9 @@ mod tests {
         let world = ctx_world();
         // first child's condition fails (entity absent), second records
         let r = runner(
-            BtSpec::Fallback { children: vec![cond_ge("missing", 1.0), record("done", 1)] },
+            BtSpec::Fallback {
+                children: vec![cond_ge("missing", 1.0), record("done", 1)],
+            },
             &world,
         );
         assert_eq!(r.tick(0), Status::Success);
@@ -449,7 +539,9 @@ mod tests {
     fn condition_gates_a_sequence() {
         let world = ctx_world();
         let r = runner(
-            BtSpec::Sequence { children: vec![cond_ge("flag", 1.0), record("ran", 1)] },
+            BtSpec::Sequence {
+                children: vec![cond_ge("flag", 1.0), record("ran", 1)],
+            },
             &world,
         );
         // flag not set → condition Failure → sequence Failure → action not run
@@ -464,7 +556,12 @@ mod tests {
     #[test]
     fn invert_flips_result() {
         let world = ctx_world();
-        let r = runner(BtSpec::Invert { child: Box::new(cond_ge("x", 1.0)) }, &world);
+        let r = runner(
+            BtSpec::Invert {
+                child: Box::new(cond_ge("x", 1.0)),
+            },
+            &world,
+        );
         assert_eq!(r.tick(0), Status::Success); // condition fails → inverted to success
     }
 
@@ -472,7 +569,9 @@ mod tests {
     fn wait_runs_until_elapsed() {
         let world = ctx_world();
         let r = runner(
-            BtSpec::Action { step: MissionStep::Wait { ms: 1_000 } },
+            BtSpec::Action {
+                step: MissionStep::Wait { ms: 1_000 },
+            },
             &world,
         );
         assert_eq!(r.tick(0), Status::Running);
@@ -486,12 +585,17 @@ mod tests {
         world.observe("ok", json!(1), 0, 0, "t").unwrap();
         let r = runner(
             BtSpec::ReactiveSequence {
-                children: vec![cond_ge("ok", 1.0), BtSpec::Action { step: MissionStep::Wait { ms: 10_000 } }],
+                children: vec![
+                    cond_ge("ok", 1.0),
+                    BtSpec::Action {
+                        step: MissionStep::Wait { ms: 10_000 },
+                    },
+                ],
             },
             &world,
         );
         assert_eq!(r.tick(0), Status::Running); // guard ok, wait running
-        // guard turns false → reactive sequence re-checks and fails
+                                                // guard turns false → reactive sequence re-checks and fails
         world.observe("ok", json!(0), 1, 1, "t").unwrap();
         assert_eq!(r.tick(1), Status::Failure);
     }
@@ -501,7 +605,10 @@ mod tests {
         let world = ctx_world();
         // a condition that only becomes true after the flag is set; retry keeps it alive
         let r = runner(
-            BtSpec::Retry { n: 5, child: Box::new(cond_ge("go", 1.0)) },
+            BtSpec::Retry {
+                n: 5,
+                child: Box::new(cond_ge("go", 1.0)),
+            },
             &world,
         );
         assert_eq!(r.tick(0), Status::Running); // failed once, retrying
@@ -529,7 +636,9 @@ mod tests {
         let spec = BtSpec::Sequence {
             children: vec![
                 cond_ge("power.mode_ok", 1.0),
-                BtSpec::Fallback { children: vec![record("x", 1)] },
+                BtSpec::Fallback {
+                    children: vec![record("x", 1)],
+                },
             ],
         };
         let js = serde_json::to_string(&spec).unwrap();

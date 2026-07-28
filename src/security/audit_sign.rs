@@ -27,7 +27,9 @@ impl AuditSigner {
     /// Generate a fresh keypair from the OS CSPRNG.
     pub fn generate() -> Self {
         let mut csprng = OsRng;
-        Self { key: SigningKey::generate(&mut csprng) }
+        Self {
+            key: SigningKey::generate(&mut csprng),
+        }
     }
 
     /// Reconstruct a signer from its 32-byte secret key (hex).
@@ -37,7 +39,9 @@ impl AuditSigner {
             .as_slice()
             .try_into()
             .map_err(|_| anyhow::anyhow!("ed25519 secret key must be 32 bytes"))?;
-        Ok(Self { key: SigningKey::from_bytes(&arr) })
+        Ok(Self {
+            key: SigningKey::from_bytes(&arr),
+        })
     }
 
     /// The 32-byte secret key as hex — store securely (vault).
@@ -116,7 +120,11 @@ mod tests {
         assert_eq!(signer.public_hex(), restored.public_hex());
         // a signature from the restored key verifies against the original public key
         let msg = b"m";
-        assert!(verify_hex(&signer.public_hex(), msg, &restored.sign_hex(msg)));
+        assert!(verify_hex(
+            &signer.public_hex(),
+            msg,
+            &restored.sign_hex(msg)
+        ));
     }
 
     #[test]

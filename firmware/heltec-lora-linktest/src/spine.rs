@@ -63,7 +63,11 @@ impl SeenSet {
     const CAP: usize = 32;
 
     pub const fn new() -> Self {
-        Self { ring: [(0, 0); Self::CAP], head: 0, len: 0 }
+        Self {
+            ring: [(0, 0); Self::CAP],
+            head: 0,
+            len: 0,
+        }
     }
 
     /// Returns `true` if `(src, seq)` was already recorded; otherwise records it
@@ -104,10 +108,18 @@ pub fn is_spine_payload(line: &[u8]) -> bool {
 
 fn trim_ascii_ws(mut s: &[u8]) -> &[u8] {
     while let [f, rest @ ..] = s {
-        if f.is_ascii_whitespace() { s = rest } else { break }
+        if f.is_ascii_whitespace() {
+            s = rest
+        } else {
+            break;
+        }
     }
     while let [rest @ .., l] = s {
-        if l.is_ascii_whitespace() { s = rest } else { break }
+        if l.is_ascii_whitespace() {
+            s = rest
+        } else {
+            break;
+        }
     }
     s
 }
@@ -144,7 +156,11 @@ pub enum Framed<'a> {
 
 impl LineFramer {
     pub const fn new() -> Self {
-        Self { line: Vec::new(), overflowed: false, emitted: false }
+        Self {
+            line: Vec::new(),
+            overflowed: false,
+            emitted: false,
+        }
     }
 
     pub fn push(&mut self, b: u8) -> Framed<'_> {
@@ -202,7 +218,10 @@ mod tests {
         let (lines, overflows) = run(&mut f, burst);
         assert_eq!(overflows, 0);
         assert_eq!(lines.len(), 2, "both commands must survive the burst");
-        assert_eq!(lines[0], b"{\"cmd\":\"capabilities\",\"to\":\"obc-esp32-s3-001\"}");
+        assert_eq!(
+            lines[0],
+            b"{\"cmd\":\"capabilities\",\"to\":\"obc-esp32-s3-001\"}"
+        );
         assert_eq!(lines[1], b"{\"cmd\":\"capabilities\",\"to\":\"gw-40\"}");
     }
 
@@ -275,7 +294,11 @@ mod tests {
             b"I (30) boot: compile time Nov 26 20size=c276ch (796524) map",
             b"",
         ] {
-            assert!(!is_spine_payload(junk), "would have transmitted: {:?}", junk);
+            assert!(
+                !is_spine_payload(junk),
+                "would have transmitted: {:?}",
+                junk
+            );
         }
     }
 
@@ -302,7 +325,13 @@ mod tests {
     #[test]
     fn roundtrip_and_dedup() {
         let mut buf = Vec::new();
-        SpineFrame { src: 0x40, seq: 7, ttl: 2, payload: b"{\"t\":\"hb\"}" }.encode(&mut buf);
+        SpineFrame {
+            src: 0x40,
+            seq: 7,
+            ttl: 2,
+            payload: b"{\"t\":\"hb\"}",
+        }
+        .encode(&mut buf);
         let f = SpineFrame::decode(&buf).unwrap();
         assert_eq!((f.src, f.seq, f.ttl), (0x40, 7, 2));
         assert_eq!(f.payload, b"{\"t\":\"hb\"}");

@@ -92,7 +92,11 @@ impl GnssFix {
             x: Some(enu.e),
             y: Some(enu.n),
             battery: None,
-            mode: if self.has_fix() { "gnss_fix".to_string() } else { "gnss_nofix".to_string() },
+            mode: if self.has_fix() {
+                "gnss_fix".to_string()
+            } else {
+                "gnss_nofix".to_string()
+            },
             busy: false,
             last_seen_ms: now_ms,
         }
@@ -183,9 +187,21 @@ pub fn parse_gga(sentence: &str) -> Result<GnssFix, String> {
     let satellites: u32 = f[7].trim().parse().unwrap_or(0);
     let hdop = f[8].trim().parse::<f64>().ok();
     let alt_m = f[9].trim().parse::<f64>().unwrap_or(0.0);
-    let time_utc = if f[1].is_empty() { None } else { Some(f[1].to_string()) };
+    let time_utc = if f[1].is_empty() {
+        None
+    } else {
+        Some(f[1].to_string())
+    };
 
-    Ok(GnssFix { lat, lon, alt_m, fix_quality, satellites, hdop, time_utc })
+    Ok(GnssFix {
+        lat,
+        lon,
+        alt_m,
+        fix_quality,
+        satellites,
+        hdop,
+        time_utc,
+    })
 }
 
 #[cfg(test)]
@@ -198,9 +214,13 @@ mod tests {
     #[test]
     fn checksum_validates_the_canonical_sentence() {
         assert!(checksum_ok(GGA));
-        assert!(!checksum_ok("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*00"));
+        assert!(!checksum_ok(
+            "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*00"
+        ));
         // No checksum present => accepted.
-        assert!(checksum_ok("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,"));
+        assert!(checksum_ok(
+            "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,"
+        ));
     }
 
     #[test]
@@ -249,7 +269,9 @@ mod tests {
     fn rejects_non_gga_and_truncated() {
         assert!(parse_gga("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,,").is_err());
         assert!(parse_gga("$GPGGA,123519,4807.038,N").is_err());
-        assert!(parse_gga("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*99").is_err());
+        assert!(
+            parse_gga("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*99").is_err()
+        );
     }
 
     #[test]
@@ -272,8 +294,13 @@ mod tests {
     #[test]
     fn no_fix_node_reports_gnss_nofix_mode() {
         let fix = GnssFix {
-            lat: 0.0, lon: 0.0, alt_m: 0.0, fix_quality: 0,
-            satellites: 0, hdop: None, time_utc: None,
+            lat: 0.0,
+            lon: 0.0,
+            alt_m: 0.0,
+            fix_quality: 0,
+            satellites: 0,
+            hdop: None,
+            time_utc: None,
         };
         let frame = GeoFrame::new(GeoPoint::new(45.0, -122.0, 0.0));
         let node = fix.to_node_state(&frame, "rover-2", 0);
@@ -286,11 +313,24 @@ mod tests {
         let origin = GeoPoint::new(45.0, -122.0, 0.0);
         let frame = GeoFrame::new(origin);
         let east = GnssFix {
-            lat: 45.0, lon: -122.0 + 1.0 / 60.0, alt_m: 0.0,
-            fix_quality: 1, satellites: 9, hdop: Some(0.8), time_utc: None,
+            lat: 45.0,
+            lon: -122.0 + 1.0 / 60.0,
+            alt_m: 0.0,
+            fix_quality: 1,
+            satellites: 9,
+            hdop: Some(0.8),
+            time_utc: None,
         };
         let node = east.to_node_state(&frame, "e", 0);
-        assert!(node.x.unwrap() > 0.0, "east offset should be +x: {:?}", node.x);
-        assert!(node.y.unwrap().abs() < 1.0, "no north component: {:?}", node.y);
+        assert!(
+            node.x.unwrap() > 0.0,
+            "east offset should be +x: {:?}",
+            node.x
+        );
+        assert!(
+            node.y.unwrap().abs() < 1.0,
+            "no north component: {:?}",
+            node.y
+        );
     }
 }
