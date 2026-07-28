@@ -110,12 +110,26 @@ impl NotificationChannel for WorldMemoryChannel {
         "world-memory"
     }
     async fn deliver(&self, esc: &Escalation) -> anyhow::Result<()> {
-        self.world.observe(
+        // Written with an *empty* in-list, which is a claim and not an absence: this
+        // fact is self-standing and nothing upstream can undercut it.
+        //
+        // The distinction matters here more than anywhere else in the codebase. A log of
+        // record says an event happened — this escalation was raised and delivered at
+        // this time — and that stays true forever, even when the belief that triggered
+        // it is later withdrawn. Retracting it because its cause was retracted would be
+        // falsifying history, which is the one thing a log of record exists to prevent.
+        //
+        // Contrast `mesh.escalated_count`, which is a *claim about the present* and must
+        // fall when its grounds do. Same subsystem, opposite treatment, and the empty
+        // in-list is where that decision is recorded rather than left to be inferred
+        // from the fact that nobody got round to wiring it up.
+        self.world.observe_derived_from(
             "notifications.escalation",
             json!({ "reason": esc.reason, "ts_ms": esc.ts_ms }),
             esc.ts_ms,
             esc.ts_ms,
             "notifier",
+            &[],
         )?;
         Ok(())
     }

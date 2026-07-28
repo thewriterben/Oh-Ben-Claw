@@ -129,6 +129,39 @@ impl Tool for WorldMemoryTool {
                             .or_insert_with(|| Value::String(claimed.to_string()));
                     }
                 }
+                // Write admission: an assertion that restates what is already believed
+                // is not new evidence, and recording it would do active harm.
+                //
+                // Every write supersedes — the open fact is closed and a fresh row is
+                // appended with a fresh `ingested_at`. So an agent that reads a fact and
+                // writes it back makes a stale belief look freshly confirmed, by an
+                // agent that learned it *from that same belief*. Nothing new entered the
+                // system and the store now says otherwise.
+                //
+                // That is the concrete form of the general finding: repeated
+                // observations in an agent trace are not independent evidence ("When Not
+                // to Write Memory", arXiv:2607.02579, which measures a 0.597 false
+                // promotion rate for naive frequency-based admission). It also defeats
+                // source liveness directly — an echo lands under `agent`, so a silent
+                // source the agent keeps restating never looks silent.
+                //
+                // Rejecting the no-op keeps the original row, and with it the original
+                // timestamp, so the belief's age stays truthful. A genuine change is
+                // unaffected: only an identical value for an already-open entity is
+                // refused, and the caller is told what is already there rather than
+                // being given an error to work around.
+                if let Some(open) = self.mem.current(entity)? {
+                    if open.value == value {
+                        return Ok(ToolResult::ok(format!(
+                            "Unchanged: '{entity}' already holds this value, believed \
+                             since {} (fact #{}). Not recorded — restating a fact is not \
+                             new evidence for it, and re-recording would make the \
+                             existing belief look freshly confirmed. Write only what \
+                             changed.",
+                            open.valid_from, open.id
+                        )));
+                    }
+                }
                 let fact = self.mem.observe_as(
                     entity,
                     value,
@@ -213,6 +246,53 @@ mod tests {
             .await
             .unwrap();
         assert!(ok.success);
+    }
+
+    #[tokio::test]
+    async fn restating_a_belief_is_refused_so_it_cannot_look_freshly_confirmed() {
+        let mem = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let t = WorldMemoryTool::new(Arc::clone(&mem));
+
+        t.execute(json!({
+            "action": "observe",
+            "entity": "site.gate",
+            "value": { "state": "open" },
+            "valid_from": 1_000
+        }))
+        .await
+        .unwrap();
+        let first = mem.current("site.gate").unwrap().unwrap();
+
+        // The echo: the agent reads the fact and writes the same thing back.
+        let r = t
+            .execute(json!({
+                "action": "observe",
+                "entity": "site.gate",
+                "value": { "state": "open" }
+            }))
+            .await
+            .unwrap();
+        assert!(r.success, "not an error — there is nothing wrong with asking");
+        assert!(r.output.contains("Unchanged"), "{}", r.output);
+
+        // The point of the whole check: the belief's age is unchanged, so it can still
+        // be seen for what it is. A superseding write would have reset it.
+        let after = mem.current("site.gate").unwrap().unwrap();
+        assert_eq!(after.id, first.id, "no new row");
+        assert_eq!(after.valid_from, 1_000, "age preserved");
+        assert_eq!(mem.history("site.gate").unwrap().len(), 1);
+
+        // A real change still writes.
+        t.execute(json!({
+            "action": "observe",
+            "entity": "site.gate",
+            "value": { "state": "closed" },
+            "valid_from": 2_000
+        }))
+        .await
+        .unwrap();
+        assert_eq!(mem.current("site.gate").unwrap().unwrap().value["state"], json!("closed"));
+        assert_eq!(mem.history("site.gate").unwrap().len(), 2, "supersession intact");
     }
 
     #[tokio::test]
