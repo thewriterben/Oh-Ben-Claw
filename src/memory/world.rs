@@ -153,6 +153,25 @@ pub struct Fact {
     pub source: String,
     /// What kind of claim this is. The field consumers gate on.
     pub origin: Origin,
+    /// The facts this belief was computed from — Doyle's JTMS *in-list*.
+    ///
+    /// Three states, and the difference between the first two is the whole point:
+    /// - `None` — **unknown support.** We did not record what this was computed from.
+    ///   Every row written before this column existed is in this state, as is every
+    ///   caller of [`WorldMemory::observe`] that has not been taught to declare its
+    ///   inputs. Invalidation must never treat unknown support as *no* support: a
+    ///   sweep that retracted these would empty the store.
+    /// - `Some([])` — **explicitly self-standing.** A premise. Nothing upstream can
+    ///   undercut it.
+    /// - `Some([ids…])` — **supported by these facts.** If they all go away, this
+    ///   belief is unsupported (which is not the same as false — see
+    ///   [`WorldMemory::dependents`]).
+    ///
+    /// Note that [`Origin::Derived`] alone does *not* imply support is recorded, because
+    /// `Derived` is also the conservative default for callers that have not thought
+    /// about provenance at all. Origin says what kind of claim this is; `derived_from`
+    /// says what it rests on. Only the latter can be walked.
+    pub derived_from: Option<Vec<i64>>,
 }
 
 /// SQLite-backed temporal store of world [`Fact`]s.
@@ -231,6 +250,19 @@ impl WorldMemory {
                 ",
             )?;
         }
+
+        // ── derived_from column (added 2026-07-28) ─────────────────────────────
+        // A JSON array of `world_facts.id` — the JTMS in-list. Deliberately NULL for
+        // every existing row and NOT backfilled: unlike `origin`, support genuinely
+        // cannot be guessed from a source label, and a wrong in-list is worse than an
+        // absent one because invalidation would walk it. NULL means "unknown support"
+        // and is inert to every sweep.
+        let has_derived_from = conn
+            .prepare("SELECT 1 FROM pragma_table_info('world_facts') WHERE name = 'derived_from'")?
+            .exists([])?;
+        if !has_derived_from {
+            conn.execute_batch("ALTER TABLE world_facts ADD COLUMN derived_from TEXT;")?;
+        }
         Ok(())
     }
 
@@ -272,7 +304,57 @@ impl WorldMemory {
         source: &str,
         origin: Origin,
     ) -> Result<Fact> {
+        self.insert(entity, value, valid_from, ingested_at, source, origin, None)
+    }
+
+    /// Record a belief the framework computed, declaring what it was computed *from*.
+    ///
+    /// `derived_from` is the JTMS in-list: the ids of the facts this one rests on. Pass
+    /// an empty slice to say "this is a premise, nothing undercuts it" — that is a
+    /// different and much stronger claim than [`WorldMemory::observe`], which records no
+    /// support at all.
+    ///
+    /// Callers already hold their inputs at the moment they compute a rollup; this is
+    /// the API that stops them throwing that away. Once support is recorded, the
+    /// question "what did I believe *because of* that source?" becomes a walk instead of
+    /// an archaeology exercise — see [`WorldMemory::dependents`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn observe_derived_from(
+        &self,
+        entity: &str,
+        value: Value,
+        valid_from: u64,
+        ingested_at: u64,
+        source: &str,
+        derived_from: &[i64],
+    ) -> Result<Fact> {
+        self.insert(
+            entity,
+            value,
+            valid_from,
+            ingested_at,
+            source,
+            Origin::Derived,
+            Some(derived_from.to_vec()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert(
+        &self,
+        entity: &str,
+        value: Value,
+        valid_from: u64,
+        ingested_at: u64,
+        source: &str,
+        origin: Origin,
+        derived_from: Option<Vec<i64>>,
+    ) -> Result<Fact> {
         let value_json = serde_json::to_string(&value)?;
+        let derived_json = match &derived_from {
+            Some(ids) => Some(serde_json::to_string(ids)?),
+            None => None,
+        };
         let conn = self.conn.lock().unwrap();
 
         // Close the entity's open fact, if any (only those that started at or
@@ -284,15 +366,16 @@ impl WorldMemory {
         )?;
 
         conn.execute(
-            "INSERT INTO world_facts (entity, value_json, valid_from, valid_to, ingested_at, source, origin)
-             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6)",
+            "INSERT INTO world_facts (entity, value_json, valid_from, valid_to, ingested_at, source, origin, derived_from)
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7)",
             params![
                 entity,
                 value_json,
                 valid_from as i64,
                 ingested_at as i64,
                 source,
-                origin.as_str()
+                origin.as_str(),
+                derived_json
             ],
         )?;
         let id = conn.last_insert_rowid();
@@ -306,6 +389,7 @@ impl WorldMemory {
             ingested_at,
             source: source.to_string(),
             origin,
+            derived_from,
         })
     }
 
@@ -319,6 +403,7 @@ impl WorldMemory {
         ingested_at: i64,
         source: String,
         origin: String,
+        derived_from: Option<String>,
     ) -> Fact {
         Fact {
             id,
@@ -329,6 +414,9 @@ impl WorldMemory {
             ingested_at: ingested_at as u64,
             source,
             origin: Origin::parse(&origin),
+            // Unparseable support reads as unknown, never as empty. `Some([])` is the
+            // assertion "nothing can undercut this"; a corrupted row must not make it.
+            derived_from: derived_from.and_then(|s| serde_json::from_str::<Vec<i64>>(&s).ok()),
         }
     }
 
@@ -345,6 +433,7 @@ impl WorldMemory {
                 row.get(5)?,
                 row.get(6)?,
                 row.get(7)?,
+                row.get(8)?,
             ))
         })?;
         match rows.next() {
@@ -354,7 +443,7 @@ impl WorldMemory {
     }
 
     const COLS: &'static str =
-        "id, entity, value_json, valid_from, valid_to, ingested_at, source, origin";
+        "id, entity, value_json, valid_from, valid_to, ingested_at, source, origin, derived_from";
 
     /// The currently-believed fact for `entity` (the open one), if any.
     pub fn current(&self, entity: &str) -> Result<Option<Fact>> {
@@ -396,10 +485,68 @@ impl WorldMemory {
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
+                    row.get(8)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(facts)
+    }
+
+    /// The facts whose in-list names `id` — one step of the JTMS dependency walk.
+    ///
+    /// Answers "what did I believe *because of* this?" for a single fact. Rows with
+    /// unknown support (`derived_from IS NULL`) are invisible here by construction:
+    /// they might depend on `id` and we have no way to know, so they are never claimed
+    /// as dependents. That is the fail-closed direction — a sweep built on this will
+    /// under-retract rather than empty the store.
+    ///
+    /// Returns both open and closed facts; callers filter. Not transitive: propagation
+    /// is a separate decision (a fact with several supports may survive one dying), and
+    /// putting that policy here would bake in `a·b` semantics for everyone.
+    pub fn dependents(&self, id: i64) -> Result<Vec<Fact>> {
+        let conn = self.conn.lock().unwrap();
+        // json_each over a NULL column yields no rows, so the NULL case needs no guard.
+        let sql = format!(
+            "SELECT {} FROM world_facts f
+             WHERE EXISTS (
+                 SELECT 1 FROM json_each(f.derived_from) WHERE json_each.value = ?1
+             )
+             ORDER BY f.id ASC",
+            Self::COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let facts = stmt
+            .query_map(params![id], |row| {
+                Ok(Self::row_to_fact(
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(facts)
+    }
+
+    /// How many facts record their support at all.
+    ///
+    /// Returns `(with_support, total)`. Useful as a migration dial: the gap is the set
+    /// of beliefs no invalidation sweep can reason about, and it only shrinks as write
+    /// sites are taught to declare their inputs.
+    pub fn support_coverage(&self) -> Result<(usize, usize)> {
+        let conn = self.conn.lock().unwrap();
+        let with: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM world_facts WHERE derived_from IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )?;
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM world_facts", [], |r| r.get(0))?;
+        Ok((with as usize, total as usize))
     }
 
     /// All distinct entities known to the store.
@@ -435,6 +582,93 @@ mod tests {
         w.observe_as("c.d", json!(2), 1_000, 1_000, "lora-gateway", Origin::Observed)
             .unwrap();
         assert_eq!(w.current("c.d").unwrap().unwrap().origin, Origin::Observed);
+    }
+
+    #[test]
+    fn unknown_support_and_no_support_are_different_states() {
+        // The distinction the whole column exists for. `observe` records nothing about
+        // support (None); `observe_derived_from(&[])` asserts there is none (Some([])).
+        // Collapsing them would make an invalidation sweep either inert or catastrophic.
+        let w = WorldMemory::open_in_memory().unwrap();
+
+        w.observe("unknown.support", json!(1), 1_000, 1_000, "legacy").unwrap();
+        assert_eq!(w.current("unknown.support").unwrap().unwrap().derived_from, None);
+
+        w.observe_derived_from("premise", json!(1), 1_000, 1_000, "rule", &[])
+            .unwrap();
+        assert_eq!(
+            w.current("premise").unwrap().unwrap().derived_from,
+            Some(vec![]),
+            "an empty in-list is a claim, not an absence"
+        );
+
+        // observe_as still records nothing — an explicit origin is not a claim about support.
+        w.observe_as("obs", json!(1), 1_000, 1_000, "lora-gateway", Origin::Observed)
+            .unwrap();
+        assert_eq!(w.current("obs").unwrap().unwrap().derived_from, None);
+    }
+
+    #[test]
+    fn dependents_walks_back_to_the_source_that_died() {
+        // The mesh.escalated_count shape: a rollup computed from two node readings.
+        // When one reading's source goes away we must be able to find the rollup.
+        let w = WorldMemory::open_in_memory().unwrap();
+        let n1 = w
+            .observe_as("mesh.n1.rssi", json!(-90), 1_000, 1_000, "lora-gateway", Origin::Observed)
+            .unwrap();
+        let n2 = w
+            .observe_as("mesh.n2.rssi", json!(-70), 1_000, 1_000, "lora-gateway", Origin::Observed)
+            .unwrap();
+        let roll = w
+            .observe_derived_from(
+                "mesh.escalated_count",
+                json!(2),
+                1_100,
+                1_100,
+                "mesh-supervisor",
+                &[n1.id, n2.id],
+            )
+            .unwrap();
+        assert_eq!(roll.origin, Origin::Derived);
+
+        let deps = w.dependents(n1.id).unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].id, roll.id);
+        assert_eq!(deps[0].entity, "mesh.escalated_count");
+        // Support survives the round trip through the query, not just the insert.
+        assert_eq!(deps[0].derived_from, Some(vec![n1.id, n2.id]));
+        // Both supports find it — the caller decides whether one death is enough.
+        assert_eq!(w.dependents(n2.id).unwrap().len(), 1);
+        // Nothing rests on the rollup itself.
+        assert!(w.dependents(roll.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn unknown_support_is_never_claimed_as_a_dependent() {
+        // Fail-closed. A row that might depend on n1 but never said so must not be
+        // swept: under-retracting is recoverable, retracting the store is not.
+        let w = WorldMemory::open_in_memory().unwrap();
+        let n1 = w.observe("mesh.n1.rssi", json!(-90), 1_000, 1_000, "lora").unwrap();
+        w.observe("probably.related", json!(true), 1_100, 1_100, "mesh-supervisor")
+            .unwrap();
+        assert!(w.dependents(n1.id).unwrap().is_empty());
+
+        let (with, total) = w.support_coverage().unwrap();
+        assert_eq!((with, total), (0, 2), "coverage names the blind spot");
+    }
+
+    #[test]
+    fn a_corrupted_in_list_reads_as_unknown_not_as_empty() {
+        // Same fail-closed rule as Origin::parse: garbage must never be promoted into
+        // the stronger claim ("nothing undercuts this").
+        let w = WorldMemory::open_in_memory().unwrap();
+        w.observe("x", json!(1), 1_000, 1_000, "s").unwrap();
+        {
+            let conn = w.conn.lock().unwrap();
+            conn.execute("UPDATE world_facts SET derived_from = 'not json'", [])
+                .unwrap();
+        }
+        assert_eq!(w.current("x").unwrap().unwrap().derived_from, None);
     }
 
     #[test]
@@ -565,6 +799,50 @@ mod tests {
         assert!(w.at("later.entity", 5_000).unwrap().is_some());
         // unknown entity
         assert!(w.at("nope", 1_000).unwrap().is_none());
+    }
+
+    #[test]
+    fn migration_adds_derived_from_as_unknown_and_never_guesses_it() {
+        // Two shapes the bench db can be in: pre-origin, and post-origin/pre-support.
+        // Both must land on "unknown support" for every existing row — a backfilled
+        // in-list would be walked by invalidation, so a wrong guess is worse than none.
+        let dir = std::env::temp_dir().join(format!("obc-world-derived-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        for (name, extra_col) in [("pre-origin.db", ""), ("post-origin.db", ", origin TEXT NOT NULL DEFAULT 'asserted'")] {
+            let path = dir.join(name);
+            let _ = std::fs::remove_file(&path);
+            {
+                let conn = Connection::open(&path).unwrap();
+                conn.execute_batch(&format!(
+                    "CREATE TABLE world_facts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        entity TEXT NOT NULL, value_json TEXT NOT NULL,
+                        valid_from INTEGER NOT NULL, valid_to INTEGER,
+                        ingested_at INTEGER NOT NULL, source TEXT NOT NULL{extra_col});
+                     INSERT INTO world_facts (entity,value_json,valid_from,valid_to,ingested_at,source)
+                     VALUES ('mesh.escalated_count','2',1,NULL,1,'mesh-supervisor');"
+                ))
+                .unwrap();
+            }
+
+            let w = WorldMemory::open(&path).unwrap();
+            let f = w.current("mesh.escalated_count").unwrap().unwrap();
+            assert_eq!(f.value, json!(2), "columns did not shift");
+            assert_eq!(f.derived_from, None, "{name}: support must not be invented");
+            // And so the fact that motivated all this is invisible to a sweep until the
+            // supervisor is taught to declare its inputs. That is the honest state.
+            assert!(w.dependents(f.id).unwrap().is_empty());
+            assert_eq!(w.support_coverage().unwrap(), (0, 1));
+
+            // Re-opening must not re-run the ALTER (it would error).
+            drop(w);
+            let w2 = WorldMemory::open(&path).unwrap();
+            let n = w2.observe_as("s", json!(1), 2, 2, "lora", Origin::Observed).unwrap();
+            w2.observe_derived_from("roll", json!(1), 3, 3, "sup", &[n.id]).unwrap();
+            assert_eq!(w2.dependents(n.id).unwrap().len(), 1);
+            assert_eq!(w2.support_coverage().unwrap(), (1, 3));
+        }
     }
 
     #[test]
