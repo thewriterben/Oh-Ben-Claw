@@ -22,11 +22,10 @@
 //! p2p_enabled          = true
 //! ```
 //!
-//! Then start the agent with:
-//!
-//! ```bash
-//! oh-ben-claw start --edge
-//! ```
+//! There is no `--edge` CLI flag: `EdgeAgent` is a library type, assembled by
+//! whoever is embedding the agent on the device. `[edge].enabled` and
+//! `[edge].p2p_enabled` are read by `Config::validate` and by that caller — this
+//! type honours the two limits and nothing auto-starts the P2P spine.
 
 /// Milliseconds to wait after starting the P2P spine before collecting peer
 /// tools, to allow initial discovery broadcasts to arrive.
@@ -57,7 +56,6 @@ use std::sync::Arc;
 ///    that edge conversations are stored separately from host-side sessions.
 pub struct EdgeAgent {
     inner: Agent,
-    config: EdgeConfig,
     provider_config: ProviderConfig,
     node_id: String,
     p2p_spine: Option<Arc<P2pSpine>>,
@@ -78,10 +76,16 @@ impl EdgeAgent {
         node_id: impl Into<String>,
     ) -> Result<Self> {
         let provider = providers::from_config(&provider_config)?;
-        let agent = Agent::new(agent_config, provider, memory, tools);
+        // The point of an edge agent is bounded RAM, and this is where that is
+        // actually applied. Before, `edge_config` was stored and never read: the
+        // module header documented `max_history_messages`, the deployment planner
+        // emitted it into every generated NanoPi config, and nothing anywhere
+        // consumed it. `max_tool_iterations` was applied, but only on the builder
+        // path — constructing an EdgeAgent directly silently ignored it.
+        let agent = Agent::new(agent_config, provider, memory, tools)
+            .with_max_history(edge_config.max_history_messages);
         Ok(Self {
             inner: agent,
-            config: edge_config,
             provider_config,
             node_id: node_id.into(),
             p2p_spine: None,

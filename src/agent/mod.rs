@@ -109,6 +109,12 @@ pub struct Agent {
     /// scanning; `Warn` (default) logs + counts; `Enforce` refuses unless the
     /// tool is explicitly operator-granted.
     taint_mode: crate::security::taint::TaintMode,
+    /// How many recent messages to replay into context. Defaults to
+    /// [`MAX_HISTORY_MESSAGES`]; an edge device lowers it to bound RAM. This used to
+    /// be the constant, read directly, which is why `edge.max_history_messages` could
+    /// be documented, generated into every NanoPi config by the deployment planner,
+    /// and have no effect whatsoever.
+    max_history: usize,
 }
 
 impl Agent {
@@ -142,7 +148,20 @@ impl Agent {
             rollout: None,
             forge_dir: None,
             taint_mode: crate::security::taint::TaintMode::Off,
+            max_history: MAX_HISTORY_MESSAGES,
         }
+    }
+
+    /// Bound how much conversation history is replayed into context.
+    ///
+    /// Zero is rejected rather than honoured: an agent that cannot see its own last
+    /// turn is broken in a way that looks like the model being stupid, and the caller
+    /// almost certainly meant "default".
+    pub fn with_max_history(mut self, n: usize) -> Self {
+        if n > 0 {
+            self.max_history = n;
+        }
+        self
     }
 
     /// Attach a policy engine to enforce tool execution policies.
@@ -726,7 +745,7 @@ impl Agent {
         // Recent conversation history
         let history = self
             .memory
-            .load_recent_messages(session_id, MAX_HISTORY_MESSAGES)?;
+            .load_recent_messages(session_id, self.max_history)?;
 
         // Skip the last user message since we'll add it fresh from memory
         // (it was already appended before this call)
@@ -1250,6 +1269,73 @@ impl AgentResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── History window ────────────────────────────────────────────────────────
+
+    struct SilentProvider;
+
+    #[async_trait::async_trait]
+    impl crate::providers::Provider for SilentProvider {
+        fn name(&self) -> &str {
+            "silent"
+        }
+        async fn chat_completion(
+            &self,
+            _messages: &[crate::providers::ChatMessage],
+            _tools: &[Box<dyn Tool>],
+            _config: &crate::config::ProviderConfig,
+        ) -> Result<crate::providers::ChatCompletion> {
+            anyhow::bail!("SilentProvider never answers; these tests only build context")
+        }
+    }
+
+    fn agent_with_history(n: Option<usize>) -> (Agent, String) {
+        let memory = Arc::new(crate::memory::MemoryStore::open_in_memory().unwrap());
+        let session = memory.create_session("history").unwrap();
+        for i in 0..40 {
+            memory
+                .append_message(&session, ChatRole::User, &format!("msg {i}"))
+                .unwrap();
+        }
+        let mut agent = Agent::new(
+            AgentConfig::default(),
+            Arc::new(SilentProvider),
+            memory,
+            vec![],
+        );
+        if let Some(n) = n {
+            agent = agent.with_max_history(n);
+        }
+        (agent, session)
+    }
+
+    /// The regression this exists for: `edge.max_history_messages` was documented,
+    /// emitted into every generated NanoPi config by the deployment planner, and
+    /// applied to nothing at all — `build_context` read a crate constant.
+    #[test]
+    fn the_history_window_is_the_one_it_was_told_about() {
+        let (agent, session) = agent_with_history(Some(6));
+        let ctx = agent.build_context(&session).unwrap();
+        // One system message for the prompt; no world memory attached here.
+        let history = ctx.len() - 1;
+        assert_eq!(history, 6, "asked for 6 turns of history, got {history}");
+    }
+
+    #[test]
+    fn an_unbounded_agent_still_gets_the_default_window() {
+        let (agent, session) = agent_with_history(None);
+        let ctx = agent.build_context(&session).unwrap();
+        assert_eq!(ctx.len() - 1, MAX_HISTORY_MESSAGES.min(40));
+    }
+
+    #[test]
+    fn a_zero_window_is_refused_rather_than_honoured() {
+        // An agent that cannot see its own last turn looks like a stupid model, not
+        // like a misconfiguration, so zero is treated as "no opinion".
+        let (agent, session) = agent_with_history(Some(0));
+        let ctx = agent.build_context(&session).unwrap();
+        assert_eq!(ctx.len() - 1, MAX_HISTORY_MESSAGES.min(40));
+    }
     use crate::security::limits::{SafetyGate, SafetyLimit};
     use crate::tools::traits::BlastRadius;
     use serde_json::json;

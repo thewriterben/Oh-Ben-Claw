@@ -13,6 +13,13 @@ crate-type = ["cdylib", "rlib"]
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 
+[features]
+# Declared, not enabled. The planner sources are compiled verbatim from the host
+# crate via `#[path]`, and `src/geo/mod.rs` carries `#[cfg(feature = "world-anchor")]`.
+# Without the feature named here that cfg is an unknown value, which `-D warnings`
+# turns into a hard CI failure in a crate that is otherwise fine.
+world-anchor = []
+
 [dependencies]
 wasm-bindgen = "0.2"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
