@@ -68,6 +68,16 @@ impl MeshHealth {
 #[derive(Debug, Clone)]
 pub struct MeshNodeView {
     pub node: String,
+    /// Row id of the `mesh.<node>` rollup fact this view was read from.
+    ///
+    /// The ids on this view exist so decisions can say what they were computed *from*.
+    /// The supervisor concludes; the gateway observes; carrying the id is what lets a
+    /// conclusion be withdrawn when the observation under it is.
+    pub rollup_id: i64,
+    /// Row id of the `cmd_result` fact behind [`Self::last_cmd_ok`], if any.
+    pub cmd_result_id: Option<i64>,
+    /// Row id of the current `mesh.<node>.health` fact, if any.
+    pub health_id: Option<i64>,
     /// `valid_from` of the node's latest `mesh.<node>` rollup fact (ms).
     pub last_seen_ms: u64,
     /// Whether the node's latest `cmd_result` reflects a *healthy* node.
@@ -246,16 +256,15 @@ pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
         }
         let node = parts[1].to_string();
         // Heard over the air, or it is not a node.
-        let last_seen_ms = match world.current(&e).ok().flatten() {
-            Some(f) if f.origin == Origin::Observed => f.valid_from,
+        let (last_seen_ms, rollup_id) = match world.current(&e).ok().flatten() {
+            Some(f) if f.origin == Origin::Observed => (f.valid_from, f.id),
             _ => continue,
         };
-        let last_cmd_ok = world
-            .current(&format!("mesh.{node}.cmd_result"))
-            .ok()
-            .flatten()
-            .and_then(|f| cmd_result_healthy(&f.value));
+        let cmd_result_fact = world.current(&format!("mesh.{node}.cmd_result")).ok().flatten();
+        let cmd_result_id = cmd_result_fact.as_ref().map(|f| f.id);
+        let last_cmd_ok = cmd_result_fact.as_ref().and_then(|f| cmd_result_healthy(&f.value));
         let health_fact = world.current(&format!("mesh.{node}.health")).ok().flatten();
+        let health_id = health_fact.as_ref().map(|f| f.id);
         let prev_health = health_fact
             .as_ref()
             .and_then(|f| f.value.get("status").and_then(|v| v.as_str()).and_then(MeshHealth::parse));
@@ -273,6 +282,9 @@ pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
             .unwrap_or(false);
         views.push(MeshNodeView {
             node,
+            rollup_id,
+            cmd_result_id,
+            health_id,
             last_seen_ms,
             last_cmd_ok,
             prev_health,
@@ -412,27 +424,61 @@ pub async fn tick(
     let views = snapshot(world);
     let decisions = decide(&views, now_ms, cfg);
     let mut applied = 0;
+
+    // Every fact written below is a *conclusion*, and every one of them has inputs the
+    // supervisor is holding at the moment it writes. Declaring them builds the chain
+    //
+    //     mesh.<node>            (lora-gateway, observed off the air)
+    //       └─ mesh.<node>.health        (supervisor concluded)
+    //            ├─ mesh.<node>.escalation
+    //            │    └─ mesh.escalated_count
+    //            └─ mesh.<node>.recovery
+    //
+    // which is what makes "the radio is gone, so none of this is grounded any more" a
+    // walk rather than a judgement call. Without it, retiring the gateway closes the
+    // rollups and leaves every conclusion drawn from them standing.
+    let by_node: std::collections::HashMap<&str, &MeshNodeView> =
+        views.iter().map(|v| (v.node.as_str(), v)).collect();
+    // Health facts written during this tick supersede the ones the snapshot saw, so
+    // decisions later in the same tick must point at the new row, not the stale one.
+    let mut health_ids: std::collections::HashMap<String, i64> = views
+        .iter()
+        .filter_map(|v| v.health_id.map(|id| (v.node.clone(), id)))
+        .collect();
+
     for d in decisions {
         match d {
             MeshDecision::Health { node, status, reason } => {
-                let _ = world.observe(
+                // Health rests on the radio evidence it was derived from: when the node
+                // was last heard, and how it answered the last command.
+                let mut support = Vec::new();
+                if let Some(v) = by_node.get(node.as_str()) {
+                    support.push(v.rollup_id);
+                    support.extend(v.cmd_result_id);
+                }
+                if let Ok(f) = world.observe_derived_from(
                     &format!("mesh.{node}.health"),
                     json!({ "status": status, "reason": reason, "ts_ms": now_ms }),
                     now_ms,
                     now_ms,
                     SUPERVISOR_SOURCE,
-                );
+                    &support,
+                ) {
+                    health_ids.insert(node.clone(), f.id);
+                }
                 applied += 1;
             }
             MeshDecision::Recover { node, cmd } => {
                 if let Some(s) = sink {
                     if s.send_command(&cmd).await.is_ok() {
-                        let _ = world.observe(
+                        let support: Vec<i64> = health_ids.get(&node).copied().into_iter().collect();
+                        let _ = world.observe_derived_from(
                             &format!("mesh.{node}.recovery"),
                             json!({ "cmd": cmd.cmd, "id": cmd.id, "ts_ms": now_ms }),
                             now_ms,
                             now_ms,
                             SUPERVISOR_SOURCE,
+                            &support,
                         );
                         applied += 1;
                     }
@@ -440,23 +486,34 @@ pub async fn tick(
             }
             MeshDecision::Escalate { node, reason } => {
                 tracing::warn!(node = %node, "mesh supervisor: node presumed lost — {reason}");
-                let _ = world.observe(
+                // "Presumed lost" is a conclusion about a health state that has persisted.
+                // If that health fact stops being believed, so must this.
+                let support: Vec<i64> = health_ids.get(&node).copied().into_iter().collect();
+                let _ = world.observe_derived_from(
                     &format!("mesh.{node}.escalation"),
                     json!({ "status": "escalated", "reason": reason, "ts_ms": now_ms }),
                     now_ms,
                     now_ms,
                     SUPERVISOR_SOURCE,
+                    &support,
                 );
                 applied += 1;
             }
             MeshDecision::ClearEscalation { node } => {
                 tracing::info!(node = %node, "mesh supervisor: node returned — escalation cleared");
-                let _ = world.observe(
+                // Clearing rests on the *fresh* rollup — the node transmitting again is
+                // the evidence, not the health rollup computed from it.
+                let support: Vec<i64> = by_node
+                    .get(node.as_str())
+                    .map(|v| vec![v.rollup_id])
+                    .unwrap_or_default();
+                let _ = world.observe_derived_from(
                     &format!("mesh.{node}.escalation"),
                     json!({ "status": "cleared", "ts_ms": now_ms }),
                     now_ms,
                     now_ms,
                     SUPERVISOR_SOURCE,
+                    &support,
                 );
                 applied += 1;
             }
@@ -531,6 +588,12 @@ mod tests {
     fn view(node: &str, last_seen_ms: u64) -> MeshNodeView {
         MeshNodeView {
             node: node.to_string(),
+            // `decide` is pure and never reads these; they exist so the driver can
+            // record what it derived a conclusion from. Zero is a deliberate tell: any
+            // test that starts caring about support must build a real store.
+            rollup_id: 0,
+            cmd_result_id: None,
+            health_id: None,
             last_seen_ms,
             last_cmd_ok: None,
             prev_health: None,
@@ -803,6 +866,53 @@ mod tests {
         let deps = world.dependents(esc.id).unwrap();
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].entity, "mesh.escalated_count");
+    }
+
+    #[tokio::test]
+    async fn losing_the_radio_unwinds_everything_the_supervisor_concluded() {
+        // End-to-end, through the real tick rather than a hand-built chain: the gateway
+        // observes a node, the supervisor concludes health → escalation → count on top
+        // of it, and then the radio goes away. The supervisor is still running and still
+        // willing; it simply has nothing left to have concluded from.
+        use crate::memory::liveness::{stopped, Stopped};
+        use crate::spine::lora_gateway::SOURCE as GATEWAY_SOURCE;
+
+        let world = WorldMemory::open_in_memory().unwrap();
+        world
+            .observe_as("mesh.n", json!({ "last_type": "link_state" }), 1_000, 1_000, GATEWAY_SOURCE, Origin::Observed)
+            .unwrap();
+        let mut c = esc_cfg();
+        c.recover = None;
+
+        tick(&world, None, &c, 30_000).await; // health: offline
+        tick(&world, None, &c, 160_000).await; // escalate + count
+
+        assert_eq!(
+            world.current("mesh.escalated_count").unwrap().unwrap().value.as_u64(),
+            Some(1)
+        );
+        // Every link in the chain declares its support — this is what makes the sweep
+        // below a walk rather than a guess.
+        for e in ["mesh.n.health", "mesh.n.escalation", "mesh.escalated_count"] {
+            assert!(
+                world.current(e).unwrap().unwrap().derived_from.is_some(),
+                "{e} did not record what it was derived from"
+            );
+        }
+
+        let sweep = stopped(&world, GATEWAY_SOURCE, Stopped::Retired, 200_000, "no COM port").unwrap();
+
+        assert_eq!(sweep.closed.len(), 1, "only the radio's own fact was its own");
+        assert_eq!(sweep.unsupported.len(), 3, "health, escalation, count");
+        for e in ["mesh.n.health", "mesh.n.escalation", "mesh.escalated_count"] {
+            assert!(world.current(e).unwrap().is_none(), "{e} outlived the radio");
+        }
+
+        // Undercut, not rebutted: the count is not now zero, it is not held at all.
+        assert_eq!(
+            world.at("mesh.escalated_count", 170_000).unwrap().unwrap().value.as_u64(),
+            Some(1)
+        );
     }
 
     #[tokio::test]

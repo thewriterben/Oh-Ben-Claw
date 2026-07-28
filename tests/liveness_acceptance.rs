@@ -17,18 +17,30 @@ use oh_ben_claw::memory::liveness::{entity_for, is_marked_stopped, stopped, Stop
 use oh_ben_claw::memory::world::WorldMemory;
 use oh_ben_claw::spine::mesh_supervisor::SUPERVISOR_SOURCE;
 
-fn store() -> Option<(WorldMemory, String)> {
-    let path = std::env::var("OBC_ACCEPTANCE_WORLD_DB").ok()?;
-    if !std::path::Path::new(&path).exists() {
-        panic!("OBC_ACCEPTANCE_WORLD_DB={path} does not exist");
+/// Open a private copy of the store under test.
+///
+/// Every test gets its own copy, for two reasons. These tests retract things, so sharing
+/// one file would make them order-dependent — and order-dependent tests against real
+/// data are how you end up asserting on the previous test's damage. It also means that
+/// if someone points the variable at a live database despite the warning, the writes
+/// land on the copy.
+fn store(tag: &str) -> Option<(WorldMemory, String)> {
+    let src = std::env::var("OBC_ACCEPTANCE_WORLD_DB").ok()?;
+    if !std::path::Path::new(&src).exists() {
+        panic!("OBC_ACCEPTANCE_WORLD_DB={src} does not exist");
     }
-    let w = WorldMemory::open(&path).expect("open world db copy");
-    Some((w, path))
+    let dst = std::env::temp_dir().join(format!("obc-acceptance-{tag}.db"));
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", dst.display()));
+    }
+    std::fs::copy(&src, &dst).expect("copy the store under test");
+    let w = WorldMemory::open(&dst).expect("open world db copy");
+    Some((w, dst.display().to_string()))
 }
 
 #[test]
 fn retiring_the_supervisor_retracts_what_it_left_standing() {
-    let Some((w, path)) = store() else {
+    let Some((w, path)) = store("retire-supervisor") else {
         eprintln!("skipped: set OBC_ACCEPTANCE_WORLD_DB to a *copy* of a world.db");
         return;
     };
@@ -101,6 +113,80 @@ fn retiring_the_supervisor_retracts_what_it_left_standing() {
     assert!(again.is_empty());
 }
 
+/// The whole feature, end to end, on real data.
+///
+/// Runs a supervisor tick against the real store so the chain is built from the actual
+/// bench nodes and their real timestamps, then takes the radio away. This is the closest
+/// thing available to reproducing the original bug and watching it not happen.
+#[tokio::test]
+async fn a_real_tick_builds_the_chain_and_losing_the_radio_unwinds_it() {
+    let Some((w, _)) = store("rebuild-chain") else {
+        eprintln!("skipped: set OBC_ACCEPTANCE_WORLD_DB to a *copy* of a world.db");
+        return;
+    };
+    use oh_ben_claw::config::MeshSupervisorConfig;
+    use oh_ben_claw::spine::lora_gateway::SOURCE as GATEWAY_SOURCE;
+
+    // First, what the next boot will do: the supervisor is configured off, so its
+    // beliefs are retired. This also clears the legacy rows — the ones written before
+    // support was recorded — which is what lets the ticks below rebuild the chain
+    // properly. Without it the supervisor writes nothing at all: health is already
+    // "offline" and both nodes are already escalated, and it only writes on change. A
+    // no-op tick is correct behaviour and useless as a test, which is a distinction an
+    // earlier version of this test got wrong.
+    stopped(&w, SUPERVISOR_SOURCE, Stopped::Retired, 1_999_000_000_000, "boot: configured off")
+        .unwrap();
+
+    let before = w.support_coverage().unwrap();
+    println!("  support coverage before: {before:?}");
+
+    let cfg = MeshSupervisorConfig {
+        enabled: true,
+        stale_ms: 30_000,
+        tick_ms: 5_000,
+        recover: None, // observe-only: never transmit during a test
+        min_recovery_interval_ms: 30_000,
+        escalate_after_ms: 120_000,
+        escalated_probe_interval_ms: 300_000,
+    };
+    // Two ticks: the first records health, the second escalates once that health has
+    // stood long enough. Timestamps well past the bench data so the nodes read as long
+    // gone, which they are — the boards have been off for over a week.
+    let t0 = 2_000_000_000_000u64;
+    oh_ben_claw::spine::mesh_supervisor::tick(&w, None, &cfg, t0).await;
+    oh_ben_claw::spine::mesh_supervisor::tick(&w, None, &cfg, t0 + 200_000).await;
+
+    let after = w.support_coverage().unwrap();
+    println!("  support coverage after ticks: {after:?}");
+    assert!(after.0 > before.0, "the tick recorded no support at all");
+
+    let count = w
+        .current("mesh.escalated_count")
+        .unwrap()
+        .expect("a count after escalating long-dead nodes");
+    println!("  mesh.escalated_count = {} support={:?}", count.value, count.derived_from);
+    assert!(count.derived_from.is_some(), "the count did not declare its support");
+
+    // Now the radio goes away. The supervisor is untouched — still enabled, still
+    // running. Everything it concluded rested on facts the gateway observed.
+    let sweep = stopped(&w, GATEWAY_SOURCE, Stopped::Retired, t0 + 400_000, "no COM port").unwrap();
+    println!(
+        "  retiring the radio: closed {} of its own, {} lost justification",
+        sweep.closed.len(),
+        sweep.unsupported.len()
+    );
+    assert!(
+        !sweep.unsupported.is_empty(),
+        "nothing propagated — the chain was not built"
+    );
+    assert!(
+        w.current("mesh.escalated_count").unwrap().is_none(),
+        "the count outlived the radio it was ultimately derived from"
+    );
+    // History intact: this is a retraction, not a delete.
+    assert!(!w.history("mesh.escalated_count").unwrap().is_empty());
+}
+
 #[test]
 fn the_phantom_rows_are_reported_even_though_this_cannot_close_them() {
     // The July 17 orphans: an agent note that discovery misread as a node, plus the
@@ -111,7 +197,7 @@ fn the_phantom_rows_are_reported_even_though_this_cannot_close_them() {
     //
     // This test asserts that limit rather than papering over it, so the residue is
     // visible instead of quietly assumed handled.
-    let Some((w, _)) = store() else {
+    let Some((w, _)) = store("phantom-residue") else {
         eprintln!("skipped: set OBC_ACCEPTANCE_WORLD_DB to a *copy* of a world.db");
         return;
     };
