@@ -1,117 +1,147 @@
 # Contributing to Oh-Ben-Claw
 
-Thank you for your interest in contributing! This document explains how to get involved.
+## Where work happens
+
+Oh-Ben-Claw is the **upstream core**: the Rust agent, the world model, the
+reflex/System-2 layer, the tool and channel surface, the MQTT/LoRa spine.
+
+[**OBC-Prime**](https://github.com/thewriterben/OBC-Prime) is the **public
+project**: the reference bodies you can actually run, the board registry, the
+tri-implementation planner parity harness, and the documentation a newcomer
+meets first.
+
+Which repo a change belongs in:
+
+| Change | Repo |
+|---|---|
+| Agent behaviour, memory, tools, channels, spine, safety | **Oh-Ben-Claw** |
+| Board registry, golden fixtures, planner WASM | **Oh-Ben-Claw** — they are emitted from here and vendored downstream |
+| Reference bodies, quickstarts, deployment docs | **OBC-Prime** |
+| Anything a first-time user reads | **OBC-Prime** |
+
+Registry, fixtures and the planner WASM exist in more than one repository and
+are kept in step by hash, not by convention: `scripts/sync_upstream.py` in
+OBC-Prime plus a CI parity gate. Edit them **here**; never hand-copy them
+downstream.
 
 ## Code of Conduct
 
-By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
+By participating you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
-## How to Contribute
+## Reporting bugs
 
-### Reporting Bugs
+1. Search [existing issues](https://github.com/thewriterben/Oh-Ben-Claw/issues).
+2. Open one with the **Bug Report** template.
+3. Include your OS, `rustc --version`, and reproduction steps.
 
-1. Search [existing issues](https://github.com/thewriterben/Oh-Ben-Claw/issues) to avoid duplicates.
-2. Open a new issue using the **Bug Report** template.
-3. Include your OS, Rust version (`rustc --version`), and reproduction steps.
+For anything the agent believes that it should not — a stale sensor reading, a
+belief that survived its source going away — please include the output of
+`oh-ben-claw doctor` and, if you can, the relevant rows from `world_facts`.
+Belief-revision bugs are close to unreproducible without the provenance.
 
-### Suggesting Features
+## Submitting pull requests
 
-1. Search [existing issues](https://github.com/thewriterben/Oh-Ben-Claw/issues) to avoid duplicates.
-2. Open a new issue using the **Feature Request** template.
-3. Describe the use case and expected behaviour clearly.
+```bash
+git checkout -b feat/my-feature
+```
 
-### Submitting Pull Requests
+Then, before opening the PR, run exactly what CI runs:
 
-1. Fork the repository and create a branch from `main`:
-   ```bash
-   git checkout -b feat/my-feature
-   ```
-2. Make your changes, following the style guide below.
-3. Add or update tests as appropriate.
-4. Ensure all CI checks pass locally:
-   ```bash
-   cargo build --workspace --exclude obc-esp32-s3
-   cargo test --workspace --exclude obc-esp32-s3
-   cargo clippy --workspace --exclude obc-esp32-s3 -- -D warnings
-   cargo fmt --all --check
-   ```
-5. Open a pull request against `main` and fill out the PR template.
+```bash
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
+```
 
-## Development Setup
+All four pass on a clean checkout of `main`. If one fails and you did not
+expect it to, that is a bug worth reporting on its own — a check that fails by
+default teaches everyone who meets it to ignore it.
 
-### Prerequisites
+Two notes on the clippy line, both learned the hard way:
 
-- **Rust** (stable, see `rust-toolchain.toml` for the pinned version):
+- `--all-targets` matters. Without it, clippy never looks at `tests/`, and a
+  crate-level survey that skipped `tests/` is exactly how a module with
+  thirteen live references nearly got deleted.
+- The crate carries **no blanket `#![allow(...)]`**, and must not gain one. If
+  a lint is wrong about your code, suppress it at the item or the file, with a
+  comment saying why. `src/channels/slack.rs` is the worked example: its
+  structs mirror a vendor's webhook payload, so fields this code never reads
+  still earn their place.
+
+## Development setup
+
+- **Rust** stable (see `rust-toolchain.toml`):
   `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- **MQTT broker** for integration testing (e.g. `mosquitto`):
-  `brew install mosquitto` or `apt install mosquitto`
-- **Node.js 20+** and **pnpm** for GUI work:
-  `npm install -g pnpm`
+- **MQTT broker** for spine integration tests, e.g. `mosquitto`
+- **Node.js 20+** and **pnpm** for GUI work
+
+Recommended once per clone, so the first-ever `cargo fmt --all` does not sit on
+top of every `git blame`:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
 
 ### Building
 
 ```bash
-# Core agent (default features: hardware + mqtt-spine)
-cargo build --workspace --exclude obc-esp32-s3
+# Core agent (default features: hardware + mqtt-spine + world-anchor)
+cargo build --workspace
 
 # NanoPi Neo3 cross-compile (from Linux/macOS)
-cargo build \
-  --target aarch64-unknown-linux-gnu \
-  --features hardware,peripheral-nanopi \
-  --exclude obc-esp32-s3
+cargo build --target aarch64-unknown-linux-gnu --features hardware,peripheral-nanopi
 
-# GUI (Tauri 2 + React 18)
+# GUI (Tauri 2 + React)
 cd gui && pnpm install && pnpm tauri dev
 ```
 
-### Running Tests
+The two firmware crates are **not** workspace members — they live in
+`[workspace] exclude` because they need the Espressif toolchain and their own
+`Cargo.lock`. `cargo build --workspace` will not touch them, and you do not
+need `--exclude obc-esp32-s3` to keep it from trying.
+
+### ESP32-S3 / Heltec LoRa firmware
 
 ```bash
-cargo test --workspace --exclude obc-esp32-s3
-```
-
-### ESP32-S3 Firmware
-
-```bash
-# Install the ESP toolchain (once)
 cargo install espup && espup install && source ~/export-esp.sh
-
-# Build and flash (from firmware/obc-esp32-s3)
 cd firmware/obc-esp32-s3
 cargo build --release
 cargo espflash flash --monitor
 ```
 
-### Deployment Planner
+### Deployment planner
 
 ```bash
-# Run the static planner against the NanoPi reference scenario
 cargo run -- deployment plan --scenario nanopi
-
-# Run with the full LLM swarm (requires OPENAI_API_KEY)
-cargo run -- deployment plan --scenario nanopi --llm-swarm
+cargo run -- deployment plan --scenario nanopi --llm-swarm   # needs a provider key
 ```
 
-## Style Guide
+## Style
 
-- Follow standard Rust conventions (`rustfmt` and `clippy` are enforced in CI).
-- Keep public APIs documented with `///` doc comments.
-- Prefer `anyhow` for application-level errors and `thiserror` for library-level errors.
-- New features should have corresponding tests in the same module.
-- Use `&Path` instead of `&PathBuf` in function signatures (`clippy::ptr_arg`).
-- Use `format!(...)` instead of `&format!(...)` when a value is expected (`clippy::needless_borrows_for_generic_args`).
+- `rustfmt` defaults, `clippy` at `-D warnings`. Both enforced in CI.
+- Public items get `///` docs. Say what it is *for*, not what it is called.
+- `anyhow` for application errors, `thiserror` for library errors.
+- `&Path`, not `&PathBuf`, in signatures.
+- New behaviour gets a test in the same module. A fix with no test is a claim.
+- Comments should say *why*, especially where the obvious thing is wrong. The
+  code can already be read; the reasoning cannot.
 
-## Commit Messages
+### On adding config
 
-Use conventional commits:
+A config key that parses cleanly and changes nothing is worse than a missing
+feature, because the config file is the surface a user actually reads. If you
+add a key, wire it in the same PR and test that it has an effect. Several keys
+have been deleted for failing exactly this.
 
-```
-feat: add BME680 sensor support
-fix: correct MQTT reconnect backoff
-docs: update hardware setup guide
-chore: bump tokio to 1.43
-```
+## Commit messages
+
+Conventional prefixes — `feat:`, `fix:`, `docs:`, `chore:`, `style:`, `lint:`,
+`curation:`. The body matters more than the prefix: say what was wrong, what
+you changed, and what you are *not* claiming. Known weaknesses stated in the
+message are worth more than a clean one that hides them.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE).
+By contributing you agree that your contributions are licensed under the
+[MIT License](LICENSE).

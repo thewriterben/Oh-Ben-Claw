@@ -606,6 +606,13 @@ Oh-Ben-Claw is built on the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw
 
 ---
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). It starts with which repo a change
+belongs in: this one is the upstream core, and
+[OBC-Prime](https://github.com/thewriterben/OBC-Prime) is the public project
+that vendors the registry, fixtures and planner WASM emitted from here.
+
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.

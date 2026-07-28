@@ -27,15 +27,15 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Build (default features)
-        run: cargo build --workspace --exclude obc-esp32-s3
+        run: cargo build --workspace
       - name: Build (all host features)
-        run: cargo build --workspace --exclude obc-esp32-s3 --features hardware,mqtt-spine
+        run: cargo build --workspace --features hardware,mqtt-spine
       - name: Build (NanoPi feature, Linux only)
-        run: cargo build --workspace --exclude obc-esp32-s3 --features hardware,peripheral-nanopi
+        run: cargo build --workspace --features hardware,peripheral-nanopi
       - name: Run tests
-        run: cargo test --workspace --exclude obc-esp32-s3
+        run: cargo test --workspace
       - name: Clippy
-        run: cargo clippy --workspace --exclude obc-esp32-s3 -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Format check
         run: cargo fmt --all --check
   # ── MCP conformance (official suite vs. our hand-rolled implementation) ───
@@ -105,8 +105,7 @@ jobs:
           cargo build \
             --workspace \
             --target aarch64-unknown-linux-gnu \
-            --features hardware,peripheral-nanopi \
-            --exclude obc-esp32-s3
+            --features hardware,peripheral-nanopi
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
   # ── Security audit ─────────────────────────────────────────────────────────
