@@ -50,21 +50,22 @@
 //! # What this module does *not* do yet
 //!
 //! An in-list is **conjunctive** — Doyle's JTMS: every entry must hold for the
-//! justification to stand — so `a·b` is the only semantics available here. A belief that
-//! is *independently corroborated* (`a+b`, surviving one support dying) needs to carry
-//! several alternative in-lists, and the schema holds one. Until it does, a fact with
-//! two supports is treated as needing both.
+//! justification to stand. A belief may carry *several alternative* justifications
+//! (`a+b`) and survives while any one of them holds; see
+//! [`WorldMemory::observe_derived_from_any`]. So the walk reaching a fact is not
+//! sufficient reason to withdraw it — the cascade re-asks
+//! [`WorldMemory::support_status`] at every step, and a corroborated belief simply
+//! stays.
 //!
-//! That limit over-retracts where it applies, which is the opposite direction to
-//! everything else here, so it is worth being precise about the blast radius: facts with
-//! unknown support are invisible to [`WorldMemory::dependents`] by construction, so the
-//! only beliefs any sweep can touch are the ones that explicitly declared what they rest
-//! on. Today that is the mesh supervisor and nothing else.
+//! The blast radius is worth stating plainly regardless: facts with unknown support are
+//! invisible to [`WorldMemory::dependents`] by construction, so the only beliefs any
+//! sweep can touch are the ones that explicitly declared what they rest on. Today that
+//! is three producers.
 
 use anyhow::Result;
 use serde_json::json;
 
-use super::world::{Closure, Fact, Origin, WorldMemory};
+use super::world::{Closure, Fact, Origin, Support, WorldMemory};
 
 /// The source label liveness facts are written under.
 ///
@@ -240,6 +241,15 @@ pub(crate) fn cascade(
                     // it is no better supported for the retraction having come from
                     // elsewhere.
                     next.push(dep.id);
+                    continue;
+                }
+                // Naming a dead fact is not enough to be withdrawn. A belief with
+                // alternative justifications survives while any one of them still
+                // stands, so ask the store rather than assuming the walk arrived here
+                // for a fatal reason. Without this check `a+b` would behave as `a·b`
+                // and the whole distinction would be decorative.
+                if !world.support_status(&dep)?.has_failed() {
+                    skipped.push(dep.id);
                     continue;
                 }
                 if world.close_fact(dep.id, now_ms, tag)? {
@@ -472,6 +482,69 @@ mod tests {
         for e in ["mesh.n.health", "mesh.n.escalation", "mesh.escalated_count"] {
             assert!(w.current(e).unwrap().is_none(), "{e} still believed");
         }
+    }
+
+    #[test]
+    fn independent_corroboration_survives_one_source_dying() {
+        // The a+b case, and the reason the schema carries alternatives at all. Two
+        // cameras each independently establish that the gate is occupied. Unplug one and
+        // the belief must stand — under a single conjunctive in-list it would not, and
+        // the distinction would be decorative.
+        let w = WorldMemory::open_in_memory().unwrap();
+        let cam1 = w
+            .observe_as("gate.cam1.motion", json!(true), 1_000, 1_000, "clawcam", Origin::Observed)
+            .unwrap();
+        let cam2 = w
+            .observe_as("gate.cam2.motion", json!(true), 1_000, 1_000, "clawcam-b", Origin::Observed)
+            .unwrap();
+        let occupied = w
+            .observe_derived_from_any(
+                "gate.occupied",
+                json!(true),
+                1_100,
+                1_100,
+                "fusion",
+                &[vec![cam1.id], vec![cam2.id]],
+            )
+            .unwrap();
+        // A belief on the same evidence but needing *both* — the control.
+        let stereo = w
+            .observe_derived_from("gate.depth", json!(2.4), 1_100, 1_100, "fusion", &[cam1.id, cam2.id])
+            .unwrap();
+
+        let sweep = stopped(&w, "clawcam", Stopped::Retired, 9_000, "camera 1 unplugged").unwrap();
+
+        assert_eq!(sweep.closed, vec![cam1.id]);
+        assert!(
+            w.current("gate.occupied").unwrap().is_some(),
+            "corroborated belief must survive one source dying"
+        );
+        assert!(sweep.skipped.contains(&occupied.id), "and the survival is reported");
+        assert_eq!(w.support_status(&w.current("gate.occupied").unwrap().unwrap()).unwrap(), Support::Grounded);
+
+        // The conjunctive one goes, because it genuinely needed both.
+        assert!(w.current("gate.depth").unwrap().is_none());
+        assert!(sweep.unsupported.contains(&stereo.id));
+
+        // Kill the second camera and the corroborated belief finally falls.
+        let second = stopped(&w, "clawcam-b", Stopped::Retired, 10_000, "camera 2 unplugged").unwrap();
+        assert!(second.unsupported.contains(&occupied.id));
+        assert!(w.current("gate.occupied").unwrap().is_none());
+    }
+
+    #[test]
+    fn the_flat_and_nested_encodings_mean_the_same_thing_for_one_justification() {
+        // A store written before alternatives existed holds flat arrays. Both forms have
+        // to parse, and a single-justification write must keep producing the flat form —
+        // migrating support is exactly the operation whose errors get walked.
+        let w = WorldMemory::open_in_memory().unwrap();
+        let a = w.observe_as("a", json!(1), 1_000, 1_000, "s", Origin::Observed).unwrap();
+        let flat = w.observe_derived_from("flat", json!(1), 1_100, 1_100, "s", &[a.id]).unwrap();
+        let nested = w
+            .observe_derived_from_any("nested", json!(1), 1_100, 1_100, "s", &[vec![a.id]])
+            .unwrap();
+        assert_eq!(flat.derived_from, nested.derived_from);
+        assert_eq!(w.dependents(a.id).unwrap().len(), 2, "both are found by the walk");
     }
 
     #[test]
