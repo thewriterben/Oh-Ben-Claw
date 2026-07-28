@@ -71,6 +71,7 @@ fn rule(id: &str, when: Condition, then: Action, debounce_ms: u64) -> ReflexRule
         then,
         debounce_ms,
         max_rate_hz: None,
+        fire_on_change: false,
     }
 }
 
