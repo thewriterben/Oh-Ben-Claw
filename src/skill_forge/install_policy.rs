@@ -251,7 +251,7 @@ pub struct InstallPolicyConfig {
     #[serde(default)]
     pub allowlist: Vec<String>,
     /// Path of the JSONL install audit log. Defaults to
-    /// `~/.oh-ben-claw/skill_install_audit.jsonl` when unset.
+    /// `skill_install_audit.jsonl` in the data root when unset.
     #[serde(default)]
     pub audit_log_path: Option<String>,
 }
@@ -394,14 +394,9 @@ impl InstallAuditLog {
         Self { path: path.into() }
     }
 
-    /// Default location: `~/.oh-ben-claw/skill_install_audit.jsonl`.
+    /// `skill_install_audit.jsonl` in the data root — see [`crate::config::paths`].
     pub fn default_path() -> PathBuf {
-        std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(".oh-ben-claw")
-            .join("skill_install_audit.jsonl")
+        crate::config::paths::in_data_dir("skill_install_audit.jsonl")
     }
 
     pub fn path(&self) -> &Path {

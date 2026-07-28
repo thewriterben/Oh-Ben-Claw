@@ -10,7 +10,7 @@
 //!
 //! - **Call** — this single invocation (`y`)
 //! - **Session** — this tool for the rest of the session (`a`, formerly "always")
-//! - **Forever** — persisted across sessions to `~/.oh-ben-claw/approval_grants.json` (`f`)
+//! - **Forever** — persisted across sessions to `approval_grants.json` in the data root (`f`)
 //!
 //! **Plan-mode approval**: a multi-step [`ApprovedPlan`] is approved once with
 //! per-step [`ArgumentBound`]s; execution then checks each call against the
@@ -186,14 +186,15 @@ pub struct ForeverGrants {
 }
 
 impl ForeverGrants {
-    /// Default location: `~/.oh-ben-claw/approval_grants.json`.
+    /// `approval_grants.json` in the data root — see [`crate::config::paths`].
+    ///
+    /// This used to read `$HOME`/`%USERPROFILE%` directly and append `.oh-ben-claw`,
+    /// which put standing permission-to-act grants somewhere no other subsystem
+    /// wrote and no environment variable could move. Two instances on one machine
+    /// shared one grant file; a grant given to the kitchen agent applied to the
+    /// workshop one.
     pub fn default_path() -> PathBuf {
-        std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(".oh-ben-claw")
-            .join("approval_grants.json")
+        crate::config::paths::in_data_dir("approval_grants.json")
     }
 
     /// Load grants from `path` (missing file ⇒ empty store).

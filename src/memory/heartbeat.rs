@@ -40,7 +40,6 @@
 //! ```
 
 use anyhow::Result;
-use directories::ProjectDirs;
 use std::path::PathBuf;
 
 /// Default path within the data directory.
@@ -73,9 +72,7 @@ impl HeartbeatStore {
     }
 
     fn default_path() -> Result<PathBuf> {
-        let dirs = ProjectDirs::from("com", "thewriterben", "oh-ben-claw")
-            .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-        Ok(dirs.data_dir().join(HEARTBEAT_FILE))
+        Ok(crate::config::paths::in_data_dir(HEARTBEAT_FILE))
     }
 
     // ── Task detection ────────────────────────────────────────────────────────

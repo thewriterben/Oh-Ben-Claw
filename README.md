@@ -246,9 +246,12 @@ cd Oh-Ben-Claw
 # Build the core agent (hardware + MQTT features enabled by default)
 cargo build --release
 
-# Run the setup wizard
-./target/release/oh-ben-claw setup
 ```
+
+There is no setup wizard, and you do not need one: with a provider key in the
+environment and no config file at all, the agent picks the provider whose key is
+actually set. Write a config when you want to pin a choice rather than have one
+inferred — start from [`config.example.toml`](config.example.toml).
 
 ### Quick Start
 
@@ -259,7 +262,7 @@ mosquitto -d
 # 2. Set your LLM API key
 export OPENAI_API_KEY="sk-..."
 
-# 3. Start the agent (uses ~/.oh-ben-claw/config.toml)
+# 3. Start the agent (no config file needed — see below for where one goes)
 ./target/release/oh-ben-claw start
 
 # 4. In another terminal, run diagnostics
@@ -270,7 +273,36 @@ export OPENAI_API_KEY="sk-..."
 
 ## Configuration
 
-Oh-Ben-Claw uses a TOML configuration file at `~/.oh-ben-claw/config.toml`. The setup wizard guides you through the basics; see [`examples/config-multi-device.toml`](examples/config-multi-device.toml) for a full annotated example.
+Configuration is TOML, and entirely optional. The agent looks in four places,
+first hit wins:
+
+1. `--config <PATH>`, or the `OBC_CONFIG` environment variable
+2. `config.toml` in the **data root** — see [Data location](#data-location)
+3. the platform config directory (`~/.config/oh-ben-claw/` on Linux,
+   `%APPDATA%\thewriterben\oh-ben-claw\config\` on Windows)
+4. `~/.oh-ben-claw/config.toml`, kept for anyone following older documentation
+
+Start from [`config.example.toml`](config.example.toml), which is annotated and
+carries no credentials; [`examples/config-multi-device.toml`](examples/config-multi-device.toml)
+is a fuller worked example.
+
+### Data location
+
+Everything this instance writes — `memory.db`, `world.db`, `scheduler.db`,
+`vault.db`, the journal, the audit chain, approval grants — lives under one root:
+
+```bash
+# Platform default: ~/.local/share/oh-ben-claw (Linux),
+# %APPDATA%\thewriterben\oh-ben-claw\data (Windows),
+# ~/Library/Application Support/com.thewriterben.oh-ben-claw (macOS)
+
+export OBC_DATA_DIR=/srv/obc/kitchen     # or [paths].data_dir in the config file
+```
+
+Two agents on one machine need two roots. Set `OBC_DATA_DIR` for the second one
+and it is fully separate — its own database, its own audit chain, its own
+standing approval grants — and if you drop a `config.toml` in that root it will
+pick that up too, without touching anything the first agent reads.
 
 ### Core
 
@@ -383,8 +415,8 @@ Channels, browser, ClawHub, cost, runtime, multimodal, and proxy sections are un
 
 ## Heartbeat File
 
-`~/.oh-ben-claw/HEARTBEAT.md` is a plain Markdown task list; uncompleted items
-trigger the agent on a schedule.
+`HEARTBEAT.md` in the data root (see [Data location](#data-location)) is a plain
+Markdown task list; uncompleted items trigger the agent on a schedule.
 
 Say what the agent is for in `[agent].system_prompt` — see `config.example.toml`.
 You do not need to describe the world there: current beliefs, with provenance
@@ -441,20 +473,31 @@ See [`examples/config-nanopi-deployment.toml`](examples/config-nanopi-deployment
 oh-ben-claw <COMMAND>
 
 Commands:
-  start      Start the agent and connect to all configured peripherals and channels
-  setup      Interactive setup wizard — creates ~/.oh-ben-claw/config.toml
-  doctor     Run system diagnostics (config, connectivity, channels, spine, subsystems/safing)
-  status     Show running agent status, connected nodes, and active sessions
-  peripheral List and manage connected peripheral nodes
-  service    Manage the oh-ben-claw system service (install / start / stop / uninstall)
-  help       Print help for a command
+  start            Start the agent (interactive CLI, gateway, and tunnel)
+  status           Check the agent and all connected peripheral nodes
+  peripheral       Manage peripheral hardware nodes
+  history          Manage conversation history
+  skill            Manage learned skills and their Track 0 staged rollout
+  mcp-serve        Run the MCP server standalone (stdio, or http for gateways
+                   and the official conformance suite)
+  judge-calibrate  Measure LLM-judge calibration against a gold label set (κ)
+  doctor           Run system diagnostics
+  help             Print this message or the help of a subcommand
 
 Options:
-  -c, --config <PATH>   Path to config file [default: ~/.oh-ben-claw/config.toml]
-  -v, --verbose         Enable verbose logging
-  -h, --help            Print help
-  -V, --version         Print version
+      --config <PATH>  Path to a config file, overriding the default location
+                       and the OBC_CONFIG env var
+  -h, --help           Print help
+  -V, --version        Print version
 ```
+
+Environment: `OBC_CONFIG` (config file), `OBC_DATA_DIR` (data root),
+`OBC_VAULT_PASSWORD`, `OBC_BROWSER_CDP_URL`. Provider keys are read directly —
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`.
+
+This block is generated from `--help` output rather than remembered. It
+previously advertised a `setup` wizard and a `service` manager, neither of which
+has ever existed, and omitted four commands that do.
 
 ---
 

@@ -53,12 +53,9 @@ impl RolloutTracker {
         }
     }
 
-    /// The default record path (`~/.oh-ben-claw/skill_rollout.json`).
+    /// `skill_rollout.json` in the data root — see [`crate::config::paths`].
     pub fn default_path() -> PathBuf {
-        directories::UserDirs::new()
-            .map(|d| d.home_dir().join(".oh-ben-claw"))
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("skill_rollout.json")
+        crate::config::paths::in_data_dir("skill_rollout.json")
     }
 
     fn persist(&self, state: &HashMap<String, RolloutRecord>) {
