@@ -23,7 +23,7 @@
 //! Observations for an entity are expected in non-decreasing `valid_from` order.
 
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
@@ -746,6 +746,31 @@ impl WorldMemory {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(facts)
+    }
+
+    /// Whether any fact for `entity` — open or closed — already carries
+    /// `value_json.<field> == value`.
+    ///
+    /// The idempotence check for an event stream. A poll that re-reads the same source
+    /// returns the same events, and re-recording them is not new evidence: it inflates
+    /// counters, resets the age of a belief that has not changed, and makes a reflex
+    /// keyed on freshness fire forever on data from weeks ago. The ClawCam poll did all
+    /// three — 50 distinct events written 380 times each.
+    ///
+    /// Searches history, not just the open fact, because supersession means yesterday's
+    /// event is closed by today's and would otherwise look unseen on the next poll.
+    pub fn has_value_field(&self, entity: &str, field: &str, value: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let found: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM world_facts
+                 WHERE entity = ?1 AND json_extract(value_json, '$.' || ?2) = ?3
+                 LIMIT 1",
+                params![entity, field, value],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(found.is_some())
     }
 
     /// Distinct sources with at least one currently-believed fact.

@@ -119,6 +119,21 @@ pub fn ingest_clawcam_detections(
     let mut entities = Vec::with_capacity(detections.len());
     for d in detections {
         let entity = subject_entity(d);
+        // Idempotent on `event_id`. A poll re-reads the source, so the same events come
+        // back every cycle, and recording them again is not a second sighting of the
+        // same animal — it is the same sighting, counted twice.
+        //
+        // Measured on the bench store before this check existed: 50 distinct events
+        // written 9,600 times over six hours of polling, `vision.count.white_tailed_deer`
+        // reading 5,376 from roughly 17 real deer, and the vision reflex escalating to
+        // the 30B model every hour on detections from 6 July because each re-write reset
+        // the belief's age. Three separate symptoms, one cause.
+        //
+        // A detection with no `event_id` cannot be deduplicated and is written through:
+        // dropping it would silently lose data from any source that does not supply one.
+        if !d.event_id.is_empty() && world.has_value_field(&entity, "event_id", &d.event_id)? {
+            continue;
+        }
         let valid_from = d
             .ran_at
             .as_deref()
@@ -404,7 +419,199 @@ pub fn record_subject_counts(
     Ok(out)
 }
 
+/// One-time correction for counters inflated by re-ingested events.
+///
+/// Recounts each `vision.count.<subject>` as the number of **distinct** `event_id`s ever
+/// recorded under the matching `vision.subject.<subject>`, and writes the true value.
+///
+/// This exists because the counter is an accumulator: it was incremented once per
+/// ingest, and before ingest was idempotent that meant once per poll per event. Nothing
+/// else can repair it — supersession only ever writes `prev + 1`, so the error compounds
+/// rather than washing out.
+///
+/// Corrects rather than deletes. The inflated values stay in `history()` as superseded
+/// rows, so "we used to think there had been 5,376 deer" remains answerable, which is the
+/// same rule every other withdrawal here follows.
+///
+/// Returns `(subject, old, new)` for every counter it changed. Idempotent: a second run
+/// finds the values already correct and writes nothing.
+pub fn recount_subjects(
+    world: &WorldMemory,
+    ingested_at_ms: u64,
+    source: &str,
+) -> anyhow::Result<Vec<(String, u64, u64)>> {
+    let mut fixed = Vec::new();
+    for entity in world.entities()? {
+        let Some(subject) = entity.strip_prefix("vision.subject.") else {
+            continue;
+        };
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut without_id = 0u64;
+        for f in world.history(&entity)? {
+            match f.value.get("event_id").and_then(|v| v.as_str()) {
+                Some(id) if !id.is_empty() => {
+                    seen.insert(id.to_string());
+                }
+                // No id means it could not be deduplicated on the way in either, so each
+                // write really was a separate report as far as anything here can tell.
+                _ => without_id += 1,
+            }
+        }
+        let truth = seen.len() as u64 + without_id;
+        let key = format!("vision.count.{subject}");
+        let old = world
+            .current(&key)?
+            .and_then(|f| f.value.get("value").and_then(|v| v.as_u64()))
+            .unwrap_or(0);
+        if old != truth {
+            world.observe(&key, json!({ "value": truth }), ingested_at_ms, ingested_at_ms, source)?;
+            fixed.push((subject.to_string(), old, truth));
+        }
+    }
+    Ok(fixed)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod recount_tests {
+    use super::*;
+    use crate::memory::world::WorldMemory;
+
+    #[test]
+    fn recount_replaces_an_inflated_counter_with_the_distinct_event_count() {
+        let w = WorldMemory::open_in_memory().unwrap();
+        // Three distinct events, written the way a non-idempotent poll would: repeatedly.
+        for round in 0..4u64 {
+            for ev in ["evt-1", "evt-2", "evt-3"] {
+                w.observe(
+                    "vision.subject.red_fox",
+                    json!({ "event_id": ev }),
+                    1_000 + round,
+                    1_000 + round,
+                    "clawcam",
+                )
+                .unwrap();
+            }
+        }
+        w.observe("vision.count.red_fox", json!({ "value": 12 }), 1_000, 1_000, "clawcam")
+            .unwrap();
+
+        let fixed = recount_subjects(&w, 9_000, "clawcam").unwrap();
+        assert_eq!(fixed, vec![("red_fox".to_string(), 12, 3)]);
+        assert_eq!(
+            w.current("vision.count.red_fox").unwrap().unwrap().value["value"],
+            json!(3)
+        );
+        // Corrected, not erased: what we used to think is still answerable.
+        assert_eq!(w.at("vision.count.red_fox", 5_000).unwrap().unwrap().value["value"], json!(12));
+
+        // Idempotent.
+        assert!(recount_subjects(&w, 10_000, "clawcam").unwrap().is_empty());
+    }
+
+    #[test]
+    fn detections_without_an_event_id_each_count_once() {
+        // They could not be deduplicated on the way in, so as far as anything here can
+        // tell each write was a separate report. Collapsing them would invent a merge.
+        let w = WorldMemory::open_in_memory().unwrap();
+        for i in 0..3 {
+            w.observe("vision.subject.coyote", json!({ "n": i }), 1_000 + i, 1_000 + i, "clawcam")
+                .unwrap();
+        }
+        let fixed = recount_subjects(&w, 9_000, "clawcam").unwrap();
+        assert_eq!(fixed, vec![("coyote".to_string(), 0, 3)]);
+    }
+}
+
+#[cfg(test)]
+mod dedup_tests {
+    use super::*;
+    use crate::memory::world::WorldMemory;
+
+    fn det(event_id: &str, species: &str, ran_at: &str) -> ClawCamDetection {
+        serde_json::from_value(json!({
+            "event_id": event_id,
+            "top_species": species,
+            "top_label": species,
+            "top_confidence": 0.9,
+            "review_state": "verified",
+            "ran_at": ran_at,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn re_polling_the_same_events_records_them_once() {
+        // The bench failure, in miniature: a poll re-reads its source, so the same
+        // events come back every cycle. Before this, six hours of polling turned 50
+        // events into 9,600 rows.
+        let w = WorldMemory::open_in_memory().unwrap();
+        let batch = vec![
+            det("evt-1", "white_tailed_deer", "2026-07-06T11:00:00Z"),
+            det("evt-2", "white_tailed_deer", "2026-07-06T11:30:00Z"),
+            det("evt-3", "red_fox", "2026-07-06T12:00:00Z"),
+        ];
+
+        let first = ingest_clawcam_detections(&w, &batch, 1_000, "clawcam").unwrap();
+        assert_eq!(first.len(), 3);
+        assert_eq!(w.count().unwrap(), 3);
+
+        for tick in 1..=5 {
+            let again = ingest_clawcam_detections(&w, &batch, 1_000 + tick * 60_000, "clawcam")
+                .unwrap();
+            assert!(again.is_empty(), "poll {tick} re-recorded a known event");
+        }
+        assert_eq!(w.count().unwrap(), 3, "five more polls wrote nothing");
+
+        // And the belief keeps its original age, which is what stops a freshness-keyed
+        // reflex escalating on July data forever.
+        let deer = w.current("vision.subject.white_tailed_deer").unwrap().unwrap();
+        assert_eq!(deer.ingested_at, 1_000);
+    }
+
+    #[test]
+    fn a_genuinely_new_event_still_lands() {
+        let w = WorldMemory::open_in_memory().unwrap();
+        let batch = vec![det("evt-1", "red_fox", "2026-07-06T12:00:00Z")];
+        ingest_clawcam_detections(&w, &batch, 1_000, "clawcam").unwrap();
+
+        let next = vec![
+            det("evt-1", "red_fox", "2026-07-06T12:00:00Z"), // seen
+            det("evt-9", "red_fox", "2026-07-07T09:00:00Z"), // new
+        ];
+        let wrote = ingest_clawcam_detections(&w, &next, 2_000, "clawcam").unwrap();
+        assert_eq!(wrote.len(), 1, "only the new one");
+        assert_eq!(
+            w.current("vision.subject.red_fox").unwrap().unwrap().value["event_id"],
+            json!("evt-9")
+        );
+    }
+
+    #[test]
+    fn a_detection_without_an_event_id_is_written_through() {
+        // Cannot be deduplicated, and dropping it would silently lose data from a source
+        // that does not supply ids. Duplicates are recoverable; missing detections are not.
+        let w = WorldMemory::open_in_memory().unwrap();
+        let batch = vec![det("", "coyote", "2026-07-06T12:00:00Z")];
+        ingest_clawcam_detections(&w, &batch, 1_000, "clawcam").unwrap();
+        ingest_clawcam_detections(&w, &batch, 2_000, "clawcam").unwrap();
+        assert_eq!(w.history("vision.subject.coyote").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn the_same_event_under_a_different_subject_is_not_suppressed() {
+        // Dedup is per entity, not global: one event that yields two subjects is two
+        // beliefs, and collapsing them would lose one.
+        let w = WorldMemory::open_in_memory().unwrap();
+        let batch = vec![
+            det("evt-1", "red_fox", "2026-07-06T12:00:00Z"),
+            det("evt-1", "coyote", "2026-07-06T12:00:00Z"),
+        ];
+        let wrote = ingest_clawcam_detections(&w, &batch, 1_000, "clawcam").unwrap();
+        assert_eq!(wrote.len(), 2);
+    }
+}
 
 #[cfg(test)]
 mod tests {
