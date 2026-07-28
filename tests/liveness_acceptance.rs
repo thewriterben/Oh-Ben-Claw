@@ -196,6 +196,60 @@ async fn a_real_tick_builds_the_chain_and_losing_the_radio_unwinds_it() {
     assert!(!w.history("mesh.escalated_count").unwrap().is_empty());
 }
 
+/// What a candidate retention policy would take, without taking it.
+///
+/// Retention is the one withdrawal whose blast radius is chosen by a human typing a
+/// string, so the first thing to do with a new rule is find out what it eats. This
+/// prints; it asserts only that the rule stays inside its namespace.
+#[test]
+fn a_candidate_retention_policy_reports_what_it_would_take() {
+    let Some((w, _)) = store("expiry-dryrun") else {
+        eprintln!("skipped: set OBC_ACCEPTANCE_WORLD_DB to a *copy* of a world.db");
+        return;
+    };
+    use oh_ben_claw::memory::expiry::{due, ExpiryPolicy};
+
+    let policies = vec![
+        ExpiryPolicy {
+            prefix: "incident.".into(),
+            max_age_ms: 7 * 24 * 60 * 60 * 1000,
+            origins: vec!["asserted".into()],
+        },
+        // `mesh.` is a shared namespace: the radio's evidence lives there too. Only the
+        // agent's assertions under it age out, which is what the origin filter is for.
+        ExpiryPolicy {
+            prefix: "mesh.".into(),
+            max_age_ms: 7 * 24 * 60 * 60 * 1000,
+            origins: vec!["asserted".into()],
+        },
+    ];
+
+    // A timestamp comfortably past any bench data, so age is not the variable under test.
+    let now = 2_000_000_000_000u64;
+    let would = due(&w, &policies, now).expect("dry run");
+    println!("  would expire {} facts:", would.len());
+    for f in &would {
+        println!(
+            "    #{:<6} {:<34} {:<9} {}",
+            f.id,
+            f.entity,
+            f.source,
+            f.value.to_string().chars().take(60).collect::<String>()
+        );
+    }
+
+    for f in &would {
+        assert!(
+            f.entity.starts_with("incident.") || f.entity.starts_with("mesh."),
+            "policy reached outside its namespace: {}",
+            f.entity
+        );
+        assert_eq!(f.source, "agent", "only the agent's own assertions");
+    }
+    // A dry run writes nothing.
+    assert!(due(&w, &policies, now).unwrap().len() == would.len());
+}
+
 #[test]
 fn the_phantom_rows_are_reported_even_though_this_cannot_close_them() {
     // The July 17 orphans: an agent note that discovery misread as a node, plus the

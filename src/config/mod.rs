@@ -1276,6 +1276,23 @@ pub struct PerceptionConfig {
     /// Vision-driven reflex + foresight rules keyed on ClawCam detections.
     #[serde(default)]
     pub vision_rules: VisionRulesConfig,
+    /// Retention policies for beliefs nothing else will retract — `[[perception.expiry]]`.
+    ///
+    /// Empty by default, and deliberately so. Supersession needs a newer value for the
+    /// same entity, source liveness needs the author to stop existing, and dependency
+    /// withdrawal needs a recorded in-list; an agent's own note at `incident.<subject>`
+    /// has none of the three and stays believed forever. A policy is the only way to say
+    /// that a *kind* of belief goes stale, and since it is the one withdrawal that comes
+    /// from a rule rather than from the world, it only ever does what it is told:
+    ///
+    /// ```toml
+    /// [[perception.expiry]]
+    /// prefix = "incident."     # required, never empty — an empty prefix is the store
+    /// max_age_ms = 604800000   # 7 days, measured from ingest, not caller-set valid_from
+    /// origins = ["asserted"]   # optional; omit for any origin under the prefix
+    /// ```
+    #[serde(default)]
+    pub expiry: Vec<crate::memory::expiry::ExpiryPolicy>,
 }
 
 /// Vision-driven reflex + foresight rules (`[perception.vision_rules]`). Detections
