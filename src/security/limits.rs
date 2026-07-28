@@ -17,7 +17,9 @@ use std::sync::Mutex;
 
 /// A single deterministic limit for a `(node, tool)` pair.
 ///
-/// Loadable from the `[[safety.limit]]` config section and mirrored to the node
+/// Loadable from the `[[safety.limits]]` config section (plural — it is the
+/// field name; the singular `[[safety.limit]]` is now a hard config error
+/// rather than a silently empty limit table) and mirrored to the node
 /// firmware over the spine (`obc/nodes/{id}/limits`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SafetyLimit {
@@ -57,7 +59,21 @@ impl SafetyLimit {
 ///
 /// When `enabled`, the agent attaches a [`SafetyGate`] built from `limits` plus
 /// an action auditor at `audit_log_path`.
+///
+/// # Unknown keys are rejected, deliberately
+///
+/// Every other config section tolerates stray keys, which is the friendly
+/// default. `[safety]` is the exception: a typo here does not degrade a
+/// feature, it silently removes an enforcement control while startup still
+/// logs the gate as active.
+///
+/// The motivating case was real — documentation across this repo wrote the
+/// limit table as `[[safety.limit]]` (singular) while the field is `limits`, so
+/// a config written from the docs parsed cleanly, logged
+/// `Track 0 safety gate active limits=0`, and enforced nothing. A safety
+/// section must fail loudly or not at all.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct SafetyConfig {
     /// Enable the deterministic safety gate + tamper-evident action audit.
     #[serde(default)]

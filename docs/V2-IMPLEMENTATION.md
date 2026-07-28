@@ -119,7 +119,7 @@ audit_log_path = "~/.oh-ben-claw/action_audit.jsonl"
 signing_key_path = "~/.oh-ben-claw/action_signing.key"   # ed25519; auto-generated
 default_physical_stage = "supervised"                    # simulate|supervised|autonomous
 
-[[safety.limit]]            # mirrored to firmware over obc/nodes/{id}/limits
+[[safety.limits]]            # mirrored to firmware over obc/nodes/{id}/limits
 node_id = "obc-esp32-s3-001"
 tool = "gpio_write"
 allow_pins = [17, 18, 27]   # everything else denied
@@ -449,7 +449,7 @@ privacy_keep_local = ["camera_capture", "audio_sample"]   # raw media never leav
 
 | Phase | New/changed host modules | Firmware work | New config |
 |---|---|---|---|
-| Track 0 | `tools/traits.rs` (RiskClass), `security/authz.rs`, `approval/` defaults | **`SafetyGate` enforced on-chip**, NVS limit table, `set/get_limits` | `[safety]`, `[[safety.limit]]` |
+| Track 0 | `tools/traits.rs` (RiskClass), `security/authz.rs`, `approval/` defaults | **`SafetyGate` enforced on-chip**, NVS limit table, `set/get_limits` | `[safety]`, `[[safety.limits]]` |
 | 16 | `memory/trajectory.rs`, `skill_forge/synthesis.rs` + `evolve.rs` | result `seq`/`ok` reporting | `[self_improvement]` |
 | 17 | `runtime/durable.rs`, orchestrator reuse | `call_id` idempotency dedup, structured `status` | `[autonomy.durable]` |
 | 18 | `agent/reflex.rs`, `memory/world.rs` | **on-device reflex engine**, `set/get/clear_reflex` | `[perception]`, `[[reflex.rule]]` |
