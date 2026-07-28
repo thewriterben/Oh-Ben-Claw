@@ -857,9 +857,27 @@ impl Tool for BrowserCloseTabTool {
             state.active_target_id.clone()
         };
 
+        // The session's idea of which tab is active is a cached belief, and the user
+        // can invalidate it at any moment by closing a tab by hand. When it is empty,
+        // ask the browser rather than reporting "no tabs" at a window full of them —
+        // this is what `list_targets` was written for and never wired to.
         let target_id = match target_id {
             Some(id) => id,
-            None => return Ok(ToolResult::err("No active tab to close")),
+            None => match self.session.list_targets().await {
+                Ok(targets) => match targets
+                    .iter()
+                    .filter(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
+                    .find_map(|t| t.get("id").and_then(|v| v.as_str()))
+                {
+                    Some(id) => id.to_string(),
+                    None => return Ok(ToolResult::err("No open tab to close")),
+                },
+                Err(e) => {
+                    return Ok(ToolResult::err(format!(
+                        "No active tab, and could not list tabs: {e}"
+                    )))
+                }
+            },
         };
 
         match self.session.close_target(&target_id).await {

@@ -29,7 +29,21 @@ pub struct CostField {
 
 impl CostField {
     fn idx(&self, cx: usize, cy: usize) -> usize {
+        // `height` was stored and never consulted, so an out-of-range `cx` silently
+        // read the next row's cost rather than failing — a wrong-but-plausible answer,
+        // which is the worst kind for a planner to get from its obstacle map.
+        debug_assert!(
+            cx < self.width && cy < self.height,
+            "CostField index ({cx}, {cy}) outside {}x{}",
+            self.width,
+            self.height
+        );
         cy * self.width + cx
+    }
+
+    /// Grid dimensions in cells.
+    pub fn dims(&self) -> (usize, usize) {
+        (self.width, self.height)
     }
     /// The inflation cost of a cell (`1.0` lethal).
     pub fn cost(&self, cx: usize, cy: usize) -> f64 {
@@ -94,10 +108,16 @@ pub fn inflate(
         if d_world <= inscribed_radius {
             cost[i] = 1.0; // lethal (includes occupied cells, dist 0)
         } else if d_world <= inflation_radius {
-            cost[i] = (-decay * (d_world - inscribed_radius)).exp().clamp(0.0, 0.999);
+            cost[i] = (-decay * (d_world - inscribed_radius))
+                .exp()
+                .clamp(0.0, 0.999);
         }
     }
-    CostField { width: w, height: h, cost }
+    CostField {
+        width: w,
+        height: h,
+        cost,
+    }
 }
 
 // ── Clearance-aware A* ──────────────────────────────────────────────────────────
@@ -138,7 +158,8 @@ pub fn plan_inflated(
 ) -> Option<Vec<(f64, f64)>> {
     let start_c = grid.world_to_cell(start.0, start.1)?;
     let goal_c = grid.world_to_cell(goal.0, goal.1)?;
-    let blocked = |c: (usize, usize)| matches!(grid.get(c.0, c.1), Cell::Occupied) || field.lethal(c.0, c.1);
+    let blocked =
+        |c: (usize, usize)| matches!(grid.get(c.0, c.1), Cell::Occupied) || field.lethal(c.0, c.1);
     if blocked(goal_c) {
         return None;
     }
@@ -147,7 +168,10 @@ pub fn plan_inflated(
     let mut g_score: HashMap<(usize, usize), f64> = HashMap::new();
     let mut came_from: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
     g_score.insert(start_c, 0.0);
-    open.push(Frontier { f: heuristic(start_c, goal_c), cell: start_c });
+    open.push(Frontier {
+        f: heuristic(start_c, goal_c),
+        cell: start_c,
+    });
 
     while let Some(Frontier { cell, .. }) = open.pop() {
         if cell == goal_c {
@@ -173,7 +197,10 @@ pub fn plan_inflated(
                 if tentative < *g_score.get(&nc).unwrap_or(&f64::INFINITY) {
                     came_from.insert(nc, cell);
                     g_score.insert(nc, tentative);
-                    open.push(Frontier { f: tentative + heuristic(nc, goal_c), cell: nc });
+                    open.push(Frontier {
+                        f: tentative + heuristic(nc, goal_c),
+                        cell: nc,
+                    });
                 }
             }
         }
@@ -193,7 +220,11 @@ fn reconstruct(
         cur = prev;
     }
     cells.reverse();
-    simplify(&cells).into_iter().skip(1).map(|(cx, cy)| grid.cell_center(cx, cy)).collect()
+    simplify(&cells)
+        .into_iter()
+        .skip(1)
+        .map(|(cx, cy)| grid.cell_center(cx, cy))
+        .collect()
 }
 
 fn simplify(cells: &[(usize, usize)]) -> Vec<(usize, usize)> {
@@ -201,7 +232,10 @@ fn simplify(cells: &[(usize, usize)]) -> Vec<(usize, usize)> {
         return cells.to_vec();
     }
     let dir = |a: (usize, usize), b: (usize, usize)| {
-        ((b.0 as i64 - a.0 as i64).signum(), (b.1 as i64 - a.1 as i64).signum())
+        (
+            (b.0 as i64 - a.0 as i64).signum(),
+            (b.1 as i64 - a.1 as i64).signum(),
+        )
     };
     let mut out = vec![cells[0]];
     for i in 1..cells.len() - 1 {
@@ -226,7 +260,10 @@ mod tests {
         let near = f.cost(5, 6); // 1 cell away
         let mid = f.cost(5, 8); // 3 cells away
         let far = f.cost(5, 9); // 4 cells away — outside inflation radius
-        assert!(near > mid && mid > 0.0, "cost decays with distance: {near} > {mid} > 0");
+        assert!(
+            near > mid && mid > 0.0,
+            "cost decays with distance: {near} > {mid} > 0"
+        );
         assert_eq!(far, 0.0, "beyond the inflation radius is clear");
     }
 
@@ -265,7 +302,10 @@ mod tests {
         // no waypoint sits on a lethal cell
         for &(x, y) in &path {
             let (cx, cy) = g.world_to_cell(x, y).unwrap();
-            assert!(!f.lethal(cx, cy), "waypoint ({x},{y}) is in the lethal halo");
+            assert!(
+                !f.lethal(cx, cy),
+                "waypoint ({x},{y}) is in the lethal halo"
+            );
         }
     }
 }

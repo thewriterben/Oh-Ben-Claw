@@ -39,7 +39,11 @@ pub struct Pose2 {
 
 impl Pose2 {
     pub fn new(x: f64, y: f64, theta: f64) -> Self {
-        Self { x, y, theta: norm_angle(theta) }
+        Self {
+            x,
+            y,
+            theta: norm_angle(theta),
+        }
     }
 }
 
@@ -57,7 +61,11 @@ impl RelPose {
     }
     /// The identity transform (used for "I am exactly back at that place").
     pub fn identity() -> Self {
-        Self { dx: 0.0, dy: 0.0, dtheta: 0.0 }
+        Self {
+            dx: 0.0,
+            dy: 0.0,
+            dtheta: 0.0,
+        }
     }
 }
 
@@ -110,7 +118,10 @@ impl PoseGraph {
 
     /// A graph seeded with an anchor pose (node 0).
     pub fn with_anchor(start: Pose2) -> Self {
-        Self { nodes: vec![start], edges: Vec::new() }
+        Self {
+            nodes: vec![start],
+            edges: Vec::new(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -140,12 +151,24 @@ impl PoseGraph {
 
     /// Add an odometry edge between consecutive (or any) nodes.
     pub fn add_odometry(&mut self, from: usize, to: usize, meas: RelPose, weight: f64) {
-        self.edges.push(Edge { from, to, meas, weight, loop_closure: false });
+        self.edges.push(Edge {
+            from,
+            to,
+            meas,
+            weight,
+            loop_closure: false,
+        });
     }
 
     /// Add a loop-closure constraint between two nodes.
     pub fn add_loop_closure(&mut self, from: usize, to: usize, meas: RelPose, weight: f64) {
-        self.edges.push(Edge { from, to, meas, weight, loop_closure: true });
+        self.edges.push(Edge {
+            from,
+            to,
+            meas,
+            weight,
+            loop_closure: true,
+        });
     }
 
     /// Extend the trajectory by a relative motion: append a node at
@@ -290,12 +313,21 @@ type Mat2 = [[f64; 2]; 2];
 
 fn mul2(a: &Mat2, b: &Mat2) -> Mat2 {
     [
-        [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1]],
-        [a[1][0] * b[0][0] + a[1][1] * b[1][0], a[1][0] * b[0][1] + a[1][1] * b[1][1]],
+        [
+            a[0][0] * b[0][0] + a[0][1] * b[1][0],
+            a[0][0] * b[0][1] + a[0][1] * b[1][1],
+        ],
+        [
+            a[1][0] * b[0][0] + a[1][1] * b[1][0],
+            a[1][0] * b[0][1] + a[1][1] * b[1][1],
+        ],
     ]
 }
 fn mv2(m: &Mat2, v: &[f64; 2]) -> [f64; 2] {
-    [m[0][0] * v[0] + m[0][1] * v[1], m[1][0] * v[0] + m[1][1] * v[1]]
+    [
+        m[0][0] * v[0] + m[0][1] * v[1],
+        m[1][0] * v[0] + m[1][1] * v[1],
+    ]
 }
 fn transpose3(m: &Mat3) -> Mat3 {
     let mut t = [[0.0; 3]; 3];
@@ -356,7 +388,11 @@ fn linearize_edge(xi: Pose2, xj: Pose2, z: RelPose) -> (Mat3, Mat3, Vec3) {
         [-m[1][0], -m[1][1], col[1]],
         [0.0, 0.0, -1.0],
     ];
-    let b: Mat3 = [[m[0][0], m[0][1], 0.0], [m[1][0], m[1][1], 0.0], [0.0, 0.0, 1.0]];
+    let b: Mat3 = [
+        [m[0][0], m[0][1], 0.0],
+        [m[1][0], m[1][1], 0.0],
+        [0.0, 0.0, 1.0],
+    ];
     (a, b, [e_xy[0], e_xy[1], e_th])
 }
 
@@ -415,7 +451,6 @@ pub struct SlamBackend {
     loop_radius: f64,
     min_gap: usize,
     opt_iters: usize,
-    alpha: f64,
     source: String,
 }
 
@@ -428,7 +463,6 @@ impl SlamBackend {
             loop_radius: 2.0,
             min_gap: 3,
             opt_iters: 200,
-            alpha: 0.1,
             source: "slam".to_string(),
         }
     }
@@ -473,8 +507,20 @@ impl SlamBackend {
             (closed, g.latest().unwrap(), g.len(), g.loop_closures())
         };
         if let Some(world) = &self.world {
-            world.observe("sensor.pos_x", json!({ "value": latest.x }), now_ms, now_ms, &self.source)?;
-            world.observe("sensor.pos_y", json!({ "value": latest.y }), now_ms, now_ms, &self.source)?;
+            world.observe(
+                "sensor.pos_x",
+                json!({ "value": latest.x }),
+                now_ms,
+                now_ms,
+                &self.source,
+            )?;
+            world.observe(
+                "sensor.pos_y",
+                json!({ "value": latest.y }),
+                now_ms,
+                now_ms,
+                &self.source,
+            )?;
             world.observe(
                 "sensor.heading",
                 json!({ "value": latest.theta.to_degrees() }),
@@ -522,13 +568,17 @@ mod tests {
     fn identity_compose_is_noop() {
         let a = Pose2::new(3.0, 4.0, 1.0);
         let b = compose(a, RelPose::identity());
-        assert!(approx(a.x, b.x, 1e-12) && approx(a.y, b.y, 1e-12) && approx(a.theta, b.theta, 1e-12));
+        assert!(
+            approx(a.x, b.x, 1e-12) && approx(a.y, b.y, 1e-12) && approx(a.theta, b.theta, 1e-12)
+        );
     }
 
     #[test]
     fn angle_normalization_wraps() {
         assert!(approx(norm_angle(3.0 * PI), PI, 1e-9) || approx(norm_angle(3.0 * PI), -PI, 1e-9));
-        assert!(approx(norm_angle(-3.0 * PI), PI, 1e-9) || approx(norm_angle(-3.0 * PI), -PI, 1e-9));
+        assert!(
+            approx(norm_angle(-3.0 * PI), PI, 1e-9) || approx(norm_angle(-3.0 * PI), -PI, 1e-9)
+        );
         assert!(approx(norm_angle(0.5), 0.5, 1e-12));
     }
 
@@ -551,7 +601,10 @@ mod tests {
         // Without closure the trajectory does not return to the origin.
         let before = g.node(last);
         let residual_before = before.x.hypot(before.y);
-        assert!(residual_before > 0.5, "expected drift, got {residual_before}");
+        assert!(
+            residual_before > 0.5,
+            "expected drift, got {residual_before}"
+        );
 
         // Loop closure: the robot recognizes it is back at the start (node 0),
         // i.e. node `last` coincides with node 0 (identity relative transform).
@@ -577,18 +630,27 @@ mod tests {
         let last = g.len() - 1;
         let before = g.node(last);
         let residual_before = before.x.hypot(before.y);
-        assert!(residual_before > 0.5, "expected drift, got {residual_before}");
+        assert!(
+            residual_before > 0.5,
+            "expected drift, got {residual_before}"
+        );
 
         g.add_loop_closure(last, 0, RelPose::identity(), 2.0);
         let err_before = g.total_error();
         g.optimize_gn(20);
         let err_after = g.total_error();
 
-        assert!(err_after < err_before, "GN must reduce error: {err_before} → {err_after}");
+        assert!(
+            err_after < err_before,
+            "GN must reduce error: {err_before} → {err_after}"
+        );
         let after = g.node(last);
         let residual_after = after.x.hypot(after.y);
         // Gauss-Newton closes the loop tightly (far better than relaxation).
-        assert!(residual_after < 0.2, "loop should close near-perfectly: {residual_before} → {residual_after}");
+        assert!(
+            residual_after < 0.2,
+            "loop should close near-perfectly: {residual_before} → {residual_after}"
+        );
         assert_eq!(g.node(0), Pose2::new(0.0, 0.0, 0.0), "anchor never moves");
     }
 
@@ -597,7 +659,7 @@ mod tests {
         let mut g = PoseGraph::with_anchor(Pose2::new(0.0, 0.0, 0.0));
         g.append_motion(RelPose::new(10.0, 0.0, 0.0), 1.0); // (10,0)
         g.append_motion(RelPose::new(10.0, 0.0, 0.0), 1.0); // (20,0)
-        // a long way out — no revisit near the start
+                                                            // a long way out — no revisit near the start
         assert!(g.find_revisit(2.0, 1).is_none());
         // come back near the origin
         g.append_motion(RelPose::new(-21.0, 0.0, 0.0), 1.0); // ≈(-1,0) near node 0
@@ -616,7 +678,10 @@ mod tests {
         slam.add_motion(RelPose::new(10.0, 0.0, turn), 2).unwrap();
         slam.add_motion(RelPose::new(10.0, 0.0, turn), 3).unwrap();
         let closed = slam.add_motion(RelPose::new(10.0, 0.0, turn), 4).unwrap();
-        assert!(closed, "returning near the origin should trigger a loop closure");
+        assert!(
+            closed,
+            "returning near the origin should trigger a loop closure"
+        );
 
         // after closure the corrected latest pose is back near the origin
         let p = slam.latest();
