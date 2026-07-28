@@ -172,6 +172,99 @@ pub struct Fact {
     /// about provenance at all. Origin says what kind of claim this is; `derived_from`
     /// says what it rests on. Only the latter can be walked.
     pub derived_from: Option<Vec<i64>>,
+    /// Why this fact stopped being believed, when it has.
+    ///
+    /// `None` on an open fact, and `None` on a closed one means the ordinary case: a
+    /// newer observation of the same entity superseded it. Anything else is a
+    /// *withdrawal* — see [`Closure`] — and the string says what withdrew it.
+    ///
+    /// The two look identical in the row (`valid_to` is set either way) and mean opposite
+    /// things. Superseded: we know something newer. Withdrawn: we no longer have grounds
+    /// for this, and nothing has replaced it.
+    pub closed_reason: Option<String>,
+}
+
+/// Why a fact's valid-time interval was closed.
+///
+/// The variants exist to be read, not just written: an operator looking at a store where
+/// half the mesh facts went quiet needs to know whether the mesh changed or whether its
+/// author went away, and those are the same row shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Closure {
+    /// Still believed.
+    Open,
+    /// A newer observation of the same entity replaced it. The ordinary path, and the
+    /// only one that existed before withdrawal was possible.
+    Superseded,
+    /// Withdrawn because its author stopped reporting. Names the source.
+    SourceStopped(String),
+    /// Withdrawn because something it was derived from is no longer believed — the
+    /// undercutting case. Names the source whose retirement started the walk.
+    Unsupported(String),
+}
+
+impl Closure {
+    /// The tag stored in `closed_reason`. `Open` and `Superseded` store nothing.
+    pub fn as_tag(&self) -> Option<String> {
+        match self {
+            Closure::Open | Closure::Superseded => None,
+            Closure::SourceStopped(s) => Some(format!("source-stopped:{s}")),
+            Closure::Unsupported(s) => Some(format!("unsupported:{s}")),
+        }
+    }
+
+    /// Read a fact's closure state.
+    ///
+    /// An unrecognised tag reads as `Superseded` rather than as a withdrawal: the
+    /// conservative direction is to under-report withdrawals, because a spurious
+    /// "we lost our grounds for this" is the kind of thing an operator acts on.
+    pub fn of(fact: &Fact) -> Self {
+        if fact.valid_to.is_none() {
+            return Closure::Open;
+        }
+        match fact.closed_reason.as_deref() {
+            Some(t) => match t.split_once(':') {
+                Some(("source-stopped", s)) => Closure::SourceStopped(s.to_string()),
+                Some(("unsupported", s)) => Closure::Unsupported(s.to_string()),
+                _ => Closure::Superseded,
+            },
+            None => Closure::Superseded,
+        }
+    }
+
+    /// Whether this closure was a withdrawal rather than a supersession.
+    pub fn is_withdrawal(&self) -> bool {
+        matches!(self, Closure::SourceStopped(_) | Closure::Unsupported(_))
+    }
+}
+
+/// Whether a belief's justification still stands, asked at read time.
+///
+/// See [`WorldMemory::support_status`] for why supersession is evaluated lazily rather
+/// than swept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Support {
+    /// No in-list was recorded. Says nothing either way — most of the store is here, and
+    /// treating it as ungrounded would condemn everything written before support was.
+    Unknown,
+    /// An explicitly empty in-list: a premise. Nothing upstream can undercut it.
+    SelfStanding,
+    /// Every fact in the in-list is still believed.
+    Grounded,
+    /// At least one supporting fact is no longer believed — superseded, withdrawn, or
+    /// gone. Names them, because "this is stale" is much less useful than "this is stale
+    /// because #4592 moved".
+    Ungrounded { missing: Vec<i64> },
+}
+
+impl Support {
+    /// Whether the justification has definitely failed.
+    ///
+    /// `Unknown` is *not* a failure: absence of a recorded in-list is absence of
+    /// evidence, and the fail-closed direction here is to leave it alone.
+    pub fn has_failed(&self) -> bool {
+        matches!(self, Support::Ungrounded { .. })
+    }
 }
 
 /// SQLite-backed temporal store of world [`Fact`]s.
@@ -262,6 +355,21 @@ impl WorldMemory {
             .exists([])?;
         if !has_derived_from {
             conn.execute_batch("ALTER TABLE world_facts ADD COLUMN derived_from TEXT;")?;
+        }
+
+        // ── closed_reason column (added 2026-07-28) ────────────────────────────
+        // Why an interval was closed, not just when. NULL is the ordinary case and the
+        // only one that existed until now: superseded by a newer observation of the same
+        // entity. A withdrawal is a different event wearing the same clothes — the row
+        // looks identical, `valid_to` is set either way — and telling them apart is the
+        // difference between "we know something newer" and "we no longer have grounds
+        // for this". Not backfilled, for the same reason as `derived_from`: every
+        // pre-existing closure genuinely was a supersession.
+        let has_closed_reason = conn
+            .prepare("SELECT 1 FROM pragma_table_info('world_facts') WHERE name = 'closed_reason'")?
+            .exists([])?;
+        if !has_closed_reason {
+            conn.execute_batch("ALTER TABLE world_facts ADD COLUMN closed_reason TEXT;")?;
         }
         Ok(())
     }
@@ -390,6 +498,7 @@ impl WorldMemory {
             source: source.to_string(),
             origin,
             derived_from,
+            closed_reason: None,
         })
     }
 
@@ -404,6 +513,7 @@ impl WorldMemory {
         source: String,
         origin: String,
         derived_from: Option<String>,
+        closed_reason: Option<String>,
     ) -> Fact {
         Fact {
             id,
@@ -417,6 +527,7 @@ impl WorldMemory {
             // Unparseable support reads as unknown, never as empty. `Some([])` is the
             // assertion "nothing can undercut this"; a corrupted row must not make it.
             derived_from: derived_from.and_then(|s| serde_json::from_str::<Vec<i64>>(&s).ok()),
+            closed_reason,
         }
     }
 
@@ -434,6 +545,7 @@ impl WorldMemory {
                 row.get(6)?,
                 row.get(7)?,
                 row.get(8)?,
+                row.get(9)?,
             ))
         })?;
         match rows.next() {
@@ -442,8 +554,8 @@ impl WorldMemory {
         }
     }
 
-    const COLS: &'static str =
-        "id, entity, value_json, valid_from, valid_to, ingested_at, source, origin, derived_from";
+    const COLS: &'static str = "id, entity, value_json, valid_from, valid_to, ingested_at, \
+                                source, origin, derived_from, closed_reason";
 
     /// The currently-believed fact for `entity` (the open one), if any.
     pub fn current(&self, entity: &str) -> Result<Option<Fact>> {
@@ -486,6 +598,7 @@ impl WorldMemory {
                     row.get(6)?,
                     row.get(7)?,
                     row.get(8)?,
+                    row.get(9)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -527,6 +640,7 @@ impl WorldMemory {
                     row.get(6)?,
                     row.get(7)?,
                     row.get(8)?,
+                    row.get(9)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -559,6 +673,7 @@ impl WorldMemory {
                     row.get(6)?,
                     row.get(7)?,
                     row.get(8)?,
+                    row.get(9)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -599,13 +714,141 @@ impl WorldMemory {
     ///
     /// Returns `false` if the fact does not exist or was already closed, so a caller can
     /// tell "I retracted this" from "someone else already had".
-    pub fn close_fact(&self, id: i64, at_ms: u64) -> Result<bool> {
+    ///
+    /// `why` records *which kind* of closure this was. [`Closure::Superseded`] stores
+    /// nothing, because that is what an unmarked closed row already means; a withdrawal
+    /// stores a tag, so the two can be told apart afterwards. They look identical
+    /// otherwise, and mean opposite things.
+    pub fn close_fact(&self, id: i64, at_ms: u64, why: &Closure) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
         let n = conn.execute(
-            "UPDATE world_facts SET valid_to = ?1 WHERE id = ?2 AND valid_to IS NULL",
-            params![at_ms as i64, id],
+            "UPDATE world_facts SET valid_to = ?1, closed_reason = ?2
+             WHERE id = ?3 AND valid_to IS NULL",
+            params![at_ms as i64, why.as_tag(), id],
         )?;
         Ok(n > 0)
+    }
+
+    /// Whether a fact's justification still stands — evaluated now, not when it was
+    /// written.
+    ///
+    /// # Why this is a query and not a sweep
+    ///
+    /// A justification fails for two different reasons, and only one of them is an event
+    /// worth reacting to. Its author can stop reporting — that is rare, discrete, and
+    /// [`liveness::stopped`](crate::memory::liveness::stopped) handles it eagerly. Or a
+    /// supporting fact can simply be *superseded* by a newer value, which happens on
+    /// every sensor tick.
+    ///
+    /// Propagating eagerly through supersession would be the pure JTMS reading, and it
+    /// would be unworkable: every reading a fused pose was computed from is replaced
+    /// seconds later, so the pose would be retracted and immediately recomputed, forever.
+    /// The store would fill with churn that says nothing.
+    ///
+    /// So supersession is evaluated lazily. The dependent stays open and a consumer that
+    /// cares asks whether it is still grounded. This is the STALE Type II case — a
+    /// belief invalidated not by contradiction but by something *underneath* it having
+    /// moved — and the honest position is that OBC can now answer the question rather
+    /// than that it eagerly acts on it.
+    pub fn support_status(&self, fact: &Fact) -> Result<Support> {
+        let Some(ids) = &fact.derived_from else {
+            return Ok(Support::Unknown);
+        };
+        if ids.is_empty() {
+            return Ok(Support::SelfStanding);
+        }
+        let mut missing = Vec::new();
+        for id in ids {
+            match self.fact_by_id(*id)? {
+                // Closed: superseded, or withdrawn. Either way it is not believed now,
+                // and a conjunctive in-list needs every member.
+                Some(f) if f.valid_to.is_some() => missing.push(*id),
+                // Gone entirely. Nothing deletes facts today, so this means a store that
+                // has been edited by hand — treat it as missing rather than as fine.
+                None => missing.push(*id),
+                Some(_) => {}
+            }
+        }
+        if missing.is_empty() {
+            Ok(Support::Grounded)
+        } else {
+            Ok(Support::Ungrounded { missing })
+        }
+    }
+
+    /// Open facts whose justification no longer stands.
+    ///
+    /// The lazy counterpart to [`WorldMemory::withdrawn_since`]: these are beliefs still
+    /// being served by `current` whose grounds have moved underneath them. Nothing
+    /// retracts them automatically — see [`WorldMemory::support_status`] — so this is
+    /// the query that makes them visible rather than silently stale.
+    pub fn ungrounded(&self) -> Result<Vec<(Fact, Vec<i64>)>> {
+        let sql = format!(
+            "SELECT {} FROM world_facts WHERE valid_to IS NULL AND derived_from IS NOT NULL
+             ORDER BY id ASC",
+            Self::COLS
+        );
+        let open: Vec<Fact> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(&sql)?;
+            let v = stmt
+                .query_map([], |row| {
+                    Ok(Self::row_to_fact(
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            v
+        };
+        let mut out = Vec::new();
+        for f in open {
+            if let Support::Ungrounded { missing } = self.support_status(&f)? {
+                out.push((f, missing));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Facts withdrawn (not superseded) at or after `since_ms`, newest first.
+    ///
+    /// The operator's question after a source disappears: what did we stop believing,
+    /// and why. Superseded rows are excluded — an entity changing value is ordinary and
+    /// would bury the signal.
+    pub fn withdrawn_since(&self, since_ms: u64) -> Result<Vec<Fact>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT {} FROM world_facts
+             WHERE closed_reason IS NOT NULL AND valid_to >= ?1
+             ORDER BY valid_to DESC, id DESC",
+            Self::COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let facts = stmt
+            .query_map(params![since_ms as i64], |row| {
+                Ok(Self::row_to_fact(
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(facts)
     }
 
     /// How many facts record their support at all.
@@ -730,6 +973,32 @@ mod tests {
 
         let (with, total) = w.support_coverage().unwrap();
         assert_eq!((with, total), (0, 2), "coverage names the blind spot");
+    }
+
+    #[test]
+    fn an_unrecognised_closed_reason_reads_as_superseded() {
+        // Fail-quiet in the direction that does not raise a false alarm. A spurious
+        // "we lost our grounds for this" is the kind of thing an operator acts on, so a
+        // tag we cannot parse degrades to the ordinary case rather than inventing a
+        // withdrawal.
+        let w = WorldMemory::open_in_memory().unwrap();
+        w.observe("x", json!(1), 1_000, 1_000, "s").unwrap();
+        w.observe("x", json!(2), 2_000, 2_000, "s").unwrap();
+        {
+            let conn = w.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE world_facts SET closed_reason = 'who knows' WHERE valid_to IS NOT NULL",
+                [],
+            )
+            .unwrap();
+        }
+        let hist = w.history("x").unwrap();
+        assert_eq!(Closure::of(&hist[0]), Closure::Superseded);
+        assert!(!Closure::of(&hist[0]).is_withdrawal());
+        assert_eq!(Closure::of(&hist[1]), Closure::Open, "the live one");
+        // An unparseable tag still counts as *marked*, so it stays visible to the
+        // operator query rather than vanishing quietly.
+        assert_eq!(w.withdrawn_since(0).unwrap().len(), 1);
     }
 
     #[test]
