@@ -2217,10 +2217,17 @@ pub struct Config {
 impl Config {
     /// Load the configuration.
     ///
-    /// Precedence: the `OBC_CONFIG` env var (set by the CLI's `--config` flag,
-    /// or directly) → the default location per [`Self::default_config_path`]
-    /// (ProjectDirs — e.g. `%APPDATA%\thewriterben\oh-ben-claw\config\config.toml`
-    /// on Windows, `~/.config/oh-ben-claw/config.toml` on Linux).
+    /// Precedence, first hit wins:
+    ///   1. the `OBC_CONFIG` env var (set by the CLI's `--config` flag, or directly)
+    ///   2. [`Self::default_config_path`] (ProjectDirs — e.g.
+    ///      `%APPDATA%\thewriterben\oh-ben-claw\config\config.toml` on Windows,
+    ///      `~/.config/oh-ben-claw/config.toml` on Linux)
+    ///   3. `~/.oh-ben-claw/config.toml` — the documented location, next to the
+    ///      agent's own data directory
+    ///
+    /// If none exist, built-in defaults are used and a warning names the
+    /// provider they select, because those defaults are a cloud provider and
+    /// silently reaching for one is worse than failing loudly.
     /// An explicitly named file that is missing or malformed is a hard error —
     /// never silently swapped for defaults. If only the default path is in play
     /// and absent, a default configuration is returned.
@@ -2237,14 +2244,46 @@ impl Config {
             return Ok(config);
         }
         let config_path = Self::default_config_path()?;
-        if !config_path.exists() {
-            tracing::info!("No config file found at {:?}, using defaults", config_path);
-            return Ok(Self::default());
+        if config_path.exists() {
+            let content = std::fs::read_to_string(&config_path)?;
+            let config: Self = toml::from_str(&content)?;
+            tracing::info!("Loaded config from {:?}", config_path);
+            return Ok(config);
         }
-        let content = std::fs::read_to_string(&config_path)?;
-        let config: Self = toml::from_str(&content)?;
-        tracing::info!("Loaded config from {:?}", config_path);
-        Ok(config)
+
+        // `~/.oh-ben-claw/config.toml` is where the documentation, the setup
+        // scripts and this module's own doc comments have always said the
+        // config lives -- and it sits next to the data the agent already keeps
+        // there. Before this it was not on the search path at all, so a config
+        // in the documented location was silently ignored and the agent fell
+        // back to built-in defaults, which name a *cloud* provider. Quietly
+        // trying to spend money because a config was in the obvious place is a
+        // bad failure mode, so look there too.
+        if let Some(home) = Self::home_config_path() {
+            if home.exists() {
+                let content = std::fs::read_to_string(&home)?;
+                let config: Self = toml::from_str(&content)
+                    .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", home.display()))?;
+                tracing::info!("Loaded config from {:?} (home)", home);
+                return Ok(config);
+            }
+        }
+
+        tracing::warn!(
+            "No config file found at {:?} (or ~/.oh-ben-claw/config.toml) - using \
+             built-in defaults, which use the `{}` provider. Set OBC_CONFIG or \
+             pass --config to load a specific file.",
+            config_path,
+            Self::default().provider.name,
+        );
+        Ok(Self::default())
+    }
+
+    /// `~/.oh-ben-claw/config.toml` - the documented location, kept on the
+    /// search path alongside the platform config dir.
+    pub fn home_config_path() -> Option<PathBuf> {
+        directories::UserDirs::new()
+            .map(|d| d.home_dir().join(".oh-ben-claw").join("config.toml"))
     }
 
     /// Save the configuration to the default location.
