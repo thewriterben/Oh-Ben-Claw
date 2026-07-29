@@ -2497,19 +2497,47 @@ impl Config {
         if self.spine.port == 0 {
             anyhow::bail!("spine.port must be > 0");
         }
-        if self.spine.tls && self.spine.port == 1883 {
-            warnings.push(
-                "spine.tls is enabled but port is 1883 (unencrypted MQTT default); \
-                 consider using port 8883 for MQTT over TLS"
-                    .to_string(),
+        // `spine.tls` is a hard error, not a warning, and that needs saying out loud:
+        // **MQTT-over-TLS has never been implemented.** `src/spine/mod.rs` builds
+        // `MqttOptions` and never calls `set_transport`, so the key parsed, produced
+        // advice about which port to use, and left the broker link in cleartext.
+        //
+        // A config key that silently fails to encrypt is the worst kind of dead key.
+        // Every other one found in this codebase merely did nothing; this one told the
+        // operator their traffic was protected. So it refuses to start rather than
+        // warning — someone who set it made a security decision and is entitled to
+        // find out that it did not take effect.
+        //
+        // The rustls stack was also dropped from the rumqttc dependency (see
+        // Cargo.toml) because it carried four RUSTSEC advisories for a code path
+        // nothing could reach. Implementing TLS means reinstating that feature on a
+        // version whose certificate handling is not vulnerable, and wiring
+        // `set_transport` — not just deleting this check.
+        if self.spine.tls {
+            anyhow::bail!(
+                "spine.tls = true, but MQTT-over-TLS is not implemented — the \
+                 connection would be cleartext. Set spine.tls = false and use a \
+                 broker on a trusted network, or tunnel the link. This is a hard \
+                 error rather than a warning because the alternative is believing \
+                 you are encrypted when you are not."
             );
         }
-        if self.spine.ca_cert_path.is_some() && !self.spine.tls {
-            warnings.push(
-                "spine.ca_cert_path is set but spine.tls is false; \
-                 the CA certificate will not be used"
-                    .to_string(),
-            );
+        for (key, set) in [
+            ("spine.ca_cert_path", self.spine.ca_cert_path.is_some()),
+            (
+                "spine.client_cert_path",
+                self.spine.client_cert_path.is_some(),
+            ),
+            (
+                "spine.client_key_path",
+                self.spine.client_key_path.is_some(),
+            ),
+        ] {
+            if set {
+                warnings.push(format!(
+                    "{key} is set but MQTT-over-TLS is not implemented; it has no effect"
+                ));
+            }
         }
 
         // Validate gateway
@@ -2814,11 +2842,17 @@ mod tests {
     }
 
     #[test]
-    fn validate_warns_tls_on_default_port() {
+    fn validate_refuses_spine_tls_because_it_is_not_implemented() {
+        // This test used to assert a *warning* recommending port 8883, which is how
+        // the missing feature stayed hidden: the advice implied there was a TLS path
+        // to configure. `src/spine/mod.rs` never calls `set_transport`, so the link
+        // was cleartext either way. Refusing to start is the only honest answer to a
+        // security key that cannot be honoured.
         let mut config = Config::default();
         config.spine.tls = true;
-        let warnings = config.validate().unwrap();
-        assert!(warnings.iter().any(|w| w.contains("8883")));
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("not implemented"), "{err}");
+        assert!(err.contains("cleartext"), "{err}");
     }
 
     #[test]
@@ -2875,13 +2909,22 @@ mod tests {
     }
 
     #[test]
-    fn validate_warns_ca_cert_without_tls() {
+    fn validate_warns_that_the_spine_cert_paths_have_no_effect() {
+        // Previously the warning said the CA cert "will not be used *because tls is
+        // false*" — true, and misleading, since it would not be used with tls true
+        // either.
         let mut config = Config::default();
         config.spine.ca_cert_path = Some("/etc/mqtt/ca.crt".to_string());
+        config.spine.client_key_path = Some("/etc/mqtt/client.key".to_string());
         let warnings = config.validate().unwrap();
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("ca_cert_path") && w.contains("tls is false")));
+        for key in ["ca_cert_path", "client_key_path"] {
+            assert!(
+                warnings
+                    .iter()
+                    .any(|w| w.contains(key) && w.contains("not implemented")),
+                "no warning for {key}: {warnings:?}"
+            );
+        }
     }
 
     // ── Phase 11 tests ─────────────────────────────────────────────────────────
@@ -3230,14 +3273,19 @@ mod tests {
 
     #[test]
     fn validate_warns_nonexistent_cert_path() {
+        // No longer sets spine.tls: that is now a hard error, and this test is about
+        // the file-existence check, which still runs and is still worth having for
+        // whenever TLS is implemented.
         let mut config = Config::default();
-        config.spine.tls = true;
         config.spine.port = 8883;
         config.spine.ca_cert_path = Some("/nonexistent/path/to/ca.crt".to_string());
         let warnings = config.validate().unwrap();
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("ca_cert_path") && w.contains("does not exist")));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("ca_cert_path") && w.contains("does not exist")),
+            "{warnings:?}"
+        );
     }
 
     #[test]

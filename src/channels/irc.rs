@@ -233,14 +233,12 @@ impl IrcChannel {
                         sasl_done = true;
                     }
                 }
-                "AUTHENTICATE" => {
-                    if params.first().copied() == Some("+") {
-                        // Build PLAIN payload: \0user\0pass
-                        use base64::Engine as _;
-                        let payload = format!("\0{}\0{}", sasl_user, sasl_pass);
-                        let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
-                        sink.send_raw(format!("AUTHENTICATE {}", encoded)).await?;
-                    }
+                "AUTHENTICATE" if params.first().copied() == Some("+") => {
+                    // Build PLAIN payload: \0user\0pass
+                    use base64::Engine as _;
+                    let payload = format!("\0{}\0{}", sasl_user, sasl_pass);
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
+                    sink.send_raw(format!("AUTHENTICATE {}", encoded)).await?;
                 }
                 "903" => {
                     // SASL authentication successful
@@ -254,13 +252,11 @@ impl IrcChannel {
                 }
 
                 // ── Welcome / registration complete ───────────────────────────
-                "001" if sasl_done => {
-                    if !registered {
-                        registered = true;
-                        tracing::info!(nick, "IRC: registered successfully");
-                        for ch in &channels_to_join {
-                            sink.send_raw(format!("JOIN {}", ch)).await?;
-                        }
+                "001" if sasl_done && !registered => {
+                    registered = true;
+                    tracing::info!(nick, "IRC: registered successfully");
+                    for ch in &channels_to_join {
+                        sink.send_raw(format!("JOIN {}", ch)).await?;
                     }
                 }
 

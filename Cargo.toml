@@ -89,7 +89,13 @@ rusqlite = { version = "0.38", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 
 # MQTT spine — the core communication backbone for multi-device coordination
-rumqttc = { version = "0.24", default-features = false, features = ["use-rustls"] }
+# No TLS feature. `use-rustls` pulled rustls-webpki 0.102.8, which carries four
+# RUSTSEC advisories in certificate and CRL handling and has no upgrade path -
+# rumqttc 0.25.1 still pins the same version. It was compiled in and never
+# reached: MQTT-over-TLS has never been wired (see SpineConfig::tls), so this was
+# a vulnerable certificate-validation stack shipped for a feature that does not
+# exist. Removing the feature removes the advisories rather than suppressing them.
+rumqttc = { version = "0.24", default-features = false }
 
 # Hardware discovery
 nusb = { version = "0.2", default-features = false, optional = true }
