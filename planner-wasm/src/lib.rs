@@ -23,13 +23,13 @@
 //! acceptance tests for this package on both sides of the wire.
 
 // ── Source shim: the pure planner closure, compiled verbatim via #[path] ──────
-// Inside an inline module block, #[path] resolves relative to the enclosing
-// file's directory *plus* the inline module components — hence the extra `..`.
+// `peripherals` and `deployment` are real directories with real `mod.rs` files,
+// not inline `mod { … }` blocks. That is not a style choice: inside an inline
+// module, #[path] resolves against a directory named after the module, which did
+// not exist — and Linux, unlike Windows, will not resolve `..` through a directory
+// that is not there. See planner-wasm/src/peripherals/mod.rs.
 
-pub mod peripherals {
-    #[path = "../../../src/peripherals/registry.rs"]
-    pub mod registry;
-}
+pub mod peripherals;
 
 #[path = "../../src/geo/mod.rs"]
 pub mod geo;
@@ -37,18 +37,7 @@ pub mod geo;
 #[path = "../../src/siteplan/mod.rs"]
 pub mod siteplan;
 
-pub mod deployment {
-    #[path = "../../../src/deployment/advisor.rs"]
-    pub mod advisor;
-    #[path = "../../../src/deployment/firmware_scaffold.rs"]
-    pub mod firmware_scaffold;
-    #[path = "../../../src/deployment/inventory.rs"]
-    pub mod inventory;
-    #[path = "../../../src/deployment/planner.rs"]
-    pub mod planner;
-    #[path = "../../../src/deployment/scheme.rs"]
-    pub mod scheme;
-}
+pub mod deployment;
 
 // ── Core API (target-independent; String errors) ──────────────────────────────
 

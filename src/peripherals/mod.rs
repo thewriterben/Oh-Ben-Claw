@@ -247,8 +247,19 @@ mod tests {
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let tools = rt.block_on(create_peripheral_tools(&config, None)).unwrap();
-        // On Linux, bus tools are always registered even when peripherals are disabled
-        // because they are host-level tools, not board-level. On non-Linux, empty.
+
+        // Bus tools are host-level, not board-level, so on Linux they are registered
+        // even with peripherals disabled; elsewhere there are none to register.
+        //
+        // This used to assert nothing at all on Linux, which made `tools` an unused
+        // binding there — a warning that only appears on the platform CI runs on, in
+        // a test that looked like it was checking something. Both halves are asserted
+        // now, so the test says what it means on either platform.
+        #[cfg(target_os = "linux")]
+        assert!(
+            tools.iter().all(|t| !t.name().is_empty()),
+            "disabled peripherals should still yield well-formed host bus tools"
+        );
         #[cfg(not(target_os = "linux"))]
         assert!(tools.is_empty());
     }
