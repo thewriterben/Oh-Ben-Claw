@@ -1102,6 +1102,24 @@ impl Agent {
         reg.iter().map(|t| t.name().to_string()).collect()
     }
 
+    /// Name, description and parameter schema for every registered tool.
+    ///
+    /// Enough to announce this agent's capabilities to a peer without the caller
+    /// reaching into the registry. `tool_names` alone produced announcements a peer
+    /// could see but not call, because it had no schema to build arguments from.
+    pub fn tool_specs(&self) -> Vec<(String, String, serde_json::Value)> {
+        let reg = self.tools.read().unwrap_or_else(|p| p.into_inner());
+        reg.iter()
+            .map(|t| {
+                (
+                    t.name().to_string(),
+                    t.description().to_string(),
+                    t.parameters_schema(),
+                )
+            })
+            .collect()
+    }
+
     /// Return the number of registered tools.
     pub fn tool_count(&self) -> usize {
         self.tools.read().unwrap_or_else(|p| p.into_inner()).len()

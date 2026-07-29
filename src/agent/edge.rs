@@ -23,9 +23,16 @@
 //! ```
 //!
 //! There is no `--edge` CLI flag: `EdgeAgent` is a library type, assembled by
-//! whoever is embedding the agent on the device. `[edge].enabled` and
-//! `[edge].p2p_enabled` are read by `Config::validate` and by that caller — this
-//! type honours the two limits and nothing auto-starts the P2P spine.
+//! whoever is embedding the agent on the device. `[edge].enabled` is that caller's
+//! decision — it is what makes them build an `EdgeAgent` at all.
+//!
+//! Everything else in the section is honoured here. `max_history_messages` and
+//! `max_tool_iterations` bound the agent at construction, and `p2p_enabled` starts
+//! the mesh: [`EdgeAgentBuilder::build_and_start`] joins the local P2P spine and
+//! registers whatever peer tools it finds, or does nothing at all when the key is
+//! false. Before this the key parsed, validated, and was written into every
+//! generated NanoPi config by the deployment planner — and a caller who did not
+//! separately call `start_p2p` got an isolated node that had asked to be meshed.
 
 /// Milliseconds to wait after starting the P2P spine before collecting peer
 /// tools, to allow initial discovery broadcasts to arrive.
@@ -58,6 +65,13 @@ pub struct EdgeAgent {
     inner: Agent,
     provider_config: ProviderConfig,
     node_id: String,
+    /// Retained for `p2p_enabled` — the one key in the section that describes what
+    /// this agent should *do* rather than how large it may grow. The limits are
+    /// applied at construction and the rest of the struct never needs them again.
+    config: EdgeConfig,
+    /// Board identifier used when announcing to peers. Cosmetic to this crate,
+    /// load-bearing to whoever is reading a mesh roster.
+    board: String,
     p2p_spine: Option<Arc<P2pSpine>>,
 }
 
@@ -88,6 +102,8 @@ impl EdgeAgent {
             inner: agent,
             provider_config,
             node_id: node_id.into(),
+            config: edge_config,
+            board: "edge".to_string(),
             p2p_spine: None,
         })
     }
@@ -126,6 +142,65 @@ impl EdgeAgent {
         Ok(())
     }
 
+    /// Set the board identifier announced to peers. Defaults to `"edge"`.
+    pub fn with_board(mut self, board: impl Into<String>) -> Self {
+        self.board = board.into();
+        self
+    }
+
+    /// Whether `[edge].p2p_enabled` asked for the mesh.
+    pub fn p2p_enabled(&self) -> bool {
+        self.config.p2p_enabled
+    }
+
+    /// Join the P2P spine **if the config asked for it**, and report whether it did.
+    ///
+    /// The peer-facing announcement is derived rather than passed in: the node id the
+    /// agent already has, the board it was told, this crate's version, and the tools
+    /// actually registered at this moment. A caller that had to assemble that itself
+    /// would be describing the agent from the outside and could describe it wrongly —
+    /// which is how a peer ends up seeing a tool that is not there.
+    ///
+    /// `Ok(false)` means the config said no. An error means it said yes and the mesh
+    /// could not be joined, which is a real failure and is not swallowed: a node that
+    /// silently runs isolated after asking to be meshed is the failure mode this
+    /// method exists to remove.
+    pub async fn start_p2p_if_enabled(&mut self) -> Result<bool> {
+        if !self.config.p2p_enabled {
+            tracing::debug!(
+                node_id = %self.node_id,
+                "Edge agent: [edge].p2p_enabled is false, staying off the mesh"
+            );
+            return Ok(false);
+        }
+
+        let p2p_config = P2pConfig {
+            node_id: self.node_id.clone(),
+            ..P2pConfig::default()
+        };
+        let announcement = NodeAnnouncement {
+            node_id: self.node_id.clone(),
+            board: self.board.clone(),
+            firmware_version: env!("CARGO_PKG_VERSION").to_string(),
+            tools: self
+                .inner
+                .tool_specs()
+                .into_iter()
+                .map(
+                    |(name, description, parameters)| crate::spine::NodeToolSpec {
+                        name,
+                        description,
+                        parameters,
+                    },
+                )
+                .collect(),
+            metadata: serde_json::json!({ "kind": "edge-agent" }),
+        };
+
+        self.start_p2p(p2p_config, announcement).await?;
+        Ok(true)
+    }
+
     /// Process a user message and return the assistant's final response.
     ///
     /// Uses the edge session ID (`edge-<node_id>`) so edge conversations are
@@ -159,6 +234,7 @@ impl EdgeAgent {
 pub struct EdgeAgentBuilder {
     agent_config: AgentConfig,
     edge_config: EdgeConfig,
+    board: String,
     node_id: String,
     provider_config: ProviderConfig,
     memory: Option<Arc<MemoryStore>>,
@@ -187,6 +263,7 @@ impl EdgeAgentBuilder {
         Self {
             agent_config,
             edge_config,
+            board: "edge".to_string(),
             node_id,
             provider_config: ProviderConfig::default(),
             memory: None,
@@ -236,6 +313,12 @@ impl EdgeAgentBuilder {
         self
     }
 
+    /// Board identifier announced to peers on the mesh. Defaults to `"edge"`.
+    pub fn board(mut self, board: impl Into<String>) -> Self {
+        self.board = board.into();
+        self
+    }
+
     /// Build the `EdgeAgent`.  Returns `Err` if memory is missing or the
     /// provider configuration is invalid.
     pub fn build(self) -> Result<EdgeAgent> {
@@ -243,6 +326,7 @@ impl EdgeAgentBuilder {
             .memory
             .ok_or_else(|| anyhow::anyhow!("EdgeAgentBuilder: memory is required"))?;
 
+        let board = self.board;
         let mut agent = EdgeAgent::new(
             self.agent_config,
             self.edge_config,
@@ -250,12 +334,25 @@ impl EdgeAgentBuilder {
             memory,
             self.tools,
             self.node_id,
-        )?;
+        )?
+        .with_board(board);
 
         if let Some(policy) = self.policy {
             agent = agent.with_policy(policy);
         }
 
+        Ok(agent)
+    }
+
+    /// Build, and join the mesh if `[edge].p2p_enabled` asked for it.
+    ///
+    /// The one-line form for the ordinary case. `build()` stays sync and non-joining
+    /// for callers that want to add tools or inspect the agent before it announces
+    /// itself — announcing a tool list you are about to change is worse than
+    /// announcing late.
+    pub async fn build_and_start(self) -> Result<EdgeAgent> {
+        let mut agent = self.build()?;
+        agent.start_p2p_if_enabled().await?;
         Ok(agent)
     }
 }
@@ -266,6 +363,7 @@ impl EdgeAgentBuilder {
 mod tests {
     use super::*;
     use crate::config::EdgeConfig;
+    use crate::memory::MemoryStore;
 
     #[test]
     fn edge_config_defaults_are_resource_friendly() {
@@ -278,6 +376,53 @@ mod tests {
             config.max_tool_iterations <= 5,
             "Edge agent should limit tool iterations"
         );
+    }
+
+    // ── p2p_enabled actually starts the mesh ──────────────────────────────────
+
+    fn built(p2p: bool) -> EdgeAgent {
+        let config = EdgeConfig {
+            p2p_enabled: p2p,
+            ..EdgeConfig::default()
+        };
+        EdgeAgentBuilder::new("bench-001", config)
+            .memory(Arc::new(MemoryStore::open_in_memory().unwrap()))
+            .board("dfrobot-firebeetle2-esp32s3")
+            .build()
+            .unwrap()
+    }
+
+    /// The regression this exists for: `[edge].p2p_enabled` parsed, was validated by
+    /// `Config::validate`, and was written into every generated NanoPi config by the
+    /// deployment planner — and nothing anywhere acted on it. A caller who did not
+    /// separately call `start_p2p` got an isolated node that had asked to be meshed.
+    #[tokio::test]
+    async fn p2p_disabled_stays_off_the_mesh_and_says_so() {
+        let mut agent = built(false);
+        assert!(!agent.p2p_enabled());
+        assert!(!agent.start_p2p_if_enabled().await.unwrap());
+        assert!(agent.p2p_spine().is_none());
+    }
+
+    #[test]
+    fn the_config_decides_rather_than_the_caller() {
+        // The value has to survive construction to be actionable at all — it was
+        // dropped on the floor before, which is what made the key inert.
+        assert!(built(true).p2p_enabled());
+        assert!(!built(false).p2p_enabled());
+    }
+
+    #[tokio::test]
+    async fn the_announcement_describes_the_tools_actually_registered() {
+        // Built from the agent's own registry rather than passed in by the caller,
+        // so a peer cannot be shown a tool that is not there. Checked without
+        // joining a mesh: this is about what would be announced.
+        let agent = built(true);
+        let specs = agent.inner.tool_specs();
+        assert_eq!(specs.len(), agent.tool_count());
+        for (name, _, _) in &specs {
+            assert!(!name.is_empty(), "a tool announced with no name");
+        }
     }
 
     #[test]

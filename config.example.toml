@@ -119,6 +119,22 @@ max_chars = 2400
 # max_age_ms = 604800000       # 7 days, measured from when it was recorded
 # origins = ["asserted"]       # the agent's own conclusions, never a reading
 
+# ── Edge-native mode ─────────────────────────────────────────────────────────
+# For a small single-board host (NanoPi, Pi) running the brain on the device.
+# The deployment planner emits this section for those boards.
+#
+# Every key here does something, which was not true until 2026-07-28:
+# max_history_messages and max_tool_iterations bound the agent at construction,
+# and p2p_enabled makes it join the broker-free local mesh and register whatever
+# peer tools it finds. `enabled` is the caller's decision — it is what makes them
+# build an edge agent at all rather than the ordinary one.
+#
+# [edge]
+# enabled = true
+# max_history_messages = 20      # bounds RAM on a device that has little
+# max_tool_iterations = 5
+# p2p_enabled = true             # join the local mesh; no broker needed
+
 # ── Reflexes ─────────────────────────────────────────────────────────────────
 # System 1: fast local rules over world state that act without waking the model.
 [reflex]
