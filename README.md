@@ -192,9 +192,40 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 
 **MCP Integration** exposes all tools as a Model Context Protocol server (stdio + HTTP/SSE, dual-mode for the 2026 spec) and imports tools from external MCP servers. **A2A Protocol** implements Google's Agent-to-Agent v1.0 for cross-platform agent interop.
 
-**Operations** — `oh-ben-claw doctor` health checks (now including subsystem/safing coherence), token **cost tracking** with persistent budgets, **observability** (metrics + spans), scheduled tasks, encrypted secrets **vault**, node **pairing** (HMAC-SHA256), tamper-evident **audit chain**, and sandboxed tool execution (`native` / `docker` / `wasm` runtimes).
+**Operations** — `oh-ben-claw doctor` health checks (now including subsystem/safing coherence), token **cost tracking** with persistent budgets, **observability** (metrics + spans), scheduled tasks, encrypted secrets **vault**, and a tamper-evident **audit chain**.
 
-**Memory** — a bitemporal world model with provenance, a support graph and four ways a belief can be withdrawn (supersession, source liveness, dependency withdrawal, retention); proactive `HEARTBEAT.md` task dispatch; a human-readable daily journal; and a vector store.
+> **Nodes are not authenticated.** This line previously listed node **pairing**
+> (HMAC-SHA256) as a shipped feature. `src/security/pairing.rs` is 386 tested
+> lines that implement it, and `NodePairingManager` is constructed as part of
+> `SecurityManager` — but nothing ever asks it anything. `pair_node` has zero
+> callers, `is_trusted` has zero, the `pairing` field is never read, and
+> `[security] require_pairing = true` is checked only by config validation: it
+> refuses to start without a secret, then gates nothing. Setting it buys
+> reassurance and no enforcement, which is the failure mode commit 494a1b0 fixed
+> for the safety gate and which was still live here.
+>
+> Treat the spine network as trusted, and make sure that is actually true.
+> `src/security/trust.rs` — dynamic trust scoring — *is* wired and does work, but
+> read its header with this in mind: it opens "OBC already authenticates nodes
+> (HMAC pairing) ... that trust is *static*", and builds a behavioural hardening
+> layer on top of that premise. The premise does not hold. Trust decays on
+> misbehaviour; nothing establishes it in the first place.
+
+> **Not a sandbox.** `src/runtime/` holds a runtime abstraction (`native` / `docker` / `wasm`)
+> and `[runtime]` parses, but nothing calls it: `ShellTool` spawns `sh -c` / `cmd /C`
+> directly, and the `wasm` adapter is a stub with no `wasmtime` dependency. Tools run
+> with the privileges of the agent process. This block previously advertised
+> "sandboxed tool execution" as shipped — the module has never been wired to the
+> tool-execution path, and a security boundary readers infer but do not get is worse
+> than an absent one. Wire it or cut it; until then it is documented as inert.
+
+**Memory** — a bitemporal world model with provenance, a support graph and four ways a belief can be withdrawn (supersession, source liveness, dependency withdrawal, retention); and a vector store.
+
+> `HEARTBEAT.md` task dispatch and the daily journal were listed here and are
+> **not wired**: `HeartbeatStore`'s `has_tasks`, `actionable_tasks`,
+> `build_prompt` and `append_task` have no callers outside their own file, and
+> `DailyJournal`'s only external reference is its own re-export. Both are found
+> by `scripts/file_reachability.py`, along with twelve more like them.
 
 ---
 
@@ -595,7 +626,7 @@ Oh-Ben-Claw/
 │   ├── observability/  # Metrics, spans, OpenTelemetry
 │   ├── peripherals/    # Hardware drivers + registry SSOT
 │   ├── providers/      # LLM provider adapters + failover + retry
-│   ├── runtime/        # Sandboxed tool execution (native + docker + wasm)
+│   ├── runtime/        # Runtime abstraction (native/docker/wasm) — NOT WIRED, see above
 │   ├── a2a/            # A2A protocol client and server
 │   ├── scheduler/      # Scheduled tasks and cron jobs
 │   ├── security/       # Policy, pairing, vault, audit chain, Track 0 limits
@@ -644,7 +675,7 @@ Oh-Ben-Claw is built on the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw
 | GUI | ✗ | ✅ Tauri 2 + React 18 |
 | MCP / A2A | ✗ | ✅ Client + server (both) |
 | Human approval | ✗ | ✅ 3 autonomy levels |
-| Sandboxes | ✗ | ✅ native / docker / wasm |
+| Sandboxes | ✗ | ✗ (`src/runtime/` exists, is not wired — see Operations) |
 | Edge-native mode | ✗ | ✅ (ESP32-S3, NanoPi) |
 
 ---
