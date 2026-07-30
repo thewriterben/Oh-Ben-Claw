@@ -325,7 +325,7 @@ pub fn sweep_silent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::world::Support;
+    use crate::world::Support;
     use serde_json::json;
 
     /// The bench bug, reproduced and then fixed, in the shape it actually occurred:
@@ -716,7 +716,7 @@ mod tests {
         );
         assert_eq!(
             w.support_status(&alert).unwrap(),
-            crate::memory::world::Support::Ungrounded {
+            crate::world::Support::Ungrounded {
                 missing: vec![reading.id]
             },
             "and it says which fact moved"

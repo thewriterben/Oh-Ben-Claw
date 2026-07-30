@@ -2,7 +2,7 @@
 //!
 //! Wraps [fastembed](https://github.com/Anush008/fastembed-rs) — ONNX
 //! inference on CPU, model downloaded once to the local cache and fully
-//! offline thereafter. Implements [`Embedder`](crate::memory::trajectory::Embedder),
+//! offline thereafter. Implements [`Embedder`](crate::trajectory::Embedder),
 //! the dense leg of the hybrid episode retrieval
 //! (`TrajectoryStore::similar`). See `AI-Agents-Research-July2026.md` for the
 //! selection rationale.
@@ -12,7 +12,7 @@ pub use backend::FastEmbedder;
 
 #[cfg(feature = "semantic")]
 mod backend {
-    use crate::memory::trajectory::Embedder;
+    use crate::trajectory::Embedder;
     use anyhow::Result;
     use std::sync::Mutex;
 

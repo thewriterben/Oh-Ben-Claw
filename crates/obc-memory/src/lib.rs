@@ -35,7 +35,26 @@ pub use trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};
 #[allow(unused_imports)]
 pub use world::{Fact, WorldMemory};
 
-use crate::providers::{ChatMessage, ChatRole};
+/// A single message in a conversation.
+///
+/// Defined here rather than in the agent's provider layer because this crate is
+/// what persists conversations, and a substrate that stores a type should own it.
+/// `oh-ben-claw` re-exports both from `providers`, so `crate::providers::ChatMessage`
+/// still resolves for every existing caller.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ChatMessage {
+    pub role: ChatRole,
+    pub content: String,
+}
+
+/// The role of a message sender.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatRole {
+    System,
+    User,
+    Assistant,
+}
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
@@ -99,7 +118,7 @@ impl MemoryStore {
 
     /// Get the default database path.
     pub fn default_db_path() -> Result<PathBuf> {
-        Ok(crate::config::paths::in_data_dir("memory.db"))
+        Ok(obc_paths::in_data_dir("memory.db"))
     }
 
     /// Run database migrations to create the schema.

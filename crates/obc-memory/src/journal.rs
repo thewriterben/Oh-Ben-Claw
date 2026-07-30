@@ -52,7 +52,7 @@ impl DailyJournal {
     }
 
     fn default_journal_dir() -> Result<PathBuf> {
-        Ok(crate::config::paths::in_data_dir("journal"))
+        Ok(obc_paths::in_data_dir("journal"))
     }
 
     // ── Path helpers ──────────────────────────────────────────────────────────
