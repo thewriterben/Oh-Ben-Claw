@@ -33,3 +33,10 @@ npm-debug.log*
 # Transient bench diagnostic dumps
 mesh_status.json
 gw40.log
+
+# Scratch landing area. The Cowork device bridge cannot unlink files, so an
+# agent working here moves them aside instead of deleting them. Twice that has
+# ended with scratch files committed by accident — they appear as pending
+# changes and get swept into a commit. Ignoring the directory removes the
+# temptation rather than relying on nobody clicking it.
+_to_delete/
