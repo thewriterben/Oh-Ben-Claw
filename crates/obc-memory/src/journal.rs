@@ -14,7 +14,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use oh_ben_claw::memory::DailyJournal;
+//! use obc_memory::DailyJournal;
 //!
 //! let journal = DailyJournal::new();
 //!
