@@ -53,16 +53,42 @@ pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
 /// Servers built from this module are **bilingual** regardless of mode: they
 /// answer `initialize` for legacy clients and `server/discover` for 2026
 /// clients. The mode primarily drives client behaviour and HTTP strictness.
+///
+/// `Default` is the mode a *negotiating* client tries **first**, not a mode it
+/// commits to. It became `Stateless2026` on 2026-07-30 — the Phase 15 flip
+/// scheduled for July 28 — which was only safe once
+/// [`McpClient`](client::McpClient) could fall back. Flipping it without a
+/// fallback would have connected successfully to every legacy server and failed
+/// at the first `tools/call`, because `server/discover` is optional and its
+/// absence proves nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProtocolMode {
     /// Pre-2026 lifecycle: initialize handshake, no required HTTP headers.
-    #[default]
     #[serde(rename = "legacy-2024")]
     Legacy2024,
     /// 2026-07-28 stateless lifecycle.
+    #[default]
     #[serde(rename = "stateless-2026")]
     Stateless2026,
+}
+
+/// How a connected client arrived at the protocol lifecycle it is speaking.
+///
+/// Exposed because "which protocol is this connection using" stopped being a
+/// property of the config the moment negotiation existed, and an operator
+/// debugging a server needs to know whether they are looking at their own
+/// choice or at a fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeSource {
+    /// The config named a mode. No probe was sent and no fallback was tried —
+    /// pinning is a statement of intent and quietly doing something else would
+    /// be the same class of bug as the flip this replaced.
+    Pinned,
+    /// Negotiated, and the preferred mode answered.
+    Preferred,
+    /// Negotiated, the preferred mode did not answer, and this is the fallback.
+    Fallback,
 }
 
 impl ProtocolMode {
@@ -93,6 +119,29 @@ pub fn client_info_meta() -> Value {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
+    /// Absent on notifications, and **omitted from the wire** when absent.
+    ///
+    /// Without `skip_serializing_if` this serialised as `"id": null`, which
+    /// JSON-RPC 2.0 does not treat as a notification — a notification is defined
+    /// by the *absence* of the member, and a request with a null id is malformed
+    /// rather than fire-and-forget. Servers strict enough to say so replied with
+    /// an error to `notifications/initialized`, and since the client does not
+    /// read after a notify, that error sat in the pipe and was consumed as the
+    /// response to the *next* request. Every subsequent call was then answering
+    /// the previous question.
+    ///
+    /// Found on 2026-07-30 by `tests/mcp_protocol_negotiation.rs`, which fails
+    /// this exact way: the tool call after a legacy fallback returned
+    /// "no such method: notifications/initialized". It had been latent since the
+    /// handshake was written, invisible because every server tested against
+    /// happened to ignore the malformed id.
+    /// `default` is not decoration: serde does **not** treat a missing
+    /// `Option<T>` as `None` on the way in, so omitting the member on the way
+    /// out without this makes every notification we send un-parseable by our own
+    /// server — which is exactly what happened, and what
+    /// `test_http_notification_gets_202_and_no_body` caught by turning 202 into
+    /// 400. The two attributes are one change; either alone is a bug.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Value>,
     pub method: String,
     #[serde(default)]
@@ -309,11 +358,17 @@ pub struct McpServerConfig {
     pub token: Option<String>,
     /// Environment variables to set for stdio processes
     pub env: Option<HashMap<String, String>>,
-    /// Protocol lifecycle to speak: `"legacy-2024"` (default) or
-    /// `"stateless-2026"`. Flip the default when the final 2026-07-28 spec
-    /// ships (Phase 15 work item 8).
+    /// Protocol lifecycle to speak: `"legacy-2024"`, `"stateless-2026"`, or
+    /// **omitted to negotiate**, which is the default and the right answer for
+    /// almost everyone.
+    ///
+    /// Omitted, the client probes for the 2026-07-28 lifecycle and falls back to
+    /// the legacy handshake when the server does not answer it. Set explicitly,
+    /// the client speaks exactly that and does not fall back — pinning exists so
+    /// that a server known to misbehave under negotiation can be nailed down,
+    /// and a pin that silently did something else would defeat the purpose.
     #[serde(default)]
-    pub protocol_mode: ProtocolMode,
+    pub protocol_mode: Option<ProtocolMode>,
 }
 
 #[cfg(test)]

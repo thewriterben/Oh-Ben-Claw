@@ -7,7 +7,8 @@
 //!   requests carry `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` headers.
 
 use super::{
-    client_info_meta, JsonRpcRequest, JsonRpcResponse, McpServerConfig, McpToolDef, ProtocolMode,
+    client_info_meta, JsonRpcRequest, JsonRpcResponse, McpServerConfig, McpToolDef, ModeSource,
+    ProtocolMode,
 };
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -43,10 +44,20 @@ pub struct McpClient {
     transport: Transport,
     next_id: u64,
     mode: ProtocolMode,
+    /// How `mode` was arrived at. See [`ModeSource`].
+    mode_source: ModeSource,
     server_name: String,
     server_version: String,
     /// `ttlMs` from the most recent `tools/list` response (2026 spec, SEP-2549).
     tools_ttl_ms: Option<u64>,
+    /// Tools returned by the negotiation probe, if it got as far as `tools/list`.
+    ///
+    /// Negotiation's decisive probe *is* a `tools/list`, so throwing the answer
+    /// away would mean asking the same question twice on every connect. The
+    /// first [`Self::list_tools`] consumes this; later calls go to the wire as
+    /// normal, because a cached list that never expires is how a tool catalog
+    /// goes stale.
+    probed_tools: Option<Vec<McpToolDef>>,
 }
 
 impl McpClient {
@@ -96,13 +107,15 @@ impl McpClient {
                 _child: child,
             })),
             next_id: 1,
-            mode: config.protocol_mode,
+            mode: config.protocol_mode.unwrap_or_default(),
+            mode_source: ModeSource::Pinned,
             server_name: String::new(),
             server_version: String::new(),
             tools_ttl_ms: None,
+            probed_tools: None,
         };
 
-        client.establish().await?;
+        client.establish(config.protocol_mode).await?;
         Ok(client)
     }
 
@@ -119,22 +132,130 @@ impl McpClient {
                 token: config.token.clone(),
             }),
             next_id: 1,
-            mode: config.protocol_mode,
+            mode: config.protocol_mode.unwrap_or_default(),
+            mode_source: ModeSource::Pinned,
             server_name: String::new(),
             server_version: String::new(),
             tools_ttl_ms: None,
+            probed_tools: None,
         };
 
-        client.establish().await?;
+        client.establish(config.protocol_mode).await?;
         Ok(client)
     }
 
-    /// Establish the connection according to the protocol mode.
-    async fn establish(&mut self) -> Result<()> {
-        match self.mode {
-            ProtocolMode::Legacy2024 => self.initialize().await,
-            ProtocolMode::Stateless2026 => self.discover().await,
+    /// Establish the connection: honour a pinned mode, or negotiate.
+    async fn establish(&mut self, pinned: Option<ProtocolMode>) -> Result<()> {
+        match pinned {
+            Some(mode) => {
+                self.mode = mode;
+                self.mode_source = ModeSource::Pinned;
+                match mode {
+                    ProtocolMode::Legacy2024 => self.initialize().await,
+                    ProtocolMode::Stateless2026 => self.discover().await,
+                }
+            }
+            None => self.negotiate().await,
         }
+    }
+
+    /// Find a protocol lifecycle this server actually answers.
+    ///
+    /// # Why this is not one request
+    ///
+    /// The obvious implementation — send `server/discover`, and if it works you
+    /// are talking 2026 — is wrong in the direction that hurts. `server/discover`
+    /// is **optional** in the 2026-07-28 spec: capabilities are fetched on demand
+    /// rather than as a lifecycle step, so a perfectly conformant 2026 server may
+    /// not implement it, and its absence tells you nothing about the lifecycle.
+    ///
+    /// That is exactly the hole this replaces. [`Self::discover`] tolerates a
+    /// failed `server/discover` and returns `Ok`, which is correct for a *pinned*
+    /// 2026 connection and catastrophic as a default: flipping the default mode
+    /// without this function would have made `connect()` succeed against every
+    /// legacy server on earth and then fail at the first `tools/call`. A
+    /// connection that reports success and cannot do the one thing it exists for
+    /// is worse than one that refuses to open.
+    ///
+    /// So the decisive probe is `tools/list`. Every MCP server implements it, it
+    /// is sent with the full 2026 shape (`_meta` client info, and the routing
+    /// headers on HTTP), and a server requiring the legacy handshake first will
+    /// refuse it. Succeeding means the server answered a real request under the
+    /// 2026 lifecycle, which is the only claim worth making.
+    ///
+    /// # Known limit
+    ///
+    /// A legacy server lax enough to answer `tools/list` without a handshake but
+    /// strict about `tools/call` would be misread as 2026. Nothing here detects
+    /// that, and the fix if it ever appears is to pin the mode in config, which
+    /// is what pinning is for.
+    async fn negotiate(&mut self) -> Result<()> {
+        self.mode = ProtocolMode::default();
+
+        // Cheap and conclusive when it works: a legacy-only server does not
+        // implement `server/discover`, so a successful answer settles it *and*
+        // yields the server identity in one round trip.
+        if let Ok(result) = self.request("server/discover", json!({})).await {
+            self.record_server_info(&result);
+            self.mode_source = ModeSource::Preferred;
+            tracing::debug!(
+                mode = ?self.mode,
+                "MCP negotiated via server/discover: {} v{}",
+                self.server_name,
+                self.server_version
+            );
+            return Ok(());
+        }
+
+        // Inconclusive, not negative. Ask the question that matters.
+        match self.request("tools/list", json!({})).await {
+            Ok(result) => {
+                self.tools_ttl_ms = result["ttlMs"].as_u64();
+                self.probed_tools =
+                    Some(serde_json::from_value(result["tools"].clone()).unwrap_or_default());
+                self.server_name = "unknown".to_string();
+                self.server_version = "0.0.0".to_string();
+                self.mode_source = ModeSource::Preferred;
+                tracing::debug!(
+                    mode = ?self.mode,
+                    "MCP negotiated via tools/list; server does not implement \
+                     server/discover, which the spec permits"
+                );
+                Ok(())
+            }
+            Err(probe_err) => {
+                // The server did not answer a stateless request. Fall back.
+                self.mode = ProtocolMode::Legacy2024;
+                self.mode_source = ModeSource::Fallback;
+                self.initialize().await.map_err(|handshake_err| {
+                    anyhow::anyhow!(
+                        "MCP server answered neither lifecycle. Stateless \
+                         ({stateless}) probe failed: {probe_err}. Legacy \
+                         ({legacy}) handshake failed: {handshake_err}.",
+                        stateless = ProtocolMode::Stateless2026.version(),
+                        legacy = ProtocolMode::Legacy2024.version(),
+                    )
+                })?;
+                // Info, not warn: during the transition window a legacy server is
+                // an ordinary thing to meet, and a warning per connect would be
+                // noise that trains people to ignore warnings. It is still said
+                // out loud, because a silent downgrade is how you discover in
+                // production that nothing ever used the new protocol.
+                tracing::info!(
+                    "MCP server {} v{} does not speak {}; fell back to the {} handshake",
+                    self.server_name,
+                    self.server_version,
+                    ProtocolMode::Stateless2026.version(),
+                    ProtocolMode::Legacy2024.version(),
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// Whether [`Self::mode`] was pinned by config, preferred, or fallen back to.
+    pub fn mode_source(&self) -> ModeSource {
+        self.mode_source
     }
 
     /// Perform the legacy (2024-11-05) MCP initialize handshake.
@@ -208,6 +329,11 @@ impl McpClient {
     /// In 2026 mode the response may carry `ttlMs` (SEP-2549); it is recorded
     /// and exposed via [`Self::tools_ttl_ms`] so callers can cache the list.
     pub async fn list_tools(&mut self) -> Result<Vec<McpToolDef>> {
+        // Negotiation's decisive probe is a `tools/list`; serve that answer once
+        // rather than asking twice on every connect.
+        if let Some(tools) = self.probed_tools.take() {
+            return Ok(tools);
+        }
         let result = self.request("tools/list", json!({})).await?;
         self.tools_ttl_ms = result["ttlMs"].as_u64();
         let tools: Vec<McpToolDef> =
@@ -410,7 +536,40 @@ mod tests {
     fn protocol_mode_versions() {
         assert_eq!(ProtocolMode::Legacy2024.version(), "2024-11-05");
         assert_eq!(ProtocolMode::Stateless2026.version(), "2026-07-28");
-        assert_eq!(ProtocolMode::default(), ProtocolMode::Legacy2024);
+    }
+
+    /// The Phase 15 flip, scheduled for 2026-07-28 and landed on 2026-07-30.
+    ///
+    /// This is a one-line change guarded by a great deal of care elsewhere: it is
+    /// only the mode a negotiating client tries *first*, and it is only safe
+    /// because `McpClient::negotiate` falls back. If someone reverts the
+    /// negotiation and leaves this, `mcp_protocol_negotiation.rs` fails.
+    #[test]
+    fn the_default_mode_is_the_2026_lifecycle() {
+        assert_eq!(ProtocolMode::default(), ProtocolMode::Stateless2026);
+    }
+
+    /// An omitted `protocol_mode` must negotiate, not silently pick a side.
+    #[test]
+    fn an_absent_protocol_mode_deserialises_to_negotiate() {
+        let cfg: McpServerConfig = serde_json::from_value(json!({
+            "transport": "stdio",
+            "command": "true"
+        }))
+        .expect("minimal stdio config");
+        assert_eq!(
+            cfg.protocol_mode, None,
+            "omitting protocol_mode must mean negotiate; a concrete default here \
+             would pin every server in every existing config file"
+        );
+
+        let pinned: McpServerConfig = serde_json::from_value(json!({
+            "transport": "stdio",
+            "command": "true",
+            "protocol_mode": "legacy-2024"
+        }))
+        .expect("pinned config");
+        assert_eq!(pinned.protocol_mode, Some(ProtocolMode::Legacy2024));
     }
 
     #[test]
