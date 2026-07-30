@@ -20,7 +20,6 @@
 pub mod embed;
 pub mod expiry;
 pub mod heartbeat;
-pub mod image;
 pub mod journal;
 pub mod liveness;
 pub mod trajectory;
@@ -28,7 +27,6 @@ pub mod vector;
 pub mod world;
 
 pub use heartbeat::HeartbeatStore;
-pub use image::ImageMemoryStore;
 pub use journal::DailyJournal;
 #[allow(unused_imports)]
 pub use trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};

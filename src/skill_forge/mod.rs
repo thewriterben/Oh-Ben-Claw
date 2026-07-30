@@ -48,8 +48,6 @@ use std::time::Duration;
 
 pub mod evolve;
 pub mod improve;
-pub mod install_policy;
-pub mod registry;
 pub mod rollout;
 pub mod synthesis;
 
