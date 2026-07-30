@@ -552,7 +552,7 @@ Three new boards and two new accessories are added to the registry:
 
 ### Configuration
 
-- [x] **`DeploymentConfig`** — `[deployment]` TOML section: `enabled`, `scenario`, `auto_plan`, `auto_spawn`, `feature_desires`, `hardware`, `llm_swarm` (`src/config/mod.rs`)
+- [~] **`DeploymentConfig`** — `[deployment]` TOML section — *(audit 2026-07-30: parses, and `Config.deployment` is never read by the running agent. The only reads are in `tests/planner_parity.rs`, which asserts the generated TOML is schema-valid — the shape, not the consumption. `auto_plan` and `pre_spawn` do nothing; the sole reference to `auto_plan` outside the struct is the emitter that writes it. Found by `scripts/inert_components.py`.)*
 - [x] **`DeploymentHardwareConfig`** — `[[deployment.hardware]]` entries: `name`, `board_name`, `transport`, `path`, `node_id`, `role`, `accessories` (`src/config/mod.rs`)
 - [x] `Config` gains `deployment: DeploymentConfig` field
 
