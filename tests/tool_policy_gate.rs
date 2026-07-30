@@ -297,11 +297,9 @@ async fn audit_logs_without_blocking() {
 /// and do not delete the test to make the diff smaller.
 #[test]
 fn the_documented_example_parses_and_matches_the_baseline() {
-    let example = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/config.example.toml"
-    ))
-    .expect("config.example.toml");
+    let example =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/config.example.toml"))
+            .expect("config.example.toml");
 
     let start = example
         .find("# ── Tool execution policy")
@@ -339,7 +337,11 @@ fn the_documented_example_parses_and_matches_the_baseline() {
     for (doc, base) in documented.iter().zip(baseline.iter()) {
         assert_eq!(doc.name, base.name, "policy order or naming diverged");
         assert_eq!(doc.tool_pattern, base.tool_pattern, "{}: pattern", doc.name);
-        assert_eq!(doc.arg_contains, base.arg_contains, "{}: arg_contains", doc.name);
+        assert_eq!(
+            doc.arg_contains, base.arg_contains,
+            "{}: arg_contains",
+            doc.name
+        );
         assert_eq!(doc.action, base.action, "{}: action", doc.name);
     }
 }
