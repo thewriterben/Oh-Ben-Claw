@@ -2,6 +2,8 @@
 members = [
     ".",
     "planner-wasm",
+    "crates/obc-paths",
+    "crates/obc-memory",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
@@ -53,6 +55,8 @@ serde_json = { version = "1.0", default-features = false, features = ["std"] }
 
 # Config
 directories = "5.0"
+obc-paths = { path = "crates/obc-paths" }
+obc-memory = { path = "crates/obc-memory" }
 toml = "1.0"
 shellexpand = "3.1"
 
@@ -135,9 +139,8 @@ glob = "0.3"
 # System info
 libc = { version = "0.2", default-features = false }
 
-# Local semantic embeddings (optional — `semantic` feature). ONNX inference
-# via fastembed; the model downloads once, then inference is fully offline.
-fastembed = { version = "5", optional = true }
+# Local semantic embeddings moved with the memory substrate; see
+# crates/obc-memory. The `semantic` feature below still enables it from here.
 
 # Raspberry Pi GPIO (Linux only)
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -158,7 +161,7 @@ gui = []
 # Dense retrieval leg for episode memory: local ONNX embeddings (fastembed).
 # Off by default so ordinary builds/CI stay light; enable at build time with
 # `--features semantic` and at runtime with `[self_improvement].semantic`.
-semantic = ["fastembed"]
+semantic = ["obc-memory/semantic"]
 
 [profile.release]
 opt-level = "z"

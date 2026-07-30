@@ -969,7 +969,7 @@ impl WorldMemory {
     ///
     /// A justification fails for two different reasons, and only one of them is an event
     /// worth reacting to. Its author can stop reporting — that is rare, discrete, and
-    /// [`liveness::stopped`](crate::memory::liveness::stopped) handles it eagerly. Or a
+    /// [`liveness::stopped`](crate::liveness::stopped) handles it eagerly. Or a
     /// supporting fact can simply be *superseded* by a newer value, which happens on
     /// every sensor tick.
     ///

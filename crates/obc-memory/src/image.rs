@@ -20,7 +20,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use oh_ben_claw::memory::image::ImageMemoryStore;
+//! use obc_memory::image::ImageMemoryStore;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let store = ImageMemoryStore::open_in_memory()?;

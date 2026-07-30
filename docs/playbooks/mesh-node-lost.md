@@ -95,5 +95,8 @@ reason itself carries the short form of steps 1–3; this document is the full v
 ## Operator note
 
 To make this procedure standing context for the agent (rather than delivered per-wake in
-the escalation reason), paste the Procedure + Guardrails sections into your `SOUL.md`
-under an "Operating playbooks" heading.
+the escalation reason), paste the Procedure + Guardrails sections into `[agent].system_prompt`
+in your config under an "Operating playbooks" heading.
+
+(This previously said `SOUL.md`. `PersonalityStore`, which read that file, was removed on
+2026-07-28 — it had been documented but never called, so the instruction had never worked.)

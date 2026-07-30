@@ -57,3 +57,121 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
 
     tools
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// No two tools may claim the same name.
+    ///
+    /// Added 2026-07-29 after an audit found **two** `impl Tool` types both
+    /// returning `"audio_transcribe"`, with different required parameters:
+    /// `AudioTranscribeTool` (`file_path`, registered) and
+    /// `AudioTranscriptionTool` in `builtin::vision` (`path`, never registered).
+    /// Only the first is exported here, so nothing is broken today — but the
+    /// second is a live landmine, because the day someone registers it the
+    /// registry silently holds two different tools under one name and which one
+    /// answers depends on iteration order.
+    ///
+    /// A model that calls the wrong one gets an argument-name error, and the
+    /// observed failure mode for local models given a tool error is to
+    /// *confabulate a plausible result rather than report the failure*. So the
+    /// cost of this collision is not an exception, it is a fabricated answer.
+    ///
+    /// This test guards the registered set. It does not resolve the duplicate —
+    /// see the collision test below, which pins the hazard so it cannot be
+    /// forgotten, and fails the moment someone "fixes" it by renaming one side
+    /// without deleting the dead copy.
+    #[test]
+    fn default_tools_have_unique_names() {
+        let tools = default_tools();
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for t in &tools {
+            *counts.entry(t.name()).or_insert(0) += 1;
+        }
+        let dupes: Vec<String> = counts
+            .iter()
+            .filter(|(_, &n)| n > 1)
+            .map(|(name, n)| format!("{name} (x{n})"))
+            .collect();
+        assert!(
+            dupes.is_empty(),
+            "two tools registered under one name: {}",
+            dupes.join(", ")
+        );
+        assert!(
+            tools.len() >= 11,
+            "default_tools() shrank unexpectedly: {} tools",
+            tools.len()
+        );
+    }
+
+    /// Every registered tool declares a non-empty name, description and an
+    /// object-shaped parameter schema. A tool the model cannot understand the
+    /// call shape of is worse than an absent one.
+    #[test]
+    fn default_tools_are_describable() {
+        for t in default_tools() {
+            let name = t.name();
+            assert!(!name.is_empty(), "a tool has an empty name");
+            assert!(
+                !t.description().trim().is_empty(),
+                "{name}: empty description"
+            );
+            let schema = t.parameters_schema();
+            assert_eq!(
+                schema.get("type").and_then(|v| v.as_str()),
+                Some("object"),
+                "{name}: parameters_schema is not an object schema"
+            );
+            assert!(
+                schema.get("properties").is_some(),
+                "{name}: parameters_schema has no properties"
+            );
+        }
+    }
+
+    /// The unresolved `audio_transcribe` collision, written down.
+    ///
+    /// This test *asserts the bug exists*, which is deliberate: it is the record
+    /// that the two types disagree, and it will fail — telling you to update or
+    /// delete it — the moment either side is renamed or removed. Deleting
+    /// `AudioTranscriptionTool` (and its two tests in `builtin::vision`) is the
+    /// intended resolution; the alternative is to register it under a distinct
+    /// name. Either way, this test is the thing that notices.
+    #[test]
+    fn audio_transcribe_name_is_still_claimed_twice() {
+        use builtin::vision::AudioTranscriptionTool;
+
+        let registered = AudioTranscribeTool::default();
+        let orphan = AudioTranscriptionTool::new("not-a-real-key");
+
+        assert_eq!(
+            registered.name(),
+            orphan.name(),
+            "the collision is gone — good. Delete this test."
+        );
+
+        let req = |t: &dyn Tool| -> Vec<String> {
+            t.parameters_schema()
+                .get("required")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        assert_eq!(req(&registered), vec!["file_path".to_string()]);
+        assert_eq!(req(&orphan), vec!["path".to_string()]);
+        assert_ne!(
+            req(&registered),
+            req(&orphan),
+            "same name, same parameters — the collision is now harmless, but still \
+             delete one of them"
+        );
+    }
+}
