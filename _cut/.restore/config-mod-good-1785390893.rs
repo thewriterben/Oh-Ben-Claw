@@ -786,6 +786,43 @@ impl Default for CostConfig {
     }
 }
 
+// ── Multimodal Configuration ───────────────────────────────────────────────────
+
+/// Configuration for multimodal (image) handling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultimodalConfig {
+    /// Whether multimodal image handling is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Maximum number of images per message.
+    #[serde(default = "default_max_images")]
+    pub max_images: usize,
+    /// Maximum image size in bytes.
+    #[serde(default = "default_max_image_bytes")]
+    pub max_image_bytes: usize,
+    /// Whether to allow fetching remote (URL) images.
+    #[serde(default)]
+    pub allow_remote: bool,
+}
+
+fn default_max_images() -> usize {
+    5
+}
+fn default_max_image_bytes() -> usize {
+    5 * 1024 * 1024
+}
+
+impl Default for MultimodalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_images: default_max_images(),
+            max_image_bytes: default_max_image_bytes(),
+            allow_remote: false,
+        }
+    }
+}
+
 // ── Proxy Configuration (new in Phase 11) ────────────────────────────────────
 
 /// Configuration for outbound HTTP proxy support.
@@ -932,6 +969,62 @@ impl Default for BrowserConfig {
             cdp_url: None,
             profile: default_headless_profile(),
             timeout_secs: default_browser_timeout(),
+        }
+    }
+}
+
+/// Configuration for the ClawHub community skill registry (Phase 12).
+///
+/// ```toml
+/// [clawhub]
+/// enabled = true
+/// registry_url = "https://hub.openclaw.ai"
+/// auto_update = false
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClawHubConfig {
+    /// Enable the ClawHub skill registry (default: true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Base URL of the ClawHub registry API.
+    #[serde(default = "default_clawhub_url")]
+    pub registry_url: String,
+    /// Automatically check for skill updates on startup (default: false).
+    #[serde(default)]
+    pub auto_update: bool,
+    /// Local directory where installed skills are stored.
+    ///
+    /// When unset, defaults to `~/.oh-ben-claw/skills/`.
+    #[serde(default)]
+    pub skills_dir: Option<String>,
+    /// Install-security policy (Phase 15, WS1): operator approval,
+    /// checksum verification, version pinning, allowlist, audit log.
+    ///
+    /// ```toml
+    /// [clawhub.install_policy]
+    /// require_approval = true
+    /// require_checksum = false
+    /// allowlist = []
+    ///
+    /// [clawhub.install_policy.pinned_versions]
+    /// weather = "1.2.0"
+    /// ```
+    #[serde(default)]
+    pub install_policy: crate::skill_forge::install_policy::InstallPolicyConfig,
+}
+
+fn default_clawhub_url() -> String {
+    "https://hub.openclaw.ai".to_string()
+}
+
+impl Default for ClawHubConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            registry_url: default_clawhub_url(),
+            auto_update: false,
+            skills_dir: None,
+            install_policy: Default::default(),
         }
     }
 }
@@ -2004,6 +2097,8 @@ pub struct Config {
     /// Phase 17 long-horizon harness (`[harness]`).
     #[serde(default)]
     pub harness: HarnessConfig,
+    #[serde(default)]
+    pub multimodal: MultimodalConfig,
     /// HTTP proxy for outbound requests (new in Phase 11).
     #[serde(default)]
     pub proxy: ProxyConfig,
@@ -2014,6 +2109,8 @@ pub struct Config {
     #[serde(default)]
     pub browser: BrowserConfig,
     /// ClawHub community skill registry configuration (new in Phase 12).
+    #[serde(default)]
+    pub clawhub: ClawHubConfig,
     /// Deployment scheme generator configuration (new in Phase 13).
     #[serde(default)]
     pub deployment: DeploymentConfig,
@@ -2817,9 +2914,20 @@ mod tests {
     }
 
     #[test]
-    fn root_config_has_browser_field() {
+    fn clawhub_config_default_values() {
+        let cfg = ClawHubConfig::default();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.registry_url, "https://hub.openclaw.ai");
+        assert!(!cfg.auto_update);
+        assert!(cfg.skills_dir.is_none());
+    }
+
+    #[test]
+    fn root_config_has_browser_and_clawhub_fields() {
         let config = Config::default();
         assert!(config.browser.enabled);
+        assert!(config.clawhub.enabled);
+        assert_eq!(config.clawhub.registry_url, "https://hub.openclaw.ai");
     }
 
     #[test]
@@ -2839,6 +2947,22 @@ mod tests {
         );
         assert_eq!(config.browser.profile, "user");
         assert_eq!(config.browser.timeout_secs, 60);
+    }
+
+    #[test]
+    fn clawhub_config_deserializes_from_toml() {
+        let toml = r#"
+            [clawhub]
+            enabled = true
+            registry_url = "https://my-hub.example.com"
+            auto_update = true
+            skills_dir = "/opt/skills"
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.clawhub.enabled);
+        assert_eq!(config.clawhub.registry_url, "https://my-hub.example.com");
+        assert!(config.clawhub.auto_update);
+        assert_eq!(config.clawhub.skills_dir.as_deref(), Some("/opt/skills"));
     }
 
     // ── Enhanced validation tests ──────────────────────────────────────────────

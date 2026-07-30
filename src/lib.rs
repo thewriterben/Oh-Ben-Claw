@@ -59,7 +59,6 @@ pub mod mcp;
 pub use obc_memory as memory;
 pub mod mission;
 pub mod movement;
-pub mod multimodal;
 pub mod navigation;
 pub mod observability;
 pub mod peripherals;
