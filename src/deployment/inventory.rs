@@ -141,6 +141,35 @@ pub enum ItemRole {
     Unassigned,
 }
 
+impl std::str::FromStr for ItemRole {
+    type Err = std::convert::Infallible;
+
+    /// The exact inverse of [`Display`], written against it rather than against
+    /// the serde attribute.
+    ///
+    /// `to_deployment_toml` emits roles with `item.role.to_string()`, so
+    /// `Display` — not `#[serde(rename_all)]` — is the format that actually
+    /// reaches the file. Deriving the parse from serde instead would work today
+    /// and silently diverge the moment someone changes one and not the other.
+    ///
+    /// Unknown text maps to [`ItemRole::Unassigned`], which is the same thing an
+    /// absent `role` key means: let the planner infer it. That makes this
+    /// infallible on purpose — a role we do not recognise is a hint we can drop,
+    /// not a reason to refuse to start.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.trim() {
+            "host" => Self::Host,
+            "display" => Self::Display,
+            "vision" => Self::Vision,
+            "listening" => Self::Listening,
+            "sensing" => Self::Sensing,
+            "peripheral" => Self::Peripheral,
+            "console" => Self::Console,
+            _ => Self::Unassigned,
+        })
+    }
+}
+
 impl std::fmt::Display for ItemRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
