@@ -211,13 +211,27 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 > layer on top of that premise. The premise does not hold. Trust decays on
 > misbehaviour; nothing establishes it in the first place.
 
-> **Not a sandbox.** `src/runtime/` holds a runtime abstraction (`native` / `docker` / `wasm`)
-> and `[runtime]` parses, but nothing calls it: `ShellTool` spawns `sh -c` / `cmd /C`
-> directly, and the `wasm` adapter is a stub with no `wasmtime` dependency. Tools run
-> with the privileges of the agent process. This block previously advertised
-> "sandboxed tool execution" as shipped — the module has never been wired to the
-> tool-execution path, and a security boundary readers infer but do not get is worse
-> than an absent one. Wire it or cut it; until then it is documented as inert.
+> **Tools are not sandboxed, and there is a layer that helps.** `src/runtime/`
+> held a `native` / `docker` / `wasm` abstraction that nothing ever called —
+> `ShellTool` spawned `sh -c` directly, and the `wasm` adapter was a stub with no
+> `wasmtime` dependency. It was **removed on 2026-07-30** rather than wired: it
+> would have covered one tool out of seventy-six, and the dangerous ones by
+> design — `gpio_write`, `i2c_*`, `ota_update`, spine publish — cannot be put in a
+> container, because touching hardware is the point.
+>
+> The layer that does cover every tool is **`[[security.policies]]`** — a
+> host-side allowlist evaluated on every tool call and on every hop, so it
+> re-checks the target after a skill delegates. Glob patterns, an optional
+> substring match on the arguments, and deny / audit / allow. It ships with no
+> rules, and `config.example.toml` carries a recommended baseline you can paste:
+> deny `shell`, deny `file` deletes, audit `http`, `ota_update` and `skill_forge`.
+> An agent with no policies configured now says so at startup.
+>
+> This narrows what a **hijacked reasoner** can reach — the path §4.4 of
+> `docs/SAFETY.md` names, where text recovered by `vision_analyze` arrives in the
+> planner as prose. It does not survive host compromise. The deterministic limit
+> table on the microcontroller is the only boundary that does, and nothing here
+> replaces it.
 
 **Memory** — a bitemporal world model with provenance, a support graph and four ways a belief can be withdrawn (supersession, source liveness, dependency withdrawal, retention); and a vector store.
 
@@ -626,7 +640,6 @@ Oh-Ben-Claw/
 │   ├── observability/  # Metrics, spans, OpenTelemetry
 │   ├── peripherals/    # Hardware drivers + registry SSOT
 │   ├── providers/      # LLM provider adapters + failover + retry
-│   ├── runtime/        # Runtime abstraction (native/docker/wasm) — NOT WIRED, see above
 │   ├── a2a/            # A2A protocol client and server
 │   ├── scheduler/      # Scheduled tasks and cron jobs
 │   ├── security/       # Policy, pairing, vault, audit chain, Track 0 limits
@@ -675,7 +688,7 @@ Oh-Ben-Claw is built on the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw
 | GUI | ✗ | ✅ Tauri 2 + React 18 |
 | MCP / A2A | ✗ | ✅ Client + server (both) |
 | Human approval | ✗ | ✅ 3 autonomy levels |
-| Sandboxes | ✗ | ✗ (`src/runtime/` exists, is not wired — see Operations) |
+| Tool sandboxing | ✗ | ✗ — see Operations. Host-side policy allowlist instead (`[[security.policies]]`) |
 | Edge-native mode | ✗ | ✅ (ESP32-S3, NanoPi) |
 
 ---

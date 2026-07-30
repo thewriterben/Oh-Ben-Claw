@@ -171,6 +171,63 @@ taint_mode = "warn"
 # value_max = 1
 # min_interval_ms = 500
 
+# ── Tool execution policy ────────────────────────────────────────────────────
+# A host-side allowlist over the tool surface, evaluated on every tool call and
+# on every hop — so it re-checks the target after a skill delegates, not just the
+# name the model first said. Policies are tried in order and the FIRST MATCH
+# WINS; if nothing matches the call is allowed.
+#
+# This is not a sandbox and does not replace Track 0 above. Track 0 lives on the
+# microcontroller and holds even if this host is compromised. This layer narrows
+# what a *hijacked reasoner* can reach — the path docs/SAFETY.md names, where text
+# recovered by `vision_analyze` arrives in the planner as prose — and it is worth
+# exactly as much as the host it runs on.
+#
+# There are no policies by default: an unconfigured agent permits every tool,
+# including `shell`, and says so at startup. The block below is the recommended
+# starting point (`security::policy::baseline()`), commented out because turning
+# it on silently would break anyone whose agent administers its own host.
+#
+#   action = "deny"   refuse the call; the model is told which policy refused it
+#   action = "audit"  allow, and log the call and its arguments at WARN
+#   action = "allow"  allow, and stop evaluating later rules (use it to carve an
+#                     exception out of a broader deny below it)
+#
+# arg_contains is a plain substring test against the serialised arguments, not a
+# parsed field — "delete" also matches a path containing the word. For a deny
+# rule that is the safe direction to be wrong in.
+
+# [[security.policies]]
+# name = "no-shell"
+# tool_pattern = "shell"
+# action = "deny"
+# reason = "arbitrary host command execution; the largest non-physical blast radius"
+
+# [[security.policies]]
+# name = "no-file-delete"
+# tool_pattern = "file"
+# arg_contains = "delete"
+# action = "deny"
+# reason = "irreversible, and the file tool has no path sandbox"
+
+# [[security.policies]]
+# name = "audit-network-egress"
+# tool_pattern = "http"
+# action = "audit"
+# reason = "the exfiltration path once a planner is influenced by untrusted text"
+
+# [[security.policies]]
+# name = "audit-firmware-push"
+# tool_pattern = "ota_update"
+# action = "audit"
+# reason = "the node keeps enforcing Track 0, but on the firmware you just flashed"
+
+# [[security.policies]]
+# name = "audit-skill-install"
+# tool_pattern = "skill_forge"
+# action = "audit"
+# reason = "installs and promotes community code into the running agent"
+
 # ── Gateway ──────────────────────────────────────────────────────────────────
 [gateway]
 enabled = true
