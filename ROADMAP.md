@@ -426,7 +426,7 @@ and enhanced reliability.
 - [x] All Clippy warnings resolved
 - [x] All code formatted with `rustfmt`
 
-## Phase 15: Production Hardening 🔄 In Progress *(one item left: the scheduled July 28 MCP default-mode flip)*
+## Phase 15: Production Hardening ✅ Complete *(the July 28 MCP default-mode flip landed 2026-07-30)*
 
 Executed in lockstep with **ClawCam Phase 13** (see `NEXT_PHASE_PLAN.md` in the
 workspace root). No new product surface area: this phase makes the existing 14
@@ -452,9 +452,9 @@ The MCP release candidate is breaking: stateless protocol core (no init
 handshake / session header), extensions framework, Tasks primitive.
 
 - [x] Audit MCP client + server against the 2026-07-28 RC (locked 2026-05-21) — conformant on the stateless core (`_meta` clientInfo, `server/discover`, SEP-2243 headers, SEP-2549 `ttlMs`/`cacheScope`, SEP-2164 error codes; no deprecated roots/sampling/logging). Four gaps found + fixed: header accept-list now covers every published revision (2025-11-25 was rejected!), `initialize` echoes a supported requested version, notifications no longer get responses (stdio silent, HTTP 202), `extensions: {}` capability map added (SEP-2133)
-- [x] Dual-mode operation (current spec + RC) behind a config flag — `ProtocolMode` (`legacy-2024` default / `stateless-2026`) per MCP server connection; bilingual server answers both lifecycles
+- [x] Dual-mode operation (current spec + RC) behind a config flag — `ProtocolMode` (`legacy-2024` / `stateless-2026`) per MCP server connection; bilingual server answers both lifecycles
 - [x] Cross-repo integration test with ClawCam (brain ↔ adapter ↔ stdio bridge ↔ gateway) in both modes — `ClawCam/tests/integration/test_phase15_cross_repo_mcp.py` (17/17): both protocol modes + plan-mode authorization + no-session-affinity (stdio + plain HTTP)
-- [ ] Flip default mode when the final spec ships (July 28)
+- [x] **Flip default mode when the final spec ships (July 28)** — landed 2026-07-30. `ProtocolMode::default()` is now `Stateless2026`, but the flip was one line and was never the work. `establish()` picked a mode from config and committed to it, and `discover()` deliberately tolerates a failed `server/discover` because the 2026 spec makes discovery *optional*. Those compose badly: flipping the default alone would have made `connect()` succeed against every legacy server and fail at the first `tools/call` — success at connect, failure later, which is the worst available shape. So `McpClient::negotiate` probes for the 2026 lifecycle and falls back to the legacy handshake, using `tools/list` as the decisive probe because a missing `server/discover` proves nothing. An explicit `protocol_mode` still pins the lifecycle and is never renegotiated. `tests/mcp_protocol_negotiation.rs` (6 tests) drives real processes over real pipes via `src/bin/mcp-conformance-server.rs`, which speaks exactly one lifecycle per role and refuses the other; verified by bypassing negotiation, where the naive flip yields a *working client against a server that answers nothing*. Two latent bugs fell out. Notifications serialised as `"id": null`, which JSON-RPC does not treat as a notification, so a strict server replied and every later request consumed the previous answer — the mirror image of the server-side notification fix in the audit row above, missed because every server tested until now ignored the malformed id. And `McpServer::new` read `ProtocolMode::default()`, so the flip silently made every default-constructed server *require* the SEP-2243 routing headers and answer 400 to any legacy client — the same silent-breakage bug pointed the other way, caught by an existing test turning 202 into 400. `ProtocolMode` had been doing double duty as "which lifecycle a client prefers" and "how strict a server is about headers"; those are now separate decisions, and `a_default_server_is_permissive_about_http_headers` pins the server side so the next default change cannot repeat it
 
 ### A2A v1.0 Conformance
 

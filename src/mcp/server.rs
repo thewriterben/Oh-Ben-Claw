@@ -40,9 +40,26 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    /// Create a new MCP server with the given tools (legacy-compatible mode).
+    /// Create a new MCP server with the given tools, **permissive** about HTTP
+    /// headers.
+    ///
+    /// Deliberately `Legacy2024` rather than `ProtocolMode::default()`. Those
+    /// were the same value until 2026-07-30, and writing `default()` here quietly
+    /// made this constructor mean "whatever a *client* should prefer" — two
+    /// unrelated questions sharing one enum.
+    ///
+    /// The flip made the difference load-bearing, and this is the direction that
+    /// hurts. A client preferring the 2026 lifecycle costs nothing, because it
+    /// negotiates. A **server** in `Stateless2026` mode *requires*
+    /// `MCP-Protocol-Version` and `Mcp-Method` on every HTTP request (SEP-2243)
+    /// and returns 400 without them — so inheriting the flip would have rejected
+    /// every legacy client on the network, which is the same silent-breakage bug
+    /// as the naive client flip, pointed the other way.
+    ///
+    /// Caught by `test_http_notification_gets_202_and_no_body`, which started
+    /// answering 400. Call [`Self::with_mode`] to opt into strictness.
     pub fn new(tools: Vec<Box<dyn Tool>>) -> Self {
-        Self::with_mode(tools, ProtocolMode::default())
+        Self::with_mode(tools, ProtocolMode::Legacy2024)
     }
 
     /// Create a new MCP server with an explicit protocol mode.
@@ -587,6 +604,37 @@ mod tests {
         assert!(
             caps["extensions"].is_object(),
             "SEP-2133 extensions map present"
+        );
+    }
+
+    /// A default-constructed server must not require the 2026 routing headers.
+    ///
+    /// `McpServer::new` used to read `ProtocolMode::default()`, so the Phase 15
+    /// default flip silently turned every server built this way into one that
+    /// answers 400 to any client not sending SEP-2243 headers. This pins the
+    /// constructor to the permissive lifecycle so the next default change cannot
+    /// do it again.
+    #[tokio::test]
+    async fn a_default_server_is_permissive_about_http_headers() {
+        assert_eq!(
+            make_server().mode(),
+            ProtocolMode::Legacy2024,
+            "McpServer::new became strict about HTTP headers; every legacy client \
+             now gets 400. Server strictness and client preference are different \
+             questions that happen to share one enum."
+        );
+
+        let server = Arc::new(Mutex::new(make_server()));
+        let response = http_handler(
+            State(server),
+            HeaderMap::new(),
+            Json(req("ping", json!({}))),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "a header-less request was rejected by a default server"
         );
     }
 
