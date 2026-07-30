@@ -57,21 +57,21 @@ blocks it from migrating.
 
 | module | LOC | tests | wired | integration suites | roadmap | claim | evidence |
 |---|---:|---:|---:|---|---:|---|---|
-| `foresight` | 677 | 11 | 5 | — | **0** | benchmarked | unit ⚠ |
-| `learning` | 454 | 4 | 2 | — | 2 | benchmarked | unit ⚠ |
 | `runtime` | 417 | 11 | 0 | — | 15 | documented | unwired ⚠ |
-| `agent` | 9,147 | 148 | 35 | `embodied_full_stack`, `embodied_safing_loop`, `evals`, `harness_long_horizon`, `liveness_acceptance`, `system2_eval` | 75 | benchmarked | integration |
+| `agent` | 9,147 | 148 | 36 | `embodied_full_stack`, `embodied_safing_loop`, `evals`, `harness_long_horizon`, `learning_approval_gate`, `liveness_acceptance`, `system2_eval` | 75 | benchmarked | integration |
 | `channels` | 3,859 | 33 | 1 | — | 22 | documented | unit |
 | `navigation` | 3,714 | 55 | 9 | `embodied_full_stack`, `embodied_hil_loop`, `spine_fleet_e2e` | 2 | benchmarked | integration |
-| `security` | 2,896 | 65 | 19 | `embodied_full_stack`, `embodied_hil_loop`, `evals` | 19 | benchmarked | integration |
+| `security` | 2,896 | 65 | 19 | `embodied_full_stack`, `embodied_hil_loop`, `evals` | 20 | benchmarked | integration |
 | `gateway` | 2,313 | 25 | 1 | — | 19 | documented | unit |
 | `mission` | 1,242 | 14 | 4 | `embodied_full_stack` | 2 | benchmarked | integration |
 | `audio` | 1,043 | 18 | 7 | — | 7 | documented | unit |
 | `fleet` | 823 | 10 | 8 | `mesh_fleet_e2e`, `offgrid_fleet_loop`, `spine_fleet_e2e` | 13 | benchmarked | integration |
 | `scheduler` | 684 | 16 | 3 | — | 4 | documented | unit |
+| `foresight` | 677 | 11 | 6 | `learning_approval_gate` | **0** | benchmarked | integration |
 | `tunnel` | 677 | 14 | 1 | — | 1 | documented | unit |
 | `doctor` | 560 | 9 | 1 | — | 2 | documented | unit |
 | `cost` | 472 | 8 | 4 | — | 13 | documented | unit |
+| `learning` | 454 | 4 | 3 | `learning_approval_gate` | 2 | benchmarked | integration |
 | `sensing` | 352 | 7 | 5 | — | 3 | documented | unit |
 | `gnss` | 336 | 9 | 1 | — | **0** | documented | unit |
 | `aerial` | 177 | 7 | 2 | — | **0** | documented | unit |
@@ -91,13 +91,13 @@ blocks it from migrating.
 | `power` | 319 | 6 | 6 | `embodied_full_stack`, `embodied_safing_loop` | **0** | documented | integration |
 | `comms` | 317 | 5 | 5 | `embodied_safing_loop` | **0** | documented | integration |
 | `peripherals` | 7,286 | 174 | 11 | `offgrid_fleet_loop` | 19 | documented | bench |
-| `memory` | 5,878 | 97 | 64 | `embodied_full_stack`, `embodied_hil_loop`, `embodied_safing_loop`, `evals`, `harness_long_horizon`, `liveness_acceptance`, `mesh_spine_e2e`, `revision_harness`, `system2_eval` | 39 | documented | bench |
+| `memory` | 5,878 | 97 | 65 | `embodied_full_stack`, `embodied_hil_loop`, `embodied_safing_loop`, `evals`, `harness_long_horizon`, `learning_approval_gate`, `liveness_acceptance`, `mesh_spine_e2e`, `revision_harness`, `system2_eval` | 39 | documented | bench |
 | `spine` | 4,263 | 61 | 15 | `liveness_acceptance`, `mesh_fleet_e2e`, `mesh_spine_e2e`, `offgrid_fleet_loop` | 27 | documented | bench |
 | `vision` | 2,511 | 51 | 4 | `embodied_hil_loop` | 18 | documented | bench |
 
 ```
 37 modules, 79,659 LOC, 1399 test fns.
-claim outruns evidence: 3 module(s), 1,548 LOC — foresight, learning, runtime
+claim outruns evidence: 1 module(s), 417 LOC — runtime
 no ROADMAP presence:    5 module(s), 1,826 LOC — foresight, gnss, aerial, power, comms
 Declared bench/hardware evidence (not measured by this script):
   memory: bench-validated on the live world store 2026-07-28 (10 beliefs withdrawn at one boot, mesh-node-lost 2376 -> 0)
@@ -106,21 +106,21 @@ Declared bench/hardware evidence (not measured by this script):
   vision: bench-validated on 14 days of recorded ClawCam detections (bodies/trailwatch)
 These carry a public claim with no bench evidence on record. Either add a
 citation to EVIDENCE, soften the claim, or accept that they cannot yet be
-said to be defensible: foresight, learning, runtime
+said to be defensible: runtime
 ```
 
 ### The rows that need a decision
 
-- **`foresight`** (677 LOC, 11 unit tests, no integration suite, no phase) —
-  `SOTA-COMPARISON.md` §"Foresight (anticipatory layer)" is candid that the
-  predictor is a linear-trend baseline and argues the contribution is the
-  *architectural placement* as a Track 1 tier. That is a defensible claim, and it
-  is defended nowhere in this document. It needs a phase row and an integration
-  test that shows a prediction firing a rule before a threshold crossing.
-- **`learning`** (454 LOC, 4 tests) — self-authored reflexes: mine → propose →
-  approval gate → activate. A pipeline that ends in *activating a rule that can
-  actuate hardware* has the thinnest test coverage of any module here. The
-  approval gate is the safety story and it has no integration test.
+- ~~**`foresight`**~~ and ~~**`learning`**~~ — **closed 2026-07-30** by
+  `tests/learning_approval_gate.rs`, which exercises both: the miner and the
+  approval gate in `learning`, and the live `ForesightEngine` that an approved
+  rule is pushed into. Both now read `integration` rather than `unit`, and the
+  claim-outruns-evidence count fell from three modules to one. `foresight` still
+  has no phase row of its own — see below.
+- **`foresight` still needs a phase row.** `SOTA-COMPARISON.md` §"Foresight
+  (anticipatory layer)" is candid that the predictor is a linear-trend baseline
+  and argues the contribution is the *architectural placement* as a Track 1 tier.
+  That is a defensible claim and this document does not make it anywhere.
 - **`runtime`** (417 LOC, zero external references) — see the `[~]` row under
   Phase 9. Wire it or cut it.
 - **`power`** and **`comms`** — both wired and both covered by
