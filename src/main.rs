@@ -374,6 +374,68 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         );
     }
 
+    // ── Deployment: re-derive the scheme this config was planned from ──────────
+    //
+    // `[deployment]` is written by DeploymentPlanner (and, byte-identically, by
+    // the TypeScript emitter in OBC-deployment-generator), and the planner sets
+    // `auto_plan = true` in everything it writes. Until now nothing read it back:
+    // `config.deployment` was consulted by exactly one thing in the whole tree, a
+    // test asserting the emitted TOML deserialises. An operator could set every
+    // key here and get silence — the same shape as the four channels that were
+    // exported and never started.
+    //
+    // What this does is cheap and worth the milliseconds: rebuild the inventory,
+    // re-run the planner (it is pure), and say what it now concludes. The config
+    // was planned once, by whichever planner was current then; the agent reading
+    // it may be several versions later. Unsatisfied desires are the payload —
+    // "you asked for vision and no item here provides camera_capture" is worth
+    // knowing at startup rather than at the first failed tool call.
+    if config.deployment.auto_plan {
+        let inventory =
+            oh_ben_claw::deployment::HardwareInventory::from_deployment_config(&config.deployment);
+
+        if inventory.items.is_empty() {
+            tracing::warn!(
+                scenario = %config.deployment.scenario,
+                "deployment.auto_plan is set but [[deployment.hardware]] is empty — \
+                 nothing to plan. The planner writes both together, so a config with \
+                 one and not the other was probably hand-edited."
+            );
+        } else {
+            let scheme = oh_ben_claw::deployment::DeploymentPlanner::plan(&inventory);
+            info!(
+                scenario = %scheme.scenario_name,
+                host = %scheme.host_board,
+                sub_agents = scheme.sub_agent_count(),
+                "deployment scheme re-derived from [deployment]"
+            );
+            for w in &scheme.warnings {
+                tracing::warn!(deployment = true, "{w}");
+            }
+            // The reason to do this at startup at all. `is_complete()` is false
+            // when a feature_desire has no hardware to satisfy it, which is
+            // exactly the drift a config outliving its hardware produces.
+            if !scheme.is_complete() {
+                for s in &scheme.suggested_hardware {
+                    tracing::warn!(
+                        "deployment: feature desire unsatisfied by the recorded \
+                         hardware — {s:?}"
+                    );
+                }
+            }
+        }
+    } else if config.deployment.enabled && !config.deployment.hardware.is_empty() {
+        // Not a warning: a recorded inventory with auto_plan off is a legitimate
+        // choice, and saying so at info level makes the switch discoverable to
+        // someone who did not know the block did anything. Until this release it
+        // genuinely did not.
+        info!(
+            items = config.deployment.hardware.len(),
+            "deployment inventory recorded; set deployment.auto_plan = true to \
+             re-check it against the current planner at startup"
+        );
+    }
+
     // ── Track 0: physical-action safety (shared by plain agent + orchestrator) ──
     // Resolve the audit MAC key with a secure precedence:
     //   explicit config key > vault (if unlockable via OBC_VAULT_PASSWORD)

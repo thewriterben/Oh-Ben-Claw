@@ -276,8 +276,6 @@ allow_remote    = true
 enabled    = true
 scenario   = "edge-mesh"
 auto_plan  = true
-auto_spawn = false
-llm_swarm  = false
 feature_desires = ["low-latency", "offline-capable", "secure"]
 
 [[deployment.hardware]]
