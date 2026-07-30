@@ -1,0 +1,37 @@
+[package]
+name = "obc-planner"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's hardware planner: the board registry, local-tangent-plane geometry, the site coverage optimizer, and the deployment scheme planner."
+
+# The second piece of the agent extracted as its own crate (2026-07-30), after
+# obc-memory.
+#
+# It was chosen because the compiler had already proved it extractable. The
+# `planner-wasm` crate compiled these same files standalone via `#[path]`, which
+# is a far stronger statement than the name-based reachability surveys in
+# `scripts/` can make: rustc will not link a crate whose sources reach outside
+# it. Measured before the move, the whole 6,315-line closure had exactly **one**
+# reference to the rest of the tree — `crate::memory` in `geo/anchor.rs` — and
+# that pointed at the piece already migrated. The dependency below is that one
+# edge.
+#
+# Nothing here knows about tools, providers, channels, the spine or the agent
+# loop, and the emitted `[deployment]` schema is a cross-repository contract:
+# OBC-deployment-generator's TypeScript emitter must produce byte-identical
+# output, pinned by the golden fixtures in the host crate's `tests/fixtures/`.
+[dependencies]
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+# Both are needed only by `geo::anchor`, so they ride the same feature. Keeping
+# anyhow optional means a wasm build of this crate pulls in serde and nothing
+# else.
+anyhow = { version = "1.0", optional = true }
+obc-memory = { path = "../obc-memory", optional = true }
+
+[features]
+# Anchoring a site into world memory needs SQLite, so it is off for wasm builds.
+# The rest of `geo` is pure geometry and compiles anywhere. `planner-wasm` and
+# any wasm consumer simply leave this off; the host agent turns it on.
+world-anchor = ["dep:obc-memory", "dep:anyhow"]

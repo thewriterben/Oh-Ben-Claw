@@ -160,8 +160,17 @@ fn every_item_role_survives_display_then_parse() {
 /// executes it, so this executes it.
 #[test]
 fn the_doc_comment_example_parses() {
-    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/config/mod.rs"))
-        .expect("src/config/mod.rs");
+    // The types moved to crates/obc-planner on 2026-07-30, so they sit beside
+    // the emitter and the reader rather than a crate away from both. This test
+    // followed them, and its own failure message is what said so: it read
+    // "DeploymentConfig moved; this test can no longer find its doc comment",
+    // which is a better outcome than passing because the string it searched for
+    // happened to be absent.
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/obc-planner/src/config.rs"
+    ))
+    .expect("crates/obc-planner/src/config.rs");
 
     let anchor = src
         .find("pub struct DeploymentConfig")
