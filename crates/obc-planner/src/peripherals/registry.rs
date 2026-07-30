@@ -2442,19 +2442,10 @@ mod tests {
     /// silently forks the catalog.
     #[test]
     fn committed_registry_json_is_current() {
-        // This source file is also compiled into the `planner-wasm` crate,
-        // whose manifest dir is one level down — check both locations.
-        let candidates = [
-            concat!(env!("CARGO_MANIFEST_DIR"), "/registry/registry.json"),
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../registry/registry.json"),
-        ];
-        let committed = candidates
-            .iter()
-            .find_map(|p| std::fs::read_to_string(p).ok())
-            .expect(
-                "registry/registry.json missing — generate it with \
-                 `cargo run --bin emit-registry -- registry/registry.json`",
-            );
+        let committed = crate::find_up("registry/registry.json").expect(
+            "registry/registry.json missing — generate it with \
+             `cargo run --bin emit-registry -- registry/registry.json`",
+        );
         let live = registry_json().expect("registry serializes to JSON");
         let norm = |s: &str| s.replace("\r\n", "\n").trim_end().to_string();
         assert_eq!(

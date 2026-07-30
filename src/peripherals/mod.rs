@@ -27,7 +27,11 @@
 
 pub mod bus_tools;
 pub mod onboarding;
-pub mod registry;
+/// The board and accessory registry — re-exported from the [`obc_planner`]
+/// crate. It moved because it is the planner's input and has no I/O; the
+/// transports and bus tools around it stay here. `crate::peripherals::registry`
+/// is unchanged.
+pub use obc_planner::peripherals::registry;
 pub mod selftest;
 pub mod traits;
 

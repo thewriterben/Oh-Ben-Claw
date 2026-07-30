@@ -47,7 +47,10 @@ pub mod doctor;
 pub mod fleet;
 pub mod foresight;
 pub mod gateway;
-pub mod geo;
+/// Local-tangent-plane geometry and site models — re-exported from the
+/// [`obc_planner`] crate, where it sits next to the site optimizer that consumes
+/// it. `oh_ben_claw::geo::X` is unchanged.
+pub use obc_planner::geo;
 pub mod gnss;
 pub mod harness;
 pub mod learning;
@@ -57,6 +60,7 @@ pub mod mcp;
 // — a crate split that renamed every call site would be two changes at once, and
 // only one of them is the point.
 pub use obc_memory as memory;
+pub use obc_planner;
 pub mod mission;
 pub mod movement;
 pub mod navigation;
@@ -67,7 +71,8 @@ pub mod providers;
 pub mod scheduler;
 pub mod security;
 pub mod sensing;
-pub mod siteplan;
+/// The site coverage optimizer — re-exported from the [`obc_planner`] crate.
+pub use obc_planner::siteplan;
 pub mod skill_forge;
 pub mod spine;
 pub mod tools;
