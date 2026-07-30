@@ -1,0 +1,12 @@
+[package]
+name = "obc-paths"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "One data root for Open Body Control, resolved once: OBC_DATA_DIR, then a configured value, then the platform convention."
+
+# Deliberately dependency-light. This is the lowest layer in the workspace — the
+# memory substrate and the agent both sit on it — so anything it pulls in, they
+# both pull in.
+[dependencies]
+directories = "5.0"

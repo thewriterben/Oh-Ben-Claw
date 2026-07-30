@@ -50,21 +50,11 @@ pub enum ResponseFormat {
 
 // ── Provider Trait ───────────────────────────────────────────────────────────
 
-/// A message in a conversation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: ChatRole,
-    pub content: String,
-}
-
-/// The role of a message sender.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ChatRole {
-    System,
-    User,
-    Assistant,
-}
+// `ChatMessage` and `ChatRole` moved into the `obc-memory` crate on 2026-07-30.
+// They are the shape a conversation is stored in, and the substrate that stores
+// them should own them; re-exported here because `crate::providers::ChatMessage`
+// is what every existing caller says.
+pub use obc_memory::{ChatMessage, ChatRole};
 
 /// A tool call requested by the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]

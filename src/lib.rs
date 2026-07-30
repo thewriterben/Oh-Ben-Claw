@@ -52,7 +52,11 @@ pub mod gnss;
 pub mod harness;
 pub mod learning;
 pub mod mcp;
-pub mod memory;
+// The memory substrate lives in its own crate (2026-07-30). Re-exported under the
+// old name so all twenty-three consumers keep compiling against `crate::memory::…`
+// — a crate split that renamed every call site would be two changes at once, and
+// only one of them is the point.
+pub use obc_memory as memory;
 pub mod mission;
 pub mod movement;
 pub mod multimodal;
@@ -61,7 +65,6 @@ pub mod observability;
 pub mod peripherals;
 pub mod power;
 pub mod providers;
-pub mod runtime;
 pub mod scheduler;
 pub mod security;
 pub mod sensing;
