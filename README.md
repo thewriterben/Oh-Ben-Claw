@@ -266,7 +266,15 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 > table on the microcontroller is the only boundary that does, and nothing here
 > replaces it.
 
-**Memory** — a bitemporal world model with provenance, a support graph and four ways a belief can be withdrawn (supersession, source liveness, dependency withdrawal, retention); and a vector store.
+**Memory** — a bitemporal world model with provenance, a support graph and four ways a belief can be withdrawn (supersession, source liveness, dependency withdrawal, retention).
+
+> The vector store went the same way as the two above, and I left this claim
+> standing when I struck them. `VectorStore`, `EmbeddingClient`,
+> `VectorSearchTool` and `DocumentIngestTool` all have zero references outside
+> `vector.rs`; the two tool impls were deleted on 2026-07-30 when the substrate
+> became its own crate, and the store is kept but unwired. It escaped the file
+> sweep because several of its type names are generic enough to match unrelated
+> code — a reminder that the sweep clears nothing, it only accuses.
 
 > `HEARTBEAT.md` task dispatch and the daily journal were listed here and are
 > **not wired**: `HeartbeatStore`'s `has_tasks`, `actionable_tasks`,

@@ -29,7 +29,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use oh_ben_claw::memory::HeartbeatStore;
+//! use obc_memory::HeartbeatStore;
 //!
 //! let store = HeartbeatStore::new();
 //!
