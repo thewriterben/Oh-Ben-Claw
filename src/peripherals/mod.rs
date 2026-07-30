@@ -26,11 +26,9 @@
 //! | Any Linux SBC | native | `hardware` | i2c_scan, i2c_read, i2c_write, spi_transfer, pwm_control |
 
 pub mod bus_tools;
-pub mod fusion;
 pub mod onboarding;
 pub mod registry;
 pub mod selftest;
-pub mod sensors;
 pub mod traits;
 
 #[cfg(all(feature = "peripheral-nanopi", target_os = "linux"))]
