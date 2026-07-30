@@ -537,6 +537,19 @@ The tools `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type
 
 Given a list of available hardware and desired features, the deployment planner generates a complete multi-agent topology and TOML configuration.
 
+> **The agent does not read the `[deployment]` section it is handed.**
+> `Config.deployment` is parsed and never accessed: the only reads in the tree are
+> in `tests/planner_parity.rs`, asserting the generated TOML is *schema-valid*.
+> That test is real and worth having — it is why the emitted config cannot drift
+> from the runtime's types — but it checks the shape, not that anything consumes
+> it. So `auto_plan = true` below, documented in `DeploymentConfig` as "generate
+> and print the deployment scheme at startup", does nothing; the only reference to
+> `auto_plan` outside the config struct is the line that *writes* it into
+> generated configs. Same for `pre_spawn`.
+>
+> Found by `scripts/inert_components.py`, which looks for the shape three security
+> controls already hid in: constructed, configured, tested, never interrogated.
+
 ```toml
 [deployment]
 enabled         = true
