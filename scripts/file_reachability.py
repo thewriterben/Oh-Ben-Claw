@@ -166,6 +166,14 @@ def strip_audit(text: str) -> str:
             in_ledger = line.strip() == "## Subsystem ledger"
         if fenced or in_ledger:
             continue
+        # A correction is not a claim. Blockquotes are how this repo records "this
+        # was advertised and does not run", and `[~]` / `[-]` are the roadmap
+        # markers for the same thing. Counting them kept the overclaim total at 9
+        # after nine overclaims had just been struck — the tool reporting no
+        # progress precisely because the progress was made in prose it was reading.
+        stripped = line.lstrip()
+        if stripped.startswith(">") or stripped.startswith("- [~]") or stripped.startswith("- [-]"):
+            continue
         out.append(line)
     return "\n".join(out)
 

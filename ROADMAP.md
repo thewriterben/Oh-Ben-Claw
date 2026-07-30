@@ -138,28 +138,33 @@ a module-level survey cannot see by construction:
 - `security/pairing.rs` — node authentication. Found by hand 2026-07-30, *after*
   the ledger above was built and called sufficient.
 
-`scripts/file_reachability.py` asks the same question one level down. Run on
-2026-07-30, after `src/runtime/` was removed and the four orphaned channels were
-wired, it finds **12 unwired files, 5,067 LOC — 9 of them presented as shipped in
-this file or the README (4,417 LOC)**. It started this audit at 17 and 14:
+`scripts/file_reachability.py` asks the same question one level down. It opened
+this audit at **17 unwired files, 14 of them presented as shipped (6,048 LOC)**.
+After `src/runtime/` was removed, the four orphaned channels were wired, and the
+remaining claims were struck, it reports **12 unwired files, 5,067 LOC — 3 still
+matching documentation (1,399 LOC)**, and those three are alias noise checked by
+hand: `` `audio` `` matches the *live* `audio::suite`, and the `multimodal` and
+`HEARTBEAT` hits are a Phase 19 sentence and a section heading. The heuristic is
+not tuned to zero, because tuning a measurement until it reads zero is how you
+get a zero that means nothing.
 
 ```
 file                                       loc  pub  documented as shipped in
-src/audio/mod.rs                           673    8  README.md, ROADMAP.md  <-- OVERCLAIM
-src/peripherals/fusion.rs                  662    6  ROADMAP.md  <-- OVERCLAIM
-src/mission/bt.rs                          648    3  README.md  <-- OVERCLAIM
-src/skill_forge/registry.rs                570    3  ROADMAP.md  <-- OVERCLAIM
-src/memory/image.rs                        517    2  ROADMAP.md  <-- OVERCLAIM
+src/audio/mod.rs                           673    8  README.md  <-- OVERCLAIM
 src/multimodal.rs                          441   13  ROADMAP.md  <-- OVERCLAIM
-src/peripherals/sensors.rs                 375    9  ROADMAP.md  <-- OVERCLAIM
-src/memory/heartbeat.rs                    285    1  README.md, ROADMAP.md  <-- OVERCLAIM
-src/memory/journal.rs                      246    1  README.md, ROADMAP.md  <-- OVERCLAIM
+src/memory/heartbeat.rs                    285    1  ROADMAP.md  <-- OVERCLAIM
+src/peripherals/fusion.rs                  662    6  —
+src/mission/bt.rs                          648    3  —
+src/skill_forge/registry.rs                570    3  —
+src/memory/image.rs                        517    2  —
+src/peripherals/sensors.rs                 375    9  —
 src/movement/feedback.rs                   269    3  —
 src/deployment/saga.rs                     257    3  —
+src/memory/journal.rs                      246    1  —
 src/vision/clawcam_spatial.rs              124    3  —
 
 12 unwired file(s), 5,067 LOC.
-of those, 9 are presented as shipped in README/ROADMAP (4,417 LOC) — fix the code or fix the claim.
+of those, 3 are presented as shipped in README/ROADMAP (1,399 LOC) — fix the code or fix the claim.
 ```
 
 These are candidates, not verdicts: the script is name-based, not a compiler, and
@@ -221,7 +226,7 @@ The initial release establishes the core architecture and demonstrates the key c
 - [x] MQTT Spine protocol design (`src/spine/mod.rs`)
 - [x] Hardware board registry with USB VID/PID mappings (`src/peripherals/registry.rs`)
 - [x] NanoPi Neo3 GPIO peripheral driver (`src/peripherals/nanopi.rs`)
-- [x] ESP32-S3 sensor tools (camera, audio, sensor read) (`src/peripherals/sensors.rs`)
+- [~] ESP32-S3 sensor tools (camera, audio, sensor read) (`src/peripherals/sensors.rs`) — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.)*
 - [x] ESP32-S3 firmware with serial + MQTT support (`firmware/obc-esp32-s3`)
 - [x] Configuration schema with MQTT Spine and multi-board support (`src/config/mod.rs`)
 - [x] CLI with `start`, `status`, `peripheral`, and `service` subcommands (`src/main.rs`)
@@ -332,8 +337,8 @@ Enable peripheral nodes to run the full Oh-Ben-Claw agent locally, without a hos
 ## Phase 8: Advanced Capabilities ✅ Complete
 
 - [x] Vision pipeline (camera capture → LLM vision → action) (`src/vision/mod.rs`)
-- [x] Audio pipeline (microphone → speech-to-text → agent → text-to-speech) (`src/audio/mod.rs`)
-- [x] Sensor fusion (combine readings from multiple sensors) (`src/peripherals/fusion.rs`)
+- [~] Audio pipeline (microphone → speech-to-text → agent → text-to-speech) (`src/audio/mod.rs`) — *(audit 2026-07-30: `AudioPipeline`, `AudioPipelineTool` and their six supporting types have no reference outside the file. The live audio path is `audio::suite` (22 references) plus the `audio_transcribe` / `text_to_speech` tools; the pipeline was superseded and left in place.)*
+- [~] Sensor fusion (combine readings from multiple sensors) (`src/peripherals/fusion.rs`) — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.) Live peripherals code goes through `registry`, `selftest` and `onboarding`.*
 - [x] Scheduled tasks and cron jobs (`src/scheduler/mod.rs`)
 - [-] Terminal telemetry dashboard — real-time TUI *(**removed** 2026-07-28 in the curation pass: `src/dashboard/` was never referenced outside itself)*
 - [x] Skill forge (automatic discovery and integration of new skills) (`src/skill_forge/mod.rs`)
@@ -346,7 +351,7 @@ Implements key features from the upstream ZeroClaw project to ensure Oh-Ben-Claw
 - [x] Token cost tracking and budget enforcement (`src/cost/`)
 - [x] System diagnostics CLI command (`oh-ben-claw doctor`) (`src/doctor/mod.rs`)
 - [-] Event lifecycle hooks for extensibility *(**removed** 2026-07-28 in the curation pass: `src/hooks/` was never wired)*
-- [x] Enhanced multimodal message handling with image markers (`src/multimodal.rs`)
+- [~] Enhanced multimodal message handling with image markers (`src/multimodal.rs`) — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.) No provider consumes it; there is no live image path.*
 - [-] RAG pipeline for hardware datasheet retrieval *(**removed** 2026-07-28 in the curation pass: `src/rag/` was never wired)*
 - [-] Sandboxed tool execution runtime (native + Docker) (`src/runtime/`) — *(**removed** 2026-07-30. Zero references outside itself; `ShellTool` always spawned directly and `wasm.rs` was a stub with no `wasmtime` dependency. Wiring it would have covered one tool of seventy-six, and not the physical ones, which cannot be containerised. `[[security.policies]]` covers the whole tool surface and was already wired — it was merely undocumented. See `tests/tool_policy_gate.rs`.)*
 - [x] New config sections: `[autonomy]`, `[cost]`, `[multimodal]` — *(`[runtime]` **removed** 2026-07-30 with the module)*
@@ -407,7 +412,7 @@ MimiClaw periodically checks a Markdown task file and triggers the agent when
 uncompleted items are found.  Oh-Ben-Claw adopts the same pattern on top of the
 existing `Scheduler`.
 
-- [x] **`HeartbeatStore`** — reads `~/.oh-ben-claw/HEARTBEAT.md`, detects uncompleted tasks (skips headers, empty lines, and `- [x]` completed checkboxes), and generates a prompt for the agent (`src/memory/heartbeat.rs`)
+- [~] **`HeartbeatStore`** — reads `~/.oh-ben-claw/HEARTBEAT.md`, detects uncompleted tasks (skips headers, empty lines, and `- [x]` completed checkboxes), and generates a prompt for the agent (`src/memory/heartbeat.rs`) — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.) Struck from the README on 2026-07-30.*
 - [x] `append_task()` convenience method appends a new `- [ ] …` line to the file
 - [x] `build_prompt()` returns the heartbeat prompt when actionable tasks exist
 
@@ -416,9 +421,9 @@ existing `Scheduler`.
 MimiClaw writes per-day Markdown notes as `YYYY-MM-DD.md` files to complement
 its SQLite conversation history.  Oh-Ben-Claw adopts the same pattern.
 
-- [x] **`DailyJournal`** — appends timestamped notes to `~/.oh-ben-claw/journal/YYYY-MM-DD.md`; creates file with date header on first write (`src/memory/journal.rs`)
+- [~] **`DailyJournal`** — appends timestamped notes to `~/.oh-ben-claw/journal/YYYY-MM-DD.md`; creates file with date header on first write (`src/memory/journal.rs`) — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.) Struck from the README on 2026-07-30.*
 - [x] `read_recent(days)` reads the last N days of notes, sections separated by `---`
-- [x] `list_dates()` returns all journal dates in descending order
+- [~] `list_dates()` returns all journal dates in descending order — *(unreferenced; see `DailyJournal`.)*
 
 ### HTTP Proxy Support (inspired by MimiClaw's proxy system)
 
@@ -480,9 +485,9 @@ OpenClaw popularised the concept of a public skill registry ("ClawHub") where
 the community shares pre-built automation scripts.  Oh-Ben-Claw now has a
 first-class client for this registry.
 
-- [x] **`ClawHubEntry`** — typed representation of a registry entry: name, version, description, author, download count, star rating, tags, verified status, and manifest URL (`src/skill_forge/registry.rs`)
+- [~] **`ClawHubEntry`** — typed representation of a registry entry: name, version, description, author, download count, star rating, tags, verified status, and manifest URL (`src/skill_forge/registry.rs`) — *audit 2026-07-30: `ClawHubEntry`, `SkillRegistryIndex` and `ClawHubClient` have no reference outside `registry.rs`, and `install_policy` — the supply-chain hardening written for this path — is referenced **only from `registry.rs`**. The whole ClawHub install path is unreachable: `[clawhub]` and `[clawhub.install_policy]` parse, and nothing walks through the door they guard. Skill *synthesis* and *rollout* are live; skill *installation* is not.*
 - [x] **`SkillRegistryIndex`** — locally cached index with `search(query)` (name + description + tags), `find(name)`, `len()`, and `is_empty()` helpers
-- [x] **`ClawHubClient`** — async HTTP client for a ClawHub REST API (`GET /api/v1/skills`, `GET /api/v1/skills/{name}`, `GET /api/v1/skills/{name}/{version}/manifest`); local index cache avoids redundant network round-trips; `install()` downloads and writes a `.skill.json` to the configured skills directory
+- [~] **`ClawHubClient`** — async HTTP client for a ClawHub REST API (`GET /api/v1/skills`, `GET /api/v1/skills/{name}`, `GET /api/v1/skills/{name}/{version}/manifest`); local index cache avoids redundant network round-trips; `install()` downloads and writes a `.skill.json` to the configured skills directory — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.)*
 - [x] `pub mod registry` added to `src/skill_forge/mod.rs`
 
 ### Image Memory (inspired by OpenClaw 3.13's multimodal image memory)
@@ -491,9 +496,9 @@ OpenClaw 3.13 introduced persistent image memory so agents can store and
 retrieve visual context across sessions.  Oh-Ben-Claw now provides the same
 capability via a SQLite-backed store.
 
-- [x] **`ImageEntry`** — stored image with UUID, MIME type, base64 data, description, tags, session ID, timestamp, and file name; `decode_bytes()`, `estimated_bytes()`, and `has_any_tag()` helpers (`src/memory/image.rs`)
-- [x] **`ImageMemoryStore`** — SQLite WAL-mode store with `store()`, `get()`, `delete()`, `search()` (case-insensitive LIKE on description + tags), `list_by_session()`, and `count()` operations; `open_in_memory()` for tests
-- [x] `pub mod image` + `pub use image::ImageMemoryStore` added to `src/memory/mod.rs`
+- [~] **`ImageEntry`** — *(audit 2026-07-30: unreferenced outside `src/memory/image.rs`, along with the whole image store.)*
+- [~] **`ImageMemoryStore`** — SQLite WAL-mode store with `store()`, `get()`, `delete()`, `search()` (case-insensitive LIKE on description + tags), `list_by_session()`, and `count()` operations; `open_in_memory()` for tests — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.)*
+- [~] `pub mod image` + `pub use image::ImageMemoryStore` — *(the re-export is what made this look reachable; nothing consumes it.)*
 - [x] Pre-existing `src/memory/vector.rs` `Tool::execute` return-type bug fixed (`ToolResult` → `anyhow::Result<ToolResult>`) so the vector module can be compiled and exported (`pub mod vector` added to `src/memory/mod.rs`)
 
 ### Browser Automation in `default_tools()`
@@ -566,7 +571,7 @@ and enhanced reliability.
 
 ### Peripheral Spine Integration (resolves Phase 1 TODOs)
 
-- [x] **Sensor tool spine communication** — `CameraCaptureTool`, `AudioSampleTool`, and `SensorReadTool` now accept an optional `Arc<SpineClient>` and route commands through the MQTT spine when available; falls back to stub mode for standalone testing (`src/peripherals/sensors.rs`)
+- [~] **Sensor tool spine communication** — `CameraCaptureTool`, `AudioSampleTool`, and `SensorReadTool` now accept an optional `Arc<SpineClient>` and route commands through the MQTT spine when available; falls back to stub mode for standalone testing (`src/peripherals/sensors.rs`) — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.)*
 - [x] `with_spine()` builder method on all three sensor tools
 
 ### Persistent Cost Tracking (completes Phase 9 cost subsystem)
@@ -577,7 +582,7 @@ and enhanced reliability.
 
 ### Enhanced Multimodal Support (completes Phase 9 multimodal)
 
-- [x] **Image source resolution** — `resolve_image_source()` distinguishes local file paths from remote URLs (`src/multimodal.rs`)
+- [~] **Image source resolution** — `resolve_image_source()` distinguishes local file paths from remote URLs (`src/multimodal.rs`) — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.)*
 - [x] **MIME type validation** — `validate_mime_type()` checks against the `ALLOWED_IMAGE_MIME_TYPES` whitelist
 - [x] **Image size validation** — `validate_image_size()` enforces configurable byte-size limits
 - [x] **Local image fetching** — `fetch_local_image()` reads, validates, and base64-encodes local image files

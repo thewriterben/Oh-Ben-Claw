@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/rust-stable-orange" alt="Rust stable" />
 </p>
 
-**Oh-Ben-Claw** is an advanced, distributed, **embodied** AI agent built on the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) architecture. It began as a multi-device orchestrator — one LLM brain commanding a fleet of hardware peripherals over an MQTT spine — and has grown a full **embodied control stack**: a bitemporal world memory, millisecond reflexes, a predictive foresight layer, deliberative missions and behavior trees, and multi-robot fleet coordination — all bounded by a single uniform safety gate that runs on the host **and** on the microcontroller.
+**Oh-Ben-Claw** is an advanced, distributed, **embodied** AI agent built on the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) architecture. It began as a multi-device orchestrator — one LLM brain commanding a fleet of hardware peripherals over an MQTT spine — and has grown a full **embodied control stack**: a bitemporal world memory, millisecond reflexes, a predictive foresight layer, deliberative guarded missions, and multi-robot fleet coordination — all bounded by a single uniform safety gate that runs on the host **and** on the microcontroller.
 
 > **Mental model:** Oh-Ben-Claw is the brain. Your ESP32s, NanoPis, and Raspberry Pis are the arms, eyes, and ears. The brain doesn't just *call* the hardware — it perceives the world into memory, reacts reflexively, anticipates what's coming, plans multi-step missions, and keeps every physical action inside hard safety limits.
 
@@ -81,14 +81,23 @@ All four run on the world-memory substrate and dispatch through the same Track 0
 |---|---|---|---|
 | **Reactive** | Reflexes (System 1) | the present — a fact crosses a condition *now* | `src/agent/reflex`, `src/agent/safing` |
 | **Anticipatory** | Foresight (Track 1) | the *predicted* future — a trend will cross a threshold | `src/foresight` |
-| **Deliberative** | Missions & behavior trees | a multi-step plan with guards | `src/mission` |
+| **Deliberative** | Missions | a multi-step plan with guards | `src/mission` |
 | **Coordinated** | Fleet | many robots sharing work | `src/fleet` |
 
 **Reflexes** (`src/agent/reflex`) evaluate conditions (`Sensor`, `GpioEq`, categorical `State`, `And`/`Or`) against world memory every tick and fire actions (`GpioWrite`, `Publish`, `Escalate`, `Move`) with debounce and an escalation budget — System 1, no LLM in the loop. The **safing** library (`src/agent/safing`) adds canonical self-protection rules (battery critical → escalate + Track 0 stop; battery low → shed load; link offline; audio alarm; out-of-range sensor; overheat) that *recover automatically* when conditions normalize.
 
 **Foresight** (`src/foresight`) fits a trend over an entity's recent history and fires *before* the event — `battery ≤ 10% within 60s → return to base` triggers while the pack is still at 20% but draining fast. The forecaster supports exponentially-weighted (online) regression, so it tracks regime changes instead of lagging behind them.
 
-**Missions** (`src/mission`) execute a guarded sequence of steps (`navigate_to` / `wait` / `speak` / `record` / `await_state`); a **behavior-tree engine** (`src/mission/bt`) adds a full declarative grammar (sequence / reactive-sequence / fallback / parallel / decorators) reusing the same actions and conditions. Guards **preempt and halt** the body when a bad mode appears.
+**Missions** (`src/mission`) execute a guarded sequence of steps (`navigate_to` / `wait` / `speak` / `record` / `await_state`). Guards **preempt and halt** the body when a bad mode appears.
+
+> This paragraph also advertised a **behavior-tree engine** (`src/mission/bt`) with
+> "a full declarative grammar (sequence / reactive-sequence / fallback / parallel /
+> decorators)". `Bt`, `BtSpec`, `BtContext` and `BtRunner` have no reference outside
+> that file — 648 lines that nothing runs. What executes is the linear guarded
+> sequencer, which is what `docs/SOTA-COMPARISON.md` describes accurately: "a
+> reactive Sequence with condition guards — a strict subset of a BT", with "no full
+> BT grammar" named as the honest gap. The comparison document was right and this
+> sentence was not.
 
 **Self-authored reflexes** (`src/learning`) mine history for antecedents that repeatedly preceded a bad outcome and *propose* new rules with support/confidence — but a proposal only goes live through an explicit **approval gate**, after which it joins the foresight engine's shared rule buffer on the next tick.
 
@@ -197,7 +206,22 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 
 **Deployment Scheme Generator** analyses your hardware inventory, maps capabilities to agent roles, identifies gaps, and renders a ready-to-use TOML configuration (optionally refined by an LLM-powered planning swarm).
 
-**Skill Forge & ClawHub** discover, vet, and install community skills, with a security install policy (consent, allowlist, version pinning, SHA-256 checksums, static manifest inspection, JSONL audit log). Synthesized physical skills are quarantined behind Track 0 until approved.
+**Skill Forge** synthesizes, improves and rolls out skills the agent writes for itself. Synthesized physical skills are quarantined behind Track 0 until approved.
+
+> **ClawHub installation does not run.** This line claimed Skill Forge and ClawHub
+> "discover, vet, and install community skills, with a security install policy
+> (consent, allowlist, version pinning, SHA-256 checksums, static manifest
+> inspection, JSONL audit log)". Synthesis, improvement and rollout are live.
+> Installation is not: `ClawHubClient`, `ClawHubEntry` and `SkillRegistryIndex`
+> have no reference outside `skill_forge/registry.rs`, and `install_policy` — the
+> module written against the 2026 registry supply-chain threat — is referenced
+> **only from that dead file**. `[clawhub]` and `[clawhub.install_policy]` parse
+> and configure a path nothing can take.
+>
+> That is the third security control found in this shape, after node pairing and
+> the tool sandbox: built, configured, unit-tested, and never invoked. The pattern
+> is worth more attention than any one instance — a control with tests and a config
+> key reads as present to every check except running it.
 
 **MCP Integration** exposes all tools as a Model Context Protocol server (stdio + HTTP/SSE, dual-mode for the 2026 spec) and imports tools from external MCP servers. **A2A Protocol** implements Google's Agent-to-Agent v1.0 for cross-platform agent interop.
 
@@ -343,7 +367,7 @@ is a fuller worked example.
 ### Data location
 
 Everything this instance writes — `memory.db`, `world.db`, `scheduler.db`,
-`vault.db`, the journal, the audit chain, approval grants — lives under one root:
+`vault.db`, the audit chain, approval grants — lives under one root:
 
 ```bash
 # Platform default: ~/.local/share/oh-ben-claw (Linux),
@@ -445,7 +469,7 @@ explore    = false    # true → autonomously map unknown space via frontiers
 inscribed_radius  = 0.25
 inflation_radius  = 0.6
 
-# Deliberative missions (named library) + behavior trees
+# Deliberative missions (named library)
 [mission]
 enabled = true
 
@@ -469,8 +493,12 @@ Channels, browser, ClawHub, cost, runtime, multimodal, and proxy sections are un
 
 ## Heartbeat File
 
-`HEARTBEAT.md` in the data root (see [Data location](#data-location)) is a plain
-Markdown task list; uncompleted items trigger the agent on a schedule.
+> **Not wired.** `HEARTBEAT.md` was described here as "a plain Markdown task list;
+> uncompleted items trigger the agent on a schedule". `HeartbeatStore` reads the
+> file and `has_tasks`, `actionable_tasks`, `build_prompt` and `append_task` have
+> no callers, so nothing is triggered and no schedule consults it. Writing the file
+> has no effect today. Kept as a section because the shape is right and the wiring
+> is a small job; see `scripts/file_reachability.py`.
 
 Say what the agent is for in `[agent].system_prompt` — see `config.example.toml`.
 You do not need to describe the world there: current beliefs, with provenance
@@ -634,7 +662,7 @@ Oh-Ben-Claw/
 │   ├── movement/       # Track 0–bounded actuation + closed-loop feedback
 │   ├── navigation/     # Localization, SLAM, mapping, A*+costmap, particle filter,
 │   │                   #   sensor model, frontier exploration
-│   ├── mission/        # Mission sequencer + behavior-tree engine
+│   ├── mission/        # Mission sequencer (bt.rs is an unwired BT engine — see above)
 │   ├── foresight/      # Predictive control (Track 1) + online forecaster
 │   ├── learning/       # Self-authored reflexes (mine → approve → activate)
 │   ├── fleet/          # Multi-robot coordination (registry, auction, conflicts)
@@ -687,7 +715,7 @@ Oh-Ben-Claw is built on the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw
 | **Safety gate (Track 0)** | ✗ | ✅ Host + firmware, per-call approval |
 | **Reflexes / safing** | ✗ | ✅ System 1 + self-healing recovery |
 | **Foresight (predictive)** | ✗ | ✅ Trend + online forecaster |
-| **Missions / behavior trees** | ✗ | ✅ Guarded sequencer + BT engine |
+| **Missions** | ✗ | ✅ Guarded sequencer (`bt.rs` is written and unwired — see Missions) |
 | **Navigation / SLAM** | ✗ | ✅ Particle filter, pose-graph SLAM, A*+costmap |
 | **Self-authored reflexes** | ✗ | ✅ Mine → approve → activate |
 | **Fleet coordination** | ✗ | ✅ Auction allocation + conflict avoidance |
