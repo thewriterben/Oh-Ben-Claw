@@ -1,0 +1,36 @@
+[package]
+name = "obc-memory"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's memory substrate: a bitemporal world model with provenance, a support graph, and four ways a belief can be withdrawn."
+
+# The first piece of the agent extracted as its own crate (2026-07-30). It was
+# chosen because it is nearly leaf-level — 5,878 lines with two references to the
+# rest of the tree, against twenty-three modules that depend on it — and because
+# it is the part with the strongest evidence behind it and its design already
+# documented publicly.
+#
+# Nothing here knows about tools, providers, the spine or the agent loop. Keeping
+# it that way is the point: the substrate must not depend on its consumers.
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+tracing = { version = "0.1", default-features = false }
+uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+obc-paths = { path = "../obc-paths" }
+fastembed = { version = "5", optional = true }
+
+[features]
+# Dense retrieval leg for episode memory: local ONNX embeddings. Off by default
+# so ordinary builds stay light. The agent re-exposes this as its own `semantic`
+# feature, so `--features semantic` at the top level still does what it did.
+semantic = ["dep:fastembed"]
+
+[dev-dependencies]
+tempfile = "3"

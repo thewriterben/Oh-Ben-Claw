@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub mod first_run;
-pub mod paths;
+// `paths` moved to the `obc-paths` crate on 2026-07-30 so the memory substrate can
+// depend on it without depending on the agent's config module. Re-exported here
+// because `crate::config::paths::…` is the path nine modules already use.
+pub use obc_paths as paths;
 pub mod secret;
 pub use secret::SecretString;
 

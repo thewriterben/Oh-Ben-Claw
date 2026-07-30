@@ -72,7 +72,7 @@ impl HeartbeatStore {
     }
 
     fn default_path() -> Result<PathBuf> {
-        Ok(crate::config::paths::in_data_dir(HEARTBEAT_FILE))
+        Ok(obc_paths::in_data_dir(HEARTBEAT_FILE))
     }
 
     // ── Task detection ────────────────────────────────────────────────────────
