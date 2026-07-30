@@ -247,9 +247,29 @@ print(f"claim outruns evidence: {len(gaps)} module(s), {sum(r['loc'] for r in ga
 print(f"no ROADMAP presence:    {len(nophase)} module(s), {sum(r['loc'] for r in nophase):,} LOC"
       + (" — " + ", ".join(r["mod"] for r in nophase) if nophase else ""))
 if EVIDENCE:
+    # A declaration whose subject is no longer in `src/` is not automatically
+    # stale. Under the migration policy a defensible piece *leaves* — it becomes a
+    # crate in `crates/` and then an artifact in OBC-Prime — so the bench evidence
+    # that made it defensible is exactly what we least want to drop on the way
+    # out. `memory` was the first to go and the first to be reported as a stale
+    # declaration, which was the script confusing "migrated" with "deleted".
+    #
+    # So: check `crates/` before accusing anything. Read from disk rather than a
+    # hardcoded list, so extracting the next crate needs no edit here.
+    crates_dir = ROOT / "crates"
+    extracted = {
+        d.name.removeprefix("obc-"): d.name
+        for d in (crates_dir.iterdir() if crates_dir.is_dir() else [])
+        if (d / "Cargo.toml").is_file()
+    }
     print("\nDeclared bench/hardware evidence (not measured by this script):")
     for k, v in sorted(EVIDENCE.items()):
-        mark = "" if k in mods else "  <- NOT A MODULE, stale declaration"
+        if k in mods:
+            mark = ""
+        elif k in extracted:
+            mark = f"  <- extracted to crates/{extracted[k]}; evidence travels with it"
+        else:
+            mark = "  <- NOT A MODULE and NOT A CRATE, stale declaration"
         print(f"  {k}: {v}{mark}")
 undeclared_gap = [r["mod"] for r in gaps if r["mod"] not in EVIDENCE]
 if undeclared_gap:

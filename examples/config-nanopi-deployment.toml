@@ -136,15 +136,16 @@ role   = "Environmental sensing specialist. Reads temperature and humidity from 
 tools  = ["sensor_read", "gpio_read", "i2c_read", "memory_note"]
 
 # ── Deployment Scheme Generator ───────────────────────────────────────────────
-# Records the hardware inventory for the deployment planner.
-# Set auto_plan = true to regenerate the scheme at every startup.
+# Records the hardware inventory this deployment was planned from. Normally
+# written by the planner (or by OBC-deployment-generator) rather than by hand.
+# With auto_plan = true the agent re-derives the scheme from the hardware below
+# at startup and warns if it no longer matches — which catches a config planned
+# by an older planner than the one now running.
 
 [deployment]
 enabled         = true
 scenario        = "NanoPi-Neo3 Reference Deployment"
-auto_plan       = false   # true = print scheme on startup
-auto_spawn      = false   # true = pre-spawn agents from planner output
-llm_swarm       = false   # true = use LLM sub-agents to refine the plan
+auto_plan       = false   # true = re-plan at startup and warn on drift
 
 feature_desires = [
     "vision",

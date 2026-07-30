@@ -972,7 +972,9 @@ pub struct DeploymentHardwareConfig {
     #[serde(default)]
     pub node_id: Option<String>,
     /// Operator-assigned role: `"host"`, `"display"`, `"vision"`, `"listening"`,
-    /// `"sensing"`, `"peripheral"`.  Leave empty for auto-assignment.
+    /// `"sensing"`, `"peripheral"`, `"console"`.  Leave empty for
+    /// auto-assignment. Unrecognised text is treated as empty rather than
+    /// rejected — see `ItemRole::from_str`.
     #[serde(default)]
     pub role: String,
     /// Accessory names attached to this board (e.g. `["dht22"]`).
@@ -982,26 +984,36 @@ pub struct DeploymentHardwareConfig {
 
 /// Configuration for the deployment scheme generator (Phase 13).
 ///
-/// Describes the hardware inventory and feature desires for a deployment.
-/// When `auto_plan` is true, Oh-Ben-Claw generates a deployment scheme at
-/// startup and optionally pre-spawns the required sub-agents.
+/// This block is **written by a planner and read by the agent**, which is
+/// unusual for a config section and is the thing to hold on to when reading it.
+/// `DeploymentPlanner` (and the TypeScript emitter in
+/// OBC-deployment-generator, byte-for-byte) produces it from a hardware
+/// inventory; `HardwareInventory::from_deployment_config` turns it back into
+/// that inventory. The two directions are pinned as a fixed point by
+/// `tests/deployment_config_roundtrip.rs` and by the shared golden fixtures in
+/// `tests/fixtures/deployment/`.
 ///
 /// ```toml
 /// [deployment]
-/// enabled      = true
-/// scenario     = "NanoPi Home Assistant"
-/// auto_plan    = true
-/// auto_spawn   = true
-///
-/// feature_desires = [
-///     "vision", "listening", "speech", "environmental_sensing",
-///     "display_output", "touch_input", "wireless_mesh",
-/// ]
+/// enabled = true
+/// scenario = "NanoPi Home Assistant"
+/// auto_plan = true
+/// feature_desires = ["vision", "listening", "speech", "environmental_sensing"]
 ///
 /// [[deployment.hardware]]
-/// name = "nanopi-neo3"; board_name = "nanopi-neo3"; transport = "native"
-/// role = "host"; accessories = ["dht22"]
+/// name = "nanopi-neo3"
+/// board_name = "nanopi-neo3"
+/// transport = "native"
+/// role = "host"
+/// accessories = ["dht22"]
 /// ```
+///
+/// The example above is not decorative: `deployment_config_roundtrip.rs`
+/// extracts it from this source file and parses it. An earlier version wrote
+/// three keys per line separated by semicolons, which is not TOML and had sat
+/// here uncaught since Phase 13 — the same failure as the `[[safety.limit]]`
+/// that silently did nothing because the real key was `[[safety.limits]]`.
+/// Documented configuration is prose until something executes it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeploymentConfig {
     /// Whether the deployment subsystem is enabled.
@@ -1010,13 +1022,19 @@ pub struct DeploymentConfig {
     /// Human-readable name for this deployment scenario.
     #[serde(default = "default_scenario_name")]
     pub scenario: String,
-    /// When true, generate and print the deployment scheme at startup.
+    /// When true, re-derive the deployment scheme from `hardware` at startup,
+    /// print it, and warn if it no longer matches the block that generated this
+    /// file.
+    ///
+    /// The planner emits `auto_plan = true` into every config it writes, so this
+    /// is on by default in practice. What it buys is drift detection: the config
+    /// was planned once, by whichever version of the planner was current then,
+    /// and the agent reading it may be several versions later. Re-planning at
+    /// startup and comparing is cheap — the planner is pure — and it is the same
+    /// idea as `parity/verify_wasm.cjs` executing the bundle rather than
+    /// trusting its hash.
     #[serde(default)]
     pub auto_plan: bool,
-    /// When true (and `auto_plan` is true), pre-spawn the sub-agents in the
-    /// orchestrator pool after planning.
-    #[serde(default)]
-    pub auto_spawn: bool,
     /// The hardware items in the deployment.
     #[serde(default)]
     pub hardware: Vec<DeploymentHardwareConfig>,
@@ -1027,10 +1045,6 @@ pub struct DeploymentConfig {
     /// `"edge_inference"`, `"wireless_mesh"`, `"persistent_memory"`.
     #[serde(default)]
     pub feature_desires: Vec<String>,
-    /// Whether to enable LLM-powered swarm refinement of the deployment scheme.
-    /// When false (default), only the rule-based planner is used.
-    #[serde(default)]
-    pub llm_swarm: bool,
 }
 
 fn default_scenario_name() -> String {
@@ -1043,10 +1057,8 @@ impl Default for DeploymentConfig {
             enabled: false,
             scenario: default_scenario_name(),
             auto_plan: false,
-            auto_spawn: false,
             hardware: Vec::new(),
             feature_desires: Vec::new(),
-            llm_swarm: false,
         }
     }
 }
