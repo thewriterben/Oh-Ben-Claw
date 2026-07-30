@@ -418,6 +418,63 @@ impl HardwareInventory {
         out
     }
 
+    /// Rebuild an inventory from a parsed `[deployment]` block — the inverse of
+    /// [`to_deployment_toml`].
+    ///
+    /// Until this existed the `[deployment]` schema was write-only. The planner
+    /// emitted it, the TypeScript emitter in OBC-deployment-generator emitted a
+    /// byte-identical copy, golden fixtures pinned both, and OBC-Prime hashed
+    /// those fixtures across three repositories — and nothing ever read one back.
+    /// The only consumer was a test asserting the emitted TOML deserialises,
+    /// which checks serde and not the contract.
+    ///
+    /// With the inverse the contract is a fixed point — `emit → parse → rebuild
+    /// → emit` reproduces the original text — which is the property the goldens
+    /// are reaching for. See the host crate's
+    /// `tests/deployment_config_roundtrip.rs`.
+    ///
+    /// It sits here, next to its inverse, only since the crate extraction. While
+    /// this file was compiled verbatim into `planner-wasm` a `crate::config::`
+    /// reference broke that build, so the function had to live a module away from
+    /// the thing it undoes.
+    ///
+    /// **`capabilities` is deliberately not round-tripped.** It is absent from
+    /// the emitted schema by design: capabilities come from the board registry,
+    /// so carrying them in the config would let a stale file override it. A
+    /// rebuilt item has empty `capabilities` and `resolved_capabilities()` fills
+    /// them from the registry, exactly as for a hand-built inventory.
+    ///
+    /// [`to_deployment_toml`]: HardwareInventory::to_deployment_toml
+    pub fn from_deployment_config(cfg: &crate::config::DeploymentConfig) -> Self {
+        let mut inv = Self::new(cfg.scenario.clone());
+
+        for want in &cfg.feature_desires {
+            // The exact inverse of `desire_token` above: unit variants round-trip
+            // through their snake_case token, and anything the enum does not know
+            // becomes Custom — which is what Custom is for, and keeps an
+            // operator's own desire from being silently dropped on the way in.
+            let desire =
+                serde_json::from_value::<FeatureDesire>(serde_json::Value::String(want.clone()))
+                    .unwrap_or_else(|_| FeatureDesire::Custom(want.clone()));
+            inv.add_desire(desire);
+        }
+
+        for hw in &cfg.hardware {
+            inv.add_item(HardwareItem {
+                name: hw.name.clone(),
+                board_name: hw.board_name.clone(),
+                transport: hw.transport.clone(),
+                path: hw.path.clone(),
+                node_id: hw.node_id.clone(),
+                role: hw.role.parse().unwrap_or_default(),
+                accessories: hw.accessories.clone(),
+                capabilities: Vec::new(),
+            });
+        }
+
+        inv
+    }
+
     /// Build the standard NanoPi + ESP32-S3 Touch LCD + XIAO + Sipeed mic + DHT22 scenario.
     ///
     /// This is the reference deployment scenario described in the Oh-Ben-Claw

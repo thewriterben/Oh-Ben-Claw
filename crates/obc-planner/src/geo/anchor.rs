@@ -15,7 +15,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::geo::{Enu, GeoFrame, GeoPoint, Site};
-use crate::memory::world::{Fact, WorldMemory};
+use obc_memory::world::{Fact, WorldMemory};
 
 /// The well-known world-memory entity holding the current site anchor.
 pub const SITE_ENTITY: &str = "geo.site";

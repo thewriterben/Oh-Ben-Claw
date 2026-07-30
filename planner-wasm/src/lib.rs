@@ -1,16 +1,19 @@
 //! Oh-Ben-Claw deployment planner as WebAssembly — Ecosystem Integration **I5**.
 //!
-//! This crate compiles the *same source files* as the native runtime's
-//! registry / deployment planner / site optimizer (via `include!` of the pure,
-//! serde-only closure: `peripherals::registry`, `geo`, `siteplan`,
-//! `deployment::{inventory, advisor, firmware_scaffold, scheme, planner}`) and
-//! exposes them to JavaScript through `wasm-bindgen`. No re-implementation —
+//! This crate exposes the **`obc-planner` crate** — the same code the native
+//! runtime uses — to JavaScript through `wasm-bindgen`. No re-implementation, so
 //! drift between the runtime and JS consumers is impossible by construction.
 //!
+//! Until 2026-07-30 that sameness was achieved by compiling the agent's source
+//! files verbatim through `#[path]`. It is now an ordinary dependency, which
+//! means the same thing and cannot resolve differently on two operating
+//! systems.
+//!
 //! Excluded on purpose (not wasm-compatible, not needed for planning):
-//! `geo::anchor` (SQLite world memory; cfg-gated off on wasm32),
-//! `deployment::swarm` (LLM providers) and `deployment::saga` (async runtime) —
-//! the shim below simply never declares them.
+//! `geo::anchor` (SQLite world memory), which stays behind obc-planner's
+//! `world-anchor` feature and is not enabled here; and `deployment::swarm` (LLM
+//! providers) and `deployment::saga` (async runtime), which never left the host
+//! crate.
 //!
 //! Build:
 //! ```bash
@@ -22,22 +25,23 @@
 //! `tests/fixtures/` (Ecosystem Integration I2): the golden files are the
 //! acceptance tests for this package on both sides of the wire.
 
-// ── Source shim: the pure planner closure, compiled verbatim via #[path] ──────
-// `peripherals` and `deployment` are real directories with real `mod.rs` files,
-// not inline `mod { … }` blocks. That is not a style choice: inside an inline
-// module, #[path] resolves against a directory named after the module, which did
-// not exist — and Linux, unlike Windows, will not resolve `..` through a directory
-// that is not there. See planner-wasm/src/peripherals/mod.rs.
+// ── The planner, as a dependency ─────────────────────────────────────────────
+//
+// This was a `#[path]` shim that compiled `../../src/**` verbatim. That proved
+// the sources were self-contained — rustc will not link a crate whose sources
+// reach outside it — and it is also how the closure was found to be extractable.
+//
+// It broke once, in the worst possible shape. `#[path]` inside an inline `mod`
+// block resolves against a directory named for the module; Windows normalises
+// the `..` components lexically and resolved it anyway, Linux does not. The
+// build was green on the author's machine and red on every CI push. The
+// workaround was real directories holding real `mod.rs` files whose only content
+// was a `#[path]` attribute.
+//
+// `crates/obc-planner` removes the class. Re-exported under the old names so the
+// API below, and every consumer of this crate, is unchanged.
 
-pub mod peripherals;
-
-#[path = "../../src/geo/mod.rs"]
-pub mod geo;
-
-#[path = "../../src/siteplan/mod.rs"]
-pub mod siteplan;
-
-pub mod deployment;
+pub use obc_planner::{deployment, geo, peripherals, siteplan};
 
 // ── Core API (target-independent; String errors) ──────────────────────────────
 

@@ -246,23 +246,10 @@ mod tests {
     /// registry export.
     #[test]
     fn committed_templates_json_is_current() {
-        let candidates = [
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/firmware-templates/templates.json"
-            ),
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../firmware-templates/templates.json"
-            ),
-        ];
-        let committed = candidates
-            .iter()
-            .find_map(|p| std::fs::read_to_string(p).ok())
-            .expect(
-                "firmware-templates/templates.json missing — generate it with \
-                 `cargo run --bin emit-firmware-templates -- firmware-templates/templates.json`",
-            );
+        let committed = crate::find_up("firmware-templates/templates.json").expect(
+            "firmware-templates/templates.json missing — generate it with \
+             `cargo run --bin emit-firmware-templates -- firmware-templates/templates.json`",
+        );
         let live = templates_json().unwrap();
         let norm = |s: &str| s.replace("\r\n", "\n").trim_end().to_string();
         assert_eq!(

@@ -13,14 +13,13 @@ crate-type = ["cdylib", "rlib"]
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 
-[features]
-# Declared, not enabled. The planner sources are compiled verbatim from the host
-# crate via `#[path]`, and `src/geo/mod.rs` carries `#[cfg(feature = "world-anchor")]`.
-# Without the feature named here that cfg is an unknown value, which `-D warnings`
-# turns into a hard CI failure in a crate that is otherwise fine.
-world-anchor = []
-
 [dependencies]
+# A real dependency, not a `#[path]` shim. The shim compiled the host crate's
+# sources verbatim, which proved they were self-contained but resolved
+# differently on Windows and Linux — green locally, red on every CI push. The
+# planner is now `crates/obc-planner`, depended on here *without* `world-anchor`
+# so SQLite never enters a wasm build.
+obc-planner = { path = "../crates/obc-planner" }
 wasm-bindgen = "0.2"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }

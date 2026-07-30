@@ -4,6 +4,7 @@ members = [
     "planner-wasm",
     "crates/obc-paths",
     "crates/obc-memory",
+    "crates/obc-planner",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
@@ -57,6 +58,7 @@ serde_json = { version = "1.0", default-features = false, features = ["std"] }
 directories = "5.0"
 obc-paths = { path = "crates/obc-paths" }
 obc-memory = { path = "crates/obc-memory" }
+obc-planner = { path = "crates/obc-planner" }
 toml = "1.0"
 shellexpand = "3.1"
 
@@ -149,9 +151,11 @@ rppal = { version = "0.14", optional = true }
 [features]
 default = ["hardware", "mqtt-spine", "world-anchor"]
 # World-memory geo anchoring (SQLite). Default-on for the runtime; the
-# `planner-wasm` crate compiles the same geo sources *without* this feature so
-# the pure geometry stays wasm-compatible.
-world-anchor = []
+# `planner-wasm` crate depends on obc-planner *without* this feature, so the
+# pure geometry stays wasm-compatible and rusqlite never reaches the chip.
+# Now forwards to the crate that owns `geo::anchor`, rather than gating a module
+# in this crate. Same name, same default, so no command line changed.
+world-anchor = ["obc-planner/world-anchor"]
 hardware = ["nusb", "tokio-serial", "serialport"]
 mqtt-spine = []
 peripheral-rpi = ["rppal"]
