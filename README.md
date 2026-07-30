@@ -184,6 +184,15 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 
 **Rich Communication Channels** — Telegram, Discord, Slack, WhatsApp, iMessage, IRC, Matrix, Signal, Mattermost, Feishu/Lark, and a built-in CLI, with typing indicators and a native GUI (Tauri 2 + React).
 
+> **Four of these were unreachable until 2026-07-30.** IRC, Signal, Mattermost and
+> Feishu were written and unit-tested — 1,524 lines, twenty-two tests — and never
+> added to `start_channels`, so configuring one produced silence. They are wired
+> now, and **have not been run against a live server**: no IRC network, no
+> signal-cli daemon, no Mattermost or Feishu tenant was to hand. Unit tests only.
+> The other seven are exercised in normal use. `tests/channel_wiring.rs` now fails
+> the build if an exported channel is not constructed, which is the check that was
+> missing.
+
 **Human-in-the-Loop Approval** provides supervised execution with three autonomy levels (`full` / `supervised` / `manual`), a session-scoped allowlist, and a full audit log — and it is what gates high-blast physical actions from the embodied stack.
 
 **Deployment Scheme Generator** analyses your hardware inventory, maps capabilities to agent roles, identifies gaps, and renders a ready-to-use TOML configuration (optionally refined by an LLM-powered planning swarm).

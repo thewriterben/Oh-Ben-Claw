@@ -32,8 +32,8 @@ use tracing_subscriber::FmtSubscriber;
 
 use oh_ben_claw::agent::{Agent, AgentHandle, OrchestratorAgent};
 use oh_ben_claw::channels::{
-    CliChannel, DiscordChannel, IMessageChannel, MatrixChannel, SlackChannel, TelegramChannel,
-    WhatsAppChannel,
+    CliChannel, DiscordChannel, FeishuChannel, IMessageChannel, IrcChannel, MatrixChannel,
+    MattermostChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
 };
 use oh_ben_claw::config::Config;
 use oh_ben_claw::memory::MemoryStore;
@@ -2707,13 +2707,88 @@ fn spawn_channels(agent: Arc<Agent>, config: &Config) {
         });
     }
 
-    // ── Matrix ────────────────────────────────────────────────────────────────
-    if let Some(ch) = MatrixChannel::new(&config.channels.matrix, Arc::clone(&agent), provider) {
+    // ── Matrix ──────────────────────────────────────────────────────────────────
+    if let Some(ch) = MatrixChannel::new(
+        &config.channels.matrix,
+        Arc::clone(&agent),
+        provider.clone(),
+    ) {
         info!("Starting Matrix channel");
         tokio::spawn(async move {
             loop {
                 if let Err(e) = ch.run().await {
                     tracing::warn!(error = %e, "Matrix channel error; restarting in 10 s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                }
+            }
+        });
+    }
+
+    // The four below were written, unit-tested, and never added to this function.
+    // `channels/mod.rs` re-exported them, which is why nothing looked wrong: the
+    // types were reachable, so no survey flagged them, and the README counted
+    // eleven channels while seven could start. Each `new()` returns None when the
+    // channel is unconfigured, so wiring them changes nothing for anyone who has
+    // not set the corresponding config block.
+    //
+    // Wired 2026-07-30, and not verified against a live server — no IRC network,
+    // no signal-cli daemon, no Mattermost or Feishu tenant was available. Unit
+    // tests only. tests/channel_wiring.rs keeps this list and the exports in step.
+
+    // ── IRC ─────────────────────────────────────────────────────────────────────
+    if let Some(ch) = IrcChannel::new(&config.channels.irc, Arc::clone(&agent), provider.clone()) {
+        info!("Starting IRC channel");
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = ch.run().await {
+                    tracing::warn!(error = %e, "IRC channel error; restarting in 10 s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                }
+            }
+        });
+    }
+
+    // ── Signal ──────────────────────────────────────────────────────────────────
+    if let Some(ch) = SignalChannel::new(
+        &config.channels.signal,
+        Arc::clone(&agent),
+        provider.clone(),
+    ) {
+        info!("Starting Signal channel");
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = ch.run().await {
+                    tracing::warn!(error = %e, "Signal channel error; restarting in 10 s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                }
+            }
+        });
+    }
+
+    // ── Mattermost ──────────────────────────────────────────────────────────────
+    if let Some(ch) = MattermostChannel::new(
+        &config.channels.mattermost,
+        Arc::clone(&agent),
+        provider.clone(),
+    ) {
+        info!("Starting Mattermost channel");
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = ch.run().await {
+                    tracing::warn!(error = %e, "Mattermost channel error; restarting in 10 s");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                }
+            }
+        });
+    }
+
+    // ── Feishu ──────────────────────────────────────────────────────────────────
+    if let Some(ch) = FeishuChannel::new(&config.channels.feishu, Arc::clone(&agent), provider) {
+        info!("Starting Feishu channel");
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = ch.run().await {
+                    tracing::warn!(error = %e, "Feishu channel error; restarting in 10 s");
                     tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
                 }
             }

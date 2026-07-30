@@ -139,8 +139,9 @@ a module-level survey cannot see by construction:
   the ledger above was built and called sufficient.
 
 `scripts/file_reachability.py` asks the same question one level down. Run on
-2026-07-30, after `src/runtime/` was removed, it finds **16 unwired files, 6,591
-LOC — 13 of them presented as shipped in this file or the README (5,941 LOC)**:
+2026-07-30, after `src/runtime/` was removed and the four orphaned channels were
+wired, it finds **12 unwired files, 5,067 LOC — 9 of them presented as shipped in
+this file or the README (4,417 LOC)**. It started this audit at 17 and 14:
 
 ```
 file                                       loc  pub  documented as shipped in
@@ -150,27 +151,32 @@ src/mission/bt.rs                          648    3  README.md  <-- OVERCLAIM
 src/skill_forge/registry.rs                570    3  ROADMAP.md  <-- OVERCLAIM
 src/memory/image.rs                        517    2  ROADMAP.md  <-- OVERCLAIM
 src/multimodal.rs                          441   13  ROADMAP.md  <-- OVERCLAIM
-src/channels/feishu.rs                     422    1  ROADMAP.md  <-- OVERCLAIM
-src/channels/mattermost.rs                 405    1  ROADMAP.md  <-- OVERCLAIM
-src/channels/irc.rs                        383    1  ROADMAP.md  <-- OVERCLAIM
 src/peripherals/sensors.rs                 375    9  ROADMAP.md  <-- OVERCLAIM
-src/channels/signal.rs                     314    1  ROADMAP.md  <-- OVERCLAIM
 src/memory/heartbeat.rs                    285    1  README.md, ROADMAP.md  <-- OVERCLAIM
 src/memory/journal.rs                      246    1  README.md, ROADMAP.md  <-- OVERCLAIM
 src/movement/feedback.rs                   269    3  —
 src/deployment/saga.rs                     257    3  —
 src/vision/clawcam_spatial.rs              124    3  —
 
-16 unwired file(s), 6,591 LOC.
-of those, 13 are presented as shipped in README/ROADMAP (5,941 LOC) — fix the code or fix the claim.
+12 unwired file(s), 5,067 LOC.
+of those, 9 are presented as shipped in README/ROADMAP (4,417 LOC) — fix the code or fix the claim.
 ```
 
 These are candidates, not verdicts: the script is name-based, not a compiler, and
-says so. Six were then confirmed by hand — the four channels (each file's only
-external reference is its own `pub use` line in `channels/mod.rs`, so nothing ever
-constructs them), `mission/bt.rs` (`BtSpec`, `BtContext`, `Bt`, `BtRunner`: zero
-references each), `peripherals/fusion.rs` (all six public types: zero), and
-`memory/heartbeat.rs`. The README claims eleven channels; four of them cannot run.
+says so. Six were confirmed by hand, and two groups are now resolved:
+
+- **The four channels — fixed.** `main.rs` imported and constructed seven of the
+  eleven exported types. IRC, Signal, Mattermost and Feishu were written,
+  unit-tested (22 tests between them), given config blocks, and never added to
+  `start_channels` — so setting an IRC password produced silence. They are
+  structurally identical to Matrix, which works, and each `new()` returns `None`
+  when unconfigured, so wiring them was mechanical and risk-free. Done 2026-07-30;
+  not verified against live servers, and the README says so.
+  `tests/channel_wiring.rs` now fails the build if an exported channel is not
+  constructed, verified by deleting the IRC block and watching it name `IrcChannel`.
+- **`src/runtime/` — removed**, see the Phase 9 row.
+
+The nine below are unresolved. Each is wire it, cut it, or fix the claim.
 
 ### A third category, caught by neither
 
