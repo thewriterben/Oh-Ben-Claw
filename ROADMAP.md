@@ -57,28 +57,28 @@ blocks it from migrating.
 
 | module | LOC | tests | wired | integration suites | roadmap | claim | evidence |
 |---|---:|---:|---:|---|---:|---|---|
-| `agent` | 9,147 | 148 | 37 | `embodied_full_stack`, `embodied_safing_loop`, `evals`, `harness_long_horizon`, `learning_approval_gate`, `liveness_acceptance`, `system2_eval`, `tool_policy_gate` | 75 | benchmarked | integration |
+| `agent` | 9,147 | 148 | 36 | `embodied_full_stack`, `embodied_safing_loop`, `evals`, `harness_long_horizon`, `learning_approval_gate`, `liveness_acceptance`, `system2_eval`, `tool_policy_gate` | 76 | benchmarked | integration |
 | `channels` | 3,859 | 33 | 1 | — | 22 | documented | unit |
-| `navigation` | 3,714 | 55 | 9 | `embodied_full_stack`, `embodied_hil_loop`, `spine_fleet_e2e` | 2 | benchmarked | integration |
+| `navigation` | 3,714 | 55 | 8 | `embodied_full_stack`, `embodied_hil_loop`, `spine_fleet_e2e` | 2 | benchmarked | integration |
 | `security` | 2,967 | 65 | 20 | `embodied_full_stack`, `embodied_hil_loop`, `evals`, `tool_policy_gate` | 21 | benchmarked | integration |
 | `gateway` | 2,313 | 25 | 1 | — | 19 | documented | unit |
-| `mission` | 1,242 | 14 | 4 | `embodied_full_stack` | 2 | benchmarked | integration |
-| `audio` | 1,043 | 18 | 7 | — | 7 | documented | unit |
 | `fleet` | 823 | 10 | 8 | `mesh_fleet_e2e`, `offgrid_fleet_loop`, `spine_fleet_e2e` | 13 | benchmarked | integration |
 | `scheduler` | 684 | 16 | 3 | — | 4 | documented | unit |
 | `foresight` | 677 | 11 | 6 | `learning_approval_gate` | **0** | benchmarked | integration |
 | `tunnel` | 677 | 14 | 1 | — | 1 | documented | unit |
+| `mission` | 592 | 5 | 4 | `embodied_full_stack` | 2 | benchmarked | integration |
 | `doctor` | 560 | 9 | 1 | — | 2 | documented | unit |
 | `cost` | 472 | 8 | 4 | — | 13 | documented | unit |
 | `learning` | 454 | 4 | 3 | `learning_approval_gate` | 2 | benchmarked | integration |
+| `audio` | 389 | 8 | 6 | — | 9 | documented | unit |
 | `sensing` | 352 | 7 | 5 | — | 3 | documented | unit |
 | `gnss` | 336 | 9 | 1 | — | **0** | documented | unit |
 | `aerial` | 177 | 7 | 2 | — | **0** | documented | unit |
-| `tools` | 8,623 | 159 | 50 | `evals`, `harness_long_horizon`, `tool_policy_gate` | 25 | documented | integration |
-| `skill_forge` | 4,582 | 89 | 10 | `evals` | 5 | documented | integration |
-| `config` | 3,843 | 70 | 61 | `evals`, `harness_long_horizon`, `liveness_acceptance`, `planner_parity`, `tool_policy_gate` | 43 | documented | integration |
-| `deployment` | 3,083 | 56 | 4 | `planner_parity` | 37 | documented | integration |
-| `providers` | 2,174 | 28 | 16 | `evals`, `harness_long_horizon`, `tool_policy_gate` | 9 | documented | integration |
+| `tools` | 8,623 | 159 | 45 | `evals`, `harness_long_horizon`, `tool_policy_gate` | 26 | documented | integration |
+| `config` | 3,496 | 62 | 57 | `evals`, `harness_long_horizon`, `liveness_acceptance`, `planner_parity`, `tool_policy_gate` | 43 | documented | integration |
+| `skill_forge` | 3,275 | 56 | 8 | `evals` | 5 | documented | integration |
+| `deployment` | 3,083 | 56 | 4 | `planner_parity` | 38 | documented | integration |
+| `providers` | 2,164 | 28 | 14 | `evals`, `harness_long_horizon`, `tool_policy_gate` | 9 | documented | integration |
 | `mcp` | 1,396 | 28 | 6 | `evals` | 9 | documented | integration |
 | `approval` | 1,299 | 30 | 6 | `evals` | 16 | documented | integration |
 | `observability` | 918 | 18 | 9 | `evals` | 3 | documented | integration |
@@ -89,17 +89,16 @@ blocks it from migrating.
 | `geo` | 418 | 13 | 10 | `planner_parity` | 11 | documented | integration |
 | `power` | 319 | 6 | 6 | `embodied_full_stack`, `embodied_safing_loop` | **0** | documented | integration |
 | `comms` | 317 | 5 | 5 | `embodied_safing_loop` | **0** | documented | integration |
-| `peripherals` | 7,286 | 174 | 11 | `offgrid_fleet_loop` | 19 | documented | bench |
-| `memory` | 5,878 | 97 | 66 | `embodied_full_stack`, `embodied_hil_loop`, `embodied_safing_loop`, `evals`, `harness_long_horizon`, `learning_approval_gate`, `liveness_acceptance`, `mesh_spine_e2e`, `revision_harness`, `system2_eval`, `tool_policy_gate` | 38 | documented | bench |
-| `spine` | 4,263 | 61 | 15 | `liveness_acceptance`, `mesh_fleet_e2e`, `mesh_spine_e2e`, `offgrid_fleet_loop` | 27 | documented | bench |
-| `vision` | 2,511 | 51 | 4 | `embodied_hil_loop` | 18 | documented | bench |
+| `peripherals` | 6,247 | 154 | 11 | `offgrid_fleet_loop` | 20 | documented | bench |
+| `spine` | 4,263 | 61 | 14 | `liveness_acceptance`, `mesh_fleet_e2e`, `mesh_spine_e2e`, `offgrid_fleet_loop` | 27 | documented | bench |
+| `vision` | 1,973 | 43 | 4 | `embodied_hil_loop` | 18 | documented | bench |
 
 ```
-36 modules, 79,206 LOC, 1388 test fns.
+35 modules, 68,783 LOC, 1203 test fns.
 claim outruns evidence: 0 module(s), 0 LOC
 no ROADMAP presence:    5 module(s), 1,826 LOC — foresight, gnss, aerial, power, comms
 Declared bench/hardware evidence (not measured by this script):
-  memory: bench-validated on the live world store 2026-07-28 (10 beliefs withdrawn at one boot, mesh-node-lost 2376 -> 0)
+  memory: bench-validated on the live world store 2026-07-28 (10 beliefs withdrawn at one boot, mesh-node-lost 2376 -> 0)  <- NOT A MODULE, stale declaration
   peripherals: bench-validated 2026-07-17 (XIAO ESP32-S3 over serial; gpio_write pin=99 refused by the node allow-list)
   spine: bench-validated 2026-07-17 (2x Heltec V3 LoRa link, host<->mesh both directions)
   vision: bench-validated on 14 days of recorded ClawCam detections (bodies/trailwatch)
@@ -140,31 +139,20 @@ a module-level survey cannot see by construction:
 
 `scripts/file_reachability.py` asks the same question one level down. It opened
 this audit at **17 unwired files, 14 of them presented as shipped (6,048 LOC)**.
-After `src/runtime/` was removed, the four orphaned channels were wired, and the
-remaining claims were struck, it reports **12 unwired files, 5,067 LOC — 3 still
-matching documentation (1,399 LOC)**, and those three are alias noise checked by
-hand: `` `audio` `` matches the *live* `audio::suite`, and the `multimodal` and
+After the removals of 2026-07-30 it reports **3 unwired files, 650 LOC, and none
+of them documented as shipped** — the column that mattered is empty: `` `audio` `` matches the *live* `audio::suite`, and the `multimodal` and
 `HEARTBEAT` hits are a Phase 19 sentence and a section heading. The heuristic is
 not tuned to zero, because tuning a measurement until it reads zero is how you
 get a zero that means nothing.
 
 ```
 file                                       loc  pub  documented as shipped in
-src/audio/mod.rs                           673    8  README.md  <-- OVERCLAIM
-src/multimodal.rs                          441   13  ROADMAP.md  <-- OVERCLAIM
-src/memory/heartbeat.rs                    285    1  ROADMAP.md  <-- OVERCLAIM
-src/peripherals/fusion.rs                  662    6  —
-src/mission/bt.rs                          648    3  —
-src/skill_forge/registry.rs                570    3  —
-src/memory/image.rs                        517    2  —
-src/peripherals/sensors.rs                 375    9  —
 src/movement/feedback.rs                   269    3  —
 src/deployment/saga.rs                     257    3  —
-src/memory/journal.rs                      246    1  —
 src/vision/clawcam_spatial.rs              124    3  —
 
-12 unwired file(s), 5,067 LOC.
-of those, 3 are presented as shipped in README/ROADMAP (1,399 LOC) — fix the code or fix the claim.
+3 unwired file(s), 650 LOC.
+of those, 0 are presented as shipped in README/ROADMAP (0 LOC) — fix the code or fix the claim.
 ```
 
 These are candidates, not verdicts: the script is name-based, not a compiler, and
@@ -226,7 +214,7 @@ The initial release establishes the core architecture and demonstrates the key c
 - [x] MQTT Spine protocol design (`src/spine/mod.rs`)
 - [x] Hardware board registry with USB VID/PID mappings (`src/peripherals/registry.rs`)
 - [x] NanoPi Neo3 GPIO peripheral driver (`src/peripherals/nanopi.rs`)
-- [~] ESP32-S3 sensor tools (camera, audio, sensor read) (`src/peripherals/sensors.rs`) — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.)*
+- [-] ESP32-S3 sensor tools (camera, audio, sensor read) (`src/peripherals/sensors.rs`) — *(**removed** 2026-07-30 in the cut pass — unreferenced, and the compiler agreed: the crate builds without it.)*
 - [x] ESP32-S3 firmware with serial + MQTT support (`firmware/obc-esp32-s3`)
 - [x] Configuration schema with MQTT Spine and multi-board support (`src/config/mod.rs`)
 - [x] CLI with `start`, `status`, `peripheral`, and `service` subcommands (`src/main.rs`)
@@ -337,8 +325,8 @@ Enable peripheral nodes to run the full Oh-Ben-Claw agent locally, without a hos
 ## Phase 8: Advanced Capabilities ✅ Complete
 
 - [x] Vision pipeline (camera capture → LLM vision → action) (`src/vision/mod.rs`)
-- [~] Audio pipeline (microphone → speech-to-text → agent → text-to-speech) (`src/audio/mod.rs`) — *(audit 2026-07-30: `AudioPipeline`, `AudioPipelineTool` and their six supporting types have no reference outside the file. The live audio path is `audio::suite` (22 references) plus the `audio_transcribe` / `text_to_speech` tools; the pipeline was superseded and left in place.)*
-- [~] Sensor fusion (combine readings from multiple sensors) (`src/peripherals/fusion.rs`) — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.) Live peripherals code goes through `registry`, `selftest` and `onboarding`.*
+- [-] Audio pipeline (microphone → speech-to-text → agent → text-to-speech) (`src/audio/mod.rs`) — *(**removed** 2026-07-30 in the cut pass — unreferenced, and the compiler agreed: the crate builds without it.)*
+- [-] Sensor fusion (combine readings from multiple sensors) (`src/peripherals/fusion.rs`) — *(**removed** 2026-07-30 in the cut pass — unreferenced, and the compiler agreed: the crate builds without it.)*
 - [x] Scheduled tasks and cron jobs (`src/scheduler/mod.rs`)
 - [-] Terminal telemetry dashboard — real-time TUI *(**removed** 2026-07-28 in the curation pass: `src/dashboard/` was never referenced outside itself)*
 - [x] Skill forge (automatic discovery and integration of new skills) (`src/skill_forge/mod.rs`)
@@ -351,7 +339,7 @@ Implements key features from the upstream ZeroClaw project to ensure Oh-Ben-Claw
 - [x] Token cost tracking and budget enforcement (`src/cost/`)
 - [x] System diagnostics CLI command (`oh-ben-claw doctor`) (`src/doctor/mod.rs`)
 - [-] Event lifecycle hooks for extensibility *(**removed** 2026-07-28 in the curation pass: `src/hooks/` was never wired)*
-- [~] Enhanced multimodal message handling with image markers (`src/multimodal.rs`) — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.) No provider consumes it; there is no live image path.*
+- [-] Enhanced multimodal message handling with image markers (`src/multimodal.rs`) — *(**removed** 2026-07-30 in the cut pass — unreferenced, and the compiler agreed: the crate builds without it.)*
 - [-] RAG pipeline for hardware datasheet retrieval *(**removed** 2026-07-28 in the curation pass: `src/rag/` was never wired)*
 - [-] Sandboxed tool execution runtime (native + Docker) (`src/runtime/`) — *(**removed** 2026-07-30. Zero references outside itself; `ShellTool` always spawned directly and `wasm.rs` was a stub with no `wasmtime` dependency. Wiring it would have covered one tool of seventy-six, and not the physical ones, which cannot be containerised. `[[security.policies]]` covers the whole tool surface and was already wired — it was merely undocumented. See `tests/tool_policy_gate.rs`.)*
 - [x] New config sections: `[autonomy]`, `[cost]`, `[multimodal]` — *(`[runtime]` **removed** 2026-07-30 with the module)*
@@ -485,9 +473,9 @@ OpenClaw popularised the concept of a public skill registry ("ClawHub") where
 the community shares pre-built automation scripts.  Oh-Ben-Claw now has a
 first-class client for this registry.
 
-- [~] **`ClawHubEntry`** — typed representation of a registry entry: name, version, description, author, download count, star rating, tags, verified status, and manifest URL (`src/skill_forge/registry.rs`) — *audit 2026-07-30: `ClawHubEntry`, `SkillRegistryIndex` and `ClawHubClient` have no reference outside `registry.rs`, and `install_policy` — the supply-chain hardening written for this path — is referenced **only from `registry.rs`**. The whole ClawHub install path is unreachable: `[clawhub]` and `[clawhub.install_policy]` parse, and nothing walks through the door they guard. Skill *synthesis* and *rollout* are live; skill *installation* is not.*
+- [-] **`ClawHubEntry`** — typed representation of a registry entry: name, version, description, author, download count, star rating, tags, verified status, and manifest URL (`src/skill_forge/registry.rs`) — *(**removed** 2026-07-30 in the cut pass — unreferenced, and the compiler agreed: the crate builds without it.)*
 - [x] **`SkillRegistryIndex`** — locally cached index with `search(query)` (name + description + tags), `find(name)`, `len()`, and `is_empty()` helpers
-- [~] **`ClawHubClient`** — async HTTP client for a ClawHub REST API (`GET /api/v1/skills`, `GET /api/v1/skills/{name}`, `GET /api/v1/skills/{name}/{version}/manifest`); local index cache avoids redundant network round-trips; `install()` downloads and writes a `.skill.json` to the configured skills directory — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.)*
+- [-] **`ClawHubClient`** — async HTTP client for a ClawHub REST API (`GET /api/v1/skills`, `GET /api/v1/skills/{name}`, `GET /api/v1/skills/{name}/{version}/manifest`); local index cache avoids redundant network round-trips; `install()` downloads and writes a `.skill.json` to the configured skills directory — *(**removed** 2026-07-30 in the cut pass — unreferenced, and the compiler agreed: the crate builds without it.)*
 - [x] `pub mod registry` added to `src/skill_forge/mod.rs`
 
 ### Image Memory (inspired by OpenClaw 3.13's multimodal image memory)
@@ -496,9 +484,9 @@ OpenClaw 3.13 introduced persistent image memory so agents can store and
 retrieve visual context across sessions.  Oh-Ben-Claw now provides the same
 capability via a SQLite-backed store.
 
-- [~] **`ImageEntry`** — *(audit 2026-07-30: unreferenced outside `src/memory/image.rs`, along with the whole image store.)*
-- [~] **`ImageMemoryStore`** — SQLite WAL-mode store with `store()`, `get()`, `delete()`, `search()` (case-insensitive LIKE on description + tags), `list_by_session()`, and `count()` operations; `open_in_memory()` for tests — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.)*
-- [~] `pub mod image` + `pub use image::ImageMemoryStore` — *(the re-export is what made this look reachable; nothing consumes it.)*
+- [-] **`ImageEntry`** — *(**removed** 2026-07-30 in the cut pass — unreferenced, and the compiler agreed: the crate builds without it.)*
+- [-] **`ImageMemoryStore`** — SQLite WAL-mode store with `store()`, `get()`, `delete()`, `search()` (case-insensitive LIKE on description + tags), `list_by_session()`, and `count()` operations; `open_in_memory()` for tests — *(**removed** 2026-07-30 in the cut pass — unreferenced, and the compiler agreed: the crate builds without it.)*
+- [-] `pub mod image` + `pub use image::ImageMemoryStore` — *(**removed** 2026-07-30 in the cut pass — unreferenced, and the compiler agreed: the crate builds without it.)*
 - [x] Pre-existing `src/memory/vector.rs` `Tool::execute` return-type bug fixed (`ToolResult` → `anyhow::Result<ToolResult>`) so the vector module can be compiled and exported (`pub mod vector` added to `src/memory/mod.rs`)
 
 ### Browser Automation in `default_tools()`
@@ -571,7 +559,7 @@ and enhanced reliability.
 
 ### Peripheral Spine Integration (resolves Phase 1 TODOs)
 
-- [~] **Sensor tool spine communication** — `CameraCaptureTool`, `AudioSampleTool`, and `SensorReadTool` now accept an optional `Arc<SpineClient>` and route commands through the MQTT spine when available; falls back to stub mode for standalone testing (`src/peripherals/sensors.rs`) — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.)*
+- [-] **Sensor tool spine communication** — `CameraCaptureTool`, `AudioSampleTool`, and `SensorReadTool` now accept an optional `Arc<SpineClient>` and route commands through the MQTT spine when available; falls back to stub mode for standalone testing (`src/peripherals/sensors.rs`) — *(**removed** 2026-07-30 in the cut pass — unreferenced, and the compiler agreed: the crate builds without it.)*
 - [x] `with_spine()` builder method on all three sensor tools
 
 ### Persistent Cost Tracking (completes Phase 9 cost subsystem)
@@ -582,7 +570,7 @@ and enhanced reliability.
 
 ### Enhanced Multimodal Support (completes Phase 9 multimodal)
 
-- [~] **Image source resolution** — `resolve_image_source()` distinguishes local file paths from remote URLs (`src/multimodal.rs`) — *(audit 2026-07-30: no reference outside its own file; `scripts/file_reachability.py`.)*
+- [-] **Image source resolution** — `resolve_image_source()` distinguishes local file paths from remote URLs (`src/multimodal.rs`) — *(**removed** 2026-07-30 in the cut pass — unreferenced, and the compiler agreed: the crate builds without it.)*
 - [x] **MIME type validation** — `validate_mime_type()` checks against the `ALLOWED_IMAGE_MIME_TYPES` whitelist
 - [x] **Image size validation** — `validate_image_size()` enforces configurable byte-size limits
 - [x] **Local image fetching** — `fetch_local_image()` reads, validates, and base64-encodes local image files
