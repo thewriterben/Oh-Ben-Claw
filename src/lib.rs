@@ -61,7 +61,6 @@ pub mod observability;
 pub mod peripherals;
 pub mod power;
 pub mod providers;
-pub mod runtime;
 pub mod scheduler;
 pub mod security;
 pub mod sensing;

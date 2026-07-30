@@ -180,6 +180,77 @@ fn glob_match_inner(p: &[char], t: &[char], depth: usize) -> bool {
     }
 }
 
+/// A recommended starting set of tool-execution policies.
+///
+/// **Not applied automatically.** `SecurityConfig.policies` defaults to empty and
+/// stays that way; adopting this is a paste into `[[security.policies]]`. Turning
+/// it on by default would silently break every existing deployment that uses the
+/// shell, and a security control that arrives unannounced and breaks things gets
+/// switched off wholesale, which is worse than not shipping it.
+///
+/// What it is *not*: this is a **host-side allowlist**. It reduces what a hijacked
+/// reasoner can reach — the live path `docs/SAFETY.md` admits, where text recovered
+/// by `vision_analyze` reaches the planner as prose — and it does **not** survive
+/// host compromise. The deterministic limit table on the microcontroller is the
+/// only boundary that holds when the host is owned, and nothing here replaces it.
+/// Physical actuation is deliberately left to Track 0 rather than duplicated as a
+/// second, weaker copy of the same rules in a different place.
+///
+/// Policies are evaluated in order and the first match wins, so the deny rules are
+/// listed before the broad audit rules.
+pub fn baseline() -> Vec<ToolPolicy> {
+    let deny = |name: &str, pattern: &str, arg: Option<&str>, reason: &str| ToolPolicy {
+        name: name.to_string(),
+        tool_pattern: pattern.to_string(),
+        arg_contains: arg.map(str::to_string),
+        action: ToolPolicyAction::Deny,
+        reason: Some(reason.to_string()),
+    };
+    let audit = |name: &str, pattern: &str, reason: &str| ToolPolicy {
+        name: name.to_string(),
+        tool_pattern: pattern.to_string(),
+        arg_contains: None,
+        action: ToolPolicyAction::Audit,
+        reason: Some(reason.to_string()),
+    };
+
+    vec![
+        deny(
+            "no-shell",
+            "shell",
+            None,
+            "arbitrary host command execution; the largest non-physical blast \
+             radius in the tool set. Remove this rule only for a deployment where \
+             the agent is expected to administer its own host.",
+        ),
+        // Substring, not a parsed field: it will also match a path containing the
+        // word. That is the safe direction to be wrong in for a deny rule.
+        deny(
+            "no-file-delete",
+            "file",
+            Some("delete"),
+            "irreversible, and the file tool has no path sandbox.",
+        ),
+        audit(
+            "audit-network-egress",
+            "http",
+            "arbitrary outbound requests are the exfiltration path once a planner \
+             is influenced by untrusted text.",
+        ),
+        audit(
+            "audit-firmware-push",
+            "ota_update",
+            "writes new firmware to a node; the node keeps enforcing Track 0, but \
+             what it enforces is what you just flashed.",
+        ),
+        audit(
+            "audit-skill-install",
+            "skill_forge",
+            "installs and promotes community code into the running agent.",
+        ),
+    ]
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

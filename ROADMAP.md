@@ -57,11 +57,10 @@ blocks it from migrating.
 
 | module | LOC | tests | wired | integration suites | roadmap | claim | evidence |
 |---|---:|---:|---:|---|---:|---|---|
-| `runtime` | 417 | 11 | 0 | — | 15 | documented | unwired ⚠ |
-| `agent` | 9,147 | 148 | 36 | `embodied_full_stack`, `embodied_safing_loop`, `evals`, `harness_long_horizon`, `learning_approval_gate`, `liveness_acceptance`, `system2_eval` | 75 | benchmarked | integration |
+| `agent` | 9,147 | 148 | 37 | `embodied_full_stack`, `embodied_safing_loop`, `evals`, `harness_long_horizon`, `learning_approval_gate`, `liveness_acceptance`, `system2_eval`, `tool_policy_gate` | 75 | benchmarked | integration |
 | `channels` | 3,859 | 33 | 1 | — | 22 | documented | unit |
 | `navigation` | 3,714 | 55 | 9 | `embodied_full_stack`, `embodied_hil_loop`, `spine_fleet_e2e` | 2 | benchmarked | integration |
-| `security` | 2,896 | 65 | 19 | `embodied_full_stack`, `embodied_hil_loop`, `evals` | 20 | benchmarked | integration |
+| `security` | 2,967 | 65 | 20 | `embodied_full_stack`, `embodied_hil_loop`, `evals`, `tool_policy_gate` | 21 | benchmarked | integration |
 | `gateway` | 2,313 | 25 | 1 | — | 19 | documented | unit |
 | `mission` | 1,242 | 14 | 4 | `embodied_full_stack` | 2 | benchmarked | integration |
 | `audio` | 1,043 | 18 | 7 | — | 7 | documented | unit |
@@ -75,11 +74,11 @@ blocks it from migrating.
 | `sensing` | 352 | 7 | 5 | — | 3 | documented | unit |
 | `gnss` | 336 | 9 | 1 | — | **0** | documented | unit |
 | `aerial` | 177 | 7 | 2 | — | **0** | documented | unit |
-| `tools` | 8,623 | 159 | 49 | `evals`, `harness_long_horizon` | 25 | documented | integration |
+| `tools` | 8,623 | 159 | 50 | `evals`, `harness_long_horizon`, `tool_policy_gate` | 25 | documented | integration |
 | `skill_forge` | 4,582 | 89 | 10 | `evals` | 5 | documented | integration |
-| `config` | 3,950 | 70 | 62 | `evals`, `harness_long_horizon`, `liveness_acceptance`, `planner_parity` | 44 | documented | integration |
+| `config` | 3,843 | 70 | 61 | `evals`, `harness_long_horizon`, `liveness_acceptance`, `planner_parity`, `tool_policy_gate` | 43 | documented | integration |
 | `deployment` | 3,083 | 56 | 4 | `planner_parity` | 37 | documented | integration |
-| `providers` | 2,174 | 28 | 15 | `evals`, `harness_long_horizon` | 9 | documented | integration |
+| `providers` | 2,174 | 28 | 16 | `evals`, `harness_long_horizon`, `tool_policy_gate` | 9 | documented | integration |
 | `mcp` | 1,396 | 28 | 6 | `evals` | 9 | documented | integration |
 | `approval` | 1,299 | 30 | 6 | `evals` | 16 | documented | integration |
 | `observability` | 918 | 18 | 9 | `evals` | 3 | documented | integration |
@@ -91,22 +90,19 @@ blocks it from migrating.
 | `power` | 319 | 6 | 6 | `embodied_full_stack`, `embodied_safing_loop` | **0** | documented | integration |
 | `comms` | 317 | 5 | 5 | `embodied_safing_loop` | **0** | documented | integration |
 | `peripherals` | 7,286 | 174 | 11 | `offgrid_fleet_loop` | 19 | documented | bench |
-| `memory` | 5,878 | 97 | 65 | `embodied_full_stack`, `embodied_hil_loop`, `embodied_safing_loop`, `evals`, `harness_long_horizon`, `learning_approval_gate`, `liveness_acceptance`, `mesh_spine_e2e`, `revision_harness`, `system2_eval` | 39 | documented | bench |
+| `memory` | 5,878 | 97 | 66 | `embodied_full_stack`, `embodied_hil_loop`, `embodied_safing_loop`, `evals`, `harness_long_horizon`, `learning_approval_gate`, `liveness_acceptance`, `mesh_spine_e2e`, `revision_harness`, `system2_eval`, `tool_policy_gate` | 38 | documented | bench |
 | `spine` | 4,263 | 61 | 15 | `liveness_acceptance`, `mesh_fleet_e2e`, `mesh_spine_e2e`, `offgrid_fleet_loop` | 27 | documented | bench |
 | `vision` | 2,511 | 51 | 4 | `embodied_hil_loop` | 18 | documented | bench |
 
 ```
-37 modules, 79,659 LOC, 1399 test fns.
-claim outruns evidence: 1 module(s), 417 LOC — runtime
+36 modules, 79,206 LOC, 1388 test fns.
+claim outruns evidence: 0 module(s), 0 LOC
 no ROADMAP presence:    5 module(s), 1,826 LOC — foresight, gnss, aerial, power, comms
 Declared bench/hardware evidence (not measured by this script):
   memory: bench-validated on the live world store 2026-07-28 (10 beliefs withdrawn at one boot, mesh-node-lost 2376 -> 0)
   peripherals: bench-validated 2026-07-17 (XIAO ESP32-S3 over serial; gpio_write pin=99 refused by the node allow-list)
   spine: bench-validated 2026-07-17 (2x Heltec V3 LoRa link, host<->mesh both directions)
   vision: bench-validated on 14 days of recorded ClawCam detections (bodies/trailwatch)
-These carry a public claim with no bench evidence on record. Either add a
-citation to EVIDENCE, soften the claim, or accept that they cannot yet be
-said to be defensible: runtime
 ```
 
 ### The rows that need a decision
@@ -143,8 +139,8 @@ a module-level survey cannot see by construction:
   the ledger above was built and called sufficient.
 
 `scripts/file_reachability.py` asks the same question one level down. Run on
-2026-07-30 it found **17 unwired files, 6,698 LOC — 14 of them presented as
-shipped in this file or the README (6,048 LOC)**:
+2026-07-30, after `src/runtime/` was removed, it finds **16 unwired files, 6,591
+LOC — 13 of them presented as shipped in this file or the README (5,941 LOC)**:
 
 ```
 file                                       loc  pub  documented as shipped in
@@ -161,13 +157,12 @@ src/peripherals/sensors.rs                 375    9  ROADMAP.md  <-- OVERCLAIM
 src/channels/signal.rs                     314    1  ROADMAP.md  <-- OVERCLAIM
 src/memory/heartbeat.rs                    285    1  README.md, ROADMAP.md  <-- OVERCLAIM
 src/memory/journal.rs                      246    1  README.md, ROADMAP.md  <-- OVERCLAIM
-src/runtime/mod.rs                         107    1  README.md, ROADMAP.md  <-- OVERCLAIM
 src/movement/feedback.rs                   269    3  —
 src/deployment/saga.rs                     257    3  —
 src/vision/clawcam_spatial.rs              124    3  —
 
-17 unwired file(s), 6,698 LOC.
-of those, 14 are presented as shipped in README/ROADMAP (6,048 LOC) — fix the code or fix the claim.
+16 unwired file(s), 6,591 LOC.
+of those, 13 are presented as shipped in README/ROADMAP (5,941 LOC) — fix the code or fix the claim.
 ```
 
 These are candidates, not verdicts: the script is name-based, not a compiler, and
@@ -347,8 +342,8 @@ Implements key features from the upstream ZeroClaw project to ensure Oh-Ben-Claw
 - [-] Event lifecycle hooks for extensibility *(**removed** 2026-07-28 in the curation pass: `src/hooks/` was never wired)*
 - [x] Enhanced multimodal message handling with image markers (`src/multimodal.rs`)
 - [-] RAG pipeline for hardware datasheet retrieval *(**removed** 2026-07-28 in the curation pass: `src/rag/` was never wired)*
-- [~] Sandboxed tool execution runtime (native + Docker) (`src/runtime/`) — *(audit 2026-07-29: the module exists and `create_runtime()` is written, but it has **zero** references outside `src/runtime/`; `ShellTool` spawns directly. `wasm.rs` is a self-described stub with no `wasmtime` dependency. Box was checked for code that was authored, not for code that runs. README claims struck the same day.)*
-- [x] New config sections: `[autonomy]`, `[cost]`, `[runtime]`, `[multimodal]` — *(`[runtime]` parses and does nothing; it is absent from `config.example.toml` deliberately)*
+- [-] Sandboxed tool execution runtime (native + Docker) (`src/runtime/`) — *(**removed** 2026-07-30. Zero references outside itself; `ShellTool` always spawned directly and `wasm.rs` was a stub with no `wasmtime` dependency. Wiring it would have covered one tool of seventy-six, and not the physical ones, which cannot be containerised. `[[security.policies]]` covers the whole tool surface and was already wired — it was merely undocumented. See `tests/tool_policy_gate.rs`.)*
+- [x] New config sections: `[autonomy]`, `[cost]`, `[multimodal]` — *(`[runtime]` **removed** 2026-07-30 with the module)*
 
 ---
 
@@ -589,9 +584,9 @@ and enhanced reliability.
 
 ### WASM Sandbox Runtime (new runtime adapter)
 
-- [x] **`WasmRuntime`** — new runtime adapter for WebAssembly sandboxed execution with configurable memory pages, execution fuel, and WASI directory access (`src/runtime/wasm.rs`)
-- [x] **`WasmConfig`** added to `RuntimeConfig` with `enabled`, `max_memory_pages`, `max_fuel`, `allowed_dirs` fields
-- [x] Framework-ready for wasmtime integration when the dependency is added
+- [-] **`WasmRuntime`** *(**removed** 2026-07-30 — "framework-ready" meant `run_wasm()` returned an error saying wasmtime was not linked, and nothing called it either way)*
+- [-] **`WasmConfig`** *(**removed** 2026-07-30 with `RuntimeConfig`)*
+- [-] Framework-ready for wasmtime integration *(a checked box for an unbuilt feature; this row is why `[~]` and `[-]` exist in the legend)*
 
 ### Structured Output / JSON Mode (new provider capability)
 

@@ -361,6 +361,17 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             policies = security_ctx.policy.policy_count(),
             "Security policy engine active"
         );
+    } else {
+        // Previously silent. The engine is wired and consulted on every tool call
+        // at every hop; with no rules it permits everything, which is a reasonable
+        // default and an unreasonable thing not to say out loud. `[[security.policies]]`
+        // was implemented, tested and documented nowhere, so nobody could have
+        // known it existed to set it.
+        tracing::warn!(
+            "no tool execution policies configured — every tool is permitted, \
+             including `shell`. See [[security.policies]] in config.example.toml \
+             for a recommended baseline (security::policy::baseline())."
+        );
     }
 
     // ── Track 0: physical-action safety (shared by plain agent + orchestrator) ──
