@@ -10,12 +10,20 @@
 //! This is the field. It drives `@modelcontextprotocol/server-everything`, the
 //! reference implementation published by the MCP project, over a real stdio pipe.
 //!
-//! `#[ignore]` by default: it needs network access and npx, neither of which
-//! belongs in a unit-test run. Run it deliberately:
+//! `#[ignore]` so a plain `cargo test` stays offline and fast. CI runs it
+//! explicitly, so it is not a check that waits to be remembered — that pattern
+//! is what this whole audit kept finding. Locally:
 //!
 //! ```bash
 //! cargo test --test mcp_real_server -- --ignored --nocapture
 //! ```
+//!
+//! The server version is **pinned**. An unpinned `npx -y <pkg>` makes this job
+//! depend on whatever npm serves that morning, so a red build could mean our
+//! regression or their release, and the two would be indistinguishable. Pinning
+//! costs the ability to notice an upstream change automatically; bumping the
+//! version below is the deliberate act that buys it back, and any behaviour
+//! change shows up in that commit rather than in an unrelated one.
 
 use oh_ben_claw::mcp::client::McpClient;
 use oh_ben_claw::mcp::{McpServerConfig, ModeSource};
@@ -30,15 +38,14 @@ fn npx() -> &'static str {
     }
 }
 
+/// Pinned deliberately — see the module docs.
+const REFERENCE_SERVER: &str = "@modelcontextprotocol/server-everything@2026.7.4";
+
 fn reference_server() -> McpServerConfig {
     McpServerConfig {
         transport: "stdio".to_string(),
         command: Some(npx().to_string()),
-        args: Some(vec![
-            "-y".into(),
-            "@modelcontextprotocol/server-everything".into(),
-            "stdio".into(),
-        ]),
+        args: Some(vec!["-y".into(), REFERENCE_SERVER.into(), "stdio".into()]),
         url: None,
         token: None,
         env: None,
