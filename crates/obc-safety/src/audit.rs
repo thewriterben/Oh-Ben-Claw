@@ -12,7 +12,7 @@
 //!
 //! **Ed25519 detached signatures are also implemented** (this comment used to
 //! describe them as a follow-up; they landed in [`audit_sign`]). Attach an
-//! [`AuditSigner`](crate::security::audit_sign::AuditSigner) with
+//! [`AuditSigner`](crate::audit_sign::AuditSigner) with
 //! [`ActionAuditor::with_signer`] and each new record additionally carries a
 //! detached signature over the same canonical fields, so a third party can
 //! verify the log with only the public key. Signing is additive — the record
@@ -21,7 +21,7 @@
 //!
 //! Architecture rationale and threat model: `docs/SAFETY.md` in OBC-Prime.
 
-use crate::tools::traits::RiskClass;
+use crate::risk::RiskClass;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -110,7 +110,7 @@ pub struct ActionAuditor {
     path: PathBuf,
     seq: u64,
     prev_mac: String,
-    signer: Option<crate::security::audit_sign::AuditSigner>,
+    signer: Option<crate::audit_sign::AuditSigner>,
 }
 
 impl ActionAuditor {
@@ -136,7 +136,7 @@ impl ActionAuditor {
     /// Attach an Ed25519 signer so each new record also carries a detached signature
     /// verifiable by anyone holding the public key (asymmetric non-repudiation).
     /// The HMAC chain is unaffected; signing is additive.
-    pub fn with_signer(mut self, signer: crate::security::audit_sign::AuditSigner) -> Self {
+    pub fn with_signer(mut self, signer: crate::audit_sign::AuditSigner) -> Self {
         self.signer = Some(signer);
         self
     }
@@ -307,7 +307,7 @@ pub fn verify_signatures(path: impl AsRef<Path>, public_hex: &str) -> anyhow::Re
                 &rec.decision,
                 &rec.prev_mac,
             );
-            if !crate::security::audit_sign::verify_hex(public_hex, canon.as_bytes(), sig) {
+            if !crate::audit_sign::verify_hex(public_hex, canon.as_bytes(), sig) {
                 anyhow::bail!("audit: bad Ed25519 signature at seq {}", rec.seq);
             }
             verified += 1;
@@ -319,7 +319,7 @@ pub fn verify_signatures(path: impl AsRef<Path>, public_hex: &str) -> anyhow::Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::traits::BlastRadius;
+    use crate::risk::BlastRadius;
     use serde_json::json;
 
     fn tmp_path(tag: &str) -> PathBuf {
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn signed_records_verify_with_the_public_key() {
-        use crate::security::audit_sign::AuditSigner;
+        use crate::audit_sign::AuditSigner;
         let path = tmp_path("signed");
         let key = b"k";
         let signer = AuditSigner::generate();

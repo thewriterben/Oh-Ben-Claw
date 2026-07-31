@@ -19,7 +19,7 @@
 //!   `asi_redteam` (this generator): injected content must not steer a
 //!   privileged action.
 //! - **ASI02 Tool Misuse** — the same, at the actuator boundary, backstopped
-//!   by the deterministic [`crate::security::limits::SafetyGate`].
+//!   by the deterministic [`crate::limits::SafetyGate`].
 //! - **ASI04 Supply Chain (skills)** — `skill_forge::install_policy` +
 //!   `skill_forge::improve` red-team tests (checksum/consent/staged rollout).
 //! - **ASI06 Memory/Trajectory Poisoning** — Phase 16 P3 red-team evals

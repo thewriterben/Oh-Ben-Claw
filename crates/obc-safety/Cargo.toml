@@ -1,0 +1,44 @@
+[package]
+name = "obc-safety"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's Track 0 layer: physical-risk classification, deterministic actuator limits, signed action audit, argument taint tracking, and node pairing."
+
+# The third piece of the agent extracted as its own crate (2026-07-30), after
+# obc-memory and obc-planner.
+#
+# It is the piece with the strongest claim to being published. A physical agent
+# is only as trustworthy as the boundary between what the model asks for and
+# what the hardware does, and that boundary is here: a pin allowlist and value
+# ranges enforced at the actuator, a hash-chained and Ed25519-signed record of
+# every physical decision, a risk classification that drives approval defaults,
+# and a data-flow guard that refuses a privileged call whose arguments echo
+# untrusted content.
+#
+# Extraction required one change of direction. `audit.rs`, `taint.rs` and
+# `trust.rs` imported RiskClass and BlastRadius from `crate::tools` — the whole
+# security subsystem's only outward edge, pointing at the largest and least
+# self-contained module in the tree. Those four types are the contract, not tool
+# machinery, so they moved here as `risk`, and `tools::traits` re-exports them.
+# The dependency now runs the way the doc comments always described it.
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+tracing = "0.1"
+hex = "0.4"
+sha2 = "0.10"
+hmac = "0.12"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+aes-gcm = "0.10"
+argon2 = "0.5"
+base64 = "0.22"
+glob = "0.3"
+rusqlite = { version = "0.38", features = ["bundled"] }
+obc-paths = { path = "../obc-paths" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -13,7 +13,7 @@
 //! The *idea* is adapted from a sibling project's device-authentication module; the
 //! implementation here is original and self-contained (no external deps).
 
-use crate::tools::traits::{BlastRadius, RiskClass};
+use crate::risk::{BlastRadius, RiskClass};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
