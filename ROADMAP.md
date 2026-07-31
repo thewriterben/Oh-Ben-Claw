@@ -783,6 +783,43 @@ System 1) and recover when any link returns.
 - [ ] Not exercised against a degrading LoRa link on the bench mesh, which is the
   scenario it exists for and the one `docs/SAFETY.md` §4.3 makes most relevant
 
+### The three unwired files — resolved 2026-07-30
+
+`scripts/file_reachability.py` reported three files with public API that nothing
+referenced. None was advertised anywhere, so none was a false claim; what they
+lacked was any record of *why* they existed unused, which is indistinguishable
+from having been forgotten.
+
+- [x] **`vision/clawcam_spatial.rs` (124 LOC) — wired.** A fixed camera's
+  detection now stamps a hazard disc into the occupancy grid, so the planner
+  routes the mobile robot clear of what a static node saw. Both ends were already
+  live: the ClawCam detection poll and `NavController`. The missing piece was the
+  camera's *position*, now `[perception.clawcam_poll].cameras` plus
+  `hazard_radius_m`; the path stays off until both are set. `device_id` was
+  already being written into the world-memory fact, so `detection_node_of` reads
+  the camera identity back out of the shared model rather than changing the
+  poll's signature — which is how the module's own header describes closing the
+  loop. Gated by `tests/clawcam_spatial_wiring.rs` against a real controller and
+  a real grid; its four existing unit tests never touched either, so all four
+  could pass while the module could not affect navigation, which is what it was.
+- [ ] **`movement/feedback.rs` (269 LOC, 6 tests) — deliberately unwired.**
+  Closed-loop proportional control: read the actuator's actual position from
+  world memory, correct toward the target each tick, every step through the
+  Track 0 gate. Wiring it means turning on *repeated, unattended actuation*, which
+  is a safety decision rather than a plumbing task. **Condition to wire:** a
+  feedback source that has been bench-validated end to end — a real
+  `sensor.{joint}_angle` from a node, not a synthetic fact — plus a rate limit and
+  a divergence cut-out. Until then the component is complete and parked, which is
+  the honest state.
+- [ ] **`deployment/saga.rs` (257 LOC, 4 tests) — deliberately unwired.** Forward
+  actions paired with compensating ones, unwinding in reverse on the first
+  failure, so a half-applied fleet rolls back. It has no pipeline because
+  **nothing applies a deployment scheme to nodes, on purpose**: Ecosystem
+  Integration I4 stages a pushed scheme to `~/.oh-ben-claw/incoming/` for operator
+  review and never auto-applies. Saga is the rollback for a step the architecture
+  has chosen not to take. **Condition to wire:** the day auto-apply is built,
+  this is what makes it safe to build — not before.
+
 ### Movement Suite *(highest-risk — Track 0 must be mature first)*
 - [ ] Instantiate the contract for actuators (GPIO/relay/motor/servo/pan-tilt): deterministic on-MCU safety limits, physical risk class, staged rollout, signed audit
 - [ ] Closed-loop composition: Vision detects → world memory → brain/reflex commands Movement to track (vision-driven actuation); learned movement skills gated by Track 0

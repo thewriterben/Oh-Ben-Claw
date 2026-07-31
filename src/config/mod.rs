@@ -1080,6 +1080,25 @@ fn default_vision_horizon_ms() -> u64 {
     60_000
 }
 
+/// Where a fixed camera physically is, in the same world frame the navigation
+/// grid uses.
+///
+/// Cameras are static sensors; the robot is not. Knowing where a camera stands
+/// is what lets a detection it makes become an obstacle the planner avoids.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraPositionConfig {
+    /// The camera's node id, matching `device_id` in ClawCam detections.
+    pub node: String,
+    /// World X in metres.
+    pub x: f64,
+    /// World Y in metres.
+    pub y: f64,
+}
+
+fn default_hazard_step_m() -> f64 {
+    0.25
+}
+
 /// Poll a ClawCam detection MCP tool into world memory (`[perception.clawcam_poll]`).
 /// Requires `[perception] world_memory = true`. Detections become
 /// `vision.subject.{species}` facts carrying review state and valid-time.
@@ -1110,6 +1129,23 @@ pub struct ClawCamPollConfig {
     /// (`audio.clawcam:{node}`), so a glassbreak is classifiable by safing.
     #[serde(default)]
     pub poll_audio: bool,
+    /// World position of each fixed camera, so a detection can be stamped into
+    /// the occupancy grid as a hazard the mobile robot routes around.
+    ///
+    /// Empty (the default) leaves `vision/clawcam_spatial.rs` unwired, which is
+    /// what it was until 2026-07-30. Set `hazard_radius_m` and list the cameras
+    /// to turn it on.
+    #[serde(default)]
+    pub cameras: Vec<CameraPositionConfig>,
+    /// Radius in metres of the hazard disc stamped around a camera that just
+    /// saw something. Zero (the default) disables the whole path, so adding
+    /// camera positions alone changes nothing until you also say how far the
+    /// hazard reaches.
+    #[serde(default)]
+    pub hazard_radius_m: f64,
+    /// Grid sampling step for the disc, in metres.
+    #[serde(default = "default_hazard_step_m")]
+    pub hazard_step_m: f64,
     /// Also poll the gateway's analytics reports (`get_anomaly_report`,
     /// `get_encounter_report`, `get_calibration_report`) on their own slower
     /// cadence → `clawcam.analytics.*` facts, and (with `[reflex]` enabled)
