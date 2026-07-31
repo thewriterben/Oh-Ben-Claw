@@ -207,7 +207,38 @@ impl McpClient {
             return Ok(());
         }
 
-        // Inconclusive, not negative. Ask the question that matters.
+        // `initialize` is positive evidence of the legacy lifecycle in exactly the
+        // way `server/discover` is positive evidence of the 2026 one: the 2026
+        // spec REMOVED it, so a server that answers it is speaking the old
+        // lifecycle. Asking costs one round trip and is worth far more than that,
+        // because the handshake is also the only way to learn serverInfo.
+        //
+        // Added 2026-07-30 after `tests/mcp_real_server.rs` ran this against
+        // @modelcontextprotocol/server-everything, the MCP project's own
+        // reference implementation. Without this step the negotiation reported
+        // Stateless2026 for it: `server/discover` failed, and the server was
+        // relaxed enough to answer a handshake-less `tools/list`, so the fallback
+        // below claimed it. Everything worked — and the client reported a
+        // lifecycle the server does not implement, with `unknown v0.0.0` for a
+        // server that would have introduced itself if asked.
+        //
+        // That was the documented known limit of this function, written down as
+        // hypothetical. The first real server it met tripped it.
+        self.mode = ProtocolMode::Legacy2024;
+        if self.initialize().await.is_ok() {
+            self.mode_source = ModeSource::Fallback;
+            tracing::debug!(
+                "MCP negotiated via initialize: {} v{} speaks {}",
+                self.server_name,
+                self.server_version,
+                ProtocolMode::Legacy2024.version(),
+            );
+            return Ok(());
+        }
+
+        // Neither lifecycle identified itself. A 2026 server is permitted to
+        // implement no discovery at all, so ask the question that matters.
+        self.mode = ProtocolMode::Stateless2026;
         match self.request("tools/list", json!({})).await {
             Ok(result) => {
                 self.tools_ttl_ms = result["ttlMs"].as_u64();
@@ -224,7 +255,8 @@ impl McpClient {
                 Ok(())
             }
             Err(probe_err) => {
-                // The server did not answer a stateless request. Fall back.
+                // Last resort: the handshake already failed above, so retry it
+                // only to surface its error alongside this one.
                 self.mode = ProtocolMode::Legacy2024;
                 self.mode_source = ModeSource::Fallback;
                 self.initialize().await.map_err(|handshake_err| {
@@ -336,8 +368,15 @@ impl McpClient {
         }
         let result = self.request("tools/list", json!({})).await?;
         self.tools_ttl_ms = result["ttlMs"].as_u64();
-        let tools: Vec<McpToolDef> =
-            serde_json::from_value(result["tools"].clone()).unwrap_or_default();
+        // Deliberately not `unwrap_or_default()`. An unparseable catalogue and an
+        // empty one are different facts, and rendering the first as the second is
+        // how a desynchronised stream looked like a server with no tools.
+        let raw = result["tools"].clone();
+        if raw.is_null() {
+            return Ok(Vec::new());
+        }
+        let tools: Vec<McpToolDef> = serde_json::from_value(raw)
+            .map_err(|e| anyhow::anyhow!("tools/list returned something unreadable: {e}"))?;
         Ok(tools)
     }
 
@@ -403,14 +442,58 @@ impl McpClient {
 
                 let stdout = t.stdout.clone();
                 let mut guard = stdout.lock().await;
-                let mut response_line = String::new();
-                guard.read_line(&mut response_line).await?;
 
-                let resp: JsonRpcResponse = serde_json::from_str(response_line.trim())?;
-                if let Some(err) = resp.error {
-                    anyhow::bail!("MCP error {}: {}", err.code, err.message);
+                // Read until the reply to *this* request arrives.
+                //
+                // The stream is not strict request/response alternation: a server
+                // may send notifications of its own at any time — progress,
+                // logging, resource-change events — and JSON-RPC identifies a
+                // reply by its `id`, not by its position in the pipe.
+                //
+                // This used to take the next line and call it the answer. Against
+                // `src/bin/mcp-conformance-server.rs`, which only ever speaks when
+                // spoken to, that is indistinguishable from correct. Against
+                // @modelcontextprotocol/server-everything it is not: the server
+                // emits notifications after `initialized`, one of them landed where
+                // the `tools/list` reply should have been, and the client reported
+                // a server with no tools. `list_tools` then hid it, because
+                // `unwrap_or_default()` renders an unparseable response as an
+                // empty catalogue.
+                //
+                // Bounded so a server that never answers cannot hang the caller.
+                let mut skipped = 0usize;
+                loop {
+                    let mut line = String::new();
+                    let n = guard.read_line(&mut line).await?;
+                    if n == 0 {
+                        anyhow::bail!(
+                            "MCP server closed the connection while awaiting a reply to {method}"
+                        );
+                    }
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let resp: JsonRpcResponse = match serde_json::from_str(line) {
+                        Ok(r) => r,
+                        Err(e) => anyhow::bail!("unparseable MCP frame: {e}: {line}"),
+                    };
+                    // A notification has no id; a reply to an earlier, abandoned
+                    // request has the wrong one. Neither is ours.
+                    let is_ours = resp.id.as_ref().and_then(|v| v.as_u64()) == Some(id);
+                    if !is_ours {
+                        skipped += 1;
+                        if skipped > 64 {
+                            anyhow::bail!("no reply to {method} after {skipped} unrelated frames");
+                        }
+                        tracing::trace!("MCP: skipping unsolicited frame while awaiting {method}");
+                        continue;
+                    }
+                    if let Some(err) = resp.error {
+                        anyhow::bail!("MCP error {}: {}", err.code, err.message);
+                    }
+                    return Ok(resp.result.unwrap_or(Value::Null));
                 }
-                Ok(resp.result.unwrap_or(Value::Null))
             }
             Transport::Http(t) => {
                 let url = format!("{}/mcp", t.base_url);
