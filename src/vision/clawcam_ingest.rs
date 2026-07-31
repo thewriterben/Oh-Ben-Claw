@@ -643,6 +643,28 @@ mod dedup_tests {
     }
 }
 
+/// The camera that produced the detection recorded under `entity`, if the fact
+/// carries one.
+///
+/// `poll_clawcam_into_world` writes `device_id` into the fact value (see the
+/// json! block above) but returns only entity names, so the camera identity is
+/// in the world model rather than in the return value. Spatial fusion needs it
+/// to know *where* the detection happened, and reading it back here keeps the
+/// poll signature — and its callers and tests — untouched.
+///
+/// Returns `None` for an unknown entity, a fact with no `device_id`, or a read
+/// error: a missing camera means no hazard is stamped, which is the safe
+/// direction to fail. It is not silent — the caller logs only when cells are
+/// actually marked, so a camera that never resolves shows up as a hazard that
+/// never appears.
+pub fn detection_node_of(world: &WorldMemory, entity: &str) -> Option<String> {
+    let fact = world.current(entity).ok().flatten()?;
+    fact.value
+        .get("device_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

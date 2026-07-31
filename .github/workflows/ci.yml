@@ -38,6 +38,39 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Format check
         run: cargo fmt --all --check
+  # ── MCP against a real third-party server ─────────────────────────────────
+  # Blocking, unlike the conformance job below, and deliberately so. It found
+  # three bugs the moment it was first run by hand -- a legacy server classified
+  # as 2026, a client that assumed strict request/response alternation on stdio,
+  # and a tools/list that rendered an unreadable response as an empty one. None
+  # was reachable from the hand-written fixture in src/bin/mcp-conformance-server.rs,
+  # because a fixture only refuses what its author thought to make it refuse.
+  #
+  # The test is #[ignore]d so a plain `cargo test` stays offline; this runs it
+  # explicitly. The alternative -- leaving it ignored and trusting someone to
+  # remember -- is the exact shape of every stale gate this repository has found.
+  #
+  # The server version is pinned in the test. A red build here should mean our
+  # regression, not their release.
+  mcp-real-server:
+    name: MCP against the reference implementation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: negotiate against @modelcontextprotocol/server-everything
+        run: cargo test --test mcp_real_server -- --ignored --nocapture
+
   # ── MCP conformance (official suite vs. our hand-rolled implementation) ───
   # Runs the Model Context Protocol conformance suite against the OBC MCP
   # server in BOTH protocol modes. Advisory (continue-on-error) until an

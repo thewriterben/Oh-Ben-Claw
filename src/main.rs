@@ -1975,6 +1975,37 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 let client = Arc::clone(client);
                 let poll_safing = Arc::clone(&safing_state);
                 let audio_ctrl = audio_controller.clone();
+                // Spatial fusion: a fixed camera's detection becomes a hazard disc
+                // in the occupancy grid, so the planner routes the mobile robot
+                // clear of what a *static* node saw. Both halves were already
+                // live -- the detection poll below and NavController above -- and
+                // vision/clawcam_spatial.rs sat unwired between them until
+                // 2026-07-30. Off unless hazard_radius_m > 0 and cameras are listed.
+                let spatial_nav = nav_controller.clone();
+                let camera_map = {
+                    let mut m = oh_ben_claw::vision::clawcam_spatial::CameraMap::new();
+                    for c in &cfg.cameras {
+                        m.set(c.node.clone(), c.x, c.y);
+                    }
+                    m
+                };
+                let hazard_radius = cfg.hazard_radius_m;
+                let hazard_step = cfg.hazard_step_m;
+                if hazard_radius > 0.0 && !camera_map.is_empty() {
+                    if spatial_nav.is_some() {
+                        info!(
+                            cameras = camera_map.len(),
+                            radius_m = hazard_radius,
+                            "ClawCam spatial fusion active: detections become nav hazards"
+                        );
+                    } else {
+                        tracing::warn!(
+                            "[perception.clawcam_poll] lists cameras and a hazard radius, \
+                             but no navigation grid is configured -- detections cannot \
+                             become obstacles. Configure [navigation] or drop the cameras."
+                        );
+                    }
+                }
                 let interval = std::time::Duration::from_millis(cfg.interval_ms.max(250));
                 info!(
                     tool = %cfg.tool,
@@ -2015,6 +2046,46 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                     now,
                                     &cfg.source,
                                 );
+
+                                // Stamp a hazard disc around every camera that just
+                                // reported. device_id rides in the fact value the
+                                // ingest wrote, so this reads the shared world model
+                                // rather than needing the poll to hand it over --
+                                // which is how clawcam_spatial.rs describes closing
+                                // the loop.
+                                if let Some(nav) = spatial_nav.as_ref() {
+                                    if hazard_radius > 0.0 {
+                                        let mut seen: Vec<String> = Vec::new();
+                                        for ent in &entities {
+                                            if let Some(node) =
+                                                oh_ben_claw::vision::clawcam_ingest::detection_node_of(
+                                                    &world, ent,
+                                                )
+                                            {
+                                                if !seen.contains(&node) {
+                                                    seen.push(node);
+                                                }
+                                            }
+                                        }
+                                        for node in seen {
+                                            let cells =
+                                                oh_ben_claw::vision::clawcam_spatial::mark_detection_hazard(
+                                                    nav,
+                                                    &camera_map,
+                                                    &node,
+                                                    hazard_radius,
+                                                    hazard_step,
+                                                );
+                                            if cells > 0 {
+                                                info!(
+                                                    camera = %node,
+                                                    cells,
+                                                    "detection marked as a navigation hazard"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                                 info!(
                                     count = entities.len(),
                                     "ClawCam detections folded into world memory"

@@ -9,7 +9,7 @@
 //! Mechanics (a practical value-flow approximation, since we cannot trace
 //! dataflow through an LLM):
 //! - Tools that ingest **external** content (web pages, remote MCP servers)
-//!   declare [`OutputTrust::External`](crate::tools::traits::OutputTrust);
+//!   declare [`OutputTrust::External`](crate::risk::OutputTrust);
 //!   their outputs accumulate in a bounded per-run [`TaintPool`].
 //! - Before a **gated** call executes (physical, irreversible, or with real
 //!   blast radius), its arguments are scanned: a string or number that
@@ -23,7 +23,7 @@
 //! at the cost of occasional false positives, which the explicit-grant
 //! escape hatch and `Warn` mode make operable. Maps to OWASP ASI01/ASI02.
 
-use crate::tools::traits::RiskClass;
+use crate::risk::RiskClass;
 use serde_json::Value;
 use std::sync::Mutex;
 
@@ -61,9 +61,7 @@ impl TaintMode {
 /// Whether a call is privileged enough to gate on provenance: physical,
 /// irreversible, or carrying real-world blast radius.
 pub fn gated(risk: RiskClass) -> bool {
-    risk.physical
-        || !risk.reversible
-        || !matches!(risk.blast, crate::tools::traits::BlastRadius::None)
+    risk.physical || !risk.reversible || !matches!(risk.blast, crate::risk::BlastRadius::None)
 }
 
 /// One pooled chunk of untrusted content.
@@ -229,7 +227,7 @@ pub fn scan_args(args: &Value, pool: &TaintPool) -> Option<TaintHit> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::traits::BlastRadius;
+    use crate::risk::BlastRadius;
     use serde_json::json;
 
     fn pool_with(content: &str) -> TaintPool {

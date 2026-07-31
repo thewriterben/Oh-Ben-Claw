@@ -5,6 +5,7 @@ members = [
     "crates/obc-paths",
     "crates/obc-memory",
     "crates/obc-planner",
+    "crates/obc-safety",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
@@ -59,6 +60,7 @@ directories = "5.0"
 obc-paths = { path = "crates/obc-paths" }
 obc-memory = { path = "crates/obc-memory" }
 obc-planner = { path = "crates/obc-planner" }
+obc-safety = { path = "crates/obc-safety" }
 toml = "1.0"
 shellexpand = "3.1"
 

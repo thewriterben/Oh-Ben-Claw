@@ -33,6 +33,7 @@ pub mod limits;
 pub mod pairing;
 pub mod policy;
 pub mod redteam;
+pub mod risk;
 pub mod taint;
 pub mod trust;
 pub mod vault;
