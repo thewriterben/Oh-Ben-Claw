@@ -11,7 +11,7 @@
 //! local System 1), and recover when a link comes back. Perceive → remember →
 //! reflex, same spine as the other suites.
 
-use crate::memory::world::WorldMemory;
+use obc_memory::world::WorldMemory;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;

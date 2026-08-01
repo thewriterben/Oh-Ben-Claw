@@ -705,6 +705,95 @@ new transports/drivers/accelerator-inference touch firmware.
 - [ ] AI-accelerator nodes (Coral/Hailo/Jetson/K230) run as edge-inference nodes via `EdgeAgent`, advertising their accelerator token and exposing local inference as a spine tool
 - [ ] **OAK VPU node (from 2026-07-06 scout):** DepthAI host runtime wiring so `oak-d-lite` (`vpu`) runs as an edge-inference node — depth + NN pipelines exposed as spine tools; IMX500 AI Camera model loading via the rpicam/imx500 stack on RPi hosts
 
+## Migration to Open Body Control 🚚 *(standing track)*
+
+Development stays here and moves piecewise: each piece goes to the public repo
+(`OBC-Prime`) when it is defensible on its own. Vendored, not relocated — the
+crates stay here where the rest of the agent compiles against them, and
+OBC-Prime carries a SHA-256-checked copy it builds and tests in CI. Rationale
+and the wider blockers: `OBC-Prime/docs/MIGRATION.md`.
+
+### Moved so far
+
+| crate | LOC | tests | when | what it let the public repo check |
+|---|---:|---:|---|---|
+| `obc-paths` | 226 | 6 | 2026-07-30 | where data lives, resolved once |
+| `obc-memory` | 5,148 | 83 | 2026-07-30 | the bitemporal world model and belief revision its docs described |
+| `obc-planner` | 6,610 | 165 | 2026-07-30 | the Rust leg of the parity claim — the source the vendored WASM is built from |
+| `obc-safety` | 3,115 | 65 | 2026-08-01 | Track 0: the actuator limit table, the signed audit, taint. The safety claim was the one a reader could not check |
+| `obc-telemetry` | 1,015 | 18 | 2026-08-01 | the body-telemetry suites — `power`, `comms`, `sensing`. First piece picked by the derived queue rather than by hand |
+
+LOC and test counts measured 2026-08-01. `obc-memory` is 5,148 rather than the
+5,878 quoted when it moved — `image.rs` was cut upstream on 2026-07-30 as
+documented-but-never-run.
+
+### The queue is derived now, not guessed
+
+The first four were picked by hand, reading imports. That worked and hid the
+shape of the work: `obc-safety` was blocked for months by exactly one edge pointing the
+wrong way — `RiskClass` living in `tools` — and nobody had written that down
+because nobody was counting edges.
+
+- [x] **`scripts/extractability.py`** (2026-08-01) — per module, the outward
+  edges. An edge is *blocking* if it points at a module still in this tree and
+  *free* if it points at a crate that has already left, since a new crate can
+  just depend on `obc-memory`. `curation_survey.py` answers the deletion
+  question (who references this?); this answers the migration one (what does
+  this reference?), and they are not the same: a module with many dependents is
+  still easy to extract, and a module with many dependencies is not, however few
+  things use it. The shared import parser moved to `scripts/rust_imports.py` so
+  the two cannot drift.
+
+Its first run listed six modules with zero blocking edges. Three of them —
+`comms`, `power`, `sensing` — became `obc-telemetry` the same day. Current
+standing, `python scripts/extractability.py`:
+
+| ready (0 blocking) | LOC | one edge away | LOC | blocked by |
+|---|---:|---|---:|---|
+| `scheduler` | 684 | `aerial` | 177 | `fleet` |
+| `a2a` | 871 | `gnss` | 336 | `fleet` |
+| `observability` | 918 | `cost` | 472 | `config` |
+| | | `foresight` | 677 | `agent` |
+| | | `tunnel` | 677 | `config` |
+| | | `movement` | 741 | `spine` |
+| | | `mcp` | 1,741 | `tools` |
+| | | `navigation` | 3,714 | `movement` |
+
+Before any of it moved, the top row was confirmed the only way that counts — by
+a compiler. `src/comms/mod.rs` was compiled in a scratch crate whose entire
+universe was `obc-memory`, serde and anyhow, with nothing else from this tree
+reachable: it built, and its 5 tests passed. A name-based survey saying "no
+blocking edges" and a compiler agreeing are different claims, and the second is
+the one an extraction rests on. The probe is a ten-line `Cargo.toml` plus a
+`#[path]` include for any other candidate, and is worth running *before* moving
+one. The extraction that followed needed no call-site changes at all — the three
+re-exports in `lib.rs` kept `crate::power::…` working everywhere — which is what
+zero blocking edges should feel like when the measurement was right.
+
+Worth recording what the first version of that script said, because it is the
+failure mode this whole track is exposed to: counting only `use crate::…`
+declarations, it reported **`config` as having zero outward edges** — 3,430 LOC,
+58 dependents, the obvious next piece. `config` has six. Its struct fields are
+typed with inline paths (`pub server: crate::mcp::McpServerConfig`) that no
+`use` line records. Same class of miss as the July correction to
+`curation_survey.py`, caught before the script was committed, and the reason
+both now share one parser.
+
+- [x] **Piece five: `obc-telemetry`** (2026-08-01). Chosen against the claim it
+  backs, not against the queue order — zero blocking edges makes a module
+  *movable*, not worth moving. OBC-Prime's README says the reflex layer keeps
+  working when the brain is unreachable, on ten separate lines, and that claim
+  was backed only by vendored firmware; `power`, `comms` and `sensing` are the
+  host side of it. Honest limit: the reflex *engine* is in `agent/` behind
+  thirteen blocking edges and cannot follow, so this backs the
+  perceive-and-classify half, not the whole sentence.
+- [ ] **Pick piece six** the same way: which claim is currently unbacked.
+- [ ] **`navigation` (3,714 LOC) is the largest single unlock**, and it is one
+  edge behind `movement` (741 LOC), which is one edge behind `spine`. Three
+  small moves in order, not one large one.
+- [ ] Spine authentication remains the gate on migrating anything that touches
+  the transport — see `docs/SPINE-AUTH.md` in OBC-Prime and Phase B below.
+
 ## Ecosystem Integration 📋 Planned *(standing track)*
 
 Unify the three sibling projects — **Oh-Ben-Claw** (Rust runtime/planner/firmware, canonical), the **OBC-deployment-generator** (Expo iOS/Android/web UX front door), and **Accelerapp** (Python multi-platform codegen) — into one pipeline with a single source of truth, ending the three-way drift of registry/planner/firmware. Design + phased plan: `docs/ECOSYSTEM-INTEGRATION.md`.
@@ -748,10 +837,16 @@ Generalize ClawCam's "capability suite plugged into the brain" pattern into a re
 - [ ] **S4 Safe:** assign `RiskClass` to every world-changing vision tool; route through Track 0 signed audit + staged rollout; use ClawCam's cron engine as a Phase 17 autonomy-loop instance
 - [x] **S1b Analytics consumption (2026-07-05):** ClawCam's aggregate reports feed the brain — `get_anomaly_report` / `get_encounter_report` / `get_calibration_report` poll on a slow cadence into `clawcam.analytics.*` world-memory facts (`vision/clawcam_analytics`), with reflex rules (`vision_analytics_rules`) that escalate an unusually quiet day (possible knocked-over/obstructed camera), an activity surge, or model-calibration drift (`[perception.clawcam_poll] poll_analytics`)
 
-### Sensing Suite
+### Sensing Suite *(ingestion half shipped: `crates/obc-telemetry/src/sensing.rs`, 321 LOC, 7 unit tests — extracted 2026-08-01)*
+
+Quality-aware ingestion exists and is wired: a named scalar stream is classified
+against range and freshness expectations and recorded as `sensor.{quantity}`
+carrying value, unit, source and quality, which reflexes already read. What the
+row below asks for is the rest of the contract.
+
 - [ ] Instantiate the contract: read sensors/fusion → world memory as time-valid facts; on-node reflex rules (Phase 18 System 1); learned thresholds; edge-accelerated fusion
 
-### Power Suite ✅ Shipped *(`src/power/`, 319 LOC, 6 unit tests)*
+### Power Suite ✅ Shipped *(`crates/obc-telemetry/src/power.rs`, 292 LOC, 6 unit tests — extracted 2026-08-01)*
 
 The first suite instantiated end to end, and the template the others should
 follow. Perceives like Sensing does — a `BatteryReading` (SoC, voltage, current,
@@ -770,7 +865,7 @@ reflex rule watches to drive low-power safing.
 - [ ] No bench validation — no real pack has driven a `critical` transition into a
   safing action on hardware
 
-### Comms Suite ✅ Shipped *(`src/comms/`, 317 LOC, 5 unit tests)*
+### Comms Suite ✅ Shipped *(`crates/obc-telemetry/src/comms.rs`, 291 LOC, 5 unit tests — extracted 2026-08-01)*
 
 The same shape as Power, one level up: a `LinkReading` (signal, latency, loss, up)
 per named link is classified into a `LinkState` and recorded as `link.{name}`. The

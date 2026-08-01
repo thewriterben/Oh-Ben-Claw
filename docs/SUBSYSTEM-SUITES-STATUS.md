@@ -17,10 +17,10 @@ Six capability suites now share one spine: **perceive → remember → react →
 |---|---|---|---|---|
 | **Vision** | (ClawCam, external) | detections | `subject:*` | — |
 | **Movement** | `src/movement` | — | `actuator.{name}` | `move_actuator` tool + reflex `Move`; `ActuatorSink` (`LoggingActuatorSink` / `SpineActuatorSink`); Track 0 gate |
-| **Sensing** | `src/sensing` | quality-classified readings | `sensor.{quantity}` (incl. `quality`) | — |
+| **Sensing** | `crates/obc-telemetry/src/sensing.rs` | quality-classified readings | `sensor.{quantity}` (incl. `quality`) | — |
 | **Audio** | `src/audio/suite` | heard events (reliability) | `audio.{stream}`, `speech.last` | `speak` tool; `SpeechSink` (`LoggingSpeechSink` / `SpineSpeechSink`) |
-| **Power** | `src/power` | battery telemetry | `power.battery`, `power.mode` | — |
-| **Comms** | `src/comms` | per-link telemetry + aggregate | `link.{name}`, `net.mode` | — |
+| **Power** | `crates/obc-telemetry/src/power.rs` | battery telemetry | `power.battery`, `power.mode` | — |
+| **Comms** | `crates/obc-telemetry/src/comms.rs` | per-link telemetry + aggregate | `link.{name}`, `net.mode` | — |
 
 Each suite records into world memory non-destructively (bitemporal `observe`), so every fact is a historical observation, never an overwrite.
 
