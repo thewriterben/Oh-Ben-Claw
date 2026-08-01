@@ -107,10 +107,10 @@ Five capability suites share one contract (perceive → remember → act; see [`
 
 | Suite | Module | Perceives / Acts | Mode hook |
 |---|---|---|---|
-| **Sensing** | `src/sensing` | classifies samples vs range/freshness specs → `sensor.{quantity}` with quality | `quality` |
+| **Sensing** | `crates/obc-telemetry/src/sensing.rs` | classifies samples vs range/freshness specs → `sensor.{quantity}` with quality | `quality` |
 | **Audio** | `src/audio/suite` | hears (reliability-classified events) and speaks (pluggable TTS / spine sink) | `audio.*` |
-| **Power** | `src/power` | battery SoC + charge state → `power.mode` (`normal`/`low`/`critical`/`charging`) | `power.mode` |
-| **Comms** | `src/comms` | per-link health → aggregated `net.mode` (`online`/`degraded`/`offline`) | `net.mode` |
+| **Power** | `crates/obc-telemetry/src/power.rs` | battery SoC + charge state → `power.mode` (`normal`/`low`/`critical`/`charging`) | `power.mode` |
+| **Comms** | `crates/obc-telemetry/src/comms.rs` | per-link health → aggregated `net.mode` (`online`/`degraded`/`offline`) | `net.mode` |
 | **Movement** | `src/movement` | Track 0–bounded actuation + closed-loop P-controller servo | — |
 
 ### Navigation, SLAM & autonomy

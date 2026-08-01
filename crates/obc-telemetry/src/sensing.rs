@@ -12,7 +12,7 @@
 //! them and a human can recalibrate. Reflexes already read `sensor.{quantity}`
 //! from world memory, so sensing feeds System 1 directly.
 
-use crate::memory::world::WorldMemory;
+use obc_memory::world::WorldMemory;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -152,7 +152,7 @@ impl SensingController {
         &self,
         sample: &Sample,
         now_ms: u64,
-        origin: crate::memory::world::Origin,
+        origin: obc_memory::world::Origin,
     ) -> anyhow::Result<ClassifiedReading> {
         let quality = self.classify_range(&sample.quantity, sample.value);
         let unit = sample.unit.clone().or_else(|| {
@@ -263,7 +263,7 @@ mod tests {
             .ingest(
                 &sample("temperature", 22.5),
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
         assert_eq!(r.quality, Quality::Ok);
@@ -282,7 +282,7 @@ mod tests {
             .ingest(
                 &sample("temperature", 150.0),
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
         assert_eq!(r.quality, Quality::OutOfRange);
@@ -298,7 +298,7 @@ mod tests {
         ctrl.ingest(
             &sample("temperature", 20.0),
             1_000,
-            crate::memory::world::Origin::Observed,
+            obc_memory::world::Origin::Observed,
         )
         .unwrap();
         assert_eq!(ctrl.status("temperature", 5_000), Quality::Ok); // within 10s
@@ -318,7 +318,7 @@ mod tests {
             .ingest(
                 &sample("lux", 999.0),
                 1,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
         assert_eq!(r.quality, Quality::Ok);
@@ -335,7 +335,7 @@ mod tests {
         ctrl.ingest(
             &sample("temperature", 200.0),
             1_000,
-            crate::memory::world::Origin::Observed,
+            obc_memory::world::Origin::Observed,
         )
         .unwrap();
         let anomalies = ctrl.anomalies(2_000);

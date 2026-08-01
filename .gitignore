@@ -41,6 +41,11 @@ gw40.log
 __pycache__/
 *.py[cod]
 
+# Commit messages written to a file and passed with `git commit -F`. One was
+# swept into a commit by `git add -A` on 2026-08-01, seconds after the scratch
+# note below said that is how it happens.
+_commitmsg.txt
+
 # Scratch landing area. The Cowork device bridge cannot unlink files, so an
 # agent working here moves them aside instead of deleting them. Twice that has
 # ended with scratch files committed by accident — they appear as pending
