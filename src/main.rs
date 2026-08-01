@@ -310,6 +310,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 obc_safety::NodePairingManager::new(config.security.pairing_secret.clone()),
                 config.security.require_pairing,
             )
+            .with_frame_auth(obc_safety::frame_auth::FrameAuth::new(
+                config.security.pairing_secret.clone(),
+                config.security.require_frame_auth,
+            ))
             .connect()
             .await
         {
