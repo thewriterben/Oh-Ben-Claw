@@ -428,8 +428,11 @@ and enhanced reliability.
 
 ## Phase 15: Production Hardening ✅ Complete *(the July 28 MCP default-mode flip landed 2026-07-30)*
 
-Executed in lockstep with **ClawCam Phase 13** (see `NEXT_PHASE_PLAN.md` in the
-workspace root). No new product surface area: this phase makes the existing 14
+Executed in lockstep with **ClawCam Phase 13**. The shared contract — approval
+scopes, plan-mode argument bounds, tool-catalog SSOT, protocol modes — is written
+down once, in `ClawCam/NEXT_PHASE_PLAN.md`; it is deliberately not copied here,
+since two copies of a cross-repo contract are the drift it exists to prevent.
+No new product surface area: this phase makes the existing 14
 phases trustworthy — supply-chain security, protocol conformance against the
 specs as they actually shipped, and the evaluation/observability layer the 2026
 agentic-AI ecosystem treats as table stakes. Target window: June 8 – July 31, 2026.
@@ -738,7 +741,7 @@ Generalize ClawCam's "capability suite plugged into the brain" pattern into a re
 - [ ] Formalize the 8-point contract (perceive/act · connect · remember · learn · improve · accelerate · stay-safe · observe) as a shared standard in OBC + suite repos
 
 ### Vision Suite (ClawCam) — the reference implementation
-- [ ] **S0 Consolidate:** fix ClawCam tool-catalog drift (stale 5-tool JSON, 16-vs-32 HTTP listing, lagging docs); commit cross-repo `NEXT_PHASE_PLAN.md`; finish Phase 13↔15 lockstep (plan-mode approval w/ arg bounds; wire `tests/evals` into CI)
+- [x] **S0 Consolidate (2026-08-01):** ClawCam tool-catalog drift closed on both halves. **Code:** `stdio_server.TOOL_DEFINITIONS` + `APPROVAL_REQUIRED_TOOLS` are canonical, the 5-tool `ClawCam/brain/tools/clawcam_tools.json` is retired to `"tools": []`, and `GET /api/v1/tools` + the adapter `ToolPolicy` derive from the same pair — guarded by `tests/gateway/test_tool_catalog_ssot.py`. **Docs** were the fourth consumer and the only one still hand-copied, so they kept drifting after the code stopped: the old 5/16/32 spread had become a uniform *46* while the server had grown to *57*. `tools/gen_mcp_tool_docs.py` now generates `docs/standards/mcp-tools.md` from the source literals (AST-read, so it works without the gateway's runtime deps) and `tests/gateway/test_tool_catalog_docs.py` regenerates-and-compares plus rejects a stale count in any live prose doc (ClawCam `docs/generate-tool-catalog`). Lockstep is closed: plan-mode approval with argument bounds ✅ both sides, ClawCam's `tests/evals` is in pytest `testpaths` = CI release gate, cross-repo MCP suite 17/17 in both modes, July 28 default flip landed 2026-07-30. The cross-repo plan stays single-copy in `ClawCam/NEXT_PHASE_PLAN.md`, linked from Phase 15 above
 - [ ] **S1 Remember (→ Phase 18):** implement ClawCam's documented review-state model; add re-identification/embeddings; feed subjects as entities into OBC bitemporal world memory (valid-time intervals, non-destructive corrections)
 - [ ] **S2 Learn (→ Phase 16):** active-learning loop — low-confidence/novel detections → review queue → human/brain correction (ground-truth signal) → improve thresholds/heads + synthesize skills
 - [ ] **S3 Accelerate (→ Phase 20/18):** register real models (MegaDetector/BirdNET weights, SpeciesNet) + accelerator detectors (Hailo/Coral/Jetson; ESP-DL/LiteRT-Micro on ESP32-S3-EYE); dual-system fast-trigger/slow-inference split
