@@ -167,6 +167,13 @@ pub struct P2pSpine {
     pending_calls: PendingCalls,
     /// Our own announcement — set once we call `start()`.
     local_announcement: RwLock<Option<NodeAnnouncement>>,
+    /// Node pairing, and whether an unpaired peer is refused or merely noted.
+    ///
+    /// This transport needs it more than MQTT does: discovery is a UDP broadcast
+    /// on the local network with no broker, no credentials and no handshake, so
+    /// anyone who can send a datagram can offer the brain a set of tools.
+    pairing: obc_safety::NodePairingManager,
+    require_pairing: bool,
 }
 
 impl P2pSpine {
@@ -177,7 +184,20 @@ impl P2pSpine {
             peer_registry: Arc::new(RwLock::new(HashMap::new())),
             pending_calls: Arc::new(Mutex::new(HashMap::new())),
             local_announcement: RwLock::new(None),
+            pairing: obc_safety::NodePairingManager::new(None),
+            require_pairing: false,
         }
+    }
+
+    /// Enforce `[security] pairing_secret` / `require_pairing` on discovered peers.
+    pub fn with_pairing(
+        mut self,
+        pairing: obc_safety::NodePairingManager,
+        require_pairing: bool,
+    ) -> Self {
+        self.pairing = pairing;
+        self.require_pairing = require_pairing;
+        self
     }
 
     /// Start the P2P spine: bind the TCP server, bind the UDP discovery socket,
@@ -223,6 +243,8 @@ impl P2pSpine {
 
         let peer_registry = Arc::clone(&arc.peer_registry);
         let peer_timeout = arc.config.peer_timeout_secs;
+        let pairing = arc.pairing.clone();
+        let require_pairing = arc.require_pairing;
         tokio::spawn(async move {
             let mut buf = [0u8; 4096];
             loop {
@@ -230,6 +252,24 @@ impl P2pSpine {
                     Ok((len, src)) => {
                         if let Ok(announce) = serde_json::from_slice::<P2pAnnounce>(&buf[..len]) {
                             let node_id = announce.announcement.node_id.clone();
+
+                            if let super::Admission::Refuse { reason } = super::admit_announcement(
+                                &pairing,
+                                require_pairing,
+                                &node_id,
+                                &announce.announcement.metadata,
+                            ) {
+                                tracing::warn!(
+                                    node_id = %node_id,
+                                    src = %src,
+                                    tool_count = announce.announcement.tools.len(),
+                                    %reason,
+                                    "Refused a P2P peer: its tools are NOT registered \
+                                     ([security] require_pairing is on)"
+                                );
+                                continue;
+                            }
+
                             // If the sender broadcast "0.0.0.0" (bind-all), use the
                             // actual UDP source IP so we can dial back to the peer.
                             let tcp_host = if announce.tcp_host == "0.0.0.0" {

@@ -302,6 +302,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // Connect to MQTT spine and discover peripheral tools
     let spine_client = if !no_spine && config.spine.kind == "mqtt" {
         match spine::SpineClient::new(config.spine.clone(), "obc-brain")
+            // `[security] require_pairing` finally reaches the announcement
+            // path. Before 2026-08-01 it was validated at boot and gated
+            // nothing: any node that could publish on the topic got its tools
+            // registered, paired or not.
+            .with_pairing(
+                obc_safety::NodePairingManager::new(config.security.pairing_secret.clone()),
+                config.security.require_pairing,
+            )
             .connect()
             .await
         {

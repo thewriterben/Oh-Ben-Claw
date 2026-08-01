@@ -44,7 +44,8 @@ Tool execution policies, peripheral node pairing, and encrypted secrets vault. *
 
 - [x] Rename: Bus layer → **Spine** layer (all identifiers, configs, docs)
 - [x] Tool policy engine — glob pattern matching, arg_contains, allow/deny/audit actions (`src/security/policy.rs`)
-- [x] Node pairing — HMAC-SHA256 tokens, 5-minute replay window, quarantine status (`src/security/pairing.rs`)
+- [x] Node pairing — HMAC-SHA256 tokens, 5-minute replay window, quarantine status (`crates/obc-safety/src/pairing.rs`)
+- [x] **Pairing actually gates announcements (2026-08-01).** This row read as done from 2026-03 and the mechanism was inert until today: `pair_node` had no callers, `is_trusted` had none, and `[security] require_pairing = true` was checked by config validation — which refused to boot without a secret — and then gated nothing. Any node that could publish on the announce topic got its tools registered. Now `spine::admit_announcement` decides, on both transports: MQTT (`/announce`) and P2P (UDP discovery, which needs it more — no broker, no credentials, anyone who can send a datagram can offer the brain a set of tools). Refusals are logged loudly with the reason. The decision is a free function rather than a line inside a poll loop, because a security control no test can reach is the kind that turns out not to work on the day it is needed: `tests/pairing_admission_gate.rs`, 7 tests, verified by making the gate always admit and watching three of them fail. This also makes `trust.rs` honest — it opens by asserting "OBC already authenticates nodes (HMAC pairing)" and builds behavioural hardening on that premise, which until today was false
 - [x] Encrypted secrets vault — AES-256-GCM, Argon2id KDF, SQLite backend (`src/security/vault.rs`)
 - [x] `SecurityContext` wired into agent loop and startup (`src/main.rs`)
 - [x] `[security]` config section with policy examples (`examples/config-multi-device.toml`)
@@ -722,8 +723,15 @@ frames sit near 240 bytes everything above needs rethinking.*
     what make the first two mean anything, being constants someone else
     published years ago. Verified by sabotage: flipping the node's counter to
     little-endian fails the agreement test.
-- [ ] Steps 3–6 of `SPINE-AUTH.md` (NVS counter, wire format v2, wiring
-  `NodePairingManager`, re-sync firmware + update `SAFETY.md` §4.3). Step 4
+- [x] **Step 5, first bullet — `require_pairing` means something** (2026-08-01).
+  The design's step 5 is *"`NodePairingManager` gets its callers, finally"*, and
+  its first item — refuse announcements from unpaired nodes — needs no wire
+  change, so it did not have to wait behind step 4. See Phase 3 above for what
+  was actually wrong and how it was verified. The remaining step-5 items (verify
+  the MAC on inbound frames, sign outbound calls) do depend on the wire format
+  and stay with step 4.
+- [ ] Steps 3, 4 and the rest of 6 in `SPINE-AUTH.md` (NVS counter — designed,
+  unbuilt; wire format v2; re-sync firmware + update `SAFETY.md` §4.3). Step 4
   should carry the correlation-id change with it.
 
 ---

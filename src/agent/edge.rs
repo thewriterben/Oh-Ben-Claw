@@ -73,6 +73,10 @@ pub struct EdgeAgent {
     /// load-bearing to whoever is reading a mesh roster.
     board: String,
     p2p_spine: Option<Arc<P2pSpine>>,
+    /// Applied to the P2P spine when it starts. Defaults to pairing disabled,
+    /// which is what every existing caller got before 2026-08-01 and still gets
+    /// unless it opts in.
+    pairing: (obc_safety::NodePairingManager, bool),
 }
 
 impl EdgeAgent {
@@ -105,7 +109,23 @@ impl EdgeAgent {
             config: edge_config,
             board: "edge".to_string(),
             p2p_spine: None,
+            pairing: (obc_safety::NodePairingManager::new(None), false),
         })
+    }
+
+    /// Enforce `[security] pairing_secret` / `require_pairing` on peers this
+    /// node discovers over P2P.
+    ///
+    /// Worth having on the *node* and not only on the brain: P2P discovery is a
+    /// UDP broadcast with no broker and no handshake, so on an edge device the
+    /// set of tools it will call is decided by whoever else is on the network.
+    pub fn with_pairing(
+        mut self,
+        pairing: obc_safety::NodePairingManager,
+        require_pairing: bool,
+    ) -> Self {
+        self.pairing = (pairing, require_pairing);
+        self
     }
 
     /// Attach a policy engine.
@@ -124,7 +144,10 @@ impl EdgeAgent {
         p2p_config: P2pConfig,
         announcement: NodeAnnouncement,
     ) -> Result<()> {
-        let spine = P2pSpine::new(p2p_config).start().await?;
+        let spine = P2pSpine::new(p2p_config)
+            .with_pairing(self.pairing.0.clone(), self.pairing.1)
+            .start()
+            .await?;
         spine.announce(&announcement).await?;
 
         // Wait briefly for initial peer discovery before registering tools.

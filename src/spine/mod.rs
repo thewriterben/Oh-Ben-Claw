@@ -145,6 +145,50 @@ pub fn topic_matches(filter: &str, topic: &str) -> bool {
     fs.len() == ts.len()
 }
 
+// ── Admission ────────────────────────────────────────────────────────────────
+
+/// What the brain does with an announcement, before its tools reach the registry.
+///
+/// A separate type, and a pure function to produce it, because the decision
+/// otherwise lives inside an MQTT poll loop that no test can reach. The loop
+/// should be plumbing; this is the policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Admission {
+    /// Register the node's tools.
+    Admit,
+    /// Refuse: the node did not prove who it is and `require_pairing` is set.
+    Refuse { reason: String },
+}
+
+/// Decide whether an announcement may register its tools.
+///
+/// Until 2026-08-01 there was no decision: `NodePairingManager` was constructed
+/// at startup, `pair_node` had no callers, and `[security] require_pairing = true`
+/// was validated at boot and then gated nothing — a node could announce any tools
+/// it liked and the brain would register them. `security/trust.rs` opens by
+/// asserting "OBC already authenticates nodes (HMAC pairing) … that trust is
+/// *static*" and builds behavioural hardening on that premise. The premise was
+/// false, which made the hardening on top of it a decoration.
+///
+/// Pairing is still evaluated when `require_pairing` is off, so status is
+/// observable — you can see which nodes would be refused before turning the key
+/// on. Only the *refusal* is gated.
+pub fn admit_announcement(
+    pairing: &obc_safety::NodePairingManager,
+    require_pairing: bool,
+    node_id: &str,
+    metadata: &Value,
+) -> Admission {
+    let status = pairing.pair_node(node_id, Some(metadata));
+    match status {
+        obc_safety::PairingStatus::Paired => Admission::Admit,
+        _ if !require_pairing => Admission::Admit,
+        other => Admission::Refuse {
+            reason: other.to_string(),
+        },
+    }
+}
+
 /// A client for the Oh-Ben-Claw MQTT communication spine.
 pub struct SpineClient {
     config: SpineConfig,
@@ -153,6 +197,9 @@ pub struct SpineClient {
     pending_calls: PendingCalls,
     node_registry: NodeRegistry,
     handlers: Handlers,
+    /// Node pairing, and whether an unpaired node is refused or merely noted.
+    pairing: obc_safety::NodePairingManager,
+    require_pairing: bool,
 }
 
 impl SpineClient {
@@ -165,7 +212,27 @@ impl SpineClient {
             pending_calls: Arc::new(Mutex::new(HashMap::new())),
             node_registry: Arc::new(RwLock::new(HashMap::new())),
             handlers: Arc::new(std::sync::Mutex::new(Vec::new())),
+            // Defaults keep every existing caller's behaviour: no secret means
+            // `pair_node` marks everything Paired, and `require_pairing` is off.
+            // A deployment opts in through `with_pairing`.
+            pairing: obc_safety::NodePairingManager::new(None),
+            require_pairing: false,
         }
+    }
+
+    /// Enforce `[security] pairing_secret` / `require_pairing` on announcements.
+    ///
+    /// Separate from `new` so the security config reaches the spine explicitly
+    /// at the one place that wires them together, rather than the spine reaching
+    /// into a global.
+    pub fn with_pairing(
+        mut self,
+        pairing: obc_safety::NodePairingManager,
+        require_pairing: bool,
+    ) -> Self {
+        self.pairing = pairing;
+        self.require_pairing = require_pairing;
+        self
     }
 
     /// Connect to the MQTT broker and spawn the event loop.
@@ -194,6 +261,8 @@ impl SpineClient {
         let pending_calls = Arc::clone(&self.pending_calls);
         let node_registry = Arc::clone(&self.node_registry);
         let handlers = Arc::clone(&self.handlers);
+        let pairing = self.pairing.clone();
+        let require_pairing = self.require_pairing;
 
         // Spawn the event loop handler
         tokio::spawn(async move {
@@ -221,13 +290,35 @@ impl SpineClient {
                                 serde_json::from_slice::<NodeAnnouncement>(&payload)
                             {
                                 let node_id = announcement.node_id.clone();
-                                tracing::info!(
-                                    node_id = %node_id,
-                                    board = %announcement.board,
-                                    tool_count = announcement.tools.len(),
-                                    "Node announced on spine"
-                                );
-                                node_registry.write().await.insert(node_id, announcement);
+                                match admit_announcement(
+                                    &pairing,
+                                    require_pairing,
+                                    &node_id,
+                                    &announcement.metadata,
+                                ) {
+                                    Admission::Admit => {
+                                        tracing::info!(
+                                            node_id = %node_id,
+                                            board = %announcement.board,
+                                            tool_count = announcement.tools.len(),
+                                            "Node announced on spine"
+                                        );
+                                        node_registry.write().await.insert(node_id, announcement);
+                                    }
+                                    Admission::Refuse { reason } => {
+                                        // Loudly: a node the operator expects to
+                                        // see, silently absent, is a worse
+                                        // afternoon than a refusal they can read.
+                                        tracing::warn!(
+                                            node_id = %node_id,
+                                            board = %announcement.board,
+                                            tool_count = announcement.tools.len(),
+                                            %reason,
+                                            "Refused a node announcement: its tools are NOT registered \
+                                             ([security] require_pairing is on)"
+                                        );
+                                    }
+                                }
                             }
                         } else if topic.contains("/result/") {
                             // Parse tool call result and wake the waiting caller
