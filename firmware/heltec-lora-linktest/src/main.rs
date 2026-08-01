@@ -14,6 +14,13 @@
 //! Region: 915 MHz (US ISM). Modulation: SF7 / BW 125 kHz / CR 4-5.
 //! SX1262: NSS=8 SCK=9 MOSI=10 MISO=11 · RST=12 BUSY=13 DIO1=14.
 
+// Nothing calls `auth` yet — it is step 2 of SPINE-AUTH.md, the primitive
+// landed ahead of the wire change that will use it in step 4. Declared so it
+// compiles with the firmware rather than only in the host harness, because a
+// module that builds on the host and not on the target is not evidence of
+// anything.
+#[allow(dead_code)]
+mod auth;
 mod spine;
 mod sx1262;
 
