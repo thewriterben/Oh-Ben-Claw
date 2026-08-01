@@ -97,6 +97,12 @@ pub struct ToolCallRequest {
 }
 
 /// A tool call result published by a peripheral node back to the brain.
+///
+/// `ctr` and `mac` are `SPINE-AUTH.md` §3.3: on MQTT and P2P the tag rides as
+/// fields rather than as a byte prefix, since neither transport has a frame
+/// budget worth defending. Both are optional on the wire so a node that has not
+/// been upgraded still parses — whether an untagged result is *accepted* is
+/// `[security] require_frame_auth`, not a parsing question.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallResult {
     pub call_id: String,
@@ -105,6 +111,27 @@ pub struct ToolCallResult {
     pub output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Monotonic per-node counter, covered by `mac`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctr: Option<u32>,
+    /// Truncated HMAC over the result body, hex. See `obc_safety::frame_auth`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac: Option<String>,
+}
+
+impl ToolCallResult {
+    /// The exact bytes the tag covers: the result with `ctr` and `mac` removed.
+    ///
+    /// Signing the message minus its own signature is the only shape that works,
+    /// and re-serializing a canonical subset is the only way to get the same
+    /// bytes on both ends — the sender's field order and spacing are not
+    /// something the receiver can reconstruct from the text it received.
+    pub fn signed_bytes(&self) -> Vec<u8> {
+        let mut unsigned = self.clone();
+        unsigned.ctr = None;
+        unsigned.mac = None;
+        serde_json::to_vec(&unsigned).unwrap_or_default()
+    }
 }
 
 // ── Pending Call Registry ────────────────────────────────────────────────────
@@ -200,6 +227,8 @@ pub struct SpineClient {
     /// Node pairing, and whether an unpaired node is refused or merely noted.
     pairing: obc_safety::NodePairingManager,
     require_pairing: bool,
+    /// Per-message authentication for inbound results (`SPINE-AUTH.md` §3.3).
+    frame_auth: Arc<obc_safety::frame_auth::FrameAuth>,
 }
 
 impl SpineClient {
@@ -217,7 +246,18 @@ impl SpineClient {
             // A deployment opts in through `with_pairing`.
             pairing: obc_safety::NodePairingManager::new(None),
             require_pairing: false,
+            frame_auth: Arc::new(obc_safety::frame_auth::FrameAuth::new(None, false)),
         }
+    }
+
+    /// Authenticate inbound tool-call results (`[security] require_frame_auth`).
+    ///
+    /// A result is not a command, which is why this is easy to leave out and
+    /// worth not leaving out: results land in world memory, and reflexes act on
+    /// world memory without waking the model. A forged reading fires a rule.
+    pub fn with_frame_auth(mut self, frame_auth: obc_safety::frame_auth::FrameAuth) -> Self {
+        self.frame_auth = Arc::new(frame_auth);
+        self
     }
 
     /// Enforce `[security] pairing_secret` / `require_pairing` on announcements.
@@ -263,6 +303,7 @@ impl SpineClient {
         let handlers = Arc::clone(&self.handlers);
         let pairing = self.pairing.clone();
         let require_pairing = self.require_pairing;
+        let frame_auth = Arc::clone(&self.frame_auth);
 
         // Spawn the event loop handler
         tokio::spawn(async move {
@@ -323,6 +364,27 @@ impl SpineClient {
                         } else if topic.contains("/result/") {
                             // Parse tool call result and wake the waiting caller
                             if let Ok(result) = serde_json::from_slice::<ToolCallResult>(&payload) {
+                                // `obc/tools/{node}/result/{call_id}` — the node
+                                // is the third segment, and it is the identity
+                                // the tag is verified against.
+                                let node = topic.split('/').nth(2).unwrap_or_default().to_string();
+                                if let obc_safety::frame_auth::FrameVerdict::Reject { reason } =
+                                    frame_auth.verify_inbound(
+                                        &node,
+                                        result.ctr,
+                                        result.mac.as_deref(),
+                                        &result.signed_bytes(),
+                                    )
+                                {
+                                    tracing::warn!(
+                                        node = %node,
+                                        call_id = %result.call_id,
+                                        %reason,
+                                        "Refused a tool result: the caller will time out rather \
+                                         than act on it ([security] require_frame_auth is on)"
+                                    );
+                                    continue;
+                                }
                                 let call_id = result.call_id.clone();
                                 if let Some(sender) = pending_calls.lock().await.remove(&call_id) {
                                     let _ = sender.send(result);

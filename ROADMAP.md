@@ -727,12 +727,42 @@ frames sit near 240 bytes everything above needs rethinking.*
   The design's step 5 is *"`NodePairingManager` gets its callers, finally"*, and
   its first item — refuse announcements from unpaired nodes — needs no wire
   change, so it did not have to wait behind step 4. See Phase 3 above for what
-  was actually wrong and how it was verified. The remaining step-5 items (verify
-  the MAC on inbound frames, sign outbound calls) do depend on the wire format
-  and stay with step 4.
-- [ ] Steps 3, 4 and the rest of 6 in `SPINE-AUTH.md` (NVS counter — designed,
-  unbuilt; wire format v2; re-sync firmware + update `SAFETY.md` §4.3). Step 4
-  should carry the correlation-id change with it.
+  was actually wrong and how it was verified.
+- [x] **Step 5, second bullet — verify the MAC on inbound messages** (2026-08-01),
+  on the transports where it needs no wire change. `SPINE-AUTH.md` §3.3 puts the
+  tag in a *field* on MQTT and P2P, since neither has a byte budget worth
+  defending, so this half was never blocked behind step 4 — only the LoRa frame
+  format was.
+  - `obc-safety::replay` — the receiver's window, RFC 4303 §3.4.3. A window
+    rather than a high-water mark because flood relay delivers duplicates by
+    design and re-orders across paths, so strict monotonicity would drop the
+    mesh's own traffic as an attack. **The first version of it had a real hole**:
+    it cleared the bitmap on a jump of *exactly* the window width, forgetting
+    that the old highest was still inside the new window and had been accepted —
+    a one-frame replay, reachable by anyone who can make the counter jump 64,
+    which a lossy link does unaided. Found by the boundary test that was written
+    to look for it.
+  - `obc-safety::frame_auth` — key, tag and window as one decision, because a
+    caller that must remember to do both, in order, on every path will
+    eventually do one. A message that fails its MAC does **not** advance the
+    window: judging the counter first would let anyone who cannot forge a tag
+    lock a node out by claiming a huge counter.
+  - Wired at the inbound tool-result path (`obc/tools/{node}/result/{id}`).
+    Results are the non-obvious direction — they do not actuate, they land in
+    world memory, and reflexes act on world memory without waking the model. A
+    forged reading fires a safing rule.
+  - `[security] require_frame_auth`, default off, deriving per-node keys from
+    the existing `pairing_secret`. Separate from `require_pairing` because
+    pairing authenticates a node *once* and this authenticates every message
+    after; and off by default because the moment it is on, a node that has not
+    been upgraded goes silent.
+  - `tests/frame_auth_wire.rs` covers the join the scheme usually breaks at: the
+    receiver cannot re-derive the sender's exact text, so the signature is over
+    a canonical re-serialization of the message minus its own signature.
+- [ ] Steps 3, 4 and the rest of 5–6 in `SPINE-AUTH.md` (NVS counter — designed,
+  unbuilt; wire format v2 and the LoRa tag; sign outbound tool calls; re-sync
+  firmware + update `SAFETY.md` §4.3). Step 4 should carry the correlation-id
+  change with it.
 
 ---
 

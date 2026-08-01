@@ -516,6 +516,11 @@ async fn handle_tcp_connection(mut stream: TcpStream, pending_calls: PendingCall
                  route through the agent loop",
                 request.tool_name
             )),
+            // Unsigned: this is a local refusal to the caller who just dialled
+            // us, not a result travelling on behalf of a node. Signing it would
+            // claim an identity this listener is not speaking for.
+            ctr: None,
+            mac: None,
         };
         let resp_payload = serde_json::to_vec(&result)?;
         write_framed(&mut stream, &resp_payload).await?;

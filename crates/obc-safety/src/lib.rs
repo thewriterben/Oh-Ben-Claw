@@ -29,10 +29,12 @@
 
 pub mod audit;
 pub mod audit_sign;
+pub mod frame_auth;
 pub mod limits;
 pub mod pairing;
 pub mod policy;
 pub mod redteam;
+pub mod replay;
 pub mod risk;
 pub mod spine_tag;
 pub mod taint;
@@ -82,6 +84,20 @@ pub struct SecurityConfig {
     /// Whether to require node pairing before accepting tool announcements.
     #[serde(default)]
     pub require_pairing: bool,
+
+    /// Whether to require a per-message tag on inbound tool results.
+    ///
+    /// Off by default and separate from `require_pairing` on purpose: pairing
+    /// authenticates a node *once*, when it announces, and this authenticates
+    /// every message it sends afterwards. A deployment can reasonably want the
+    /// first without the second — the second needs every node upgraded to send
+    /// a tag, and the moment it is on, one that has not been goes silent.
+    ///
+    /// Uses `pairing_secret` as its root secret; per-node keys are derived from
+    /// it (`obc_safety::spine_tag::derive_node_key`), so no second secret to
+    /// distribute and lose.
+    #[serde(default)]
+    pub require_frame_auth: bool,
 
     /// The shared secret used for HMAC-based node pairing tokens.
     /// Should be a random 32-byte hex string. If not set, pairing is disabled.
