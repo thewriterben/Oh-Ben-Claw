@@ -12,7 +12,7 @@
 //! declares a physical risk class so the host approval layer treats it accordingly.
 
 use crate::memory::world::WorldMemory;
-use crate::spine::lora_gateway::{CommandSink, NodeCommand};
+use crate::spine::lora_gateway::{CommandSink, NodeCommand, MESH_LINE_BUDGET};
 use crate::spine::mesh_supervisor;
 use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
@@ -100,6 +100,22 @@ impl Tool for MeshCommandTool {
         let id = uuid::Uuid::new_v4().to_string();
 
         let node_cmd = NodeCommand::new(&node_id, &id, &command, cmd_args);
+
+        // Refuse rather than report a send the mesh cannot make. The bridge's
+        // line framer discards an over-budget line whole, so this used to return
+        // `sent: true` for a command that never left — failing closed, which is
+        // right, and silently, which is not.
+        if !node_cmd.fits_one_frame() {
+            return Ok(ToolResult::err(format!(
+                "mesh_command not sent: the encoded command is {} bytes and one mesh frame \
+                 carries {}. The node's line framer discards an over-long line whole, so this \
+                 would have reported success and delivered nothing. Shorten 'args' or send it \
+                 over a transport with no frame budget (MQTT/serial).",
+                node_cmd.encoded_len(),
+                MESH_LINE_BUDGET,
+            )));
+        }
+
         match self.sink.send_command(&node_cmd).await {
             Ok(()) => Ok(ToolResult::ok(
                 json!({

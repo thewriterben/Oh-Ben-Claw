@@ -655,6 +655,50 @@ UART to a Heltec LoRa gateway, which carries it over the mesh. Runbook:
 - [x] Heltec→XIAO **reverse** jumper GPIO4→D7 (outbound) — **bench-validated 2026-07-17** (Stage 5): brain `mesh_command` → base console → LoRa → bridge → reverse jumper → node dispatch → reply home. Track 0 held at the far end: a `gpio_write pin=99` came back `{"error":"safety: pin 99 not in allow-list"}`, ingested as `node=obc-esp32-s3-001 msg=cmd_result`. The command round trip and the node-side allow-list are both real over the air.
 - [ ] True 3-hop relay (needs a 3rd radio out of direct range) — procedure ready as bench Stage 3b
 
+### Authentication — step 1 measured (2026-08-01)
+
+The spine has no authentication, which `OBC-Prime/docs/SAFETY.md` §4.3 states
+plainly and `OBC-Prime/docs/SPINE-AUTH.md` designs a way out of. That design ends
+with an instruction: *measure the payload distribution first, because if typical
+frames sit near 240 bytes everything above needs rethinking.*
+
+- [x] **Step 1 — the payload census** (`tests/spine_payload_budget.rs`). Not a
+  radio capture: the host builds every one of these payloads, so the
+  distribution is a property of the code and can be measured without the bench,
+  and as a standing gate rather than a morning's number. Payloads are built from
+  the real `ReflexRule` / `SafetyLimit` / `MeshFrame` types, so a shape change
+  moves the numbers.
+
+  | | bytes | spare of 240 | spare of 228 (with the proposed tag) |
+  |---|---:|---:|---:|
+  | `gpio_write`, `sensor_read`, `capabilities` | 100–121 | 119–140 | 107–128 |
+  | `reflex_tick`, four quantities | 183 | 57 | 45 |
+  | fleet heartbeat / assignment | 59–82 | 158–181 | 146–169 |
+  | `set_limits`, one pin | 228 | 12 | **0** |
+  | `set_limits`, two pins | 230 | 10 | **−2** |
+  | `set_reflex_rules`, one rule | 344 | **−104** | −116 |
+
+  **The verdict: steps 2–4 stand.** The 12-byte tag is affordable for every
+  frame that carries actuation, telemetry or coordination — 45 bytes spare at
+  the tightest. It is not free: `set_limits` sits exactly on the new budget with
+  one allowed pin and 2 bytes over it with two, so the design acquires a
+  prerequisite it did not have.
+
+  **And the prerequisite is already paid for.** `mesh_command` spends 36 bytes
+  on a UUIDv4 correlation id — three times the whole tag — on a link where the
+  id need only be unique among a handful of in-flight requests. Shorten it and
+  authentication costs 20 bytes *less* than nothing.
+
+- [x] **A live bug the census surfaced.** `set_reflex_rules` with one rule is 344
+  bytes; the node's line framer discards an over-length line whole, so the
+  command never happened — and `mesh_command` returned `sent: true`. Failing
+  closed is right; failing silently, for a tool classed
+  `physical(true, BlastRadius::High)`, is not. The host now refuses over-budget
+  commands and says how far over (`NodeCommand::fits_one_frame`).
+- [ ] Steps 2–6 of `SPINE-AUTH.md` (node-side HMAC, NVS counter, wire format v2,
+  wiring `NodePairingManager`, re-sync firmware). Step 4 should carry the
+  correlation-id change with it.
+
 ---
 
 ## Hardware Ecosystem Expansion 📋 Planned *(standing track)*

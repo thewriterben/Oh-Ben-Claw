@@ -356,7 +356,35 @@ impl NodeCommand {
     pub fn encode(&self) -> String {
         json!({ "id": self.id, "to": self.to, "cmd": self.cmd, "args": self.args }).to_string()
     }
+
+    /// Encoded length in bytes, against [`MESH_LINE_BUDGET`].
+    pub fn encoded_len(&self) -> usize {
+        self.encode().len()
+    }
+
+    /// Whether this command survives the trip.
+    ///
+    /// A line longer than the budget is discarded whole by the bridge's
+    /// `LineFramer` — correctly, since sending a prefix of a JSON command is
+    /// worse. But nothing on the host side was checking, so an oversized
+    /// `mesh_command` returned `sent: true` for a command the mesh never
+    /// carried. It fails closed, which is the right direction, and silently,
+    /// which is not: for a tool classed `physical(true, BlastRadius::High)` the
+    /// operator's log said the command went.
+    pub fn fits_one_frame(&self) -> bool {
+        self.encoded_len() <= MESH_LINE_BUDGET
+    }
 }
+
+/// The longest command line the mesh can carry, in bytes.
+///
+/// This is the node's `MAX_PAYLOAD` (`firmware/heltec-lora-linktest/src/spine.rs`),
+/// duplicated here because the firmware builds for xtensa and the host cannot
+/// link it. `tests/spine_payload_budget.rs` pins the two together — it includes
+/// the firmware source via `#[path]` and fails if they ever disagree, which is
+/// the same arrangement `tests/firmware_spine_framing.rs` already uses to run
+/// the framer's own tests on the host.
+pub const MESH_LINE_BUDGET: usize = 240;
 
 /// A transport that delivers a [`NodeCommand`] toward the mesh. The serial
 /// implementation writes the encoded line to the base-station Heltec's console; tests
