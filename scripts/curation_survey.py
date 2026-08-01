@@ -31,14 +31,24 @@ The previous version reported four islands — `gateway`, `tunnel`, `runtime`,
    about what a module is.
 
 After both fixes the only genuine island was `runtime` (417 LOC) — see the
-ROADMAP note against "Sandboxed tool execution".
+ROADMAP note against "Sandboxed tool execution". `runtime` has since been cut,
+and the survey now reports no islands at all.
+
+The import parser moved to `scripts/rust_imports.py` on 2026-08-01, when
+`extractability.py` needed the same brace matcher. Two copies of it would have
+been this script's own headline finding turned on itself: the 2026-07-29
+correction took two wrong answers with it, and a second copy would have kept one
+of them alive. Output is byte-identical across that refactor, which is how the
+move was checked.
 
 Consumers scanned: src/, tests/, examples/, benches/, gui/, planner-wasm/.
 """
 
-import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rust_imports import declared_modules, direct_ref, use_tree_heads  # noqa: E402
 
 ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
 SRC = ROOT / "src"
@@ -48,7 +58,7 @@ LIB = SRC / "lib.rs"
 # src/bin/ (a Cargo convention, not a module) and any scratch directory.
 if not LIB.exists():
     sys.exit(f"no {LIB} — run from the repo root or pass the root as argv[1]")
-declared = re.findall(r"^\s*pub\s+mod\s+([a-z_][a-z0-9_]*)\s*;", LIB.read_text(encoding="utf-8"), re.M)
+declared, _external = declared_modules(LIB)
 mods = sorted(m for m in declared if (SRC / m).is_dir())
 file_mods = sorted(m for m in declared if not (SRC / m).is_dir())
 
@@ -62,56 +72,6 @@ for extra in ("tests", "examples", "benches", "gui", "planner-wasm"):
     if d.is_dir():
         files += list(d.rglob("*.rs"))
 
-CRATE_ROOT = re.compile(r"\buse\s+(?:crate|oh_ben_claw)\s*::\s*")
-DIRECT = {}  # cache of per-module direct-path patterns
-
-
-def use_tree_heads(text: str) -> set[str]:
-    """Top-level module names imported by any `use crate::{…}` / `use oh_ben_claw::{…}`.
-
-    Brace-matched rather than regexed, so nested groups and multi-line imports
-    both work. `use crate::{a, b::{c, d}, e as f}` yields {a, b, e}.
-    """
-    heads: set[str] = set()
-    for m in CRATE_ROOT.finditer(text):
-        i = m.end()
-        if i >= len(text):
-            continue
-        if text[i] != "{":
-            # `use crate::foo::…;` — single path, head is the next identifier.
-            ident = re.match(r"([a-z_][a-z0-9_]*)", text[i:])
-            if ident:
-                heads.add(ident.group(1))
-            continue
-        depth, j = 0, i
-        while j < len(text):
-            if text[j] == "{":
-                depth += 1
-            elif text[j] == "}":
-                depth -= 1
-                if depth == 0:
-                    break
-            j += 1
-        group = text[i + 1:j]
-        # split on top-level commas only
-        depth, start = 0, 0
-        parts = []
-        for k, ch in enumerate(group):
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-            elif ch == "," and depth == 0:
-                parts.append(group[start:k])
-                start = k + 1
-        parts.append(group[start:])
-        for part in parts:
-            ident = re.match(r"\s*([a-z_][a-z0-9_]*)", part)
-            if ident:
-                heads.add(ident.group(1))
-    return heads
-
-
 rows = []
 # Pre-compute per-file evidence once, instead of re-reading every file per module.
 per_file: list[tuple[Path, set[str], str]] = []
@@ -121,7 +81,7 @@ for f in files:
 
 for m in mods:
     own = SRC / m
-    direct = re.compile(rf"\b(?:crate|oh_ben_claw)\s*::\s*{re.escape(m)}\b")
+    direct = direct_ref(m)
     loc = sum(sum(1 for _ in f.open(encoding="utf-8", errors="replace"))
               for f in own.rglob("*.rs"))
     ext, in_main = 0, False

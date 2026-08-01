@@ -705,6 +705,85 @@ new transports/drivers/accelerator-inference touch firmware.
 - [ ] AI-accelerator nodes (Coral/Hailo/Jetson/K230) run as edge-inference nodes via `EdgeAgent`, advertising their accelerator token and exposing local inference as a spine tool
 - [ ] **OAK VPU node (from 2026-07-06 scout):** DepthAI host runtime wiring so `oak-d-lite` (`vpu`) runs as an edge-inference node — depth + NN pipelines exposed as spine tools; IMX500 AI Camera model loading via the rpicam/imx500 stack on RPi hosts
 
+## Migration to Open Body Control 🚚 *(standing track)*
+
+Development stays here and moves piecewise: each piece goes to the public repo
+(`OBC-Prime`) when it is defensible on its own. Vendored, not relocated — the
+crates stay here where the rest of the agent compiles against them, and
+OBC-Prime carries a SHA-256-checked copy it builds and tests in CI. Rationale
+and the wider blockers: `OBC-Prime/docs/MIGRATION.md`.
+
+### Moved so far
+
+| crate | LOC | tests | when | what it let the public repo check |
+|---|---:|---:|---|---|
+| `obc-paths` | 226 | 6 | 2026-07-30 | where data lives, resolved once |
+| `obc-memory` | 5,148 | 83 | 2026-07-30 | the bitemporal world model and belief revision its docs described |
+| `obc-planner` | 6,610 | 165 | 2026-07-30 | the Rust leg of the parity claim — the source the vendored WASM is built from |
+| `obc-safety` | 3,115 | 65 | 2026-08-01 | Track 0: the actuator limit table, the signed audit, taint. The safety claim was the one a reader could not check |
+
+LOC and test counts measured 2026-08-01 (`cargo test --workspace` in OBC-Prime:
+319 tests). `obc-memory` is 5,148 rather than the 5,878 quoted when it moved —
+`image.rs` was cut upstream on 2026-07-30 as documented-but-never-run.
+
+### The queue is derived now, not guessed
+
+All four were picked by hand, reading imports. That worked and hid the shape of
+the work: `obc-safety` was blocked for months by exactly one edge pointing the
+wrong way — `RiskClass` living in `tools` — and nobody had written that down
+because nobody was counting edges.
+
+- [x] **`scripts/extractability.py`** (2026-08-01) — per module, the outward
+  edges. An edge is *blocking* if it points at a module still in this tree and
+  *free* if it points at a crate that has already left, since a new crate can
+  just depend on `obc-memory`. `curation_survey.py` answers the deletion
+  question (who references this?); this answers the migration one (what does
+  this reference?), and they are not the same: a module with many dependents is
+  still easy to extract, and a module with many dependencies is not, however few
+  things use it. The shared import parser moved to `scripts/rust_imports.py` so
+  the two cannot drift.
+
+Current standing, `python scripts/extractability.py`:
+
+| ready (0 blocking) | LOC | one edge away | LOC | blocked by |
+|---|---:|---|---:|---|
+| `comms` | 317 | `aerial` | 177 | `fleet` |
+| `power` | 319 | `gnss` | 336 | `fleet` |
+| `sensing` | 352 | `cost` | 472 | `config` |
+| `scheduler` | 684 | `foresight` | 677 | `agent` |
+| `a2a` | 871 | `tunnel` | 677 | `config` |
+| `observability` | 918 | `movement` | 741 | `spine` |
+| | | `mcp` | 1,741 | `tools` |
+| | | `navigation` | 3,714 | `movement` |
+
+The top row was then confirmed the only way that counts — by a compiler.
+`src/comms/mod.rs` was compiled in a scratch crate whose entire universe was
+`obc-memory`, serde and anyhow, with nothing else from this tree reachable:
+**it builds and its 5 tests pass**. A name-based survey saying "no blocking
+edges" and a compiler agreeing are different claims, and the second is the one
+an extraction rests on. The same probe is a ten-line `Cargo.toml` plus a
+`#[path]` include for any other candidate, and is worth running before moving
+one rather than after.
+
+Worth recording what the first version of that script said, because it is the
+failure mode this whole track is exposed to: counting only `use crate::…`
+declarations, it reported **`config` as having zero outward edges** — 3,430 LOC,
+58 dependents, the obvious next piece. `config` has six. Its struct fields are
+typed with inline paths (`pub server: crate::mcp::McpServerConfig`) that no
+`use` line records. Same class of miss as the July correction to
+`curation_survey.py`, caught before the script was committed, and the reason
+both now share one parser.
+
+- [ ] **Pick piece five.** Not automatic: zero blocking edges makes a module
+  *movable*, not *worth moving*. The question the queue cannot answer is which
+  claim in the public repo is currently unbacked, which is how the first four
+  were chosen and how `obc-safety` earned its place.
+- [ ] **`navigation` (3,714 LOC) is the largest single unlock**, and it is one
+  edge behind `movement` (741 LOC), which is one edge behind `spine`. Three
+  small moves in order, not one large one.
+- [ ] Spine authentication remains the gate on migrating anything that touches
+  the transport — see `docs/SPINE-AUTH.md` in OBC-Prime and Phase B below.
+
 ## Ecosystem Integration 📋 Planned *(standing track)*
 
 Unify the three sibling projects — **Oh-Ben-Claw** (Rust runtime/planner/firmware, canonical), the **OBC-deployment-generator** (Expo iOS/Android/web UX front door), and **Accelerapp** (Python multi-platform codegen) — into one pipeline with a single source of truth, ending the three-way drift of registry/planner/firmware. Design + phased plan: `docs/ECOSYSTEM-INTEGRATION.md`.
