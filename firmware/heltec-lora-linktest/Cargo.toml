@@ -16,6 +16,13 @@ esp-idf-hal = "0.46"
 anyhow = "1.0"
 log = "0.4"
 
+# Spine frame authentication (SPINE-AUTH.md step 2). Pure Rust so `src/auth.rs`
+# compiles for the host harness as well as for xtensa; the ESP32-S3's hardware
+# SHA is the eventual destination and an optimisation, not a prerequisite.
+hmac = "0.12"
+sha2 = "0.10"
+hkdf = "0.12"
+
 [build-dependencies]
 embuild = "0.33"
 

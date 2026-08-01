@@ -86,6 +86,9 @@ chacha20poly1305 = "0.10"
 rand = "0.8"
 hmac = "0.12"
 sha2 = "0.10"
+# Used by the node-side spine-auth module the host harness compiles
+# (tests/spine_auth_vectors.rs) and by obc-safety's copy of it.
+hkdf = "0.12"
 hex = "0.4"
 argon2 = { version = "0.5", features = ["std"] }
 # Ed25519 detached signatures for the Track 0 audit (asymmetric, third-party verifiable)

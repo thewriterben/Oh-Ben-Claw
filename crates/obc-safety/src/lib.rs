@@ -34,6 +34,7 @@ pub mod pairing;
 pub mod policy;
 pub mod redteam;
 pub mod risk;
+pub mod spine_tag;
 pub mod taint;
 pub mod trust;
 pub mod vault;

@@ -695,9 +695,36 @@ frames sit near 240 bytes everything above needs rethinking.*
   closed is right; failing silently, for a tool classed
   `physical(true, BlastRadius::High)`, is not. The host now refuses over-budget
   commands and says how far over (`NodeCommand::fits_one_frame`).
-- [ ] Steps 2–6 of `SPINE-AUTH.md` (node-side HMAC, NVS counter, wire format v2,
-  wiring `NodePairingManager`, re-sync firmware). Step 4 should carry the
-  correlation-id change with it.
+- [x] **Step 2 — the primitive, ahead of the wire** (2026-08-01). Both ends can
+  now compute the same tag, and neither sends one: `spine.rs` is untouched, no
+  frame carries a tag, no receiver checks one. A wire change is worth making
+  once the two ends have been proven to agree rather than after.
+  - `crates/obc-safety/src/spine_tag.rs` — canonical. `derive_node_key` is
+    HKDF-SHA256 (salt `obc-spine-v1`, info = node id) so a node cannot sign for
+    its neighbour; `tag` is HMAC-SHA256 over `src ‖ ctr ‖ payload`, truncated to
+    8 bytes; `verify` uses `verify_truncated_left` — constant time, because a
+    comparison that returns early lets an attacker recover a valid tag a byte at
+    a time and throws away the 2⁻⁶⁴ argument the truncation rests on. `ttl` is
+    excluded from the signed region on purpose: relays decrement it, so covering
+    it would break flood relay in a way that looks like an attack.
+  - `firmware/heltec-lora-linktest/src/auth.rs` — the node's mirror, pure
+    `hmac`/`sha2`/`hkdf`. **Not** the ESP32-S3's hardware SHA: that is the right
+    destination and an optimisation, and a portable implementation is one that
+    compiles on the machine writing it, so it could be tested today rather than
+    at the next bench session.
+  - `tests/spine_auth_vectors.rs` — three layers, weakest first. *Agreement*
+    (both implementations, one answer, across counter 0 / `u32::MAX` / empty and
+    240-byte payloads, positive **and** negative — an implementation that
+    accepts everything agrees with a correct one on every positive case).
+    *Frozen vectors*, which are a regression pin and not an independent check,
+    since they were generated from this implementation. *RFC vectors* —
+    RFC 4231 §4.2 for HMAC-SHA256 and RFC 5869 §A.1 for HKDF-SHA256 — which are
+    what make the first two mean anything, being constants someone else
+    published years ago. Verified by sabotage: flipping the node's counter to
+    little-endian fails the agreement test.
+- [ ] Steps 3–6 of `SPINE-AUTH.md` (NVS counter, wire format v2, wiring
+  `NodePairingManager`, re-sync firmware + update `SAFETY.md` §4.3). Step 4
+  should carry the correlation-id change with it.
 
 ---
 
