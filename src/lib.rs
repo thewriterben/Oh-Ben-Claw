@@ -39,7 +39,13 @@ pub mod agent;
 pub mod approval;
 pub mod audio;
 pub mod channels;
-pub mod comms;
+// The three body-telemetry suites live in their own crate (2026-08-01), the
+// first piece picked by `scripts/extractability.py` rather than by hand. They
+// are one crate because they are one pattern: reading -> classified world-memory
+// fact -> derived mode a reflex watches. Re-exported under the old names, so
+// `crate::comms::…`, `crate::power::…` and `crate::sensing::…` are unchanged at
+// every call site.
+pub use obc_telemetry::comms;
 pub mod config;
 pub mod cost;
 pub mod deployment;
@@ -66,13 +72,13 @@ pub mod movement;
 pub mod navigation;
 pub mod observability;
 pub mod peripherals;
-pub mod power;
+pub use obc_telemetry::power;
 pub mod providers;
 pub mod scheduler;
 pub mod security;
-pub mod sensing;
 /// The site coverage optimizer — re-exported from the [`obc_planner`] crate.
 pub use obc_planner::siteplan;
+pub use obc_telemetry::sensing;
 pub mod skill_forge;
 pub mod spine;
 pub mod tools;

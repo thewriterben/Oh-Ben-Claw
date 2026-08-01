@@ -11,7 +11,7 @@
 //! (stop motors, dim, sleep) — exactly the perceive→remember→reflex→act spine
 //! the other suites share.
 
-use crate::memory::world::WorldMemory;
+use obc_memory::world::WorldMemory;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -175,7 +175,7 @@ impl PowerController {
         &self,
         reading: &BatteryReading,
         now_ms: u64,
-        origin: crate::memory::world::Origin,
+        origin: obc_memory::world::Origin,
     ) -> anyhow::Result<PowerStatus> {
         let mode = self.thresholds.derive(reading.soc_pct, reading.charging);
         if let Some(world) = &self.world {
@@ -275,7 +275,7 @@ mod tests {
             .ingest(
                 &reading(8.0, ChargeState::Discharging),
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
         assert_eq!(status.mode, PowerMode::Critical);
@@ -297,7 +297,7 @@ mod tests {
             .ingest(
                 &reading(100.0, ChargeState::Full),
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
         assert_eq!(status.mode, PowerMode::Normal);

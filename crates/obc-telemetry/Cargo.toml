@@ -1,0 +1,33 @@
+[package]
+name = "obc-telemetry"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's body-telemetry suites: battery, link and sensor readings classified into world-memory facts a reflex can watch."
+
+# The fourth piece of the agent extracted as its own crate (2026-08-01), after
+# obc-memory, obc-planner and obc-safety, and the first picked by the derived
+# queue (`scripts/extractability.py`) rather than by hand.
+#
+# power, comms and sensing were three of the six modules with zero blocking
+# edges: between them they referenced nothing in the tree except world memory,
+# which had already left. `src/comms/mod.rs` was compiled in a scratch crate
+# against obc-memory alone before any of this was written, so "extractable" was
+# a compiler's verdict and not a survey's.
+#
+# They are one crate rather than three because they are one pattern. Each takes
+# a raw reading, classifies it against configured expectations, records it in
+# bitemporal world memory under a stable entity name, and derives a coarse mode
+# a System 1 reflex rule can watch: `power.mode` (normal/low/critical/charging),
+# `net.mode` (best link state across every link seen), `sensor.{quantity}` with
+# a quality flag. Perceive -> remember -> reflex is the shared spine; splitting
+# it across three 300-line crates would have hidden that.
+#
+# Not to be confused with `src/observability/`, which is the agent watching
+# itself — spans, approval counters, cost. This crate is the agent watching its
+# body.
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+obc-memory = { path = "../obc-memory" }

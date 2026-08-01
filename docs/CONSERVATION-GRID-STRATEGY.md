@@ -138,7 +138,7 @@ and OBC's "gps" is only ever a weighted *metric-frame* pose source or a planning
 never a real earth coordinate. Positioning is a contract and a placeholder, not a signal.
 
 **Weather / climate metering.** OBC has a sensing suite ingesting named scalar streams
-into bitemporal world memory with quality/anomaly classification (`src/sensing/mod.rs`)
+into bitemporal world memory with quality/anomaly classification (`crates/obc-telemetry/src/sensing.rs`)
 and a real DHT22 temp/humidity driver (`firmware/obc-esp32-s3/src/dht.rs`). ClawCam's
 health schema carries `environment{temperature_c, humidity_percent, pressure_hpa}` and the
 simulator emits it. **But:** barometric sensors (BME280/BMP388) are *registered but
