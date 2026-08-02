@@ -81,7 +81,11 @@ pub use obc_observability as observability;
 pub mod peripherals;
 pub use obc_telemetry::power;
 pub mod providers;
-pub mod scheduler;
+// Cron, interval and one-shot tasks live in their own crate (2026-08-02) — the
+// last module the extractability survey listed with zero blocking edges.
+// Re-exported under the old name so `crate::scheduler::…` is unchanged in
+// main.rs and the four gateway routes that drive it.
+pub use obc_scheduler as scheduler;
 pub mod security;
 /// The site coverage optimizer — re-exported from the [`obc_planner`] crate.
 pub use obc_planner::siteplan;

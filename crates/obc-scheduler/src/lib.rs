@@ -1,4 +1,4 @@
-//! Oh-Ben-Claw Task Scheduler
+//! Open Body Control — the task scheduler
 //!
 //! Provides cron-based and interval-based task scheduling for the agent loop.
 //! Scheduled tasks are stored in SQLite and survive restarts.
@@ -18,7 +18,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use oh_ben_claw::scheduler::{Scheduler, ScheduledTask, TaskKind};
+//! use obc_scheduler::{Scheduler, ScheduledTask, TaskKind};
 //!
 //! let scheduler = Scheduler::new(":memory:").unwrap();
 //!

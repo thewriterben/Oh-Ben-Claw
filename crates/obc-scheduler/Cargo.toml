@@ -1,0 +1,34 @@
+[package]
+name = "obc-scheduler"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's task scheduler: cron, interval and one-shot tasks in SQLite, surviving restarts."
+
+# The seventh piece of the agent extracted as its own crate (2026-08-02), and
+# the last module the derived queue (`scripts/extractability.py`) lists with
+# zero blocking edges. After this, every remaining candidate needs an edge
+# turned around first, the way obc-safety's RiskClass edge was.
+#
+# Compiled verbatim in a scratch crate against the seven external crates below
+# and nothing from the agent before any of this was written; its 16 unit tests
+# and its doctest passed there. The only edit the move required was the
+# doctest's `use` path. That is the same check obc-observability got, and it is
+# cheaper than arguing about whether a module is separable.
+#
+# A note for whoever wonders why a scheduler is in a repository about robots:
+# it is what turns "check the perimeter every hour" into something the agent
+# does without being asked, and it is the piece that writes `<agent name>` and
+# its `-wal`/`-shm` sidecars to disk. Three of those files were committed into
+# `bodies/trailwatch/` in OBC-Prime for six days, from a run in the body
+# directory under an older build that resolved the database path relative to
+# the working directory. `Scheduler::new` now takes a path the caller resolves,
+# and the caller puts it in the data dir.
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+cron = "0.12"
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.42", default-features = false, features = ["time"] }
+tracing = { version = "0.1", default-features = false }
