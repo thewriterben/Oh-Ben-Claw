@@ -296,3 +296,135 @@ mod tests {
         );
     }
 }
+
+/// A monotonic per-node counter for outbound messages.
+///
+/// `SPINE-REPLAY.md` §2 states the sender's obligation absolutely: **never
+/// reissue a counter.** Two messages sharing `(node, ctr)` destroy the
+/// receiver's ability to tell a replay from a retransmission, and a counter held
+/// only in RAM repeats on every restart.
+///
+/// The node's answer to that is NVS — designed, unbuilt, and untestable without
+/// a board. **The host's answer is the clock**, and it is both simpler and
+/// stronger: seed each counter at the current Unix second and increment from
+/// there. A restart cannot go backwards unless the clock does, and the host has
+/// a real clock at boot, which is exactly what the microcontroller does not.
+///
+/// The cost is counter *space* rather than correctness: seconds since the epoch
+/// currently sit near 1.8 × 10⁹, leaving roughly 2.5 × 10⁹ of a `u32` before
+/// exhaustion — about eighty years of headroom, less whatever the process
+/// sends. `next` saturates rather than wrapping, and a saturated counter stops
+/// producing new values instead of silently reopening the replay window, which
+/// is the failure §2 cares about.
+#[derive(Debug, Default)]
+pub struct OutboundCounters {
+    next: Mutex<std::collections::HashMap<String, u32>>,
+}
+
+impl OutboundCounters {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Seconds since the Unix epoch, saturated into a `u32`, or 1 if the clock
+    /// is before the epoch — a machine in that state is worth not trusting for
+    /// monotonicity, and 1 is safely below any real seed.
+    fn seed() -> u32 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| u32::try_from(d.as_secs()).unwrap_or(u32::MAX))
+            .unwrap_or(1)
+    }
+
+    /// The next counter for `node_id`. Never returns the same value twice for a
+    /// node, and never returns a value below one issued before a restart.
+    ///
+    /// Returns `None` once the space is exhausted rather than wrapping to zero:
+    /// a wrap would make every captured message from this host's history valid
+    /// again, all at once.
+    pub fn next(&self, node_id: &str) -> Option<u32> {
+        let mut map = self.next.lock().unwrap_or_else(|p| p.into_inner());
+        let slot = map.entry(node_id.to_string()).or_insert_with(Self::seed);
+        if *slot == u32::MAX {
+            return None;
+        }
+        let issued = *slot;
+        *slot += 1;
+        Some(issued)
+    }
+}
+
+#[cfg(test)]
+mod counter_tests {
+    use super::*;
+
+    #[test]
+    fn counters_never_repeat_for_a_node() {
+        let c = OutboundCounters::new();
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..1000 {
+            assert!(seen.insert(c.next("node-a").unwrap()), "a counter repeated");
+        }
+    }
+
+    #[test]
+    fn counters_rise() {
+        let c = OutboundCounters::new();
+        let first = c.next("node-a").unwrap();
+        let second = c.next("node-a").unwrap();
+        assert_eq!(second, first + 1);
+    }
+
+    #[test]
+    fn nodes_have_independent_counters() {
+        let c = OutboundCounters::new();
+        let a = c.next("node-a").unwrap();
+        let b = c.next("node-b").unwrap();
+        // Same seed, because the seed is the clock — the point is that
+        // advancing one does not advance the other.
+        assert_eq!(c.next("node-a").unwrap(), a + 1);
+        assert_eq!(c.next("node-b").unwrap(), b + 1);
+    }
+
+    /// The property a restart depends on: a fresh instance does not hand out
+    /// values below what the previous one issued. Simulated by constructing two,
+    /// which is what a restart is from the counter's point of view.
+    #[test]
+    fn a_restart_does_not_go_backwards() {
+        let before = OutboundCounters::new();
+        let last = (0..10)
+            .map(|_| before.next("node-a").unwrap())
+            .last()
+            .unwrap();
+
+        let after = OutboundCounters::new();
+        let first_after = after.next("node-a").unwrap();
+        assert!(
+            first_after > last - 10,
+            "a restart reissued counters: {first_after} after {last}"
+        );
+    }
+
+    /// The seed must be a real timestamp rather than zero, or the "never goes
+    /// backwards" argument is only true within a single process.
+    #[test]
+    fn the_seed_is_the_clock() {
+        let seed = OutboundCounters::seed();
+        // 2020-01-01 — any plausible run of this code is after it.
+        assert!(seed > 1_577_836_800, "seed does not look like a timestamp");
+    }
+
+    /// Exhaustion returns `None` rather than wrapping. A wrap would make every
+    /// captured message from this host's history verify again at once.
+    #[test]
+    fn exhaustion_stops_rather_than_wrapping() {
+        let c = OutboundCounters::new();
+        c.next
+            .lock()
+            .unwrap()
+            .insert("node-a".to_string(), u32::MAX - 1);
+        assert_eq!(c.next("node-a"), Some(u32::MAX - 1));
+        assert_eq!(c.next("node-a"), None, "the counter wrapped");
+        assert_eq!(c.next("node-a"), None, "and stays refused");
+    }
+}

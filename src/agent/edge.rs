@@ -77,6 +77,10 @@ pub struct EdgeAgent {
     /// which is what every existing caller got before 2026-08-01 and still gets
     /// unless it opts in.
     pairing: (obc_safety::NodePairingManager, bool),
+    /// Root secret and enforcement flag for per-message tags on P2P calls.
+    /// Same secret as pairing; per-node keys are derived from it.
+    frame_auth_secret: Option<String>,
+    frame_auth_required: bool,
 }
 
 impl EdgeAgent {
@@ -110,11 +114,13 @@ impl EdgeAgent {
             board: "edge".to_string(),
             p2p_spine: None,
             pairing: (obc_safety::NodePairingManager::new(None), false),
+            frame_auth_secret: None,
+            frame_auth_required: false,
         })
     }
 
     /// Enforce `[security] pairing_secret` / `require_pairing` on peers this
-    /// node discovers over P2P.
+    /// node discovers over P2P, and per-message tags on the calls between them.
     ///
     /// Worth having on the *node* and not only on the brain: P2P discovery is a
     /// UDP broadcast with no broker and no handshake, so on an edge device the
@@ -125,6 +131,13 @@ impl EdgeAgent {
         require_pairing: bool,
     ) -> Self {
         self.pairing = (pairing, require_pairing);
+        self
+    }
+
+    /// Root secret and enforcement for per-message P2P tags.
+    pub fn with_frame_auth(mut self, secret: Option<String>, required: bool) -> Self {
+        self.frame_auth_secret = secret;
+        self.frame_auth_required = required;
         self
     }
 
@@ -146,6 +159,10 @@ impl EdgeAgent {
     ) -> Result<()> {
         let spine = P2pSpine::new(p2p_config)
             .with_pairing(self.pairing.0.clone(), self.pairing.1)
+            .with_frame_auth(obc_safety::frame_auth::FrameAuth::new(
+                self.frame_auth_secret.clone(),
+                self.frame_auth_required,
+            ))
             .start()
             .await?;
         spine.announce(&announcement).await?;

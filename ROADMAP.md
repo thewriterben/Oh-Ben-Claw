@@ -759,10 +759,36 @@ frames sit near 240 bytes everything above needs rethinking.*
   - `tests/frame_auth_wire.rs` covers the join the scheme usually breaks at: the
     receiver cannot re-derive the sender's exact text, so the signature is over
     a canonical re-serialization of the message minus its own signature.
-- [ ] Steps 3, 4 and the rest of 5–6 in `SPINE-AUTH.md` (NVS counter — designed,
-  unbuilt; wire format v2 and the LoRa tag; sign outbound tool calls; re-sync
-  firmware + update `SAFETY.md` §4.3). Step 4 should carry the correlation-id
-  change with it.
+- [x] **Step 5, third bullet — sign outbound tool calls** (2026-08-01), which
+  closes step 5 for MQTT and P2P. This is the direction `SPINE-AUTH.md` §2 calls
+  safety-critical: a result is a claim, a call *actuates*, and a forged one
+  drives a pin.
+  - **The host's answer to the counter problem is the clock.** The sender must
+    never reissue a counter (`SPINE-REPLAY.md` §2) and RAM repeats on restart;
+    the node needs NVS for this and cannot be tested without a board, but the
+    host has a real clock at boot. `OutboundCounters` seeds each node's counter
+    at the current Unix second, so a restart cannot go backwards unless the
+    clock does. It costs counter *space* — about eighty years of `u32` headroom
+    — and saturates rather than wrapping, because a wrap would make every
+    captured message from this host's history verify again at once.
+  - **P2P is where this is provable.** Both ends of a P2P call are this
+    codebase, unlike MQTT where the far end is firmware, so a call is signed
+    here and verified there *today*: `handle_tcp_connection` refuses one that
+    does not check out.
+  - Which required a wire addition that says something about the old format:
+    `ToolCallRequest` had **no sender identity at all**. The frame said what to
+    do and never said who was asking, so a receiver could not have verified
+    anything even in principle. `from` now names the key to check against. An
+    attacker chooses it freely — that is the point: it *selects* a key, and
+    claiming another node means being unable to produce that node's tag.
+  - 13 tests on the wire pair, including the ones that would pass under a
+    careless implementation: swapping the tool name breaks the tag, two
+    identical consecutive calls do not look like a replay of each other, and
+    signing without a secret leaves the request byte-identical to what a
+    deployment has always sent.
+- [ ] Steps 3 and 4 in `SPINE-AUTH.md`, and the LoRa half of everything above
+  (NVS counter — designed, unbuilt; wire format v2; re-sync firmware + update
+  `SAFETY.md` §4.3). Step 4 should carry the correlation-id change with it.
 
 ---
 
