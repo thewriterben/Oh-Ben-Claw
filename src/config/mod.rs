@@ -2493,6 +2493,31 @@ impl Config {
 mod tests {
     // ── An absent [provider] is not a stated one ──────────────────────────────
 
+    /// These three tests write `ANTHROPIC_API_KEY` and then delete it, and the
+    /// environment is per-*process*, not per-test. Run concurrently, one can
+    /// remove the variable between another's `set_var` and its assertion.
+    ///
+    /// That race was here from the day they were written and never fired: with
+    /// 908 tests the scheduler happened not to overlap these three. On
+    /// 2026-08-02 three new `doctor` tests that bind sockets and wait on
+    /// connect timeouts changed the timing enough to overlap them, and the
+    /// suite started failing about one run in three — in a test that had
+    /// nothing to do with the change and passes in isolation on both branches.
+    ///
+    /// A lock rather than a rewrite: the function under test reads the process
+    /// environment by design, which is the behaviour being tested, so the fix
+    /// belongs at the point of contention. `PoisonError` is unwrapped away
+    /// because a panic in one of these should fail that test, not cascade.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_anthropic_key<T>(body: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-test");
+        let out = body();
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        out
+    }
+
     #[test]
     fn a_config_without_a_provider_table_takes_one_from_the_environment() {
         // Both reference bodies and every config the deployment generator emits omit
@@ -2500,9 +2525,7 @@ mod tests {
         // and then complaining about a missing OPENAI_API_KEY.
         let raw = "[agent]\nname = \"benchtop\"\n";
         let cfg: super::Config = toml::from_str(raw).unwrap();
-        std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-test");
-        let cfg = cfg.with_provider_from_env_if_absent(raw);
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        let cfg = with_anthropic_key(|| cfg.with_provider_from_env_if_absent(raw));
         assert_eq!(cfg.provider.name, "anthropic");
     }
 
@@ -2514,9 +2537,7 @@ mod tests {
         // whether a provider was *named*.
         let raw = "[provider.retry]\nmax_retries = 2\n";
         let cfg: super::Config = toml::from_str(raw).unwrap();
-        std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-test");
-        let cfg = cfg.with_provider_from_env_if_absent(raw);
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        let cfg = with_anthropic_key(|| cfg.with_provider_from_env_if_absent(raw));
         assert_eq!(cfg.provider.name, "anthropic");
     }
 
@@ -2524,9 +2545,7 @@ mod tests {
     fn a_named_provider_is_never_overridden() {
         let raw = "[provider]\nname = \"ollama\"\nmodel = \"llama3.2\"\n";
         let cfg: super::Config = toml::from_str(raw).unwrap();
-        std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-test");
-        let cfg = cfg.with_provider_from_env_if_absent(raw);
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        let cfg = with_anthropic_key(|| cfg.with_provider_from_env_if_absent(raw));
         assert_eq!(cfg.provider.name, "ollama");
         assert_eq!(cfg.provider.model, "llama3.2");
     }
