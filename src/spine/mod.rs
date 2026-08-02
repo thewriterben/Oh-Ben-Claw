@@ -89,11 +89,75 @@ pub struct NodeAnnouncement {
 // ── Tool Call Protocol ───────────────────────────────────────────────────────
 
 /// A tool call request published by the brain to a peripheral node.
+///
+/// `ctr`/`mac` as in [`ToolCallResult`] — `SPINE-AUTH.md` §3.3, the tag as a
+/// field. This is the direction §2 calls safety-critical, because a tool call
+/// actuates: a forged one drives a pin.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallRequest {
     pub call_id: String,
     pub tool_name: String,
     pub args: Value,
+    /// Who is calling, for a receiver that has to pick a key.
+    ///
+    /// Absent until 2026-08-01, and its absence was the reason a P2P receiver
+    /// could not verify anything: the frame said what to do and never said who
+    /// was asking. An attacker chooses this field freely — that is fine, and it
+    /// is the point. It selects which key the tag is checked against, and
+    /// claiming to be another node means being unable to produce that node's
+    /// tag. Asserted here, proven by `mac`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// Monotonic per-node counter, covered by `mac`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctr: Option<u32>,
+    /// Truncated HMAC over the request body, hex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac: Option<String>,
+}
+
+impl ToolCallRequest {
+    /// The bytes the tag covers: this request with `ctr` and `mac` removed.
+    pub fn signed_bytes(&self) -> Vec<u8> {
+        let mut unsigned = self.clone();
+        unsigned.ctr = None;
+        unsigned.mac = None;
+        serde_json::to_vec(&unsigned).unwrap_or_default()
+    }
+
+    /// Attach a counter and tag for `key_node`, if `frame_auth` has a secret.
+    ///
+    /// `key_node` is whose key signs this, which is **not** the same as who the
+    /// call is addressed to. On MQTT the brain signs with the destination
+    /// node's derived key — that key is a shared secret between exactly those
+    /// two, so it authenticates the sender to the receiver. On P2P the caller
+    /// signs with its own, and sets `from` so the receiver knows which to check.
+    ///
+    /// A no-op without a secret, which is the shipped default — an unsigned
+    /// request on a deployment that never configured one is not a downgrade, it
+    /// is the only thing that has ever been sent.
+    pub fn sign(
+        &mut self,
+        frame_auth: &obc_safety::frame_auth::FrameAuth,
+        counters: &obc_safety::frame_auth::OutboundCounters,
+        key_node: &str,
+    ) {
+        if !frame_auth.is_enabled() {
+            return;
+        }
+        let Some(ctr) = counters.next(key_node) else {
+            // Exhausted rather than wrapped. Leaving it unsigned is the honest
+            // outcome: the receiver refuses it when enforcing, which is a loud
+            // failure, and wrapping would be a silent one.
+            tracing::error!(
+                node = %key_node,
+                "Outbound counter exhausted; sending unsigned. Re-provision this node's key."
+            );
+            return;
+        };
+        self.ctr = Some(ctr);
+        self.mac = frame_auth.tag_outbound(key_node, ctr, &self.signed_bytes());
+    }
 }
 
 /// A tool call result published by a peripheral node back to the brain.
@@ -229,6 +293,8 @@ pub struct SpineClient {
     require_pairing: bool,
     /// Per-message authentication for inbound results (`SPINE-AUTH.md` §3.3).
     frame_auth: Arc<obc_safety::frame_auth::FrameAuth>,
+    /// Monotonic counters for outbound tool calls, one per node.
+    out_counters: Arc<obc_safety::frame_auth::OutboundCounters>,
 }
 
 impl SpineClient {
@@ -247,6 +313,7 @@ impl SpineClient {
             pairing: obc_safety::NodePairingManager::new(None),
             require_pairing: false,
             frame_auth: Arc::new(obc_safety::frame_auth::FrameAuth::new(None, false)),
+            out_counters: Arc::new(obc_safety::frame_auth::OutboundCounters::new()),
         }
     }
 
@@ -438,11 +505,18 @@ impl SpineClient {
             .ok_or_else(|| anyhow::anyhow!("Spine not connected"))?;
 
         let call_id = uuid::Uuid::new_v4().to_string();
-        let request = ToolCallRequest {
+        let mut request = ToolCallRequest {
             call_id: call_id.clone(),
             tool_name: tool_name.to_string(),
             args,
+            // The brain does not name itself: on MQTT the key is derived from
+            // the destination node, so `from` would be a label rather than a
+            // selector. The far end already knows whose key it holds.
+            from: None,
+            ctr: None,
+            mac: None,
         };
+        request.sign(&self.frame_auth, &self.out_counters, node_id);
 
         let (tx, rx) = oneshot::channel();
         self.pending_calls.lock().await.insert(call_id.clone(), tx);

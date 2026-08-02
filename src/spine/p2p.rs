@@ -174,6 +174,11 @@ pub struct P2pSpine {
     /// anyone who can send a datagram can offer the brain a set of tools.
     pairing: obc_safety::NodePairingManager,
     require_pairing: bool,
+    /// Per-message authentication, both directions. Unlike MQTT — where the far
+    /// end is firmware — both ends of a P2P call are this codebase, so a call
+    /// can be signed here and verified there today.
+    frame_auth: Arc<obc_safety::frame_auth::FrameAuth>,
+    out_counters: Arc<obc_safety::frame_auth::OutboundCounters>,
 }
 
 impl P2pSpine {
@@ -186,7 +191,16 @@ impl P2pSpine {
             local_announcement: RwLock::new(None),
             pairing: obc_safety::NodePairingManager::new(None),
             require_pairing: false,
+            frame_auth: Arc::new(obc_safety::frame_auth::FrameAuth::new(None, false)),
+            out_counters: Arc::new(obc_safety::frame_auth::OutboundCounters::new()),
         }
+    }
+
+    /// Authenticate P2P tool calls in both directions
+    /// (`[security] require_frame_auth`).
+    pub fn with_frame_auth(mut self, frame_auth: obc_safety::frame_auth::FrameAuth) -> Self {
+        self.frame_auth = Arc::new(frame_auth);
+        self
     }
 
     /// Enforce `[security] pairing_secret` / `require_pairing` on discovered peers.
@@ -213,14 +227,16 @@ impl P2pSpine {
         tracing::info!(addr = %tcp_addr, "P2P spine TCP server listening");
 
         let pending_calls = Arc::clone(&arc.pending_calls);
+        let tcp_frame_auth = Arc::clone(&arc.frame_auth);
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((stream, peer)) => {
                         tracing::debug!(peer = %peer, "Incoming P2P TCP connection");
                         let pending = Arc::clone(&pending_calls);
+                        let fa = Arc::clone(&tcp_frame_auth);
                         tokio::spawn(async move {
-                            if let Err(e) = handle_tcp_connection(stream, pending).await {
+                            if let Err(e) = handle_tcp_connection(stream, pending, fa).await {
                                 tracing::warn!(error = %e, "P2P TCP handler error");
                             }
                         });
@@ -389,11 +405,17 @@ impl P2pSpine {
         };
 
         let call_id = uuid::Uuid::new_v4().to_string();
-        let request = ToolCallRequest {
+        let mut request = ToolCallRequest {
             call_id: call_id.clone(),
             tool_name: tool_name.to_string(),
             args,
+            from: Some(self.config.node_id.clone()),
+            ctr: None,
+            mac: None,
         };
+        // Our own key, not the peer's: on P2P the receiver looks `from` up and
+        // checks against that node's key, so a caller must sign as itself.
+        request.sign(&self.frame_auth, &self.out_counters, &self.config.node_id);
 
         let (tx, rx) = oneshot::channel();
         self.pending_calls.lock().await.insert(call_id.clone(), tx);
@@ -486,7 +508,11 @@ async fn read_framed(stream: &mut TcpStream) -> Result<Vec<u8>> {
 /// caller that originally invoked `invoke_tool()`).  For cross-node calls the
 /// responding node writes a `ToolCallResult` frame back over the same
 /// connection.
-async fn handle_tcp_connection(mut stream: TcpStream, pending_calls: PendingCalls) -> Result<()> {
+async fn handle_tcp_connection(
+    mut stream: TcpStream,
+    pending_calls: PendingCalls,
+    frame_auth: Arc<obc_safety::frame_auth::FrameAuth>,
+) -> Result<()> {
     let payload = read_framed(&mut stream).await?;
 
     // Try to interpret as a ToolCallResult (response from a remote node)
@@ -500,6 +526,28 @@ async fn handle_tcp_connection(mut stream: TcpStream, pending_calls: PendingCall
 
     // Try to interpret as a ToolCallRequest (incoming call from a remote node)
     if let Ok(request) = serde_json::from_slice::<ToolCallRequest>(&payload) {
+        // Both ends of a P2P call are this codebase, so unlike MQTT — where the
+        // far end is firmware — a request can be verified here today. `from`
+        // says which key to check; the tag is what makes the claim mean
+        // anything. No `from` means nothing to verify against, which when
+        // enforcing is a refusal rather than a shrug.
+        let caller = request.from.clone().unwrap_or_default();
+        if let obc_safety::frame_auth::FrameVerdict::Reject { reason } = frame_auth.verify_inbound(
+            &caller,
+            request.ctr,
+            request.mac.as_deref(),
+            &request.signed_bytes(),
+        ) {
+            tracing::warn!(
+                call_id = %request.call_id,
+                tool = %request.tool_name,
+                from = %if caller.is_empty() { "<unstated>" } else { &caller },
+                %reason,
+                "Refused a P2P tool call ([security] require_frame_auth is on)"
+            );
+            return Ok(());
+        }
+
         tracing::debug!(
             call_id = %request.call_id,
             tool = %request.tool_name,
