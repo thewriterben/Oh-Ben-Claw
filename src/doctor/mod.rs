@@ -88,10 +88,7 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
     // operator the truth about their setup, on the path a newcomer takes —
     // Ollama is the documented fallback for someone who has no key at all.
     if config.provider.name == "ollama" {
-        results.push(DiagResult::ok(
-            "config",
-            "Ollama provider — no API key needed",
-        ));
+        results.push(ollama_reachability(&config.provider));
     } else if api_key_set {
         results.push(DiagResult::ok("config", "Provider API key is set"));
     } else {
@@ -256,6 +253,88 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
     check_hardware_onboarding(config, &mut results);
 
     results
+}
+
+/// Is the Ollama a fallback would reach actually listening?
+///
+/// Added 2026-08-02. The branch above used to push a bare
+/// `ok("Ollama provider — no API key needed")` derived from nothing but the
+/// provider *name*. True as far as it went, and reassuring about the wrong
+/// thing: on a machine with no Ollama installed, `doctor` reported a green for
+/// a provider that was not there, and the first model call failed.
+///
+/// That matters most on exactly the path the comment above names. Ollama is the
+/// documented fallback for someone who has no API key at all — which is also
+/// the person most likely not to have it running yet. Two fixes deep, this is
+/// the same defect each time: the command whose job is telling an operator the
+/// truth about their setup, reporting something it had not checked.
+///
+/// A TCP connect rather than an HTTP request: it is enough to distinguish
+/// "nothing is listening" from "something is", needs no async in a sync
+/// function and no client, and cannot hang past the timeout. It deliberately
+/// does *not* claim the model named in the config is pulled — that is a
+/// stronger claim needing a real request, and an unchecked version of it is
+/// how this function came to exist.
+fn ollama_reachability(provider: &crate::config::ProviderConfig) -> DiagResult {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_millis(400);
+
+    let raw = provider
+        .base_url
+        .clone()
+        .unwrap_or_else(|| "http://localhost:11434/api/chat".to_string());
+
+    // Enough URL parsing to get host:port, without adding a URL crate to a
+    // diagnostic. Anything unparseable is reported as unparseable rather than
+    // guessed at.
+    let rest = raw
+        .strip_prefix("http://")
+        .or_else(|| raw.strip_prefix("https://"))
+        .unwrap_or(&raw);
+    let authority = rest.split('/').next().unwrap_or("");
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) => match p.parse::<u16>() {
+            Ok(p) => (h.to_string(), p),
+            Err(_) => (authority.to_string(), 11434),
+        },
+        None => (authority.to_string(), 11434),
+    };
+    if host.is_empty() {
+        return DiagResult::warn(
+            "config",
+            format!("Provider is Ollama but base_url '{raw}' has no host to check"),
+        );
+    }
+
+    let addrs = match (host.as_str(), port).to_socket_addrs() {
+        Ok(a) => a.collect::<Vec<_>>(),
+        Err(_) => {
+            return DiagResult::warn(
+                "config",
+                format!("Provider is Ollama but '{host}' does not resolve"),
+            )
+        }
+    };
+
+    let up = addrs
+        .iter()
+        .any(|a| std::net::TcpStream::connect_timeout(a, TIMEOUT).is_ok());
+
+    if up {
+        DiagResult::ok(
+            "config",
+            format!("Ollama is listening at {host}:{port} — no API key needed"),
+        )
+    } else {
+        DiagResult::warn(
+            "config",
+            format!(
+                "Provider is Ollama (no API key needed) but nothing is listening at \
+                 {host}:{port} — start it with `ollama serve`, or set \
+                 ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY to use a \
+                 cloud provider instead"
+            ),
+        )
+    }
 }
 
 /// Track 0 onboarding hygiene: every configured peripheral board should be a known,
@@ -494,6 +573,91 @@ mod tests {
             config_msgs.iter().any(|m| m.contains("no API key needed")),
             "the accurate Ollama message is unreachable again: {config_msgs:?}"
         );
+        // Which *branch* produces that phrase depends on whether this machine
+        // happens to have Ollama running — ok when it does, warn when it does
+        // not. Deliberate: both messages carry "no API key needed", because
+        // that fact is true either way and is what this test is about. The two
+        // tests below pin the severities, on ports they control.
+    }
+
+    /// A green for Ollama must mean something is listening, not just that the
+    /// config says "ollama".
+    ///
+    /// Bound to a port and then dropped, so the address is real, routable and
+    /// almost certainly free — which is a sharper probe than picking a number
+    /// and hoping. A test that passed because 59999 happened to be closed would
+    /// be testing the machine, not the code.
+    #[test]
+    fn ollama_that_is_not_running_is_a_warning_not_an_ok() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let mut config = Config::default();
+        config.provider.name = "ollama".to_string();
+        config.provider.base_url = Some(format!("http://{addr}/api/chat"));
+
+        let results = diagnose(&config);
+        let hit = results
+            .iter()
+            .find(|r| r.category == "config" && r.message.contains("Ollama"))
+            .expect("doctor said nothing at all about the Ollama provider");
+
+        assert_eq!(
+            hit.severity,
+            Severity::Warn,
+            "doctor reported a green for an Ollama that is not there: {}",
+            hit.message
+        );
+        assert!(
+            hit.message.contains("nothing is listening"),
+            "the warning does not say what is wrong: {}",
+            hit.message
+        );
+    }
+
+    /// And the other side, so the fix cannot be "always warn about Ollama".
+    #[test]
+    fn ollama_that_is_running_is_reported_ok() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let mut config = Config::default();
+        config.provider.name = "ollama".to_string();
+        config.provider.base_url = Some(format!("http://{addr}/api/chat"));
+
+        let results = diagnose(&config);
+        let hit = results
+            .iter()
+            .find(|r| r.category == "config" && r.message.contains("Ollama"))
+            .expect("doctor said nothing at all about the Ollama provider");
+
+        assert_eq!(hit.severity, Severity::Ok, "{}", hit.message);
+        assert!(hit.message.contains("is listening"), "{}", hit.message);
+        assert!(
+            hit.message.contains("no API key needed"),
+            "the reason a key is not needed got lost: {}",
+            hit.message
+        );
+        drop(listener);
+    }
+
+    /// An unparseable base_url is reported as unparseable, not silently
+    /// defaulted to localhost and then reported on.
+    #[test]
+    fn a_base_url_with_no_host_is_not_guessed_at() {
+        let mut config = Config::default();
+        config.provider.name = "ollama".to_string();
+        config.provider.base_url = Some("http:///api/chat".to_string());
+
+        let results = diagnose(&config);
+        let hit = results
+            .iter()
+            .find(|r| r.category == "config" && r.message.contains("Ollama"))
+            .expect("doctor said nothing at all about the Ollama provider");
+
+        assert_eq!(hit.severity, Severity::Warn, "{}", hit.message);
+        assert!(hit.message.contains("no host"), "{}", hit.message);
     }
 
     /// The complement, so the fix cannot be "never say a key is set".
