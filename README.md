@@ -223,26 +223,71 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 > is worth more attention than any one instance — a control with tests and a config
 > key reads as present to every check except running it.
 
-**MCP Integration** exposes all tools as a Model Context Protocol server (stdio + HTTP/SSE, dual-mode for the 2026 spec) and imports tools from external MCP servers. **A2A Protocol** implements Google's Agent-to-Agent v1.0 for cross-platform agent interop.
+**MCP Integration** exposes all tools as a Model Context Protocol server (stdio + HTTP/SSE, dual-mode for the 2026 spec) and imports tools from external MCP servers. **A2A Protocol** — the wire format of Google's Agent-to-Agent v1.0, implemented and conformance-tested. Not reachable; see below.
+
+> **A2A is not served.** This line claimed A2A "implements Google's
+> Agent-to-Agent v1.0 for cross-platform agent interop", and the comparison table
+> below marked it "✅ Client + server (both)". What exists is 871 lines and 18
+> unit tests in `src/a2a/`, plus wire-shape goldens in `tests/evals.rs` — the v1.0
+> `AgentCard` shape, proto-name enum serialization, the no-`kind`-discriminator
+> rule, `google.rpc.ErrorInfo` error bodies, version-header rejection. That work
+> is real and the goldens are worth having.
+>
+> What does not exist is any way to reach it:
+>
+> - `A2AServer` is constructed **only in its own tests and `tests/evals.rs`**;
+>   `A2AClient` is constructed **nowhere at all**, tests included.
+> - The gateway serves no `/.well-known/agent-card.json` and no A2A endpoint —
+>   every mention of that path in `src/` is inside `src/a2a/mod.rs` itself.
+> - `[a2a]` parses and is never read. `A2AConfig` — `enabled`, `agent_name`,
+>   `agent_description`, `agent_url`, `skills` — is a field on the root config,
+>   and `config.a2a` has **zero** reads in `src/` and `tests/`. Setting
+>   `enabled = true` changes nothing. It is not in `config.example.toml` either,
+>   so it is undiscoverable as well as inert — the same shape as
+>   `[clawhub.install_policy]` above.
+> - `A2AServer::execute` is a documented stub: it files the inbound message in
+>   history and returns `TASK_STATE_COMPLETED`, having done nothing. Its own
+>   comment says "real deployments dispatch to the agent loop here."
+>
+> So serving it as-is would be worse than not serving it — a conformant endpoint
+> that reports every task complete. Wiring it means deciding task dispatch, auth
+> on the endpoint, and sync-vs-streaming, which is a design, not a hookup.
+>
+> This is the fourth control found in this shape, after node pairing, the tool
+> sandbox and ClawHub install. Two of those are now fixed. Worth noting which
+> check would have caught this one: not the tests — they pass, and they are
+> testing the right things. Only asking *who constructs this type* finds it.
 
 **Operations** — `oh-ben-claw doctor` health checks (now including subsystem/safing coherence), token **cost tracking** with persistent budgets, **observability** (metrics + spans), scheduled tasks, encrypted secrets **vault**, and a tamper-evident **audit chain**.
 
-> **Nodes are not authenticated.** This line previously listed node **pairing**
-> (HMAC-SHA256) as a shipped feature. `src/security/pairing.rs` is 386 tested
-> lines that implement it, and `NodePairingManager` is constructed as part of
-> `SecurityManager` — but nothing ever asks it anything. `pair_node` has zero
-> callers, `is_trusted` has zero, the `pairing` field is never read, and
-> `[security] require_pairing = true` is checked only by config validation: it
-> refuses to start without a secret, then gates nothing. Setting it buys
-> reassurance and no enforcement, which is the failure mode commit 494a1b0 fixed
-> for the safety gate and which was still live here.
+> **Nodes are authenticated now; their trust score is still not consulted.**
+> This block said "**Nodes are not authenticated**" — that was true when written
+> on 2026-07-30 (`1a11d23`) and stopped being true the next day, and nothing
+> updated it for two days. Correcting a stale claim with a claim that then goes
+> stale is the same defect, so here is the current measurement rather than a
+> narrative:
 >
-> Treat the spine network as trusted, and make sure that is actually true.
-> `src/security/trust.rs` — dynamic trust scoring — *is* wired and does work, but
-> read its header with this in mind: it opens "OBC already authenticates nodes
-> (HMAC pairing) ... that trust is *static*", and builds a behavioural hardening
-> layer on top of that premise. The premise does not hold. Trust decays on
-> misbehaviour; nothing establishes it in the first place.
+> | Claim the old note made | Now (callers outside the defining module's own tests) |
+> |---|---|
+> | `pair_node` has zero callers | **one** — `spine/mod.rs:273`, inside `admit_announcement` |
+> | the `pairing` field is never read | **six** reads across `agent/edge.rs`, `spine/mod.rs`, `spine/p2p.rs` |
+> | `require_pairing` gates nothing | it selects `Admission::Admit` / `Refuse` for every inbound `NodeAnnouncement` on MQTT and P2P |
+> | `is_trusted` has zero callers | **still zero** |
+>
+> Fixed by `caca7a3` ("require_pairing finally refuses something") and `2cf2ce0`
+> ("verify the MAC on inbound messages"), both 2026-07-31. An unpaired node's
+> announcement is refused and its tools never enter the registry; with
+> `[security] require_frame_auth`, inbound tool results and calls carry a
+> truncated HMAC over `src ‖ ctr ‖ payload` and a 64-frame replay window.
+> `tests/pairing_admission_gate.rs` and `tests/frame_auth_wire.rs` drive both,
+> including the forged-token and wrong-node cases.
+>
+> **The gap that remains** is the one the old note named last and got backwards.
+> `src/security/trust.rs` computes a behavioural trust score and decays it on
+> misbehaviour — and `is_trusted` has no callers, so nothing ever asks. The old
+> note said trust decays but nothing establishes it; establishment is what got
+> built, and consultation is what is still missing. A score nobody reads is the
+> same shape as a gate nobody calls, one layer up.
 
 > **Tools are not sandboxed, and there is a layer that helps.** `src/runtime/`
 > held a `native` / `docker` / `wasm` abstraction that nothing ever called —
@@ -744,7 +789,7 @@ Oh-Ben-Claw is built on the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw
 | Vision / audio / fusion | ✗ | ✅ |
 | Deployment planner | ✗ | ✅ LLM + rule-based swarm |
 | GUI | ✗ | ✅ Tauri 2 + React 18 |
-| MCP / A2A | ✗ | ✅ Client + server (both) |
+| MCP / A2A | ✗ | MCP: ✅ client + server. A2A: wire format only — implemented, conformance-tested, not served |
 | Human approval | ✗ | ✅ 3 autonomy levels |
 | Tool sandboxing | ✗ | ✗ — see Operations. Host-side policy allowlist instead (`[[security.policies]]`) |
 | Edge-native mode | ✗ | ✅ (ESP32-S3, NanoPi) |
