@@ -53,6 +53,8 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
     let mut results = Vec::new();
 
     // ── Config semantics ─────────────────────────────────────────────────────
+    // `api_key_set` means exactly what it says: a key is present. Ollama is
+    // deliberately *not* folded in here — see the branch below.
     let api_key_set = config
         .provider
         .api_key
@@ -69,17 +71,29 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
             "openrouter" => std::env::var("OPENROUTER_API_KEY")
                 .map(|v| !v.is_empty())
                 .unwrap_or(false),
-            "ollama" => true, // no key needed
             _ => false,
         };
 
-    if api_key_set {
-        results.push(DiagResult::ok("config", "Provider API key is set"));
-    } else if config.provider.name == "ollama" {
+    // Ollama first, and that ordering is the whole fix.
+    //
+    // Until 2026-08-02 the match above had an `"ollama" => true, // no key
+    // needed` arm, which set `api_key_set` and sent Ollama down the first
+    // branch — so `doctor` printed **"Provider API key is set"** on a machine
+    // with no key anywhere, and the accurate message in the branch below was
+    // unreachable. Measured on `bodies/benchtop` with no provider variables in
+    // the environment: the config loader warned "no API key is set" and two
+    // lines later doctor called it ok.
+    //
+    // It is a small lie in the one command whose entire job is telling an
+    // operator the truth about their setup, on the path a newcomer takes —
+    // Ollama is the documented fallback for someone who has no key at all.
+    if config.provider.name == "ollama" {
         results.push(DiagResult::ok(
             "config",
             "Ollama provider — no API key needed",
         ));
+    } else if api_key_set {
+        results.push(DiagResult::ok("config", "Provider API key is set"));
     } else {
         results.push(DiagResult::warn(
             "config",
@@ -451,6 +465,75 @@ pub fn run(config: &Config) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::config::Config;
+
+    /// `doctor` exists to tell an operator the truth about their setup, and
+    /// until 2026-08-02 it told the newcomer path a small lie: with Ollama —
+    /// the documented fallback for someone who has no key at all — it printed
+    /// "Provider API key is set" on a machine with no key anywhere.
+    ///
+    /// Caught by running it against `bodies/benchtop`, whose README cites this
+    /// command's output as its evidence, in a shell with no provider variables.
+    #[test]
+    fn ollama_is_not_reported_as_having_an_api_key() {
+        let mut config = Config::default();
+        config.provider.name = "ollama".to_string();
+        config.provider.api_key = None;
+
+        let results = diagnose(&config);
+        let config_msgs: Vec<&str> = results
+            .iter()
+            .filter(|r| r.category == "config")
+            .map(|r| r.message.as_str())
+            .collect();
+
+        assert!(
+            !config_msgs.iter().any(|m| m.contains("API key is set")),
+            "doctor claimed a key is set for a provider that needs none: {config_msgs:?}"
+        );
+        assert!(
+            config_msgs.iter().any(|m| m.contains("no API key needed")),
+            "the accurate Ollama message is unreachable again: {config_msgs:?}"
+        );
+    }
+
+    /// The complement, so the fix cannot be "never say a key is set".
+    #[test]
+    fn a_configured_key_is_still_reported() {
+        let mut config = Config::default();
+        config.provider.name = "anthropic".to_string();
+        config.provider.api_key = Some("sk-ant-not-a-real-key".into());
+
+        let results = diagnose(&config);
+        assert!(
+            results
+                .iter()
+                .any(|r| r.severity == Severity::Ok && r.message.contains("API key is set")),
+            "a provider with a key in config should report it"
+        );
+    }
+
+    /// And a provider that needs a key and has none must still warn, or the
+    /// ordering change would have turned a real problem into silence.
+    #[test]
+    fn a_missing_key_still_warns() {
+        let mut config = Config::default();
+        config.provider.name = "anthropic".to_string();
+        config.provider.api_key = None;
+
+        // Only meaningful when the ambient environment has no key either; if a
+        // developer has one exported, skip rather than assert something false.
+        if std::env::var("ANTHROPIC_API_KEY").is_ok_and(|v| !v.is_empty()) {
+            return;
+        }
+
+        let results = diagnose(&config);
+        assert!(
+            results
+                .iter()
+                .any(|r| r.severity == Severity::Warn && r.message.contains("No API key found")),
+            "a provider that needs a key and has none must warn"
+        );
+    }
 
     #[test]
     fn diagnose_returns_results_for_default_config() {
