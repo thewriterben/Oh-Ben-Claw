@@ -1,7 +1,11 @@
-//! Oh-Ben-Claw Observability Module
+//! Open Body Control — the agent watching itself
 //!
 //! Provides structured tracing, span recording, and lightweight metrics for
 //! the agent loop, tool calls, gateway requests, and peripheral node events.
+//!
+//! Not to be confused with [`obc_telemetry`], which is the agent watching its
+//! *body* — battery, link and sensor readings. This crate is instrumentation of
+//! the software.
 //!
 //! # Design
 //!
@@ -17,7 +21,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use oh_ben_claw::observability::{init, ObsContext};
+//! use obc_observability::{init, ObsContext};
 //!
 //! // Initialize at startup
 //! init("oh-ben-claw", "0.1.0", tracing::Level::INFO).unwrap();

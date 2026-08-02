@@ -70,7 +70,14 @@ pub use obc_planner;
 pub mod mission;
 pub mod movement;
 pub mod navigation;
-pub mod observability;
+// The agent's self-instrumentation lives in its own crate (2026-08-02) — spans,
+// the span ring buffer, and the counters `/api/v1/metrics` serves. Re-exported
+// under the old name so `crate::observability::…` is unchanged at every call
+// site in reflex, system2, orchestrator, skill_forge and the gateway.
+//
+// `obc_telemetry` is the agent watching its body; this is the agent watching
+// itself. The two were named apart on purpose and are easy to confuse.
+pub use obc_observability as observability;
 pub mod peripherals;
 pub use obc_telemetry::power;
 pub mod providers;

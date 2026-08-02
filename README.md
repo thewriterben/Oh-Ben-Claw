@@ -666,20 +666,28 @@ See [`gui/README.md`](gui/README.md) for the full build instructions and command
 
 ## Project Structure
 
+Six pieces of the agent now live in `crates/` rather than `src/`, extracted one
+at a time as each became self-contained enough to compile on its own. The tree
+below said otherwise until 2026-08-02: it still listed `src/memory/`,
+`src/sensing/`, `src/power/`, `src/comms/` and `src/security/limits.rs`, none of
+which had existed since 2026-07-30, and `src/observability/`, moved by the same
+commit as this correction. Extraction is exactly the operation that invalidates
+a path in prose, and four of them had gone by without one.
+
 ```
 Oh-Ben-Claw/
+├── crates/             # Extracted, self-contained, vendored into OBC-Prime
+│   ├── obc-paths/      # Config/data directory resolution
+│   ├── obc-memory/     # Bitemporal world memory (the embodied substrate)
+│   ├── obc-planner/    # Deployment planner, site optimizer, geo, registry
+│   ├── obc-safety/     # Track 0 gate, limits, audit chain, pairing, taint
+│   ├── obc-telemetry/  # The agent watching its body: power / comms / sensing
+│   └── obc-observability/  # The agent watching itself: spans + counters
 ├── src/
 │   ├── agent/          # Agent loop, dispatcher, Reflexion, Plan-and-Execute,
 │   │   ├── reflex.rs   #   dual-system reflexes (System 1)
 │   │   └── safing.rs   #   self-healing safing rule library
-│   ├── memory/
-│   │   └── world.rs    # Bitemporal world memory (the embodied substrate)
-│   ├── security/
-│   │   └── limits.rs   # Track 0 SafetyGate (host) — mirrored in firmware
-│   ├── sensing/        # Sensing suite (sample → quality-classified facts)
 │   ├── audio/          # Audio pipeline + audio suite (hear / speak)
-│   ├── power/          # Power suite (battery + charge → power.mode)
-│   ├── comms/          # Comms suite (link health → net.mode)
 │   ├── movement/       # Track 0–bounded actuation + closed-loop feedback
 │   ├── navigation/     # Localization, SLAM, mapping, A*+costmap, particle filter,
 │   │                   #   sensor model, frontier exploration
@@ -695,12 +703,11 @@ Oh-Ben-Claw/
 │   ├── doctor/         # System diagnostics (oh-ben-claw doctor)
 │   ├── gateway/        # REST/WebSocket API gateway (Axum)
 │   ├── mcp/            # Model Context Protocol client/server (dual-mode)
-│   ├── observability/  # Metrics, spans, OpenTelemetry
 │   ├── peripherals/    # Hardware drivers + registry SSOT
 │   ├── providers/      # LLM provider adapters + failover + retry
-│   ├── a2a/            # A2A protocol client and server
+│   ├── a2a/            # A2A wire format — implemented, not served (see above)
 │   ├── scheduler/      # Scheduled tasks and cron jobs
-│   ├── security/       # Policy, pairing, vault, audit chain, Track 0 limits
+│   ├── security.rs     # Re-exports obc-safety under the old module path
 │   ├── skill_forge/    # Skill discovery, synthesis, ClawHub registry
 │   ├── spine/          # MQTT spine + P2P broker-free mesh
 │   ├── tools/          # Tool registry (shell, file, browser, hardware, nav, …)
@@ -708,8 +715,9 @@ Oh-Ben-Claw/
 │   └── vision/         # Vision pipeline + ClawCam detection ingest
 ├── firmware/
 │   ├── obc-esp32-s3/   # ESP32-S3 firmware + on-MCU reflex/safing mirror
-│   ├── obc-nanopi/     # NanoPi Neo3 native agent
-│   └── obc-rpi/        # Raspberry Pi native agent
+│   ├── heltec-lora-linktest/  # Heltec V3 (ESP32-S3 + SX1262) LoRa mesh node
+│   ├── lora-node/      # Arduino LoRa bridge sketch
+│   └── t-deck-terminal/       # T-Deck handheld terminal sketch
 ├── gui/                # Tauri 2 + React 18 native desktop application
 ├── docs/
 │   ├── EMBODIED-ARCHITECTURE.md     # The embodied control stack, end to end
