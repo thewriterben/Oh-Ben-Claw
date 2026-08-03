@@ -20,6 +20,7 @@
 
 use crate::mcp::client::McpClient;
 use crate::memory::world::WorldMemory;
+use obc_conscience::{Conscience, PerceptionDecision, PerceptionRefusal};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -151,6 +152,63 @@ pub fn ingest_clawcam_detections(
         entities.push(entity);
     }
     Ok(entities)
+}
+
+/// Result of applying the conscience perception gate to a batch of detections.
+pub struct ConscienceFilter {
+    /// Detections permitted by the consent registry — safe to ingest.
+    pub kept: Vec<ClawCamDetection>,
+    /// Refused detections, with the reason. Dropped before world memory and the
+    /// reasoner; returned so a caller with an audit log can record them.
+    pub refused: Vec<(String, PerceptionRefusal)>,
+}
+
+/// Apply the conscience perception gate (consent registry) to detections
+/// **before** they reach world memory or the reasoner — the Track 0 pattern
+/// for perception (`obc_conscience`). A detection whose subject is not
+/// permitted — a human on a wildlife body, an unlisted class, or a
+/// low-confidence label that might be a person — is dropped here: never stored,
+/// never seen by the model, so it can neither be kept nor inject the reasoner.
+///
+/// Keyed on the classifier's own subject label (`detection_subject`), so the
+/// operator declares the labels their classifier emits (e.g. allow `"animal"`,
+/// deny `"person"`). A detection with no confidence value fails closed.
+/// Refusals are logged (first-class) and returned for the audit log. Mapping a
+/// species taxonomy onto broader consent classes is future work (see
+/// CONSCIENCE.md §6).
+pub fn conscience_filter(detections: &[ClawCamDetection], conscience: &Conscience) -> ConscienceFilter {
+    let mut kept = Vec::new();
+    let mut refused = Vec::new();
+    for d in detections {
+        let subject = detection_subject(d);
+        // No confidence on the detection → 0.0 → the gate fails closed.
+        let confidence = d.top_confidence.unwrap_or(0.0) as f32;
+        match conscience.may_perceive(&subject, confidence) {
+            PerceptionDecision::Allow { .. } => kept.push(d.clone()),
+            PerceptionDecision::Refuse(reason) => {
+                tracing::warn!(subject = %subject, refusal = %reason,
+                               "conscience: perception refused (frame dropped, not stored)");
+                refused.push((subject, reason));
+            }
+        }
+    }
+    ConscienceFilter { kept, refused }
+}
+
+/// Conscience-gated ingest: filter detections through the perception gate, then
+/// fold only the permitted ones into world memory. Drop-in replacement for
+/// [`ingest_clawcam_detections`] wherever a [`Conscience`] is available. Returns
+/// the ingested entity keys and the refusals (for the audit log).
+pub fn ingest_clawcam_detections_gated(
+    world: &WorldMemory,
+    detections: &[ClawCamDetection],
+    ingested_at_ms: u64,
+    source: &str,
+    conscience: &Conscience,
+) -> anyhow::Result<(Vec<String>, Vec<(String, PerceptionRefusal)>)> {
+    let filtered = conscience_filter(detections, conscience);
+    let entities = ingest_clawcam_detections(world, &filtered.kept, ingested_at_ms, source)?;
+    Ok((entities, filtered.refused))
 }
 
 /// Convenience: parse a JSON array of detections (e.g. the body of a
@@ -914,5 +972,69 @@ mod tests {
         // the trendable count fact exists for foresight to fit
         let fact = world.current("vision.count.person").unwrap().unwrap();
         assert_eq!(fact.value["value"], 2);
+    }
+
+    // -- conscience perception gate at the ingest boundary --
+
+    fn wildlife_conscience() -> Conscience {
+        use obc_conscience::{ConscienceConfig, ConsentRule, Transmit};
+        Conscience::new(&ConscienceConfig {
+            enabled: true,
+            subjects: vec![
+                ConsentRule::allow("deer", 30, Transmit::WeightsOnly),
+                ConsentRule::allow("animal", 30, Transmit::WeightsOnly),
+                ConsentRule::deny("person"),
+            ],
+            confidence_threshold: 0.6,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn conscience_filter_drops_humans_and_keeps_wildlife() {
+        let c = wildlife_conscience();
+        let dets = vec![
+            det("e1", Some("deer"), 0.95, "unreviewed", None),
+            det("e2", Some("person"), 0.99, "unreviewed", None), // denied
+        ];
+        let out = conscience_filter(&dets, &c);
+        assert_eq!(out.kept.len(), 1);
+        assert_eq!(out.kept[0].event_id, "e1");
+        assert_eq!(out.refused.len(), 1);
+        assert_eq!(out.refused[0].0, "person");
+    }
+
+    #[test]
+    fn conscience_filter_fails_closed_on_low_confidence() {
+        let c = wildlife_conscience();
+        // a low-confidence "deer" might be a person — refuse before ingest
+        let dets = vec![det("e", Some("deer"), 0.40, "unreviewed", None)];
+        let out = conscience_filter(&dets, &c);
+        assert!(out.kept.is_empty());
+        assert!(matches!(out.refused[0].1, PerceptionRefusal::LowConfidence { .. }));
+    }
+
+    #[test]
+    fn gated_ingest_writes_only_permitted_subjects() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let c = wildlife_conscience();
+        let dets = vec![
+            det("e1", Some("deer"), 0.95, "unreviewed", None),
+            det("e2", Some("person"), 0.99, "unreviewed", None),
+        ];
+        let (entities, refused) =
+            ingest_clawcam_detections_gated(&world, &dets, 1_000, "test", &c).unwrap();
+        assert_eq!(entities, vec!["vision.subject.deer".to_string()]);
+        assert_eq!(refused.len(), 1);
+        // the person was never written to world memory
+        assert!(world.current("vision.subject.person").unwrap().is_none());
+    }
+
+    #[test]
+    fn disabled_conscience_lets_everything_through() {
+        use obc_conscience::ConscienceConfig;
+        let c = Conscience::new(&ConscienceConfig::default()); // disabled
+        let dets = vec![det("e", Some("person"), 0.99, "unreviewed", None)];
+        assert_eq!(conscience_filter(&dets, &c).kept.len(), 1);
     }
 }
