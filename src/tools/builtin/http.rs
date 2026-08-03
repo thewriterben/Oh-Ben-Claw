@@ -14,6 +14,9 @@ pub struct HttpTool {
     /// any connection is made (the breach lesson: containment must not rely on
     /// the model's own refusals). `None` = no egress gate (until config wires one).
     reach: Option<ReachGate>,
+    /// Optional Track 0 auditor. When present, a reach refusal is written to the
+    /// tamper-evident chain as a `conscience.reach` denial — same as perception.
+    auditor: Option<std::sync::Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
 }
 
 impl HttpTool {
@@ -24,6 +27,7 @@ impl HttpTool {
                 .build()
                 .unwrap_or_default(),
             reach: None,
+            auditor: None,
         }
     }
 
@@ -31,6 +35,15 @@ impl HttpTool {
     /// allowlisted for the `http` tool, or the request is refused pre-connection.
     pub fn with_reach_gate(mut self, gate: ReachGate) -> Self {
         self.reach = Some(gate);
+        self
+    }
+
+    /// Attach a Track 0 auditor so reach refusals become tamper-evident records.
+    pub fn with_auditor(
+        mut self,
+        auditor: std::sync::Arc<std::sync::Mutex<crate::security::ActionAuditor>>,
+    ) -> Self {
+        self.auditor = Some(auditor);
         self
     }
 
@@ -138,6 +151,18 @@ impl Tool for HttpTool {
         // allowlisted BEFORE any connection is made. Logged, not silent.
         if let Err(reason) = self.check_reach(&url) {
             tracing::warn!(url = %url, refusal = %reason, "conscience: egress refused");
+            if let Some(auditor) = &self.auditor {
+                let host = reqwest::Url::parse(&url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(|h| h.to_string()))
+                    .unwrap_or_default();
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let mut g = auditor.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = g.record_conscience_refusal(ts, "conscience.reach", &host, &reason);
+            }
             return Ok(ToolResult::err(format!("conscience: {reason}")));
         }
 
@@ -277,5 +302,32 @@ mod tests {
     fn no_gate_allows_any_host() {
         let tool = HttpTool::new(); // ungated
         assert!(tool.check_reach("https://anywhere.example").is_ok());
+    }
+
+    #[tokio::test]
+    async fn refused_reach_is_written_to_the_audit_chain() {
+        use crate::security::ActionAuditor;
+        use std::sync::{Arc, Mutex};
+        let mut path = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        path.push(format!("obc-http-conscience-{nanos}.jsonl"));
+        let key = b"test-key".to_vec();
+        let auditor = Arc::new(Mutex::new(
+            ActionAuditor::open(key.clone(), path.clone()).unwrap(),
+        ));
+        let tool = HttpTool::new().with_reach_gate(gate()).with_auditor(Arc::clone(&auditor));
+
+        let result = tool
+            .execute(json!({"url": "https://evil.example.com/exfil"}))
+            .await
+            .unwrap();
+        assert!(!result.success); // refused, no connection
+
+        // the refusal is a tamper-evident record in the same chain as actions
+        assert_eq!(crate::security::audit::verify(&path, &key).unwrap(), 1);
+        let _ = std::fs::remove_file(&path);
     }
 }
