@@ -202,6 +202,30 @@ impl ActionAuditor {
         self.prev_mac = mac;
         Ok(rec)
     }
+
+    /// Record a **conscience refusal** — a perception drop or an egress denial —
+    /// into the same tamper-evident chain as physical actions. A conscience that
+    /// isn't audited is just a promise; this makes each refusal a first-class,
+    /// verifiable record. Non-physical (`RiskClass::safe`); `gate` is e.g.
+    /// `"conscience.perception"` or `"conscience.reach"`, `subject` the class or
+    /// host, `reason` the human-readable refusal.
+    pub fn record_conscience_refusal(
+        &mut self,
+        ts_ms: u64,
+        gate: &str,
+        subject: &str,
+        reason: &str,
+    ) -> anyhow::Result<ActionRecord> {
+        let args = serde_json::json!({ "subject": subject });
+        self.record(
+            ts_ms,
+            "conscience",
+            gate,
+            &args,
+            crate::risk::RiskClass::safe(),
+            Decision::Denied(reason.to_string()),
+        )
+    }
 }
 
 /// An integrity failure found while verifying an audit chain.
@@ -371,6 +395,27 @@ mod tests {
             .unwrap();
         }
         assert_eq!(verify(&path, key).unwrap(), 3);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn conscience_refusals_are_tamper_evident_records() {
+        let path = tmp_path("conscience");
+        let key = b"test-key";
+        {
+            let mut a = ActionAuditor::open(key.to_vec(), path.clone()).unwrap();
+            let r1 = a
+                .record_conscience_refusal(1_000, "conscience.perception", "human",
+                                           "capture of class 'human' is denied")
+                .unwrap();
+            assert!(matches!(r1.decision, Decision::Denied(_)));
+            assert!(!r1.risk.physical); // conscience is not actuation
+            a.record_conscience_refusal(1_100, "conscience.reach", "evil.example.com",
+                                        "egress denied (not allowlisted)")
+                .unwrap();
+        }
+        // both refusals are in the same tamper-evident chain as physical actions
+        assert_eq!(verify(&path, key).unwrap(), 2);
         let _ = std::fs::remove_file(&path);
     }
 

@@ -302,8 +302,11 @@ pub fn ingest_tool_result_gated(
 
 /// [`poll_clawcam_into_world`] with the conscience perception gate applied — the
 /// runtime-default perception path. When conscience is disabled the gate admits
-/// everything, so this is a safe drop-in for the plain poll. Returns the
-/// ingested entity keys (refusals are logged inside the gate).
+/// everything, so this is a safe drop-in for the plain poll.
+///
+/// Each refused detection is written to the Track 0 tamper-evident audit log
+/// (`auditor`, when present) as a `conscience.perception` denial — a conscience
+/// that isn't audited is just a promise. Returns the ingested entity keys.
 pub async fn poll_clawcam_into_world_gated(
     client: Arc<Mutex<McpClient>>,
     world: &WorldMemory,
@@ -312,15 +315,27 @@ pub async fn poll_clawcam_into_world_gated(
     ingested_at_ms: u64,
     source: &str,
     conscience: &Conscience,
+    auditor: Option<&std::sync::Mutex<crate::security::ActionAuditor>>,
 ) -> anyhow::Result<Vec<String>> {
     let raw = {
         let mut guard = client.lock().await;
         guard.call_tool(tool, args).await?
     };
     let parsed: serde_json::Value = serde_json::from_str(&raw)?;
-    let (entities, _refused) =
-        ingest_tool_result_gated(world, &parsed, ingested_at_ms, source, conscience)?;
-    Ok(entities)
+    let detections = extract_detections(&parsed);
+    let filtered = conscience_filter(&detections, conscience);
+    if let Some(a) = auditor {
+        for (subject, refusal) in &filtered.refused {
+            let mut guard = a.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = guard.record_conscience_refusal(
+                ingested_at_ms,
+                "conscience.perception",
+                subject,
+                &refusal.to_string(),
+            );
+        }
+    }
+    ingest_clawcam_detections(world, &filtered.kept, ingested_at_ms, source)
 }
 
 // ── ClawCam as a full perceive subsystem (health / audio / state) ───────────────

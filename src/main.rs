@@ -1996,6 +1996,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 // Conscience perception gate for this poll. When [conscience] is
                 // disabled the gate admits everything, so this is always safe.
                 let poll_conscience = obc_conscience::Conscience::new(&config.conscience);
+                let poll_auditor = action_auditor.clone();
                 // Spatial fusion: a fixed camera's detection becomes a hazard disc
                 // in the occupancy grid, so the planner routes the mobile robot
                 // clear of what a *static* node saw. Both halves were already
@@ -2056,6 +2057,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             now,
                             &cfg.source,
                             &poll_conscience,
+                            poll_auditor.as_deref(),
                         )
                         .await
                         {
