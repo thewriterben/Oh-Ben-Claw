@@ -291,8 +291,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         "LLM provider ready"
     );
 
-    // Build tool registry
-    let mut all_tools = default_tools();
+    // Build tool registry. When [conscience] is enabled, attach the egress
+    // reach gate so outbound tool calls hit the allowlist (Track 0 for reach).
+    let conscience = obc_conscience::Conscience::new(&config.conscience);
+    let mut all_tools = if conscience.enabled {
+        oh_ben_claw::tools::default_tools_with_reach(Some(conscience.reach.clone()))
+    } else {
+        default_tools()
+    };
     // Skill forge management tool (list/install/remove skills at runtime).
     all_tools.push(Box::new(
         oh_ben_claw::skill_forge::SkillForgeTool::default_dir(),

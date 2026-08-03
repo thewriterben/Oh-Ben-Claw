@@ -1957,6 +1957,11 @@ pub struct Config {
     /// Track 0 physical-action safety: deterministic limits + tamper-evident audit.
     #[serde(default)]
     pub safety: crate::security::SafetyConfig,
+    /// Conscience: deterministic gates on what the agent may PERCEIVE (consent
+    /// registry, default-deny humans) and REACH (egress allowlist). Track 0
+    /// extended to the front of the pipeline. Off unless `[conscience]` is set.
+    #[serde(default)]
+    pub conscience: obc_conscience::ConscienceConfig,
     /// Phase 16 experiential self-improvement (trajectory capture).
     #[serde(default)]
     pub self_improvement: SelfImprovementConfig,
