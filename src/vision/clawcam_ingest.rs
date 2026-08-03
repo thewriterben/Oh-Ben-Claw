@@ -286,6 +286,43 @@ pub async fn poll_clawcam_into_world(
     ingest_tool_result(world, &parsed, ingested_at_ms, source)
 }
 
+/// [`ingest_tool_result`] with the conscience perception gate applied: refused
+/// detections (humans, unlisted classes, low-confidence) are dropped before
+/// world memory and the reasoner. Returns ingested entities and the refusals.
+pub fn ingest_tool_result_gated(
+    world: &WorldMemory,
+    tool_result: &serde_json::Value,
+    ingested_at_ms: u64,
+    source: &str,
+    conscience: &Conscience,
+) -> anyhow::Result<(Vec<String>, Vec<(String, PerceptionRefusal)>)> {
+    let detections = extract_detections(tool_result);
+    ingest_clawcam_detections_gated(world, &detections, ingested_at_ms, source, conscience)
+}
+
+/// [`poll_clawcam_into_world`] with the conscience perception gate applied — the
+/// runtime-default perception path. When conscience is disabled the gate admits
+/// everything, so this is a safe drop-in for the plain poll. Returns the
+/// ingested entity keys (refusals are logged inside the gate).
+pub async fn poll_clawcam_into_world_gated(
+    client: Arc<Mutex<McpClient>>,
+    world: &WorldMemory,
+    tool: &str,
+    args: serde_json::Value,
+    ingested_at_ms: u64,
+    source: &str,
+    conscience: &Conscience,
+) -> anyhow::Result<Vec<String>> {
+    let raw = {
+        let mut guard = client.lock().await;
+        guard.call_tool(tool, args).await?
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&raw)?;
+    let (entities, _refused) =
+        ingest_tool_result_gated(world, &parsed, ingested_at_ms, source, conscience)?;
+    Ok(entities)
+}
+
 // ── ClawCam as a full perceive subsystem (health / audio / state) ───────────────
 //
 // A ClawCam node is more than a species feed: it reports its own *health*

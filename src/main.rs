@@ -1993,6 +1993,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 let client = Arc::clone(client);
                 let poll_safing = Arc::clone(&safing_state);
                 let audio_ctrl = audio_controller.clone();
+                // Conscience perception gate for this poll. When [conscience] is
+                // disabled the gate admits everything, so this is always safe.
+                let poll_conscience = obc_conscience::Conscience::new(&config.conscience);
                 // Spatial fusion: a fixed camera's detection becomes a hazard disc
                 // in the occupancy grid, so the planner routes the mobile robot
                 // clear of what a *static* node saw. Both halves were already
@@ -2045,13 +2048,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis() as u64)
                             .unwrap_or(0);
-                        match oh_ben_claw::vision::clawcam_ingest::poll_clawcam_into_world(
+                        match oh_ben_claw::vision::clawcam_ingest::poll_clawcam_into_world_gated(
                             Arc::clone(&client),
                             &world,
                             &cfg.tool,
                             cfg.args.clone(),
                             now,
                             &cfg.source,
+                            &poll_conscience,
                         )
                         .await
                         {
