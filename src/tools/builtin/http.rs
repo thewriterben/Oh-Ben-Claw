@@ -2,12 +2,18 @@
 
 use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_conscience::{ReachDecision, ReachGate};
 use reqwest::Client;
 use serde_json::{json, Value};
 
 /// Tool: make HTTP requests (GET, POST, PUT, DELETE, PATCH).
 pub struct HttpTool {
     client: Client,
+    /// Optional conscience reach gate. When present, the request host must be on
+    /// the egress allowlist for the `http` tool or the request is refused before
+    /// any connection is made (the breach lesson: containment must not rely on
+    /// the model's own refusals). `None` = no egress gate (until config wires one).
+    reach: Option<ReachGate>,
 }
 
 impl HttpTool {
@@ -17,6 +23,30 @@ impl HttpTool {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_default(),
+            reach: None,
+        }
+    }
+
+    /// Attach a conscience reach gate. Every request host must then be
+    /// allowlisted for the `http` tool, or the request is refused pre-connection.
+    pub fn with_reach_gate(mut self, gate: ReachGate) -> Self {
+        self.reach = Some(gate);
+        self
+    }
+
+    /// Egress check for a URL. `Ok(())` if allowed (or no gate); `Err(reason)`
+    /// if the reach gate refuses. Extracted for testability without a network.
+    fn check_reach(&self, url: &str) -> Result<(), String> {
+        let Some(gate) = &self.reach else {
+            return Ok(()); // no gate configured
+        };
+        let host = reqwest::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_string()))
+            .unwrap_or_default();
+        match gate.check("http", &host) {
+            ReachDecision::Allow { .. } => Ok(()),
+            ReachDecision::Refuse(reason) => Err(reason.to_string()),
         }
     }
 }
@@ -103,6 +133,13 @@ impl Tool for HttpTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'url' parameter"))?
             .to_string();
+
+        // Conscience reach gate (Track 0 for egress): refuse a host that is not
+        // allowlisted BEFORE any connection is made. Logged, not silent.
+        if let Err(reason) = self.check_reach(&url) {
+            tracing::warn!(url = %url, refusal = %reason, "conscience: egress refused");
+            return Ok(ToolResult::err(format!("conscience: {reason}")));
+        }
 
         let timeout_secs = args
             .get("timeout_secs")
@@ -196,5 +233,49 @@ mod tests {
         let tool = HttpTool::new();
         let result = tool.execute(json!({"method": "GET"})).await;
         assert!(result.is_err());
+    }
+
+    // -- conscience reach gate at the egress boundary --
+
+    fn gate() -> ReachGate {
+        use obc_conscience::{HostRule, ReachScope, ToolReach};
+        ReachGate::new(
+            vec![HostRule {
+                host: "api.allowed.example".into(),
+                purpose: "test".into(),
+                credential: None,
+            }],
+            vec![ToolReach { tool: "http".into(), scope: ReachScope::Egress }],
+        )
+    }
+
+    #[test]
+    fn reach_allows_allowlisted_host() {
+        let tool = HttpTool::new().with_reach_gate(gate());
+        assert!(tool.check_reach("https://api.allowed.example/v1/thing").is_ok());
+    }
+
+    #[test]
+    fn reach_refuses_unlisted_host() {
+        let tool = HttpTool::new().with_reach_gate(gate());
+        assert!(tool.check_reach("https://evil.example.com/exfil").is_err());
+    }
+
+    #[tokio::test]
+    async fn execute_refuses_unlisted_host_without_connecting() {
+        // No network is touched: the gate refuses before send().
+        let tool = HttpTool::new().with_reach_gate(gate());
+        let result = tool
+            .execute(json!({"url": "https://evil.example.com/exfil"}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.error.unwrap_or_default().contains("conscience"));
+    }
+
+    #[test]
+    fn no_gate_allows_any_host() {
+        let tool = HttpTool::new(); // ungated
+        assert!(tool.check_reach("https://anywhere.example").is_ok());
     }
 }
