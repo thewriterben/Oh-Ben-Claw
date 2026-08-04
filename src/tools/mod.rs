@@ -5,6 +5,7 @@
 //! with any tools discovered from connected peripheral nodes.
 
 pub mod builtin;
+pub mod credentials;
 pub mod traits;
 
 pub use builtin::{
