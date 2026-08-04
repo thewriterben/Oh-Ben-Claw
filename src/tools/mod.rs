@@ -28,7 +28,7 @@ pub use traits::{Tool, ToolResult};
 /// Browser tools are always registered; they connect to a local CDP endpoint
 /// if Chrome/Chromium is running with `--remote-debugging-port=9222`.
 pub fn default_tools() -> Vec<Box<dyn Tool>> {
-    default_tools_with_reach(None)
+    default_tools_with_reach(None, None)
 }
 
 /// Like [`default_tools`], but attaches a conscience egress **reach gate** to
@@ -36,17 +36,29 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
 /// supplied, a request to a host not on the egress allowlist is refused before
 /// any connection — the breach lesson, enforced by deterministic code the model
 /// cannot override. `None` reproduces `default_tools()` exactly.
+///
+/// `auditor`, when supplied, is attached to the egress-gated HTTP tool so a
+/// reach refusal is written to the tamper-evident audit log as a
+/// `conscience.reach` denial — the same first-class record as a perception
+/// refusal. A conscience that isn't audited is just a promise.
 pub fn default_tools_with_reach(
     reach: Option<obc_conscience::ReachGate>,
+    auditor: Option<std::sync::Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
 ) -> Vec<Box<dyn Tool>> {
     use builtin::browser::all_browser_tools;
 
     let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
     let cdp_url = std::env::var("OBC_BROWSER_CDP_URL").ok();
 
-    let http_tool = match reach.clone() {
-        Some(gate) => HttpTool::new().with_reach_gate(gate),
-        None => HttpTool::new(),
+    let http_tool = {
+        let mut t = HttpTool::new();
+        if let Some(gate) = reach.clone() {
+            t = t.with_reach_gate(gate);
+        }
+        if let Some(a) = auditor.clone() {
+            t = t.with_auditor(a);
+        }
+        t
     };
 
     let mut tools: Vec<Box<dyn Tool>> = vec![

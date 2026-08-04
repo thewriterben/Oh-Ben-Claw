@@ -291,11 +291,54 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         "LLM provider ready"
     );
 
-    // Build tool registry. When [conscience] is enabled, attach the egress
-    // reach gate so outbound tool calls hit the allowlist (Track 0 for reach).
+    // Track 0 safety gate + action auditor — built BEFORE the tool registry so
+    // the conscience reach gate can share the auditor (a reach refusal becomes a
+    // tamper-evident record, exactly as a perception refusal is). The audit-key
+    // helpers used here are nested `fn` items, so calling them before their
+    // textual definition is fine.
+    let mut safety_gate: Option<Arc<security::SafetyGate>> = None;
+    let mut action_auditor: Option<Arc<std::sync::Mutex<security::ActionAuditor>>> = None;
+    if config.safety.enabled {
+        safety_gate = Some(Arc::new(security::SafetyGate::new(
+            config.safety.limits.clone(),
+        )));
+        info!(
+            limits = config.safety.limits.len(),
+            "Track 0 safety gate active"
+        );
+
+        let key = resolve_audit_key(
+            config.safety.audit_key.as_deref(),
+            config.security.vault_enabled,
+            config.security.vault_path.as_deref(),
+            config.security.pairing_secret.as_deref(),
+        );
+        let audit_path = config
+            .safety
+            .audit_log_path
+            .clone()
+            .unwrap_or_else(|| track0_data_path("action_audit.jsonl"));
+        if let Some(parent) = std::path::Path::new(&audit_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match security::ActionAuditor::open(key, audit_path.clone()) {
+            Ok(auditor) => {
+                action_auditor = Some(Arc::new(std::sync::Mutex::new(auditor)));
+                info!(path = %audit_path, "Track 0 action audit log active");
+            }
+            Err(e) => tracing::warn!("Track 0: failed to open action audit log: {e}"),
+        }
+    }
+
+    // Build tool registry. When [conscience] is enabled, attach the egress reach
+    // gate AND the auditor, so outbound tool calls hit the allowlist and every
+    // refusal is written to the tamper-evident log (Track 0 for reach).
     let conscience = obc_conscience::Conscience::new(&config.conscience);
     let mut all_tools = if conscience.enabled {
-        oh_ben_claw::tools::default_tools_with_reach(Some(conscience.reach.clone()))
+        oh_ben_claw::tools::default_tools_with_reach(
+            Some(conscience.reach.clone()),
+            action_auditor.clone(),
+        )
     } else {
         default_tools()
     };
@@ -534,39 +577,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         k.into_bytes()
     }
 
-    let mut safety_gate: Option<Arc<security::SafetyGate>> = None;
-    let mut action_auditor: Option<Arc<std::sync::Mutex<security::ActionAuditor>>> = None;
-    if config.safety.enabled {
-        safety_gate = Some(Arc::new(security::SafetyGate::new(
-            config.safety.limits.clone(),
-        )));
-        info!(
-            limits = config.safety.limits.len(),
-            "Track 0 safety gate active"
-        );
-
-        let key = resolve_audit_key(
-            config.safety.audit_key.as_deref(),
-            config.security.vault_enabled,
-            config.security.vault_path.as_deref(),
-            config.security.pairing_secret.as_deref(),
-        );
-        let audit_path = config
-            .safety
-            .audit_log_path
-            .clone()
-            .unwrap_or_else(|| track0_data_path("action_audit.jsonl"));
-        if let Some(parent) = std::path::Path::new(&audit_path).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match security::ActionAuditor::open(key, audit_path.clone()) {
-            Ok(auditor) => {
-                action_auditor = Some(Arc::new(std::sync::Mutex::new(auditor)));
-                info!(path = %audit_path, "Track 0 action audit log active");
-            }
-            Err(e) => tracing::warn!("Track 0: failed to open action audit log: {e}"),
-        }
-    }
+    // (Track 0 safety gate + action auditor are built earlier, before the tool
+    // registry, so the conscience reach gate shares the auditor — see above.)
 
     // Phase 16: trajectory store for experiential self-improvement (shared by
     // the plain agent and the orchestrator's inner agent).
