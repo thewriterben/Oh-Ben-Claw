@@ -194,7 +194,9 @@ impl AgentPool {
         // Build the tool registry. Sub-agents get the SAME conscience reach gate
         // (and auditor) as the orchestrator, so delegation is not an egress
         // bypass — a spawned agent's HTTP/browser calls hit the same allowlist.
-        let all_tools = default_tools_with_reach(self.reach.clone(), self.auditor.clone());
+        // Credential injection (item (b)) is not yet threaded to spawned agents;
+        // they stay gated + fail-closed on named credentials (safe), so `None`.
+        let all_tools = default_tools_with_reach(self.reach.clone(), self.auditor.clone(), None);
         let tools: Vec<Box<dyn Tool>> = if spec.tools.is_empty() {
             // Give all default tools
             all_tools

@@ -334,10 +334,45 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // gate AND the auditor, so outbound tool calls hit the allowlist and every
     // refusal is written to the tamper-evident log (Track 0 for reach).
     let conscience = obc_conscience::Conscience::new(&config.conscience);
+    // Conscience credential resolver (item (b)): resolve a credential the reach
+    // gate names on an allow, by name, at the egress boundary — never seen by
+    // the model. Prefer the unlocked vault (encrypted store + env fallback);
+    // otherwise environment-only, so env-backed credentials still resolve.
+    let credential_resolver: Option<
+        std::sync::Arc<dyn oh_ben_claw::tools::credentials::CredentialResolver>,
+    > = if conscience.enabled {
+        let vault_backed = if config.security.vault_enabled {
+            std::env::var("OBC_VAULT_PASSWORD").ok().and_then(|pw| {
+                let vpath = config
+                    .security
+                    .vault_path
+                    .clone()
+                    .unwrap_or_else(|| track0_data_path("vault.db"));
+                let vault = security::SecretsVault::open(&vpath).ok()?;
+                vault.unlock(&pw).ok()?;
+                tracing::info!(
+                    "conscience: credential resolver using the unlocked vault (env fallback)"
+                );
+                Some(std::sync::Arc::new(vault)
+                    as std::sync::Arc<dyn oh_ben_claw::tools::credentials::CredentialResolver>)
+            })
+        } else {
+            None
+        };
+        Some(vault_backed.unwrap_or_else(|| {
+            tracing::info!(
+                "conscience: credential resolver is environment-only (vault locked or disabled)"
+            );
+            std::sync::Arc::new(oh_ben_claw::tools::credentials::EnvResolver)
+        }))
+    } else {
+        None
+    };
     let mut all_tools = if conscience.enabled {
         oh_ben_claw::tools::default_tools_with_reach(
             Some(conscience.reach.clone()),
             action_auditor.clone(),
+            credential_resolver,
         )
     } else {
         default_tools()
@@ -3179,7 +3214,7 @@ async fn run_mcp_serve(config: &Config, transport: &str, port: u16, mode: &str) 
     // path; the gate still refuses, it just isn't logged here.)
     let conscience = obc_conscience::Conscience::new(&config.conscience);
     let tools = if conscience.enabled {
-        default_tools_with_reach(Some(conscience.reach.clone()), None)
+        default_tools_with_reach(Some(conscience.reach.clone()), None, None)
     } else {
         default_tools()
     };

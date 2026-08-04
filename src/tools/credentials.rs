@@ -43,6 +43,17 @@ impl CredentialResolver for crate::security::SecretsVault {
     }
 }
 
+/// Environment-only resolver: `std::env::var(name)`. The fallback when no vault
+/// is unlocked, so env-backed credentials resolve with no master password —
+/// this is the plain form of the env-backed resolution the operator chose.
+pub struct EnvResolver;
+
+impl CredentialResolver for EnvResolver {
+    fn resolve(&self, name: &str) -> Option<String> {
+        std::env::var(name).ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

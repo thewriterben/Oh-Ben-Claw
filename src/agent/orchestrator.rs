@@ -216,7 +216,9 @@ impl OrchestratorAgent {
 
         // Build the orchestrator's inner tool registry: default tools (egress
         // reach-gated + audited when conscience is on) + delegation tools.
-        let mut tools = default_tools_with_reach(deps.reach.clone(), deps.auditor.clone());
+        // Credential injection (item (b)) is not yet threaded to the inner agent;
+        // it stays gated + fail-closed on named credentials (safe), so `None`.
+        let mut tools = default_tools_with_reach(deps.reach.clone(), deps.auditor.clone(), None);
         tools.extend(delegation_tools(pool.clone(), Arc::clone(&session_arc)));
 
         // Extend the system prompt with orchestrator instructions

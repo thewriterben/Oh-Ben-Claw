@@ -29,7 +29,7 @@ pub use traits::{Tool, ToolResult};
 /// Browser tools are always registered; they connect to a local CDP endpoint
 /// if Chrome/Chromium is running with `--remote-debugging-port=9222`.
 pub fn default_tools() -> Vec<Box<dyn Tool>> {
-    default_tools_with_reach(None, None)
+    default_tools_with_reach(None, None, None)
 }
 
 /// Like [`default_tools`], but attaches a conscience egress **reach gate** to
@@ -42,9 +42,15 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
 /// reach refusal is written to the tamper-evident audit log as a
 /// `conscience.reach` denial — the same first-class record as a perception
 /// refusal. A conscience that isn't audited is just a promise.
+///
+/// `resolver`, when supplied (conscience item (b)), lets the HTTP tool inject a
+/// credential the reach gate names on an allow — resolved by name from the
+/// vault/environment, never seen by the model. A named-but-unresolvable
+/// credential fails closed.
 pub fn default_tools_with_reach(
     reach: Option<obc_conscience::ReachGate>,
     auditor: Option<std::sync::Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
+    resolver: Option<std::sync::Arc<dyn crate::tools::credentials::CredentialResolver>>,
 ) -> Vec<Box<dyn Tool>> {
     let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
     let cdp_url = std::env::var("OBC_BROWSER_CDP_URL").ok();
@@ -56,6 +62,9 @@ pub fn default_tools_with_reach(
         }
         if let Some(a) = auditor.clone() {
             t = t.with_auditor(a);
+        }
+        if let Some(r) = resolver.clone() {
+            t = t.with_resolver(r);
         }
         t
     };
