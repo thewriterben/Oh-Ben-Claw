@@ -154,6 +154,30 @@ enum Commands {
         log: String,
     },
 
+    /// Decide a multi-party-consent frame: given the people detected in a frame
+    /// and a consent ledger, would it be captured? Consent is opt-in and keyed to
+    /// a token the subject presents (never a recognized identity); a person with
+    /// no valid token is not consented and, under the default policy, refuses the
+    /// whole frame. A policy-authoring / testing tool.
+    ///
+    /// `--frame` is a JSON array of {class, consent_token?}; `--ledger` is a JSON
+    /// array of {subject, purpose, expires_at_ms, revoked?}.
+    ConsentCheck {
+        /// Path to a JSON array of subject presences in the frame.
+        #[arg(long)]
+        frame: String,
+        /// Path to a JSON array of consent grants (the ledger).
+        #[arg(long)]
+        ledger: String,
+        /// Purpose the frame is being captured for (must match the grant).
+        #[arg(long, default_value = "record")]
+        purpose: String,
+        /// Policy: "require-all" (refuse the frame if anyone lacks consent) or
+        /// "redact" (list subjects to blank).
+        #[arg(long, default_value = "require-all")]
+        policy: String,
+    },
+
     /// Run system diagnostics to check configuration and connectivity.
     Doctor,
 }
@@ -293,6 +317,14 @@ async fn main() -> Result<()> {
         }
         Commands::ReplayDecisions { log } => {
             run_replay_decisions(&config, &log)?;
+        }
+        Commands::ConsentCheck {
+            frame,
+            ledger,
+            purpose,
+            policy,
+        } => {
+            run_consent_check(&config, &frame, &ledger, &purpose, &policy)?;
         }
         Commands::Doctor => {
             oh_ben_claw::doctor::run(&config)?;
@@ -3274,6 +3306,54 @@ fn run_replay_decisions(config: &Config, log_path: &str) -> Result<()> {
     // drift is expected review output, not an error.
     if report.undrifted_mismatches() > 0 {
         std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Decide a multi-party-consent frame from a frame file + a consent ledger, and
+/// print the verdict. Consent is opt-in and token-based (never identity
+/// recognition); the restricted class comes from `[conscience.classifier]`. See
+/// `obc_conscience::multiparty`.
+fn run_consent_check(
+    config: &Config,
+    frame_path: &str,
+    ledger_path: &str,
+    purpose: &str,
+    policy: &str,
+) -> Result<()> {
+    let subjects: Vec<obc_conscience::SubjectPresence> = serde_json::from_str(
+        &std::fs::read_to_string(frame_path)
+            .with_context(|| format!("reading frame from {frame_path}"))?,
+    )
+    .context("parsing frame JSON (expected an array of {class, consent_token?})")?;
+    let grants: Vec<obc_conscience::ConsentGrant> = serde_json::from_str(
+        &std::fs::read_to_string(ledger_path)
+            .with_context(|| format!("reading ledger from {ledger_path}"))?,
+    )
+    .context("parsing ledger JSON (expected an array of consent grants)")?;
+    let policy = match policy {
+        "require-all" => obc_conscience::ConsentPolicy::RequireAll,
+        "redact" => obc_conscience::ConsentPolicy::Redact,
+        other => bail!("unknown policy '{other}' (require-all | redact)"),
+    };
+    let ledger = obc_conscience::ConsentLedger::from_grants(grants);
+    let restricted = &config.conscience.classifier.restricted_class;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let decision =
+        obc_conscience::decide_frame(&subjects, &ledger, restricted, purpose, now_ms, policy);
+    match &decision {
+        obc_conscience::FrameConsent::Allow => println!(
+            "ALLOW — every '{restricted}' in the frame presented valid consent for '{purpose}' (or none present)."
+        ),
+        obc_conscience::FrameConsent::Refuse { unconsented } => println!(
+            "REFUSE — {unconsented} subject(s) lacked valid consent; the whole frame is dropped (require-all)."
+        ),
+        obc_conscience::FrameConsent::Redact { indices } => println!(
+            "REDACT — blank subject indices {indices:?} before storing; a body that cannot redact per-subject must refuse the frame."
+        ),
     }
     Ok(())
 }

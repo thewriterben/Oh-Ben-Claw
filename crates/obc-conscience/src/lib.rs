@@ -30,12 +30,15 @@
 //! determined adversary or an unlucky angle can still produce a wrong call. It
 //! cannot stop an operator with physical control from
 //! surveilling — it makes that act explicit, effortful, and logged, not
-//! impossible. Semantic consent ("this person agreed, that guest didn't") is
-//! not expressible by class. These are labeled, not hidden.
+//! impossible. Semantic consent ("this person agreed, that guest didn't") is not
+//! expressible by *class* — it is handled by the [`multiparty`] layer, which
+//! gates on an affirmative consent token the subject presents rather than a
+//! recognized identity (opt-in, fail-closed). These are labeled, not hidden.
 
 pub mod classifier;
 pub mod consent;
 pub mod detector_eval;
+pub mod multiparty;
 pub mod reach;
 pub mod replay;
 
@@ -44,6 +47,9 @@ pub use consent::{
     ConsentRule, PerceptionDecision, PerceptionGate, PerceptionRefusal, Transmit,
 };
 pub use detector_eval::{measure as measure_false_negatives, ClassStats, EvalFrame, FnReport};
+pub use multiparty::{
+    decide_frame, ConsentGrant, ConsentLedger, ConsentPolicy, FrameConsent, SubjectPresence,
+};
 pub use reach::{HostRule, ReachDecision, ReachGate, ReachRefusal, ReachScope, ToolReach};
 pub use replay::{
     fingerprint as config_fingerprint, replay as replay_decisions, DecisionInput, DecisionRecord,
