@@ -49,6 +49,7 @@ pub use obc_telemetry::comms;
 pub mod config;
 pub mod cost;
 pub mod deployment;
+pub mod decision_log;
 pub mod doctor;
 pub mod fleet;
 pub mod foresight;

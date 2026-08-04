@@ -227,7 +227,7 @@ pub fn measure(frames: &[EvalFrame], classifier: &SubjectClassifier) -> FnReport
     // (present, detected_when_present, missed, false_positive) per class.
     let mut acc: BTreeMap<String, (u64, u64, u64, u64)> = BTreeMap::new();
     let mut unrecognized_truth: BTreeSet<String> = BTreeSet::new();
-    let restricted = classifier.classify("\u{0}unlikely\u{0}").class; // the fail-closed class
+    let restricted = classifier.restricted_class().to_string(); // the fail-closed class
 
     for frame in frames {
         // Truth classes: recognized labels only; an unrecognized truth label is

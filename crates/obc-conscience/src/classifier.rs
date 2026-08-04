@@ -115,6 +115,13 @@ impl SubjectClassifier {
         Self::from_config(&ClassifierConfig::default())
     }
 
+    /// The class an unrecognized label falls back to — the most-restricted class,
+    /// and the one that requires consent. Exposed so callers (multi-party consent,
+    /// the false-negative harness) can gate on it without a sentinel lookup.
+    pub fn restricted_class(&self) -> &str {
+        &self.restricted_class
+    }
+
     /// Classify a raw label into a consent class. A label not in the map is
     /// `recognized == false` and returns the restricted class — the caller must
     /// refuse it (see [`crate::Conscience::may_perceive_label`]).

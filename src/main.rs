@@ -2112,6 +2112,49 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 // disabled the gate admits everything, so this is always safe.
                 let poll_conscience = obc_conscience::Conscience::new(&config.conscience);
                 let poll_auditor = action_auditor.clone();
+                // #2 decision log (opt-in via OBC_DECISION_LOG): persist every
+                // perception decision so `replay-decisions` runs on real history.
+                let poll_decision_log: Option<Arc<oh_ben_claw::decision_log::DecisionLog>> =
+                    std::env::var("OBC_DECISION_LOG").ok().and_then(|path| {
+                        match oh_ben_claw::decision_log::DecisionLog::open(&path, &config.conscience)
+                        {
+                            Ok(l) => {
+                                info!(path = %path, "conscience: perception decision log active");
+                                Some(Arc::new(l))
+                            }
+                            Err(e) => {
+                                tracing::warn!("could not open OBC_DECISION_LOG: {e}");
+                                None
+                            }
+                        }
+                    });
+                // #3 multi-party consent (opt-in via OBC_CONSENT_LEDGER): drop or
+                // redact frames whose subjects didn't present a valid consent token.
+                let poll_consent: Option<(
+                    Arc<obc_conscience::ConsentLedger>,
+                    obc_conscience::ConsentPolicy,
+                    String,
+                )> = std::env::var("OBC_CONSENT_LEDGER").ok().and_then(|path| {
+                    let text = std::fs::read_to_string(&path)
+                        .map_err(|e| tracing::warn!("could not read OBC_CONSENT_LEDGER: {e}"))
+                        .ok()?;
+                    let grants: Vec<obc_conscience::ConsentGrant> = serde_json::from_str(&text)
+                        .map_err(|e| tracing::warn!("could not parse OBC_CONSENT_LEDGER: {e}"))
+                        .ok()?;
+                    let policy = match std::env::var("OBC_CONSENT_POLICY").as_deref() {
+                        Ok("redact") => obc_conscience::ConsentPolicy::Redact,
+                        _ => obc_conscience::ConsentPolicy::RequireAll,
+                    };
+                    let purpose =
+                        std::env::var("OBC_CONSENT_PURPOSE").unwrap_or_else(|_| "record".into());
+                    info!(path = %path, grants = grants.len(),
+                        "conscience: multi-party consent active");
+                    Some((
+                        Arc::new(obc_conscience::ConsentLedger::from_grants(grants)),
+                        policy,
+                        purpose,
+                    ))
+                });
                 // Spatial fusion: a fixed camera's detection becomes a hazard disc
                 // in the occupancy grid, so the planner routes the mobile robot
                 // clear of what a *static* node saw. Both halves were already
@@ -2164,15 +2207,30 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis() as u64)
                             .unwrap_or(0);
-                        match oh_ben_claw::vision::clawcam_ingest::poll_clawcam_into_world_gated(
+                        let guard = {
+                            let mut g = oh_ben_claw::vision::clawcam_ingest::PerceptionGuard::new(
+                                &poll_conscience,
+                                poll_auditor.as_deref(),
+                            );
+                            g.decision_log = poll_decision_log.as_deref();
+                            if let Some((ledger, policy, purpose)) = poll_consent.as_ref() {
+                                g.consent =
+                                    Some(oh_ben_claw::vision::clawcam_ingest::ConsentContext {
+                                        ledger: ledger.as_ref(),
+                                        policy: *policy,
+                                        purpose: purpose.as_str(),
+                                    });
+                            }
+                            g
+                        };
+                        match oh_ben_claw::vision::clawcam_ingest::poll_clawcam_guarded(
                             Arc::clone(&client),
                             &world,
                             &cfg.tool,
                             cfg.args.clone(),
                             now,
                             &cfg.source,
-                            &poll_conscience,
-                            poll_auditor.as_deref(),
+                            &guard,
                         )
                         .await
                         {
@@ -3294,8 +3352,8 @@ fn run_eval_detector(config: &Config, frames_path: &str) -> Result<()> {
 fn run_replay_decisions(config: &Config, log_path: &str) -> Result<()> {
     let raw = std::fs::read_to_string(log_path)
         .with_context(|| format!("reading decision log from {log_path}"))?;
-    let records: Vec<obc_conscience::DecisionRecord> = serde_json::from_str(&raw)
-        .context("parsing decision log JSON (expected an array of decision records)")?;
+    // Accepts both a JSON array and JSON Lines (the runtime decision log is JSONL).
+    let records = oh_ben_claw::decision_log::parse_log(&raw)?;
     if records.is_empty() {
         bail!("no decision records in {log_path} — nothing to replay");
     }
