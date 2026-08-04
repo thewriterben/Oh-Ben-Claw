@@ -25,7 +25,8 @@ use crate::agent::{Agent, AgentHandle};
 use crate::config::{AgentConfig, ProviderConfig};
 use crate::memory::MemoryStore;
 use crate::providers;
-use crate::tools::{default_tools, Tool};
+use crate::tools::{default_tools_with_reach, Tool};
+use obc_conscience::ReachGate;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -133,6 +134,11 @@ pub struct AgentPool {
     default_provider: ProviderConfig,
     /// Shared memory store — sub-agents get their own sessions within it.
     memory: Arc<MemoryStore>,
+    /// Conscience egress reach gate applied to every spawned sub-agent's tools,
+    /// so a delegated agent cannot bypass the allowlist the orchestrator honors.
+    reach: Option<ReachGate>,
+    /// Track 0 auditor, so a sub-agent's reach refusal is a tamper-evident record.
+    auditor: Option<Arc<Mutex<crate::security::ActionAuditor>>>,
 }
 
 impl AgentPool {
@@ -142,7 +148,23 @@ impl AgentPool {
             agents: Arc::new(Mutex::new(HashMap::new())),
             default_provider,
             memory,
+            reach: None,
+            auditor: None,
         }
+    }
+
+    /// Attach a conscience reach gate (and optional auditor) applied to every
+    /// sub-agent this pool spawns — closing the delegation bypass where a
+    /// sub-agent would otherwise receive ungated egress tools. Returns self so
+    /// it chains onto `AgentPool::new(...)`.
+    pub fn with_reach_gate(
+        mut self,
+        reach: Option<ReachGate>,
+        auditor: Option<Arc<Mutex<crate::security::ActionAuditor>>>,
+    ) -> Self {
+        self.reach = reach;
+        self.auditor = auditor;
+        self
     }
 
     /// Spawn a new sub-agent from a spec and add it to the pool.
@@ -169,8 +191,10 @@ impl AgentPool {
             .unwrap_or_else(|| self.default_provider.clone());
         let provider = providers::from_config(&provider_config)?;
 
-        // Build the tool registry
-        let all_tools = default_tools();
+        // Build the tool registry. Sub-agents get the SAME conscience reach gate
+        // (and auditor) as the orchestrator, so delegation is not an egress
+        // bypass — a spawned agent's HTTP/browser calls hit the same allowlist.
+        let all_tools = default_tools_with_reach(self.reach.clone(), self.auditor.clone());
         let tools: Vec<Box<dyn Tool>> = if spec.tools.is_empty() {
             // Give all default tools
             all_tools

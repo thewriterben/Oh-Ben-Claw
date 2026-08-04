@@ -2391,6 +2391,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             oh_ben_claw::agent::orchestrator::InnerAgentDeps {
                 safety: safety_gate.clone(),
                 auditor: action_auditor.clone(),
+                // Conscience reach gate flows to the orchestrator's inner agent
+                // AND its sub-agent pool, so orchestration/delegation can't
+                // bypass the egress allowlist the plain agent honors.
+                reach: if conscience.enabled {
+                    Some(conscience.reach.clone())
+                } else {
+                    None
+                },
                 trajectory: trajectory_store.clone(),
                 policy: Some(security_ctx.policy.clone()),
                 approval: Some(Arc::clone(&approval)),
