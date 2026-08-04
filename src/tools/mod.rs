@@ -45,8 +45,6 @@ pub fn default_tools_with_reach(
     reach: Option<obc_conscience::ReachGate>,
     auditor: Option<std::sync::Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
 ) -> Vec<Box<dyn Tool>> {
-    use builtin::browser::all_browser_tools;
-
     let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
     let cdp_url = std::env::var("OBC_BROWSER_CDP_URL").ok();
 
@@ -80,8 +78,14 @@ pub fn default_tools_with_reach(
         tools.push(Box::new(VisionTool::new(api_key)));
     }
 
-    // Browser tools share a single session; CDP URL from env or default port
-    tools.extend(all_browser_tools(cdp_url.as_deref()));
+    // Browser tools share a single session; CDP URL from env or default port.
+    // Navigation is an egress path, so it gets the same reach gate + auditor as
+    // the HTTP tool — arbitrary browsing can't reach a non-allowlisted host.
+    tools.extend(builtin::browser::all_browser_tools_with_reach(
+        cdp_url.as_deref(),
+        reach.clone(),
+        auditor.clone(),
+    ));
 
     tools
 }

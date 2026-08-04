@@ -26,6 +26,7 @@
 
 use crate::tools::{Tool, ToolResult};
 use async_trait::async_trait;
+use obc_conscience::{ReachDecision, ReachGate};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -353,11 +354,55 @@ fn url_encode(s: &str) -> String {
 /// Navigate the browser to a URL and return the page title.
 pub struct BrowserNavigateTool {
     session: Arc<BrowserSession>,
+    /// Optional conscience reach gate. When present, the destination host must be
+    /// on the egress allowlist for the `browser` tool, or navigation is refused
+    /// before the browser is pointed anywhere — arbitrary browsing is an egress
+    /// path exactly like the HTTP tool (the breach lesson applies to both).
+    reach: Option<ReachGate>,
+    /// Optional Track 0 auditor: a refused navigation writes a `conscience.reach`
+    /// denial to the tamper-evident log, same as the HTTP tool and perception.
+    auditor: Option<Arc<Mutex<crate::security::ActionAuditor>>>,
 }
 
 impl BrowserNavigateTool {
     pub fn new(session: Arc<BrowserSession>) -> Self {
-        Self { session }
+        Self {
+            session,
+            reach: None,
+            auditor: None,
+        }
+    }
+
+    /// Attach a conscience reach gate. Every destination host must then be
+    /// allowlisted for the `browser` tool, or navigation is refused.
+    pub fn with_reach_gate(mut self, gate: ReachGate) -> Self {
+        self.reach = Some(gate);
+        self
+    }
+
+    /// Attach a Track 0 auditor so refused navigations become tamper-evident records.
+    pub fn with_auditor(
+        mut self,
+        auditor: Arc<Mutex<crate::security::ActionAuditor>>,
+    ) -> Self {
+        self.auditor = Some(auditor);
+        self
+    }
+
+    /// Egress check for a URL. `Ok(())` if allowed (or no gate); `Err(reason)`
+    /// if the reach gate refuses. Mirrors `HttpTool::check_reach` (tool `browser`).
+    fn check_reach(&self, url: &str) -> Result<(), String> {
+        let Some(gate) = &self.reach else {
+            return Ok(());
+        };
+        let host = reqwest::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_string()))
+            .unwrap_or_default();
+        match gate.check("browser", &host) {
+            ReachDecision::Allow { .. } => Ok(()),
+            ReachDecision::Refuse(reason) => Err(reason.to_string()),
+        }
     }
 }
 
@@ -407,6 +452,26 @@ impl Tool for BrowserNavigateTool {
             return Ok(ToolResult::err(format!(
                 "URL must start with http:// or https://, got: {url}"
             )));
+        }
+
+        // Conscience reach gate: the destination host must be on the egress
+        // allowlist BEFORE the browser is pointed anywhere. Logged, not silent —
+        // navigation is an egress path exactly like the HTTP tool.
+        if let Err(reason) = self.check_reach(&url) {
+            tracing::warn!(url = %url, refusal = %reason, "conscience: browser egress refused");
+            if let Some(auditor) = &self.auditor {
+                let host = reqwest::Url::parse(&url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(|h| h.to_string()))
+                    .unwrap_or_default();
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let mut g = auditor.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = g.record_conscience_refusal(ts, "conscience.reach", &host, &reason);
+            }
+            return Ok(ToolResult::err(format!("conscience: {reason}")));
         }
 
         let wait_ms = args
@@ -905,14 +970,35 @@ impl Tool for BrowserCloseTabTool {
 /// assert_eq!(tools.len(), 7);
 /// ```
 pub fn all_browser_tools(cdp_url: Option<&str>) -> Vec<Box<dyn Tool>> {
+    all_browser_tools_with_reach(cdp_url, None, None)
+}
+
+/// Like [`all_browser_tools`], but gates the navigate tool's destination host
+/// through a conscience reach gate (tool name `browser`) and audits refusals.
+/// Navigation is an egress path exactly like the HTTP tool, so it gets the same
+/// deterministic allowlist the model cannot override. `None, None` reproduces
+/// [`all_browser_tools`] exactly.
+pub fn all_browser_tools_with_reach(
+    cdp_url: Option<&str>,
+    reach: Option<ReachGate>,
+    auditor: Option<Arc<Mutex<crate::security::ActionAuditor>>>,
+) -> Vec<Box<dyn Tool>> {
     let session = Arc::new(if let Some(url) = cdp_url {
         BrowserSession::with_cdp_url(url)
     } else {
         BrowserSession::new()
     });
 
+    let mut navigate = BrowserNavigateTool::new(session.clone());
+    if let Some(g) = reach {
+        navigate = navigate.with_reach_gate(g);
+    }
+    if let Some(a) = auditor {
+        navigate = navigate.with_auditor(a);
+    }
+
     vec![
-        Box::new(BrowserNavigateTool::new(session.clone())),
+        Box::new(navigate),
         Box::new(BrowserSnapshotTool::new(session.clone())),
         Box::new(BrowserClickTool::new(session.clone())),
         Box::new(BrowserTypeTool::new(session.clone())),
