@@ -223,12 +223,49 @@ pub struct McpContent {
 // ── MCP Remote Tool ───────────────────────────────────────────────────────────
 
 /// A `Tool` implementation that proxies calls to a remote MCP server.
+///
+/// Every call forwards its arguments to a server outside the trust boundary, so
+/// this is an egress path in exactly the sense the `http` and `browser` tools
+/// are. When a conscience [`obc_conscience::ReachGate`] is attached the
+/// destination server must be allowlisted for the `mcp` tool or the call is
+/// refused before any argument leaves — the same containment rule (the breach
+/// lesson: don't rely on the model's own refusals), applied to the MCP-client
+/// surface.
 pub struct McpRemoteTool {
     pub name: String,
     pub description: String,
     pub schema: Value,
+    /// Logical name of the server this tool lives on — the reach host key.
+    pub server: String,
     /// Shared MCP client connection.
     pub client: Arc<Mutex<client::McpClient>>,
+    /// Optional conscience reach gate. `None` = ungated (until config wires one).
+    pub reach: Option<obc_conscience::ReachGate>,
+    /// Optional Track 0 auditor so a reach refusal becomes a tamper-evident record.
+    pub auditor: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
+}
+
+impl McpRemoteTool {
+    /// Core egress decision, independent of a live client so it is unit-testable.
+    /// Keyed on the server name so an operator's allowlist is transport-agnostic
+    /// (a stdio subprocess and an HTTP endpoint are gated the same way).
+    /// `Ok(())` = allowed (or no gate); `Err(reason)` = the gate refuses.
+    fn reach_decision(
+        reach: Option<&obc_conscience::ReachGate>,
+        server: &str,
+    ) -> Result<(), String> {
+        let Some(gate) = reach else {
+            return Ok(());
+        };
+        match gate.check("mcp", server) {
+            obc_conscience::ReachDecision::Allow { .. } => Ok(()),
+            obc_conscience::ReachDecision::Refuse(reason) => Err(reason.to_string()),
+        }
+    }
+
+    fn check_reach(&self) -> Result<(), String> {
+        Self::reach_decision(self.reach.as_ref(), &self.server)
+    }
 }
 
 #[async_trait]
@@ -252,6 +289,21 @@ impl Tool for McpRemoteTool {
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
+        // Conscience reach gate (Track 0 for egress): refuse a server that is not
+        // allowlisted BEFORE any argument is forwarded. Logged, not silent.
+        if let Err(reason) = self.check_reach() {
+            tracing::warn!(server = %self.server, tool = %self.name, refusal = %reason,
+                "conscience: mcp egress refused");
+            if let Some(auditor) = &self.auditor {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let mut g = auditor.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = g.record_conscience_refusal(ts, "conscience.reach", &self.server, &reason);
+            }
+            return Ok(ToolResult::err(format!("conscience: {reason}")));
+        }
         let mut client = self.client.lock().await;
         match client.call_tool(&self.name, args).await {
             Ok(result) => Ok(ToolResult::ok(result)),
@@ -296,8 +348,24 @@ impl McpRegistry {
         Ok(count)
     }
 
-    /// Build `Box<dyn Tool>` instances for all registered MCP tools.
+    /// Build `Box<dyn Tool>` instances for all registered MCP tools, ungated.
     pub fn build_tools(&self) -> Vec<Box<dyn Tool>> {
+        self.build_tools_with_reach(None, None)
+    }
+
+    /// Build tool instances with an optional conscience reach gate attached.
+    ///
+    /// Every MCP remote tool is an egress path (it forwards arguments to a
+    /// server outside the trust boundary), so when a gate is supplied each tool
+    /// is constructed already carrying it — gated by construction, the same
+    /// discipline as `default_tools_with_reach`. The reach host is the server
+    /// name, so an allowlist reads `{ host: "clawcam", ... }` regardless of
+    /// whether that server is a stdio subprocess or an HTTP endpoint.
+    pub fn build_tools_with_reach(
+        &self,
+        reach: Option<obc_conscience::ReachGate>,
+        auditor: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
+    ) -> Vec<Box<dyn Tool>> {
         self.tools
             .iter()
             .filter_map(|(tool_name, (server_name, tool_def))| {
@@ -306,7 +374,10 @@ impl McpRegistry {
                         name: tool_name.clone(),
                         description: tool_def.description.clone(),
                         schema: tool_def.input_schema.clone(),
+                        server: server_name.clone(),
                         client: client.clone(),
+                        reach: reach.clone(),
+                        auditor: auditor.clone(),
                     }) as Box<dyn Tool>
                 })
             })
@@ -396,5 +467,41 @@ mod tests {
         let registry = McpRegistry::new();
         assert!(registry.list_tools().is_empty());
         assert!(registry.build_tools().is_empty());
+    }
+
+    // -- conscience reach gate on the MCP-client egress surface --
+
+    fn egress_gate() -> obc_conscience::ReachGate {
+        use obc_conscience::{HostRule, ReachScope, ToolReach};
+        obc_conscience::ReachGate::new(
+            vec![HostRule {
+                host: "clawcam".into(),
+                purpose: "perception".into(),
+                credential: None,
+            }],
+            vec![ToolReach {
+                tool: "mcp".into(),
+                scope: ReachScope::Egress,
+            }],
+        )
+    }
+
+    #[test]
+    fn mcp_reach_allows_allowlisted_server() {
+        // The server an operator listed can be reached.
+        assert!(McpRemoteTool::reach_decision(Some(&egress_gate()), "clawcam").is_ok());
+    }
+
+    #[test]
+    fn mcp_reach_refuses_unlisted_server() {
+        // A server that is not on the allowlist is refused before any argument
+        // leaves — default-deny, the same as http/browser egress.
+        assert!(McpRemoteTool::reach_decision(Some(&egress_gate()), "exfil-corp").is_err());
+    }
+
+    #[test]
+    fn mcp_no_gate_allows_any_server() {
+        // No gate configured → no egress restriction (until config wires one).
+        assert!(McpRemoteTool::reach_decision(None, "anything").is_ok());
     }
 }
