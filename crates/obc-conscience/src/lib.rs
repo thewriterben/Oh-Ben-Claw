@@ -25,15 +25,19 @@
 //! that isn't audited is just a promise.
 //!
 //! ## Honest limits (see spec §4/§6)
-//! The perception classifier is a heuristic (this crate gates on its *output*;
-//! it does not classify). It cannot stop an operator with physical control from
+//! The perception classifier ([`classifier`]) is a heuristic label→class map,
+//! fail-closed on any label it doesn't recognize; it is not a proof and a
+//! determined adversary or an unlucky angle can still produce a wrong call. It
+//! cannot stop an operator with physical control from
 //! surveilling — it makes that act explicit, effortful, and logged, not
 //! impossible. Semantic consent ("this person agreed, that guest didn't") is
 //! not expressible by class. These are labeled, not hidden.
 
+pub mod classifier;
 pub mod consent;
 pub mod reach;
 
+pub use classifier::{Classification, ClassifierConfig, SubjectClassifier};
 pub use consent::{
     ConsentRule, PerceptionDecision, PerceptionGate, PerceptionRefusal, Transmit,
 };
@@ -68,6 +72,10 @@ pub struct ConscienceConfig {
     /// Classifier-confidence threshold for the perception gate.
     #[serde(default = "default_threshold")]
     pub confidence_threshold: f32,
+    /// Perception classifier: maps raw detector labels onto broad consent
+    /// classes, failing closed on any label it does not recognize.
+    #[serde(default)]
+    pub classifier: ClassifierConfig,
 }
 
 fn default_threshold() -> f32 {
@@ -82,6 +90,7 @@ impl Default for ConscienceConfig {
             hosts: Vec::new(),
             tools: Vec::new(),
             confidence_threshold: DEFAULT_CONFIDENCE_THRESHOLD,
+            classifier: ClassifierConfig::default(),
         }
     }
 }
@@ -92,6 +101,7 @@ pub struct Conscience {
     pub enabled: bool,
     pub perception: PerceptionGate,
     pub reach: ReachGate,
+    pub classifier: SubjectClassifier,
 }
 
 impl Conscience {
@@ -101,6 +111,7 @@ impl Conscience {
             enabled: config.enabled,
             perception: PerceptionGate::new(config.subjects.clone(), config.confidence_threshold),
             reach: ReachGate::new(config.hosts.clone(), config.tools.clone()),
+            classifier: SubjectClassifier::from_config(&config.classifier),
         }
     }
 
@@ -112,6 +123,25 @@ impl Conscience {
             return PerceptionDecision::Allow { retain_days: 0, transmit: Transmit::None };
         }
         self.perception.check(class, confidence)
+    }
+
+    /// May a detected subject be perceived, given the detector's RAW label?
+    /// Classifies the label into a consent class first, fail-closed: a label the
+    /// classifier does not recognize is refused outright (never mapped onto a
+    /// permitted class, even on a permissive body). This is the entry point the
+    /// perception ingest boundary should use — the gap the spec §6 named as the
+    /// classifier being unbuilt is now closed here.
+    pub fn may_perceive_label(&self, label: &str, confidence: f32) -> PerceptionDecision {
+        if !self.enabled {
+            return PerceptionDecision::Allow { retain_days: 0, transmit: Transmit::None };
+        }
+        let c = self.classifier.classify(label);
+        if !c.recognized {
+            return PerceptionDecision::Refuse(PerceptionRefusal::Unrecognized {
+                label: label.to_string(),
+            });
+        }
+        self.perception.check(&c.class, confidence)
     }
 
     /// May `tool` reach `host`?
@@ -146,6 +176,7 @@ mod tests {
                                    credential: Some("brain-key".into()) }],
             tools: vec![ToolReach { tool: "brain".into(), scope: ReachScope::Egress }],
             confidence_threshold: 0.6,
+            classifier: Default::default(),
         };
         let c = Conscience::new(&cfg);
         assert!(c.may_perceive("wildlife", 0.9).is_allowed());

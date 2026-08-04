@@ -170,12 +170,13 @@ pub struct ConscienceFilter {
 /// low-confidence label that might be a person — is dropped here: never stored,
 /// never seen by the model, so it can neither be kept nor inject the reasoner.
 ///
-/// Keyed on the classifier's own subject label (`detection_subject`), so the
-/// operator declares the labels their classifier emits (e.g. allow `"animal"`,
-/// deny `"person"`). A detection with no confidence value fails closed.
-/// Refusals are logged (first-class) and returned for the audit log. Mapping a
-/// species taxonomy onto broader consent classes is future work (see
-/// CONSCIENCE.md §6).
+/// The detector's raw label (`detection_subject`) is classified onto a broad
+/// consent class (e.g. `"human"` / `"wildlife"`) by the conscience classifier,
+/// then gated on that class — so the operator declares consent on a few classes,
+/// not the whole detector vocabulary, and any label the classifier does not
+/// recognize is refused outright (fail closed). A detection with no confidence
+/// value also fails closed. Refusals are logged (first-class) and returned for
+/// the audit log.
 pub fn conscience_filter(detections: &[ClawCamDetection], conscience: &Conscience) -> ConscienceFilter {
     let mut kept = Vec::new();
     let mut refused = Vec::new();
@@ -183,7 +184,9 @@ pub fn conscience_filter(detections: &[ClawCamDetection], conscience: &Conscienc
         let subject = detection_subject(d);
         // No confidence on the detection → 0.0 → the gate fails closed.
         let confidence = d.top_confidence.unwrap_or(0.0) as f32;
-        match conscience.may_perceive(&subject, confidence) {
+        // Classify the raw label onto a consent class first (fail-closed: a label
+        // the classifier doesn't recognize is refused outright), then gate on it.
+        match conscience.may_perceive_label(&subject, confidence) {
             PerceptionDecision::Allow { .. } => kept.push(d.clone()),
             PerceptionDecision::Refuse(reason) => {
                 tracing::warn!(subject = %subject, refusal = %reason,
@@ -1032,10 +1035,11 @@ mod tests {
         use obc_conscience::{ConscienceConfig, ConsentRule, Transmit};
         Conscience::new(&ConscienceConfig {
             enabled: true,
+            // Consent is declared on broad CLASSES now; the classifier maps
+            // "deer"→"wildlife" and "person"→"human" before the gate is checked.
             subjects: vec![
-                ConsentRule::allow("deer", 30, Transmit::WeightsOnly),
-                ConsentRule::allow("animal", 30, Transmit::WeightsOnly),
-                ConsentRule::deny("person"),
+                ConsentRule::allow("wildlife", 30, Transmit::WeightsOnly),
+                ConsentRule::deny("human"),
             ],
             confidence_threshold: 0.6,
             ..Default::default()
@@ -1064,6 +1068,17 @@ mod tests {
         let out = conscience_filter(&dets, &c);
         assert!(out.kept.is_empty());
         assert!(matches!(out.refused[0].1, PerceptionRefusal::LowConfidence { .. }));
+    }
+
+    #[test]
+    fn conscience_filter_fails_closed_on_unrecognized_label() {
+        let c = wildlife_conscience();
+        // a label the classifier doesn't know (not human, not wildlife) is
+        // refused outright — never mapped onto a permitted class.
+        let dets = vec![det("e", Some("drone"), 0.99, "unreviewed", None)];
+        let out = conscience_filter(&dets, &c);
+        assert!(out.kept.is_empty());
+        assert!(matches!(out.refused[0].1, PerceptionRefusal::Unrecognized { .. }));
     }
 
     #[test]

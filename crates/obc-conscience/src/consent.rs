@@ -68,6 +68,9 @@ pub enum PerceptionRefusal {
     CaptureDenied { class: String },
     /// Classifier confidence below threshold — fail closed, treat as restricted.
     LowConfidence { class: String, confidence: f32, threshold: f32 },
+    /// The classifier did not recognize the detector's label at all — fail
+    /// closed and refuse outright, never mapping it onto a permitted class.
+    Unrecognized { label: String },
 }
 
 impl std::fmt::Display for PerceptionRefusal {
@@ -82,6 +85,10 @@ impl std::fmt::Display for PerceptionRefusal {
             PerceptionRefusal::LowConfidence { class, confidence, threshold } => write!(
                 f,
                 "conscience: classifier unsure ('{class}' at {confidence:.2} < {threshold:.2}) — fail closed"
+            ),
+            PerceptionRefusal::Unrecognized { label } => write!(
+                f,
+                "conscience: unrecognized subject label '{label}' — fail closed (refused)"
             ),
         }
     }
