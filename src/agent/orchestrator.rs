@@ -47,6 +47,10 @@ pub struct InnerAgentDeps {
     /// agent and every sub-agent the pool spawns, so orchestration is not an
     /// egress bypass of the allowlist the plain agent honors.
     pub reach: Option<obc_conscience::ReachGate>,
+    /// Conscience credential resolver (item (b)). Applied to the inner agent and
+    /// every spawned sub-agent so a reach-named credential is injected at their
+    /// egress boundary too — same as the plain agent.
+    pub resolver: Option<Arc<dyn crate::tools::credentials::CredentialResolver>>,
     /// Phase 16 trajectory capture.
     pub trajectory: Option<Arc<crate::memory::trajectory::TrajectoryStore>>,
     /// Tool security policy engine.
@@ -211,14 +215,14 @@ impl OrchestratorAgent {
         // The pool carries the conscience reach gate so every sub-agent it spawns
         // is gated too — delegation is not an egress bypass.
         let pool = AgentPool::new(provider_config.clone(), Arc::clone(&memory))
-            .with_reach_gate(deps.reach.clone(), deps.auditor.clone());
+            .with_reach_gate(deps.reach.clone(), deps.auditor.clone(), deps.resolver.clone());
         let session_arc = Arc::new(Mutex::new(session_id));
 
         // Build the orchestrator's inner tool registry: default tools (egress
-        // reach-gated + audited when conscience is on) + delegation tools.
-        // Credential injection (item (b)) is not yet threaded to the inner agent;
-        // it stays gated + fail-closed on named credentials (safe), so `None`.
-        let mut tools = default_tools_with_reach(deps.reach.clone(), deps.auditor.clone(), None);
+        // reach-gated + audited + credential-injecting when conscience is on) +
+        // delegation tools — the inner agent has the plain agent's full posture.
+        let mut tools =
+            default_tools_with_reach(deps.reach.clone(), deps.auditor.clone(), deps.resolver.clone());
         tools.extend(delegation_tools(pool.clone(), Arc::clone(&session_arc)));
 
         // Extend the system prompt with orchestrator instructions

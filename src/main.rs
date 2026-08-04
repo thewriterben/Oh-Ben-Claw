@@ -372,7 +372,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         oh_ben_claw::tools::default_tools_with_reach(
             Some(conscience.reach.clone()),
             action_auditor.clone(),
-            credential_resolver,
+            credential_resolver.clone(),
         )
     } else {
         default_tools()
@@ -2434,6 +2434,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 } else {
                     None
                 },
+                // Credential resolver (item (b)) flows to the inner agent and the
+                // sub-agent pool too, so injection covers delegated egress paths.
+                resolver: credential_resolver.clone(),
                 trajectory: trajectory_store.clone(),
                 policy: Some(security_ctx.policy.clone()),
                 approval: Some(Arc::clone(&approval)),

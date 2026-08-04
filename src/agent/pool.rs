@@ -139,6 +139,9 @@ pub struct AgentPool {
     reach: Option<ReachGate>,
     /// Track 0 auditor, so a sub-agent's reach refusal is a tamper-evident record.
     auditor: Option<Arc<Mutex<crate::security::ActionAuditor>>>,
+    /// Conscience credential resolver (item (b)), so a spawned sub-agent injects
+    /// a reach-named credential at its egress boundary too.
+    resolver: Option<Arc<dyn crate::tools::credentials::CredentialResolver>>,
 }
 
 impl AgentPool {
@@ -150,20 +153,23 @@ impl AgentPool {
             memory,
             reach: None,
             auditor: None,
+            resolver: None,
         }
     }
 
-    /// Attach a conscience reach gate (and optional auditor) applied to every
-    /// sub-agent this pool spawns — closing the delegation bypass where a
-    /// sub-agent would otherwise receive ungated egress tools. Returns self so
-    /// it chains onto `AgentPool::new(...)`.
+    /// Attach a conscience reach gate (and optional auditor + credential
+    /// resolver) applied to every sub-agent this pool spawns — closing the
+    /// delegation bypass where a sub-agent would otherwise receive ungated egress
+    /// tools. Returns self so it chains onto `AgentPool::new(...)`.
     pub fn with_reach_gate(
         mut self,
         reach: Option<ReachGate>,
         auditor: Option<Arc<Mutex<crate::security::ActionAuditor>>>,
+        resolver: Option<Arc<dyn crate::tools::credentials::CredentialResolver>>,
     ) -> Self {
         self.reach = reach;
         self.auditor = auditor;
+        self.resolver = resolver;
         self
     }
 
@@ -194,9 +200,11 @@ impl AgentPool {
         // Build the tool registry. Sub-agents get the SAME conscience reach gate
         // (and auditor) as the orchestrator, so delegation is not an egress
         // bypass — a spawned agent's HTTP/browser calls hit the same allowlist.
-        // Credential injection (item (b)) is not yet threaded to spawned agents;
-        // they stay gated + fail-closed on named credentials (safe), so `None`.
-        let all_tools = default_tools_with_reach(self.reach.clone(), self.auditor.clone(), None);
+        // Sub-agents get the SAME credential resolver (item (b)) as the
+        // orchestrator, so a reach-named credential is injected at their egress
+        // boundary too — delegation is not an injection bypass either.
+        let all_tools =
+            default_tools_with_reach(self.reach.clone(), self.auditor.clone(), self.resolver.clone());
         let tools: Vec<Box<dyn Tool>> = if spec.tools.is_empty() {
             // Give all default tools
             all_tools
