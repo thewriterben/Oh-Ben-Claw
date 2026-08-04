@@ -139,6 +139,21 @@ enum Commands {
         frames: String,
     },
 
+    /// Replay a conscience decision log against the current policy — after-the-
+    /// fact review. Each recorded perception/reach decision is re-evaluated; a
+    /// verdict that no longer reproduces is flagged as policy *drift* (the config
+    /// changed) or, if the record claims the same policy, as a determinism *bug*.
+    /// Exits non-zero only on the latter, so it is safe in CI.
+    ///
+    /// The log is a JSON array of records: {ts, input, verdict, config_fingerprint?}
+    /// where input is {kind:"perception", label, confidence} or
+    /// {kind:"reach", tool, host}.
+    ReplayDecisions {
+        /// Path to a JSON array of decision records.
+        #[arg(long)]
+        log: String,
+    },
+
     /// Run system diagnostics to check configuration and connectivity.
     Doctor,
 }
@@ -275,6 +290,9 @@ async fn main() -> Result<()> {
         }
         Commands::EvalDetector { frames } => {
             run_eval_detector(&config, &frames)?;
+        }
+        Commands::ReplayDecisions { log } => {
+            run_replay_decisions(&config, &log)?;
         }
         Commands::Doctor => {
             oh_ben_claw::doctor::run(&config)?;
@@ -3234,6 +3252,29 @@ fn run_eval_detector(config: &Config, frames_path: &str) -> Result<()> {
     let classifier = obc_conscience::SubjectClassifier::from_config(&config.conscience.classifier);
     let report = obc_conscience::measure_false_negatives(&frames, &classifier);
     print!("{report}");
+    Ok(())
+}
+
+/// Replay a conscience decision log against the current policy and print the
+/// report. Exits non-zero only on an *unexplained* mismatch (same policy
+/// fingerprint, different verdict — a determinism bug); policy drift is
+/// informational and does not fail. See `obc_conscience::replay`.
+fn run_replay_decisions(config: &Config, log_path: &str) -> Result<()> {
+    let raw = std::fs::read_to_string(log_path)
+        .with_context(|| format!("reading decision log from {log_path}"))?;
+    let records: Vec<obc_conscience::DecisionRecord> = serde_json::from_str(&raw)
+        .context("parsing decision log JSON (expected an array of decision records)")?;
+    if records.is_empty() {
+        bail!("no decision records in {log_path} — nothing to replay");
+    }
+    let conscience = obc_conscience::Conscience::new(&config.conscience);
+    let report = obc_conscience::replay_decisions(&records, &conscience, &config.conscience);
+    print!("{report}");
+    // A same-config verdict flip is a real defect; fail so CI notices. Policy
+    // drift is expected review output, not an error.
+    if report.undrifted_mismatches() > 0 {
+        std::process::exit(1);
+    }
     Ok(())
 }
 

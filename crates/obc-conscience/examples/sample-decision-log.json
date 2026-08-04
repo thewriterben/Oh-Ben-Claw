@@ -1,0 +1,7 @@
+[
+  {"ts": 1717200000, "input": {"kind": "perception", "label": "deer", "confidence": 0.92}, "verdict": {"allowed": true}, "config_fingerprint": "cfg-recorded-in-june"},
+  {"ts": 1717200500, "input": {"kind": "perception", "label": "person", "confidence": 0.88}, "verdict": {"allowed": false, "reason": "conscience: perception of 'human' denied (no rule permits it)"}, "config_fingerprint": "cfg-recorded-in-june"},
+  {"ts": 1717201000, "input": {"kind": "perception", "label": "drone", "confidence": 0.95}, "verdict": {"allowed": false, "reason": "conscience: unrecognized label 'drone'"}, "config_fingerprint": "cfg-recorded-in-june"},
+  {"ts": 1717201500, "input": {"kind": "reach", "tool": "http", "host": "api.anthropic.com"}, "verdict": {"allowed": true}, "config_fingerprint": "cfg-recorded-in-june"},
+  {"ts": 1717202000, "input": {"kind": "reach", "tool": "http", "host": "evil.example.com"}, "verdict": {"allowed": false, "reason": "conscience: egress to 'evil.example.com' denied (not allowlisted)"}, "config_fingerprint": "cfg-recorded-in-june"}
+]

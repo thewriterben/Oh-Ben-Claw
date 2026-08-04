@@ -37,6 +37,7 @@ pub mod classifier;
 pub mod consent;
 pub mod detector_eval;
 pub mod reach;
+pub mod replay;
 
 pub use classifier::{Classification, ClassifierConfig, SubjectClassifier};
 pub use consent::{
@@ -44,6 +45,10 @@ pub use consent::{
 };
 pub use detector_eval::{measure as measure_false_negatives, ClassStats, EvalFrame, FnReport};
 pub use reach::{HostRule, ReachDecision, ReachGate, ReachRefusal, ReachScope, ToolReach};
+pub use replay::{
+    fingerprint as config_fingerprint, replay as replay_decisions, DecisionInput, DecisionRecord,
+    Mismatch, ReplayReport, Verdict,
+};
 
 use serde::{Deserialize, Serialize};
 
