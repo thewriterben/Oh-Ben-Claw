@@ -253,7 +253,7 @@ async fn main() -> Result<()> {
             port,
             mode,
         } => {
-            run_mcp_serve(&transport, port, &mode).await?;
+            run_mcp_serve(&config, &transport, port, &mode).await?;
         }
         Commands::JudgeCalibrate { gold, threshold } => {
             run_judge_calibrate(gold.as_deref(), threshold).await?;
@@ -3164,16 +3164,26 @@ async fn run_peripheral(mut config: Config, cmd: PeripheralCommands) -> Result<(
 /// `oh-ben-claw mcp-serve` — run the MCP server standalone with the default
 /// tool set. The http transport is what the official conformance suite tests
 /// (`npx @modelcontextprotocol/conformance server --url http://…/mcp`).
-async fn run_mcp_serve(transport: &str, port: u16, mode: &str) -> Result<()> {
+async fn run_mcp_serve(config: &Config, transport: &str, port: u16, mode: &str) -> Result<()> {
     use oh_ben_claw::mcp::{server::McpServer, ProtocolMode};
-    use oh_ben_claw::tools::default_tools;
+    use oh_ben_claw::tools::{default_tools, default_tools_with_reach};
 
     let mode = match mode {
         "stateless-2026" => ProtocolMode::Stateless2026,
         "legacy-2024" => ProtocolMode::Legacy2024,
         other => anyhow::bail!("unknown protocol mode '{other}' (legacy-2024 | stateless-2026)"),
     };
-    let server = McpServer::with_mode(default_tools(), mode);
+    // Tools exposed over MCP are an egress surface too — an external client could
+    // drive the HTTP/browser tools through this server. Gate them with the
+    // conscience reach allowlist when enabled. (No auditor in this standalone
+    // path; the gate still refuses, it just isn't logged here.)
+    let conscience = obc_conscience::Conscience::new(&config.conscience);
+    let tools = if conscience.enabled {
+        default_tools_with_reach(Some(conscience.reach.clone()), None)
+    } else {
+        default_tools()
+    };
+    let server = McpServer::with_mode(tools, mode);
 
     match transport {
         "stdio" => {
