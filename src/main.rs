@@ -24,7 +24,7 @@
 //! oh-ben-claw history clear
 //! ```
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use tracing::info;
@@ -122,6 +122,21 @@ enum Commands {
         /// Accept/reject binarization threshold for the judge's 0–1 score.
         #[arg(long, default_value = "0.5")]
         threshold: f32,
+    },
+
+    /// Measure the perception detector's false-negative (miss) rate against a
+    /// human-labeled evaluation set — the residual risk the conscience gate
+    /// cannot cover, because it can only gate labels the detector emits.
+    ///
+    /// The frames file is a JSON array of {frame_id?, truth: [labels],
+    /// detected: [labels]}: what a human says was present, and what the detector
+    /// reported. Both are classified onto consent classes (using
+    /// `[conscience.classifier]` from config), so the safety-critical number is
+    /// the `human` miss rate, reported with a 95% upper confidence bound.
+    EvalDetector {
+        /// Path to a JSON array of evaluation frames.
+        #[arg(long)]
+        frames: String,
     },
 
     /// Run system diagnostics to check configuration and connectivity.
@@ -257,6 +272,9 @@ async fn main() -> Result<()> {
         }
         Commands::JudgeCalibrate { gold, threshold } => {
             run_judge_calibrate(gold.as_deref(), threshold).await?;
+        }
+        Commands::EvalDetector { frames } => {
+            run_eval_detector(&config, &frames)?;
         }
         Commands::Doctor => {
             oh_ben_claw::doctor::run(&config)?;
@@ -3196,6 +3214,26 @@ async fn run_peripheral(mut config: Config, cmd: PeripheralCommands) -> Result<(
             }
         }
     }
+    Ok(())
+}
+
+/// Measure the perception detector's false-negative rate against a labeled eval
+/// set and print the report. This is the residual risk the conscience gate can't
+/// cover — it can only gate labels the detector emits, so a person the detector
+/// misses entirely is never seen by the gate. See `obc_conscience::detector_eval`.
+fn run_eval_detector(config: &Config, frames_path: &str) -> Result<()> {
+    let raw = std::fs::read_to_string(frames_path)
+        .with_context(|| format!("reading eval frames from {frames_path}"))?;
+    let frames: Vec<obc_conscience::EvalFrame> = serde_json::from_str(&raw)
+        .context("parsing eval frames JSON (expected an array of {truth, detected})")?;
+    if frames.is_empty() {
+        bail!("no evaluation frames in {frames_path} — nothing to measure");
+    }
+    // Classify with the deployment's own vocabulary so the measurement matches
+    // what the live gate would do with these labels.
+    let classifier = obc_conscience::SubjectClassifier::from_config(&config.conscience.classifier);
+    let report = obc_conscience::measure_false_negatives(&frames, &classifier);
+    print!("{report}");
     Ok(())
 }
 

@@ -35,12 +35,14 @@
 
 pub mod classifier;
 pub mod consent;
+pub mod detector_eval;
 pub mod reach;
 
 pub use classifier::{Classification, ClassifierConfig, SubjectClassifier};
 pub use consent::{
     ConsentRule, PerceptionDecision, PerceptionGate, PerceptionRefusal, Transmit,
 };
+pub use detector_eval::{measure as measure_false_negatives, ClassStats, EvalFrame, FnReport};
 pub use reach::{HostRule, ReachDecision, ReachGate, ReachRefusal, ReachScope, ToolReach};
 
 use serde::{Deserialize, Serialize};
