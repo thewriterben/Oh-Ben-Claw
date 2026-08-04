@@ -348,6 +348,68 @@ impl McpRegistry {
         Ok(count)
     }
 
+    /// Connect to an MCP server, enforcing the conscience egress rules at the
+    /// connection boundary — reach (item (a)) and credential injection (item (b)).
+    ///
+    /// Before opening the connection: if `reach` refuses the server (not
+    /// allowlisted for the `mcp` tool) no connection is made; if the allow names
+    /// a credential, it is resolved by name through `resolver` and bound to the
+    /// connection — the HTTP bearer token for an `http` server, or an environment
+    /// variable of that name for a `stdio` subprocess — so the secret reaches the
+    /// server without passing through the model. A named-but-unresolvable
+    /// credential **fails closed**: the connection is refused, not opened
+    /// unauthenticated. With `reach == None` this is exactly [`Self::connect`].
+    pub async fn connect_with_conscience(
+        &mut self,
+        name: &str,
+        config: &McpServerConfig,
+        reach: Option<&obc_conscience::ReachGate>,
+        resolver: Option<&dyn crate::tools::credentials::CredentialResolver>,
+    ) -> Result<usize> {
+        let effective = match reach {
+            Some(gate) => Self::apply_conscience_to_config(name, config, gate, resolver)?,
+            None => config.clone(),
+        };
+        self.connect(name, &effective).await
+    }
+
+    /// Compute the effective connection config with a reach-named credential
+    /// bound, or an error if the server is refused / the credential is required
+    /// but unresolvable. Pure (no I/O), so the decision is unit-testable without
+    /// a live server.
+    fn apply_conscience_to_config(
+        name: &str,
+        config: &McpServerConfig,
+        reach: &obc_conscience::ReachGate,
+        resolver: Option<&dyn crate::tools::credentials::CredentialResolver>,
+    ) -> Result<McpServerConfig> {
+        let credential = match reach.check("mcp", name) {
+            obc_conscience::ReachDecision::Allow { credential } => credential,
+            obc_conscience::ReachDecision::Refuse(reason) => anyhow::bail!("conscience: {reason}"),
+        };
+        let Some(cred_name) = credential else {
+            return Ok(config.clone()); // allowed, no credential required
+        };
+        let secret = resolver.and_then(|r| r.resolve(&cred_name)).ok_or_else(|| {
+            anyhow::anyhow!(
+                "conscience: MCP server '{name}' requires credential '{cred_name}' but it \
+                 could not be resolved (not in the vault or environment)"
+            )
+        })?;
+        let mut effective = config.clone();
+        match effective.transport.as_str() {
+            "http" => effective.token = Some(secret),
+            "stdio" => {
+                effective
+                    .env
+                    .get_or_insert_with(Default::default)
+                    .insert(cred_name, secret);
+            }
+            _ => {}
+        }
+        Ok(effective)
+    }
+
     /// Build `Box<dyn Tool>` instances for all registered MCP tools, ungated.
     pub fn build_tools(&self) -> Vec<Box<dyn Tool>> {
         self.build_tools_with_reach(None, None)
@@ -503,5 +565,115 @@ mod tests {
     fn mcp_no_gate_allows_any_server() {
         // No gate configured → no egress restriction (until config wires one).
         assert!(McpRemoteTool::reach_decision(None, "anything").is_ok());
+    }
+
+    // -- connection-level credential injection (item (b)) --
+
+    /// Allows "github" for the mcp tool AND names a credential to bind.
+    fn egress_gate_with_cred() -> obc_conscience::ReachGate {
+        use obc_conscience::{HostRule, ReachScope, ToolReach};
+        obc_conscience::ReachGate::new(
+            vec![HostRule {
+                host: "github".into(),
+                purpose: "code".into(),
+                credential: Some("gh-token".into()),
+            }],
+            vec![ToolReach {
+                tool: "mcp".into(),
+                scope: ReachScope::Egress,
+            }],
+        )
+    }
+
+    struct OneKey(&'static str, &'static str);
+    impl crate::tools::credentials::CredentialResolver for OneKey {
+        fn resolve(&self, name: &str) -> Option<String> {
+            (name == self.0).then(|| self.1.to_string())
+        }
+    }
+
+    fn http_cfg() -> McpServerConfig {
+        McpServerConfig {
+            transport: "http".into(),
+            command: None,
+            args: None,
+            url: Some("https://mcp.github.example".into()),
+            token: None,
+            env: None,
+            protocol_mode: None,
+        }
+    }
+
+    fn stdio_cfg() -> McpServerConfig {
+        McpServerConfig {
+            transport: "stdio".into(),
+            command: Some("mcp-github".into()),
+            args: None,
+            url: None,
+            token: None,
+            env: None,
+            protocol_mode: None,
+        }
+    }
+
+    #[test]
+    fn conscience_config_refuses_unlisted_server() {
+        // "evil" isn't allowlisted → refuse before any connection.
+        let r = McpRegistry::apply_conscience_to_config(
+            "evil",
+            &http_cfg(),
+            &egress_gate_with_cred(),
+            Some(&OneKey("gh-token", "ghp_secret")),
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn conscience_config_binds_bearer_for_http() {
+        // Allowed + credential resolvable → bound as the HTTP bearer token.
+        let cfg = McpRegistry::apply_conscience_to_config(
+            "github",
+            &http_cfg(),
+            &egress_gate_with_cred(),
+            Some(&OneKey("gh-token", "ghp_secret")),
+        )
+        .unwrap();
+        assert_eq!(cfg.token.as_deref(), Some("ghp_secret"));
+    }
+
+    #[test]
+    fn conscience_config_binds_env_for_stdio() {
+        // Allowed + credential resolvable → bound as an env var of that name.
+        let cfg = McpRegistry::apply_conscience_to_config(
+            "github",
+            &stdio_cfg(),
+            &egress_gate_with_cred(),
+            Some(&OneKey("gh-token", "ghp_secret")),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.env.as_ref().and_then(|e| e.get("gh-token")).map(String::as_str),
+            Some("ghp_secret")
+        );
+    }
+
+    #[test]
+    fn conscience_config_fails_closed_when_credential_unresolvable() {
+        // Named credential, but the resolver doesn't have it → refuse (no connect).
+        let r = McpRegistry::apply_conscience_to_config(
+            "github",
+            &http_cfg(),
+            &egress_gate_with_cred(),
+            Some(&OneKey("other", "x")),
+        );
+        assert!(r.is_err());
+        // Same with no resolver at all.
+        assert!(McpRegistry::apply_conscience_to_config(
+            "github",
+            &http_cfg(),
+            &egress_gate_with_cred(),
+            None,
+        )
+        .is_err());
     }
 }
