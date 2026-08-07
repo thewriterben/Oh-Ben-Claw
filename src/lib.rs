@@ -56,7 +56,13 @@ pub mod channels;
 // every call site.
 pub use obc_telemetry::comms;
 pub mod config;
-pub mod cost;
+// Token accounting and the spending budget left for `obc-cost` on 2026-08-06.
+// Its only edge outside itself was `CostConfig`, its own config block sitting in
+// the root config module — so the config struct went with it, the way
+// `DeploymentConfig` sits in obc-planner and `ConscienceConfig` in
+// obc-conscience. `crate::cost::…` and `crate::config::CostConfig` are both
+// unchanged.
+pub use obc_cost as cost;
 pub mod decision_log;
 pub mod deployment;
 pub mod doctor;

@@ -1,9 +1,7 @@
 //! Token cost tracker — records usage events and enforces budget limits.
 
 use crate::config::CostConfig;
-use crate::cost::types::{
-    BudgetCheck, CostRecord, CostSummary, ModelStats, TokenUsage, UsagePeriod,
-};
+use crate::types::{BudgetCheck, CostRecord, CostSummary, ModelStats, TokenUsage, UsagePeriod};
 use chrono::Utc;
 use parking_lot::Mutex;
 use rusqlite::Connection;
