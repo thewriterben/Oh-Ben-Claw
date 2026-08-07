@@ -108,6 +108,10 @@ pub use obc_telemetry::sensing;
 pub mod skill_forge;
 pub mod spine;
 pub mod tools;
-pub mod tunnel;
+// Network tunnels left for `obc-tunnel` on 2026-08-06, same day and same shape
+// as obc-cost: its only edge outside itself was `TunnelConfig`, its own config
+// block in the root config module, so the struct went with the providers that
+// read it. `crate::tunnel::…` and `crate::config::TunnelConfig` are unchanged.
+pub use obc_tunnel as tunnel;
 pub mod vision;
 pub use config::Config;

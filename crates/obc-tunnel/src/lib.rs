@@ -36,6 +36,7 @@
 //! ```
 
 pub mod cloudflare;
+pub mod config;
 pub mod tailscale;
 
 use crate::config::TunnelConfig;
