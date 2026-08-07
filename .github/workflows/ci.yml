@@ -105,6 +105,101 @@ jobs:
             echo "crates that do not stand alone:$failed"
             exit 1
           fi
+  # ── Every feature compiled at least once ──────────────────────────────────
+  # `build-and-test` builds three feature combinations: default,
+  # `hardware,mqtt-spine`, and `hardware,peripheral-nanopi`. Five features --
+  # peripheral-rpi, rppal, peripheral-stm32, gui, semantic -- appear in none of
+  # them, so the code behind them was never handed to a compiler by anything in
+  # this repository.
+  #
+  # `peripheral-stm32` and `peripheral-rpi` are what that costs. Both landed in
+  # the same commit on 2026-03-14 -- "feat(phase-5): expanded hardware
+  # ecosystem" -- and neither has compiled since. stm32 fails with two E0283s
+  # from a `.into()` whose target type is a generic parameter. rpi fails with
+  # E0597 and E0505 from one line: a `Path` borrowed from a `String` that the
+  # `spawn_blocking` closure then moves. Nobody noticed for five months, because
+  # noticing required typing a command no job ran. Both are documented in the
+  # peripherals table in mod.rs, advertising tools that could not have been
+  # built.
+  #
+  # A note on where this job runs, learned the hard way. rpi.rs is behind
+  # `all(feature = "peripheral-rpi", target_os = "linux")`, so a developer
+  # checking these features on macOS or Windows compiles an empty module and
+  # sees green. That is exactly what happened while this job was being written:
+  # twelve features passed locally, and this job failed on the first push with
+  # the error above. Running on ubuntu-latest is not incidental to the gate --
+  # for the peripheral features it *is* the gate, and a local pass is not a
+  # substitute for it.
+  #
+  # One compile per feature would have caught it on the first push. So: one
+  # compile per feature, over the feature list read from cargo metadata, so a
+  # feature added tomorrow is covered tomorrow. `--all-features` goes last,
+  # because a feature can compile alone and still conflict with another.
+  #
+  # cargo metadata reports twelve features, not the eight in `[features]`: an
+  # optional dependency implies a feature of the same name (`nusb`, `rppal`,
+  # `serialport`, `tokio-serial`). Those are redundant with `hardware` and
+  # `peripheral-rpi` and cost four extra compiles. They stay in, because they
+  # are switches a user can genuinely throw, and because filtering them would
+  # mean maintaining a list -- which is the failure this job exists to prevent.
+  #
+  # `clippy -D warnings` rather than plain `check`, because it costs roughly the
+  # same (clippy is a check plus lints) and because feature-gated code is
+  # precisely the code most likely to drift below the standard the rest of the
+  # repository is held to. All twelve features and `--all-features` pass it as
+  # of this commit, on Linux.
+  features-alone:
+    name: Every feature compiled at least once
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-features-${{ hashFiles('**/Cargo.lock') }}
+      - name: Check each declared feature on its own
+        run: |
+          set -euo pipefail
+          # `tr -d '\r'` guards the Windows case, where python prints CRLF and
+          # cargo rejects the trailing carriage return as an invalid character.
+          # Harmless on the runner; the point is that this script can be run by
+          # hand on a dev machine before pushing, and a gate nobody can run
+          # locally is a gate that rots.
+          feats=$(cargo metadata --no-deps --format-version 1 | python3 -c \
+            'import json,sys; p=[x for x in json.load(sys.stdin)["packages"] if x["name"]=="oh-ben-claw"][0]; [print(f) for f in p["features"] if f != "default"]' \
+            | tr -d '\r' | sort)
+          if [ -z "$feats" ]; then
+            echo "no features found -- the discovery query is wrong, not the manifest"
+            exit 1
+          fi
+          echo "$feats" | tr '\n' ' '; echo
+          failed=""
+          for f in $feats; do
+            echo "::group::$f"
+            if cargo clippy --features "$f" --all-targets -- -D warnings; then
+              echo "$f ok"
+            else
+              failed="$failed $f"
+            fi
+            echo "::endgroup::"
+          done
+          echo "::group::--all-features"
+          if cargo clippy --all-features --all-targets -- -D warnings; then
+            echo "all-features ok"
+          else
+            failed="$failed --all-features"
+          fi
+          echo "::endgroup::"
+          if [ -n "$failed" ]; then
+            echo "features that do not compile:$failed"
+            exit 1
+          fi
   # ── MCP against a real third-party server ─────────────────────────────────
   # Blocking, unlike the conformance job below, and deliberately so. It found
   # three bugs the moment it was first run by hand -- a legacy server classified

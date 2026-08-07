@@ -295,9 +295,14 @@ impl Tool for RpiGpioPwmTool {
 
         let duty_ns = ((duty_pct / 100.0) * period_ns as f64) as u64;
         let pwm_base = format!("/sys/class/pwm/pwmchip0/pwm{channel}");
-        let pwm_path = std::path::Path::new(&pwm_base);
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            // Built inside the closure, not outside it. `spawn_blocking` requires
+            // `'static`, so the closure must own `pwm_base`; a `Path` borrowed from
+            // it before the move both outlives its owner (E0597) and blocks the
+            // move (E0505). Two errors from one line, and the reason this module
+            // has never compiled.
+            let pwm_path = std::path::Path::new(&pwm_base);
             // Export the PWM channel if not already exported
             if !pwm_path.exists() {
                 std::fs::write("/sys/class/pwm/pwmchip0/export", channel.to_string())
