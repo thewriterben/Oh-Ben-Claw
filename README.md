@@ -257,6 +257,31 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 > sandbox and ClawHub install. Two of those are now fixed. Worth noting which
 > check would have caught this one: not the tests — they pass, and they are
 > testing the right things. Only asking *who constructs this type* finds it.
+>
+> **And the compiler will answer that, if you stop telling it not to
+> (2026-08-06).** The sentence above implied a human has to go looking. Change
+> one word in `src/lib.rs` — `pub mod a2a;` to `pub(crate) mod a2a;` — and
+> `cargo check --lib` passes while emitting **35** dead-code warnings naming
+> every item in the module: *`struct AgentCard` is never constructed*, *`enum
+> TaskState` is never used*, and so on down. `cargo check --all-targets` then
+> fails with exactly four errors, all `E0603: module a2a is private`, all
+> pointing at `tests/evals.rs` and nothing else. That is the whole finding,
+> proved by rustc rather than asserted: the only consumer outside the module is
+> one integration test.
+>
+> `dead_code` never fires here because `pub` in a library crate means "an
+> external consumer may use this", so the compiler stops asking. There are
+> **1,272** free-standing `pub` items in `src/` — 1,272 places the question is
+> switched off, in a crate whose library surface exists mostly so `tests/` can
+> reach in. Tightening `pub` to `pub(crate)` module by module would hand this
+> back to the compiler: each module either checks clean, and `dead_code` starts
+> telling the truth about it, or fails and names its real external consumers.
+>
+> Recorded because the alternative was worse. A bespoke "which public items does
+> nothing reference" script was written first and scored **0 of 28** on its own
+> candidate list — every hit was code used inside its own module and reachable
+> from `main`, which identifier counting cannot distinguish from code that is
+> not. The tool for this ships with the language.
 
 **Operations** — `oh-ben-claw doctor` health checks (now including subsystem/safing coherence), token **cost tracking** with persistent budgets, **observability** (metrics + spans), scheduled tasks, encrypted secrets **vault**, and a tamper-evident **audit chain**.
 
