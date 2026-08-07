@@ -1,0 +1,5 @@
+[
+  {"class": "human", "consent_token": "badge-alice"},
+  {"class": "human", "consent_token": null},
+  {"class": "wildlife", "consent_token": null}
+]

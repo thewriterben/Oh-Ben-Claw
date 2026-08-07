@@ -1,0 +1,12 @@
+[
+  {"frame_id": "cam1-0001", "truth": ["person"], "detected": ["person"]},
+  {"frame_id": "cam1-0002", "truth": ["person"], "detected": ["person"]},
+  {"frame_id": "cam1-0003", "truth": ["person"], "detected": []},
+  {"frame_id": "cam1-0004", "truth": ["person", "deer"], "detected": ["deer"]},
+  {"frame_id": "cam1-0005", "truth": ["deer"], "detected": ["deer"]},
+  {"frame_id": "cam1-0006", "truth": ["deer"], "detected": ["deer"]},
+  {"frame_id": "cam1-0007", "truth": [], "detected": ["person"]},
+  {"frame_id": "cam1-0008", "truth": ["person"], "detected": ["drone"]},
+  {"frame_id": "cam1-0009", "truth": ["coyote"], "detected": []},
+  {"frame_id": "cam1-0010", "truth": ["person"], "detected": ["person"]}
+]

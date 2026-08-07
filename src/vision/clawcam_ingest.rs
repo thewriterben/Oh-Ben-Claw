@@ -18,8 +18,13 @@
 //!   review_state, ran_at)                                  "vision.subject.deer", …)
 //! ```
 
+use crate::decision_log::DecisionLog;
 use crate::mcp::client::McpClient;
 use crate::memory::world::WorldMemory;
+use obc_conscience::{
+    decide_frame, Conscience, ConsentLedger, ConsentPolicy, DecisionInput, FrameConsent,
+    PerceptionDecision, PerceptionRefusal, SubjectPresence,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -52,6 +57,12 @@ pub struct ClawCamDetection {
     /// ISO-8601 timestamp the inference ran (becomes the fact's valid-time).
     #[serde(default)]
     pub ran_at: Option<String>,
+    /// Multi-party-consent token this subject presented, if any (a beacon/badge/
+    /// code — NOT a recognized identity). Absent ⇒ not consented. The gateway
+    /// populates this when a consent signal accompanies the detection; the
+    /// multi-party consent layer gates on it (see [`multiparty_filter`]).
+    #[serde(default)]
+    pub consent_token: Option<String>,
 }
 
 fn default_review_state() -> String {
@@ -153,6 +164,77 @@ pub fn ingest_clawcam_detections(
     Ok(entities)
 }
 
+/// Result of applying the conscience perception gate to a batch of detections.
+pub struct ConscienceFilter {
+    /// Detections permitted by the consent registry — safe to ingest.
+    pub kept: Vec<ClawCamDetection>,
+    /// Refused detections, with the reason. Dropped before world memory and the
+    /// reasoner; returned so a caller with an audit log can record them.
+    pub refused: Vec<(String, PerceptionRefusal)>,
+}
+
+/// Apply the conscience perception gate (consent registry) to detections
+/// **before** they reach world memory or the reasoner — the Track 0 pattern
+/// for perception (`obc_conscience`). A detection whose subject is not
+/// permitted — a human on a wildlife body, an unlisted class, or a
+/// low-confidence label that might be a person — is dropped here: never stored,
+/// never seen by the model, so it can neither be kept nor inject the reasoner.
+///
+/// The detector's raw label (`detection_subject`) is classified onto a broad
+/// consent class (e.g. `"human"` / `"wildlife"`) by the conscience classifier,
+/// then gated on that class — so the operator declares consent on a few classes,
+/// not the whole detector vocabulary, and any label the classifier does not
+/// recognize is refused outright (fail closed). A detection with no confidence
+/// value also fails closed. Refusals are logged (first-class) and returned for
+/// the audit log.
+pub fn conscience_filter(
+    detections: &[ClawCamDetection],
+    conscience: &Conscience,
+) -> ConscienceFilter {
+    let mut kept = Vec::new();
+    let mut refused = Vec::new();
+    for d in detections {
+        let subject = detection_subject(d);
+        // No confidence on the detection → 0.0 → the gate fails closed.
+        let confidence = d.top_confidence.unwrap_or(0.0) as f32;
+        // Classify the raw label onto a consent class first (fail-closed: a label
+        // the classifier doesn't recognize is refused outright), then gate on it.
+        match conscience.may_perceive_label(&subject, confidence) {
+            PerceptionDecision::Allow { .. } => kept.push(d.clone()),
+            PerceptionDecision::Refuse(reason) => {
+                tracing::warn!(subject = %subject, refusal = %reason,
+                               "conscience: perception refused (frame dropped, not stored)");
+                refused.push((subject, reason));
+            }
+        }
+    }
+    ConscienceFilter { kept, refused }
+}
+
+/// What a gated ingest produced: the entity keys folded into world memory, and
+/// the detections the perception gate refused, each with its reason.
+///
+/// A named type rather than a bare tuple because the pair is returned from three
+/// places and clippy is right that `Result<(Vec<String>, Vec<(String,
+/// PerceptionRefusal)>)>` tells a reader nothing about which half is which.
+pub type GatedIngest = (Vec<String>, Vec<(String, PerceptionRefusal)>);
+
+/// Conscience-gated ingest: filter detections through the perception gate, then
+/// fold only the permitted ones into world memory. Drop-in replacement for
+/// [`ingest_clawcam_detections`] wherever a [`Conscience`] is available. Returns
+/// the ingested entity keys and the refusals (for the audit log).
+pub fn ingest_clawcam_detections_gated(
+    world: &WorldMemory,
+    detections: &[ClawCamDetection],
+    ingested_at_ms: u64,
+    source: &str,
+    conscience: &Conscience,
+) -> anyhow::Result<GatedIngest> {
+    let filtered = conscience_filter(detections, conscience);
+    let entities = ingest_clawcam_detections(world, &filtered.kept, ingested_at_ms, source)?;
+    Ok((entities, filtered.refused))
+}
+
 /// Convenience: parse a JSON array of detections (e.g. the body of a
 /// `get_inference_results` tool result) and ingest them.
 pub fn ingest_clawcam_json(
@@ -226,6 +308,238 @@ pub async fn poll_clawcam_into_world(
     };
     let parsed: serde_json::Value = serde_json::from_str(&raw)?;
     ingest_tool_result(world, &parsed, ingested_at_ms, source)
+}
+
+/// [`ingest_tool_result`] with the conscience perception gate applied: refused
+/// detections (humans, unlisted classes, low-confidence) are dropped before
+/// world memory and the reasoner. Returns ingested entities and the refusals.
+pub fn ingest_tool_result_gated(
+    world: &WorldMemory,
+    tool_result: &serde_json::Value,
+    ingested_at_ms: u64,
+    source: &str,
+    conscience: &Conscience,
+) -> anyhow::Result<GatedIngest> {
+    let detections = extract_detections(tool_result);
+    ingest_clawcam_detections_gated(world, &detections, ingested_at_ms, source, conscience)
+}
+
+/// Runtime context for multi-party consent in the perception path.
+pub struct ConsentContext<'a> {
+    /// Grants keyed by the token subjects present.
+    pub ledger: &'a ConsentLedger,
+    /// What to do when someone in a frame lacks consent.
+    pub policy: ConsentPolicy,
+    /// The purpose the capture is for (must match a grant).
+    pub purpose: &'a str,
+}
+
+/// Everything the guarded perception poll needs beyond the raw feed: the gates,
+/// and the optional audit log, decision log, and multi-party-consent context.
+/// Bundled so the poll signature stays small as these layers accrete.
+pub struct PerceptionGuard<'a> {
+    pub conscience: &'a Conscience,
+    pub auditor: Option<&'a std::sync::Mutex<crate::security::ActionAuditor>>,
+    pub decision_log: Option<&'a DecisionLog>,
+    pub consent: Option<ConsentContext<'a>>,
+}
+
+impl<'a> PerceptionGuard<'a> {
+    /// The plain gate-only guard: conscience + optional auditor, no decision log,
+    /// no multi-party consent. Reproduces the pre-existing gated poll.
+    pub fn new(
+        conscience: &'a Conscience,
+        auditor: Option<&'a std::sync::Mutex<crate::security::ActionAuditor>>,
+    ) -> Self {
+        Self {
+            conscience,
+            auditor,
+            decision_log: None,
+            consent: None,
+        }
+    }
+}
+
+/// Apply multi-party consent to a batch of detections, grouping them into frames
+/// by `event_id` (detections sharing an event were captured together). Only
+/// subjects of the restricted class need a token; each frame is decided by
+/// [`decide_frame`] under the context's policy. Returns the surviving detections
+/// plus a refusal note per dropped frame / redacted subject for the audit log.
+///
+/// Opt-in: callers run this only when a [`ConsentContext`] is configured. Without
+/// consent tokens in the feed every restricted subject is un-consented and, under
+/// `RequireAll`, its whole frame is refused — the correct strict behavior, and
+/// the reason this layer stays off unless a ledger is supplied.
+pub fn multiparty_filter(
+    detections: &[ClawCamDetection],
+    conscience: &Conscience,
+    cx: &ConsentContext<'_>,
+    now_ms: u64,
+) -> (Vec<ClawCamDetection>, Vec<(String, String)>) {
+    use std::collections::BTreeMap;
+    let restricted = conscience.classifier.restricted_class();
+    // Group detection indices into frames by event_id (empty id ⇒ its own frame).
+    let mut frames: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, d) in detections.iter().enumerate() {
+        let key = if d.event_id.is_empty() {
+            format!("__idx{i}")
+        } else {
+            d.event_id.clone()
+        };
+        frames.entry(key).or_default().push(i);
+    }
+
+    let mut kept = Vec::new();
+    let mut refusals = Vec::new();
+    for (frame_key, idxs) in frames {
+        let subjects: Vec<SubjectPresence> = idxs
+            .iter()
+            .map(|&i| SubjectPresence {
+                class: conscience
+                    .classifier
+                    .classify(&detection_subject(&detections[i]))
+                    .class,
+                consent_token: detections[i].consent_token.clone(),
+            })
+            .collect();
+        match decide_frame(
+            &subjects, cx.ledger, restricted, cx.purpose, now_ms, cx.policy,
+        ) {
+            FrameConsent::Allow => {
+                for &i in &idxs {
+                    kept.push(detections[i].clone());
+                }
+            }
+            FrameConsent::Refuse { unconsented } => refusals.push((
+                frame_key,
+                format!(
+                    "multi-party consent: {unconsented} subject(s) without consent; frame dropped"
+                ),
+            )),
+            FrameConsent::Redact { indices } => {
+                // `indices` index into this frame's subject list; redact those,
+                // keep the rest.
+                for (pos, &i) in idxs.iter().enumerate() {
+                    if indices.contains(&pos) {
+                        refusals.push((
+                            detection_subject(&detections[i]),
+                            "multi-party consent: subject redacted (no consent)".to_string(),
+                        ));
+                    } else {
+                        kept.push(detections[i].clone());
+                    }
+                }
+            }
+        }
+    }
+    (kept, refusals)
+}
+
+/// The full guarded perception poll: fetch detections, apply multi-party consent
+/// (if configured), then the class/confidence gate; record every perception
+/// decision to the decision log (if set) and every refusal to the audit log (if
+/// set); ingest only what survives. [`poll_clawcam_into_world_gated`] is this with
+/// a gate-only guard.
+pub async fn poll_clawcam_guarded(
+    client: Arc<Mutex<McpClient>>,
+    world: &WorldMemory,
+    tool: &str,
+    args: serde_json::Value,
+    ingested_at_ms: u64,
+    source: &str,
+    guard: &PerceptionGuard<'_>,
+) -> anyhow::Result<Vec<String>> {
+    let raw = {
+        let mut c = client.lock().await;
+        c.call_tool(tool, args).await?
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&raw)?;
+    let mut detections = extract_detections(&parsed);
+
+    // #3 multi-party consent (opt-in): drop/redact frames lacking consent before
+    // the class gate, auditing each consent refusal.
+    if let Some(cx) = &guard.consent {
+        let (kept, refusals) = multiparty_filter(&detections, guard.conscience, cx, ingested_at_ms);
+        for (subject, reason) in &refusals {
+            tracing::warn!(subject = %subject, refusal = %reason,
+                           "conscience: consent refused (frame dropped, not stored)");
+            if let Some(a) = guard.auditor {
+                let mut g = a.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = g.record_conscience_refusal(
+                    ingested_at_ms,
+                    "conscience.consent",
+                    subject,
+                    reason,
+                );
+            }
+        }
+        detections = kept;
+    }
+
+    // Class/confidence gate.
+    let filtered = conscience_filter(&detections, guard.conscience);
+
+    // #2 decision log: record every perception decision the class gate saw
+    // (allows and refusals), with confidence — the input the audit entry omits.
+    if let Some(log) = guard.decision_log {
+        for d in &detections {
+            let confidence = d.top_confidence.unwrap_or(0.0) as f32;
+            log.record(
+                ingested_at_ms,
+                DecisionInput::Perception {
+                    label: detection_subject(d),
+                    confidence,
+                },
+                guard.conscience,
+            );
+        }
+    }
+
+    // Audit class-gate refusals.
+    if let Some(a) = guard.auditor {
+        for (subject, refusal) in &filtered.refused {
+            let mut g = a.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = g.record_conscience_refusal(
+                ingested_at_ms,
+                "conscience.perception",
+                subject,
+                &refusal.to_string(),
+            );
+        }
+    }
+
+    ingest_clawcam_detections(world, &filtered.kept, ingested_at_ms, source)
+}
+
+/// [`poll_clawcam_into_world`] with the conscience perception gate applied — the
+/// runtime-default perception path. Gate-only (no decision log, no multi-party
+/// consent; see [`poll_clawcam_guarded`] for those). When conscience is disabled
+/// the gate admits everything, so this is a safe drop-in for the plain poll.
+///
+/// **This has no callers.** `main.rs` calls [`poll_clawcam_guarded`] directly,
+/// building the [`PerceptionGuard`] itself, which is the only thing this
+/// function does before delegating. Kept rather than deleted because it is
+/// `pub` and the conscience work is still landing — but it is the shape this
+/// project has twice decided to cut (`src/runtime/`, `personality.rs`), so it
+/// wants a decision rather than an allow-forever.
+///
+/// The `allow` is here rather than a refactor for the same reason: taking a
+/// `&PerceptionGuard` would drop it to seven arguments and make it a verbatim
+/// alias of the function it calls, which is a worse answer than either keeping
+/// it as a convenience or removing it.
+#[allow(clippy::too_many_arguments)]
+pub async fn poll_clawcam_into_world_gated(
+    client: Arc<Mutex<McpClient>>,
+    world: &WorldMemory,
+    tool: &str,
+    args: serde_json::Value,
+    ingested_at_ms: u64,
+    source: &str,
+    conscience: &Conscience,
+    auditor: Option<&std::sync::Mutex<crate::security::ActionAuditor>>,
+) -> anyhow::Result<Vec<String>> {
+    let guard = PerceptionGuard::new(conscience, auditor);
+    poll_clawcam_guarded(client, world, tool, args, ingested_at_ms, source, &guard).await
 }
 
 // ── ClawCam as a full perceive subsystem (health / audio / state) ───────────────
@@ -684,7 +998,58 @@ mod tests {
             top_species: species.map(|s| s.to_string()),
             review_state: review.to_string(),
             ran_at: ran_at.map(|s| s.to_string()),
+            consent_token: None,
         }
+    }
+
+    #[test]
+    fn multiparty_filter_drops_unconsented_frames_keeps_consented_and_wildlife() {
+        use obc_conscience::{
+            Conscience, ConscienceConfig, ConsentGrant, ConsentLedger, ConsentPolicy, ConsentRule,
+            Transmit,
+        };
+        // Class gate allows humans + wildlife; we're isolating the multi-party layer.
+        let cfg = ConscienceConfig {
+            enabled: true,
+            subjects: vec![
+                ConsentRule::allow("human", 30, Transmit::WeightsOnly),
+                ConsentRule::allow("wildlife", 30, Transmit::WeightsOnly),
+            ],
+            ..Default::default()
+        };
+        let conscience = Conscience::new(&cfg);
+        let ledger = ConsentLedger::from_grants([ConsentGrant {
+            subject: "badge-alice".into(),
+            purpose: "record".into(),
+            expires_at_ms: 9_999,
+            revoked: false,
+        }]);
+        let cx = ConsentContext {
+            ledger: &ledger,
+            policy: ConsentPolicy::RequireAll,
+            purpose: "record",
+        };
+        let d = |event: &str, species: &str, token: Option<&str>| -> ClawCamDetection {
+            serde_json::from_value(json!({
+                "event_id": event, "top_species": species, "top_label": species,
+                "top_confidence": 0.9, "consent_token": token,
+            }))
+            .unwrap()
+        };
+        let dets = vec![
+            d("a", "person", Some("badge-alice")), // consented → frame kept
+            d("b", "person", None),                // no token → frame refused
+            d("c", "deer", None),                  // wildlife needs no token → kept
+        ];
+        let (kept, refusals) = multiparty_filter(&dets, &conscience, &cx, 100);
+        let events: Vec<&str> = kept.iter().map(|k| k.event_id.as_str()).collect();
+        assert!(events.contains(&"a"), "consented person kept");
+        assert!(events.contains(&"c"), "wildlife kept");
+        assert!(
+            !events.contains(&"b"),
+            "un-consented person's frame dropped"
+        );
+        assert_eq!(refusals.len(), 1, "one frame refused");
     }
 
     #[test]
@@ -914,5 +1279,87 @@ mod tests {
         // the trendable count fact exists for foresight to fit
         let fact = world.current("vision.count.person").unwrap().unwrap();
         assert_eq!(fact.value["value"], 2);
+    }
+
+    // -- conscience perception gate at the ingest boundary --
+
+    fn wildlife_conscience() -> Conscience {
+        use obc_conscience::{ConscienceConfig, ConsentRule, Transmit};
+        Conscience::new(&ConscienceConfig {
+            enabled: true,
+            // Consent is declared on broad CLASSES now; the classifier maps
+            // "deer"→"wildlife" and "person"→"human" before the gate is checked.
+            subjects: vec![
+                ConsentRule::allow("wildlife", 30, Transmit::WeightsOnly),
+                ConsentRule::deny("human"),
+            ],
+            confidence_threshold: 0.6,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn conscience_filter_drops_humans_and_keeps_wildlife() {
+        let c = wildlife_conscience();
+        let dets = vec![
+            det("e1", Some("deer"), 0.95, "unreviewed", None),
+            det("e2", Some("person"), 0.99, "unreviewed", None), // denied
+        ];
+        let out = conscience_filter(&dets, &c);
+        assert_eq!(out.kept.len(), 1);
+        assert_eq!(out.kept[0].event_id, "e1");
+        assert_eq!(out.refused.len(), 1);
+        assert_eq!(out.refused[0].0, "person");
+    }
+
+    #[test]
+    fn conscience_filter_fails_closed_on_low_confidence() {
+        let c = wildlife_conscience();
+        // a low-confidence "deer" might be a person — refuse before ingest
+        let dets = vec![det("e", Some("deer"), 0.40, "unreviewed", None)];
+        let out = conscience_filter(&dets, &c);
+        assert!(out.kept.is_empty());
+        assert!(matches!(
+            out.refused[0].1,
+            PerceptionRefusal::LowConfidence { .. }
+        ));
+    }
+
+    #[test]
+    fn conscience_filter_fails_closed_on_unrecognized_label() {
+        let c = wildlife_conscience();
+        // a label the classifier doesn't know (not human, not wildlife) is
+        // refused outright — never mapped onto a permitted class.
+        let dets = vec![det("e", Some("drone"), 0.99, "unreviewed", None)];
+        let out = conscience_filter(&dets, &c);
+        assert!(out.kept.is_empty());
+        assert!(matches!(
+            out.refused[0].1,
+            PerceptionRefusal::Unrecognized { .. }
+        ));
+    }
+
+    #[test]
+    fn gated_ingest_writes_only_permitted_subjects() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let c = wildlife_conscience();
+        let dets = vec![
+            det("e1", Some("deer"), 0.95, "unreviewed", None),
+            det("e2", Some("person"), 0.99, "unreviewed", None),
+        ];
+        let (entities, refused) =
+            ingest_clawcam_detections_gated(&world, &dets, 1_000, "test", &c).unwrap();
+        assert_eq!(entities, vec!["vision.subject.deer".to_string()]);
+        assert_eq!(refused.len(), 1);
+        // the person was never written to world memory
+        assert!(world.current("vision.subject.person").unwrap().is_none());
+    }
+
+    #[test]
+    fn disabled_conscience_lets_everything_through() {
+        use obc_conscience::ConscienceConfig;
+        let c = Conscience::new(&ConscienceConfig::default()); // disabled
+        let dets = vec![det("e", Some("person"), 0.99, "unreviewed", None)];
+        assert_eq!(conscience_filter(&dets, &c).kept.len(), 1);
     }
 }

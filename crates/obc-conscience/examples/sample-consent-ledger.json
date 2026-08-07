@@ -1,0 +1,4 @@
+[
+  {"subject": "badge-alice", "purpose": "record", "expires_at_ms": 4102444800000, "revoked": false},
+  {"subject": "badge-bob", "purpose": "record", "expires_at_ms": 4102444800000, "revoked": true}
+]

@@ -24,7 +24,7 @@ use crate::agent::{Agent, AgentHandle, AgentResponse};
 use crate::config::{AgentConfig, ProviderConfig};
 use crate::memory::MemoryStore;
 use crate::providers;
-use crate::tools::default_tools;
+use crate::tools::default_tools_with_reach;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -43,6 +43,14 @@ pub struct InnerAgentDeps {
     pub safety: Option<Arc<crate::security::SafetyGate>>,
     /// Track 0 tamper-evident action auditor.
     pub auditor: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
+    /// Conscience egress reach gate. Applied to BOTH the orchestrator's inner
+    /// agent and every sub-agent the pool spawns, so orchestration is not an
+    /// egress bypass of the allowlist the plain agent honors.
+    pub reach: Option<obc_conscience::ReachGate>,
+    /// Conscience credential resolver (item (b)). Applied to the inner agent and
+    /// every spawned sub-agent so a reach-named credential is injected at their
+    /// egress boundary too — same as the plain agent.
+    pub resolver: Option<Arc<dyn crate::tools::credentials::CredentialResolver>>,
     /// Phase 16 trajectory capture.
     pub trajectory: Option<Arc<crate::memory::trajectory::TrajectoryStore>>,
     /// Tool security policy engine.
@@ -204,11 +212,23 @@ impl OrchestratorAgent {
         session_id: String,
         deps: InnerAgentDeps,
     ) -> Result<Self> {
-        let pool = AgentPool::new(provider_config.clone(), Arc::clone(&memory));
+        // The pool carries the conscience reach gate so every sub-agent it spawns
+        // is gated too — delegation is not an egress bypass.
+        let pool = AgentPool::new(provider_config.clone(), Arc::clone(&memory)).with_reach_gate(
+            deps.reach.clone(),
+            deps.auditor.clone(),
+            deps.resolver.clone(),
+        );
         let session_arc = Arc::new(Mutex::new(session_id));
 
-        // Build the orchestrator's tool registry: default tools + delegation tools
-        let mut tools = default_tools();
+        // Build the orchestrator's inner tool registry: default tools (egress
+        // reach-gated + audited + credential-injecting when conscience is on) +
+        // delegation tools — the inner agent has the plain agent's full posture.
+        let mut tools = default_tools_with_reach(
+            deps.reach.clone(),
+            deps.auditor.clone(),
+            deps.resolver.clone(),
+        );
         tools.extend(delegation_tools(pool.clone(), Arc::clone(&session_arc)));
 
         // Extend the system prompt with orchestrator instructions

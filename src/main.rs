@@ -24,7 +24,7 @@
 //! oh-ben-claw history clear
 //! ```
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use tracing::info;
@@ -122,6 +122,60 @@ enum Commands {
         /// Accept/reject binarization threshold for the judge's 0–1 score.
         #[arg(long, default_value = "0.5")]
         threshold: f32,
+    },
+
+    /// Measure the perception detector's false-negative (miss) rate against a
+    /// human-labeled evaluation set — the residual risk the conscience gate
+    /// cannot cover, because it can only gate labels the detector emits.
+    ///
+    /// The frames file is a JSON array of {frame_id?, truth: [labels],
+    /// detected: [labels]}: what a human says was present, and what the detector
+    /// reported. Both are classified onto consent classes (using
+    /// `[conscience.classifier]` from config), so the safety-critical number is
+    /// the `human` miss rate, reported with a 95% upper confidence bound.
+    EvalDetector {
+        /// Path to a JSON array of evaluation frames.
+        #[arg(long)]
+        frames: String,
+    },
+
+    /// Replay a conscience decision log against the current policy — after-the-
+    /// fact review. Each recorded perception/reach decision is re-evaluated; a
+    /// verdict that no longer reproduces is flagged as policy *drift* (the config
+    /// changed) or, if the record claims the same policy, as a determinism *bug*.
+    /// Exits non-zero only on the latter, so it is safe in CI.
+    ///
+    /// The log is a JSON array of records: {ts, input, verdict, config_fingerprint?}
+    /// where input is {kind:"perception", label, confidence} or
+    /// {kind:"reach", tool, host}.
+    ReplayDecisions {
+        /// Path to a JSON array of decision records.
+        #[arg(long)]
+        log: String,
+    },
+
+    /// Decide a multi-party-consent frame: given the people detected in a frame
+    /// and a consent ledger, would it be captured? Consent is opt-in and keyed to
+    /// a token the subject presents (never a recognized identity); a person with
+    /// no valid token is not consented and, under the default policy, refuses the
+    /// whole frame. A policy-authoring / testing tool.
+    ///
+    /// `--frame` is a JSON array of {class, consent_token?}; `--ledger` is a JSON
+    /// array of {subject, purpose, expires_at_ms, revoked?}.
+    ConsentCheck {
+        /// Path to a JSON array of subject presences in the frame.
+        #[arg(long)]
+        frame: String,
+        /// Path to a JSON array of consent grants (the ledger).
+        #[arg(long)]
+        ledger: String,
+        /// Purpose the frame is being captured for (must match the grant).
+        #[arg(long, default_value = "record")]
+        purpose: String,
+        /// Policy: "require-all" (refuse the frame if anyone lacks consent) or
+        /// "redact" (list subjects to blank).
+        #[arg(long, default_value = "require-all")]
+        policy: String,
     },
 
     /// Run system diagnostics to check configuration and connectivity.
@@ -253,10 +307,24 @@ async fn main() -> Result<()> {
             port,
             mode,
         } => {
-            run_mcp_serve(&transport, port, &mode).await?;
+            run_mcp_serve(&config, &transport, port, &mode).await?;
         }
         Commands::JudgeCalibrate { gold, threshold } => {
             run_judge_calibrate(gold.as_deref(), threshold).await?;
+        }
+        Commands::EvalDetector { frames } => {
+            run_eval_detector(&config, &frames)?;
+        }
+        Commands::ReplayDecisions { log } => {
+            run_replay_decisions(&config, &log)?;
+        }
+        Commands::ConsentCheck {
+            frame,
+            ledger,
+            purpose,
+            policy,
+        } => {
+            run_consent_check(&config, &frame, &ledger, &purpose, &policy)?;
         }
         Commands::Doctor => {
             oh_ben_claw::doctor::run(&config)?;
@@ -291,8 +359,94 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         "LLM provider ready"
     );
 
-    // Build tool registry
-    let mut all_tools = default_tools();
+    // Track 0 safety gate + action auditor — built BEFORE the tool registry so
+    // the conscience reach gate can share the auditor (a reach refusal becomes a
+    // tamper-evident record, exactly as a perception refusal is). The audit-key
+    // helpers used here are nested `fn` items, so calling them before their
+    // textual definition is fine.
+    let mut safety_gate: Option<Arc<security::SafetyGate>> = None;
+    let mut action_auditor: Option<Arc<std::sync::Mutex<security::ActionAuditor>>> = None;
+    if config.safety.enabled {
+        safety_gate = Some(Arc::new(security::SafetyGate::new(
+            config.safety.limits.clone(),
+        )));
+        info!(
+            limits = config.safety.limits.len(),
+            "Track 0 safety gate active"
+        );
+
+        let key = resolve_audit_key(
+            config.safety.audit_key.as_deref(),
+            config.security.vault_enabled,
+            config.security.vault_path.as_deref(),
+            config.security.pairing_secret.as_deref(),
+        );
+        let audit_path = config
+            .safety
+            .audit_log_path
+            .clone()
+            .unwrap_or_else(|| track0_data_path("action_audit.jsonl"));
+        if let Some(parent) = std::path::Path::new(&audit_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match security::ActionAuditor::open(key, audit_path.clone()) {
+            Ok(auditor) => {
+                action_auditor = Some(Arc::new(std::sync::Mutex::new(auditor)));
+                info!(path = %audit_path, "Track 0 action audit log active");
+            }
+            Err(e) => tracing::warn!("Track 0: failed to open action audit log: {e}"),
+        }
+    }
+
+    // Build tool registry. When [conscience] is enabled, attach the egress reach
+    // gate AND the auditor, so outbound tool calls hit the allowlist and every
+    // refusal is written to the tamper-evident log (Track 0 for reach).
+    let conscience = obc_conscience::Conscience::new(&config.conscience);
+    // Conscience credential resolver (item (b)): resolve a credential the reach
+    // gate names on an allow, by name, at the egress boundary — never seen by
+    // the model. Prefer the unlocked vault (encrypted store + env fallback);
+    // otherwise environment-only, so env-backed credentials still resolve.
+    let credential_resolver: Option<
+        std::sync::Arc<dyn oh_ben_claw::tools::credentials::CredentialResolver>,
+    > = if conscience.enabled {
+        let vault_backed = if config.security.vault_enabled {
+            std::env::var("OBC_VAULT_PASSWORD").ok().and_then(|pw| {
+                let vpath = config
+                    .security
+                    .vault_path
+                    .clone()
+                    .unwrap_or_else(|| track0_data_path("vault.db"));
+                let vault = security::SecretsVault::open(&vpath).ok()?;
+                vault.unlock(&pw).ok()?;
+                tracing::info!(
+                    "conscience: credential resolver using the unlocked vault (env fallback)"
+                );
+                Some(std::sync::Arc::new(vault)
+                    as std::sync::Arc<
+                        dyn oh_ben_claw::tools::credentials::CredentialResolver,
+                    >)
+            })
+        } else {
+            None
+        };
+        Some(vault_backed.unwrap_or_else(|| {
+            tracing::info!(
+                "conscience: credential resolver is environment-only (vault locked or disabled)"
+            );
+            std::sync::Arc::new(oh_ben_claw::tools::credentials::EnvResolver)
+        }))
+    } else {
+        None
+    };
+    let mut all_tools = if conscience.enabled {
+        oh_ben_claw::tools::default_tools_with_reach(
+            Some(conscience.reach.clone()),
+            action_auditor.clone(),
+            credential_resolver.clone(),
+        )
+    } else {
+        default_tools()
+    };
     // Skill forge management tool (list/install/remove skills at runtime).
     all_tools.push(Box::new(
         oh_ben_claw::skill_forge::SkillForgeTool::default_dir(),
@@ -528,39 +682,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         k.into_bytes()
     }
 
-    let mut safety_gate: Option<Arc<security::SafetyGate>> = None;
-    let mut action_auditor: Option<Arc<std::sync::Mutex<security::ActionAuditor>>> = None;
-    if config.safety.enabled {
-        safety_gate = Some(Arc::new(security::SafetyGate::new(
-            config.safety.limits.clone(),
-        )));
-        info!(
-            limits = config.safety.limits.len(),
-            "Track 0 safety gate active"
-        );
-
-        let key = resolve_audit_key(
-            config.safety.audit_key.as_deref(),
-            config.security.vault_enabled,
-            config.security.vault_path.as_deref(),
-            config.security.pairing_secret.as_deref(),
-        );
-        let audit_path = config
-            .safety
-            .audit_log_path
-            .clone()
-            .unwrap_or_else(|| track0_data_path("action_audit.jsonl"));
-        if let Some(parent) = std::path::Path::new(&audit_path).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match security::ActionAuditor::open(key, audit_path.clone()) {
-            Ok(auditor) => {
-                action_auditor = Some(Arc::new(std::sync::Mutex::new(auditor)));
-                info!(path = %audit_path, "Track 0 action audit log active");
-            }
-            Err(e) => tracing::warn!("Track 0: failed to open action audit log: {e}"),
-        }
-    }
+    // (Track 0 safety gate + action auditor are built earlier, before the tool
+    // registry, so the conscience reach gate shares the auditor — see above.)
 
     // Phase 16: trajectory store for experiential self-improvement (shared by
     // the plain agent and the orchestrator's inner agent).
@@ -1987,6 +2110,55 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 let client = Arc::clone(client);
                 let poll_safing = Arc::clone(&safing_state);
                 let audio_ctrl = audio_controller.clone();
+                // Conscience perception gate for this poll. When [conscience] is
+                // disabled the gate admits everything, so this is always safe.
+                let poll_conscience = obc_conscience::Conscience::new(&config.conscience);
+                let poll_auditor = action_auditor.clone();
+                // #2 decision log (opt-in via OBC_DECISION_LOG): persist every
+                // perception decision so `replay-decisions` runs on real history.
+                let poll_decision_log: Option<Arc<oh_ben_claw::decision_log::DecisionLog>> =
+                    std::env::var("OBC_DECISION_LOG").ok().and_then(|path| {
+                        match oh_ben_claw::decision_log::DecisionLog::open(
+                            &path,
+                            &config.conscience,
+                        ) {
+                            Ok(l) => {
+                                info!(path = %path, "conscience: perception decision log active");
+                                Some(Arc::new(l))
+                            }
+                            Err(e) => {
+                                tracing::warn!("could not open OBC_DECISION_LOG: {e}");
+                                None
+                            }
+                        }
+                    });
+                // #3 multi-party consent (opt-in via OBC_CONSENT_LEDGER): drop or
+                // redact frames whose subjects didn't present a valid consent token.
+                let poll_consent: Option<(
+                    Arc<obc_conscience::ConsentLedger>,
+                    obc_conscience::ConsentPolicy,
+                    String,
+                )> = std::env::var("OBC_CONSENT_LEDGER").ok().and_then(|path| {
+                    let text = std::fs::read_to_string(&path)
+                        .map_err(|e| tracing::warn!("could not read OBC_CONSENT_LEDGER: {e}"))
+                        .ok()?;
+                    let grants: Vec<obc_conscience::ConsentGrant> = serde_json::from_str(&text)
+                        .map_err(|e| tracing::warn!("could not parse OBC_CONSENT_LEDGER: {e}"))
+                        .ok()?;
+                    let policy = match std::env::var("OBC_CONSENT_POLICY").as_deref() {
+                        Ok("redact") => obc_conscience::ConsentPolicy::Redact,
+                        _ => obc_conscience::ConsentPolicy::RequireAll,
+                    };
+                    let purpose =
+                        std::env::var("OBC_CONSENT_PURPOSE").unwrap_or_else(|_| "record".into());
+                    info!(path = %path, grants = grants.len(),
+                        "conscience: multi-party consent active");
+                    Some((
+                        Arc::new(obc_conscience::ConsentLedger::from_grants(grants)),
+                        policy,
+                        purpose,
+                    ))
+                });
                 // Spatial fusion: a fixed camera's detection becomes a hazard disc
                 // in the occupancy grid, so the planner routes the mobile robot
                 // clear of what a *static* node saw. Both halves were already
@@ -2039,13 +2211,30 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis() as u64)
                             .unwrap_or(0);
-                        match oh_ben_claw::vision::clawcam_ingest::poll_clawcam_into_world(
+                        let guard = {
+                            let mut g = oh_ben_claw::vision::clawcam_ingest::PerceptionGuard::new(
+                                &poll_conscience,
+                                poll_auditor.as_deref(),
+                            );
+                            g.decision_log = poll_decision_log.as_deref();
+                            if let Some((ledger, policy, purpose)) = poll_consent.as_ref() {
+                                g.consent =
+                                    Some(oh_ben_claw::vision::clawcam_ingest::ConsentContext {
+                                        ledger: ledger.as_ref(),
+                                        policy: *policy,
+                                        purpose: purpose.as_str(),
+                                    });
+                            }
+                            g
+                        };
+                        match oh_ben_claw::vision::clawcam_ingest::poll_clawcam_guarded(
                             Arc::clone(&client),
                             &world,
                             &cfg.tool,
                             cfg.args.clone(),
                             now,
                             &cfg.source,
+                            &guard,
                         )
                         .await
                         {
@@ -2367,6 +2556,17 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             oh_ben_claw::agent::orchestrator::InnerAgentDeps {
                 safety: safety_gate.clone(),
                 auditor: action_auditor.clone(),
+                // Conscience reach gate flows to the orchestrator's inner agent
+                // AND its sub-agent pool, so orchestration/delegation can't
+                // bypass the egress allowlist the plain agent honors.
+                reach: if conscience.enabled {
+                    Some(conscience.reach.clone())
+                } else {
+                    None
+                },
+                // Credential resolver (item (b)) flows to the inner agent and the
+                // sub-agent pool too, so injection covers delegated egress paths.
+                resolver: credential_resolver.clone(),
                 trajectory: trajectory_store.clone(),
                 policy: Some(security_ctx.policy.clone()),
                 approval: Some(Arc::clone(&approval)),
@@ -3129,19 +3329,120 @@ async fn run_peripheral(mut config: Config, cmd: PeripheralCommands) -> Result<(
     Ok(())
 }
 
+/// Measure the perception detector's false-negative rate against a labeled eval
+/// set and print the report. This is the residual risk the conscience gate can't
+/// cover — it can only gate labels the detector emits, so a person the detector
+/// misses entirely is never seen by the gate. See `obc_conscience::detector_eval`.
+fn run_eval_detector(config: &Config, frames_path: &str) -> Result<()> {
+    let raw = std::fs::read_to_string(frames_path)
+        .with_context(|| format!("reading eval frames from {frames_path}"))?;
+    let frames: Vec<obc_conscience::EvalFrame> = serde_json::from_str(&raw)
+        .context("parsing eval frames JSON (expected an array of {truth, detected})")?;
+    if frames.is_empty() {
+        bail!("no evaluation frames in {frames_path} — nothing to measure");
+    }
+    // Classify with the deployment's own vocabulary so the measurement matches
+    // what the live gate would do with these labels.
+    let classifier = obc_conscience::SubjectClassifier::from_config(&config.conscience.classifier);
+    let report = obc_conscience::measure_false_negatives(&frames, &classifier);
+    print!("{report}");
+    Ok(())
+}
+
+/// Replay a conscience decision log against the current policy and print the
+/// report. Exits non-zero only on an *unexplained* mismatch (same policy
+/// fingerprint, different verdict — a determinism bug); policy drift is
+/// informational and does not fail. See `obc_conscience::replay`.
+fn run_replay_decisions(config: &Config, log_path: &str) -> Result<()> {
+    let raw = std::fs::read_to_string(log_path)
+        .with_context(|| format!("reading decision log from {log_path}"))?;
+    // Accepts both a JSON array and JSON Lines (the runtime decision log is JSONL).
+    let records = oh_ben_claw::decision_log::parse_log(&raw)?;
+    if records.is_empty() {
+        bail!("no decision records in {log_path} — nothing to replay");
+    }
+    let conscience = obc_conscience::Conscience::new(&config.conscience);
+    let report = obc_conscience::replay_decisions(&records, &conscience, &config.conscience);
+    print!("{report}");
+    // A same-config verdict flip is a real defect; fail so CI notices. Policy
+    // drift is expected review output, not an error.
+    if report.undrifted_mismatches() > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Decide a multi-party-consent frame from a frame file + a consent ledger, and
+/// print the verdict. Consent is opt-in and token-based (never identity
+/// recognition); the restricted class comes from `[conscience.classifier]`. See
+/// `obc_conscience::multiparty`.
+fn run_consent_check(
+    config: &Config,
+    frame_path: &str,
+    ledger_path: &str,
+    purpose: &str,
+    policy: &str,
+) -> Result<()> {
+    let subjects: Vec<obc_conscience::SubjectPresence> = serde_json::from_str(
+        &std::fs::read_to_string(frame_path)
+            .with_context(|| format!("reading frame from {frame_path}"))?,
+    )
+    .context("parsing frame JSON (expected an array of {class, consent_token?})")?;
+    let grants: Vec<obc_conscience::ConsentGrant> = serde_json::from_str(
+        &std::fs::read_to_string(ledger_path)
+            .with_context(|| format!("reading ledger from {ledger_path}"))?,
+    )
+    .context("parsing ledger JSON (expected an array of consent grants)")?;
+    let policy = match policy {
+        "require-all" => obc_conscience::ConsentPolicy::RequireAll,
+        "redact" => obc_conscience::ConsentPolicy::Redact,
+        other => bail!("unknown policy '{other}' (require-all | redact)"),
+    };
+    let ledger = obc_conscience::ConsentLedger::from_grants(grants);
+    let restricted = &config.conscience.classifier.restricted_class;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let decision =
+        obc_conscience::decide_frame(&subjects, &ledger, restricted, purpose, now_ms, policy);
+    match &decision {
+        obc_conscience::FrameConsent::Allow => println!(
+            "ALLOW — every '{restricted}' in the frame presented valid consent for '{purpose}' (or none present)."
+        ),
+        obc_conscience::FrameConsent::Refuse { unconsented } => println!(
+            "REFUSE — {unconsented} subject(s) lacked valid consent; the whole frame is dropped (require-all)."
+        ),
+        obc_conscience::FrameConsent::Redact { indices } => println!(
+            "REDACT — blank subject indices {indices:?} before storing; a body that cannot redact per-subject must refuse the frame."
+        ),
+    }
+    Ok(())
+}
+
 /// `oh-ben-claw mcp-serve` — run the MCP server standalone with the default
 /// tool set. The http transport is what the official conformance suite tests
 /// (`npx @modelcontextprotocol/conformance server --url http://…/mcp`).
-async fn run_mcp_serve(transport: &str, port: u16, mode: &str) -> Result<()> {
+async fn run_mcp_serve(config: &Config, transport: &str, port: u16, mode: &str) -> Result<()> {
     use oh_ben_claw::mcp::{server::McpServer, ProtocolMode};
-    use oh_ben_claw::tools::default_tools;
+    use oh_ben_claw::tools::{default_tools, default_tools_with_reach};
 
     let mode = match mode {
         "stateless-2026" => ProtocolMode::Stateless2026,
         "legacy-2024" => ProtocolMode::Legacy2024,
         other => anyhow::bail!("unknown protocol mode '{other}' (legacy-2024 | stateless-2026)"),
     };
-    let server = McpServer::with_mode(default_tools(), mode);
+    // Tools exposed over MCP are an egress surface too — an external client could
+    // drive the HTTP/browser tools through this server. Gate them with the
+    // conscience reach allowlist when enabled. (No auditor in this standalone
+    // path; the gate still refuses, it just isn't logged here.)
+    let conscience = obc_conscience::Conscience::new(&config.conscience);
+    let tools = if conscience.enabled {
+        default_tools_with_reach(Some(conscience.reach.clone()), None, None)
+    } else {
+        default_tools()
+    };
+    let server = McpServer::with_mode(tools, mode);
 
     match transport {
         "stdio" => {

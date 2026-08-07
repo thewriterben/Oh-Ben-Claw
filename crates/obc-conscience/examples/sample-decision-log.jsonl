@@ -1,0 +1,3 @@
+{"ts":1717200000,"input":{"kind":"perception","label":"deer","confidence":0.92},"verdict":{"allowed":true},"config_fingerprint":"cfg-recorded-in-june"}
+{"ts":1717200500,"input":{"kind":"perception","label":"person","confidence":0.88},"verdict":{"allowed":false,"reason":"conscience: perception of 'human' denied"},"config_fingerprint":"cfg-recorded-in-june"}
+{"ts":1717201000,"input":{"kind":"perception","label":"deer","confidence":0.40},"verdict":{"allowed":false,"reason":"below confidence threshold"},"config_fingerprint":"cfg-recorded-in-june"}

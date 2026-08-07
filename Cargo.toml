@@ -9,6 +9,7 @@ members = [
     "crates/obc-telemetry",
     "crates/obc-observability",
     "crates/obc-scheduler",
+    "crates/obc-conscience",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
@@ -67,6 +68,7 @@ obc-safety = { path = "crates/obc-safety" }
 obc-telemetry = { path = "crates/obc-telemetry" }
 obc-observability = { path = "crates/obc-observability" }
 obc-scheduler = { path = "crates/obc-scheduler" }
+obc-conscience = { path = "crates/obc-conscience" }
 toml = "1.0"
 shellexpand = "3.1"
 

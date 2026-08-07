@@ -48,6 +48,7 @@ pub mod channels;
 pub use obc_telemetry::comms;
 pub mod config;
 pub mod cost;
+pub mod decision_log;
 pub mod deployment;
 pub mod doctor;
 pub mod fleet;

@@ -5,6 +5,7 @@
 //! with any tools discovered from connected peripheral nodes.
 
 pub mod builtin;
+pub mod credentials;
 pub mod traits;
 
 pub use builtin::{
@@ -28,15 +29,50 @@ pub use traits::{Tool, ToolResult};
 /// Browser tools are always registered; they connect to a local CDP endpoint
 /// if Chrome/Chromium is running with `--remote-debugging-port=9222`.
 pub fn default_tools() -> Vec<Box<dyn Tool>> {
-    use builtin::browser::all_browser_tools;
+    default_tools_with_reach(None, None, None)
+}
 
+/// Like [`default_tools`], but attaches a conscience egress **reach gate** to
+/// tools that make outbound network calls (the HTTP tool today). When a gate is
+/// supplied, a request to a host not on the egress allowlist is refused before
+/// any connection — the breach lesson, enforced by deterministic code the model
+/// cannot override. `None` reproduces `default_tools()` exactly.
+///
+/// `auditor`, when supplied, is attached to the egress-gated HTTP tool so a
+/// reach refusal is written to the tamper-evident audit log as a
+/// `conscience.reach` denial — the same first-class record as a perception
+/// refusal. A conscience that isn't audited is just a promise.
+///
+/// `resolver`, when supplied (conscience item (b)), lets the HTTP tool inject a
+/// credential the reach gate names on an allow — resolved by name from the
+/// vault/environment, never seen by the model. A named-but-unresolvable
+/// credential fails closed.
+pub fn default_tools_with_reach(
+    reach: Option<obc_conscience::ReachGate>,
+    auditor: Option<std::sync::Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
+    resolver: Option<std::sync::Arc<dyn crate::tools::credentials::CredentialResolver>>,
+) -> Vec<Box<dyn Tool>> {
     let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
     let cdp_url = std::env::var("OBC_BROWSER_CDP_URL").ok();
+
+    let http_tool = {
+        let mut t = HttpTool::new();
+        if let Some(gate) = reach.clone() {
+            t = t.with_reach_gate(gate);
+        }
+        if let Some(a) = auditor.clone() {
+            t = t.with_auditor(a);
+        }
+        if let Some(r) = resolver.clone() {
+            t = t.with_resolver(r);
+        }
+        t
+    };
 
     let mut tools: Vec<Box<dyn Tool>> = vec![
         Box::new(ShellTool::new()),
         Box::new(FileTool::new()),
-        Box::new(HttpTool::new()),
+        Box::new(http_tool),
         Box::new(MemoryTool::new()),
         Box::new(AudioTranscribeTool::default()),
         Box::new(TextToSpeechTool::default()),
@@ -52,8 +88,14 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
         tools.push(Box::new(VisionTool::new(api_key)));
     }
 
-    // Browser tools share a single session; CDP URL from env or default port
-    tools.extend(all_browser_tools(cdp_url.as_deref()));
+    // Browser tools share a single session; CDP URL from env or default port.
+    // Navigation is an egress path, so it gets the same reach gate + auditor as
+    // the HTTP tool — arbitrary browsing can't reach a non-allowlisted host.
+    tools.extend(builtin::browser::all_browser_tools_with_reach(
+        cdp_url.as_deref(),
+        reach.clone(),
+        auditor.clone(),
+    ));
 
     tools
 }
