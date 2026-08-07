@@ -1,0 +1,31 @@
+[package]
+name = "obc-tunnel"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's network tunnels: Cloudflare, ngrok and Tailscale providers behind one interface, so a gateway on a home network can be reached without opening a port."
+
+# The eleventh piece of the agent extracted (2026-08-06), and the same shape as
+# obc-cost the same day: `tunnel` named exactly one thing outside itself --
+# `TunnelConfig`, its own `[tunnel]` block sitting in the root config module --
+# so the config struct travels with the providers that read it.
+#
+# That is the arrangement obc-planner (`DeploymentConfig`), obc-conscience
+# (`ConscienceConfig`) and obc-cost (`CostConfig`) already use: the crate owns
+# its config block and the root `Config` composes them.
+#
+# Dependencies were read off the module and then corrected by the compiler,
+# which is the only reliable order. A `use`-declaration survey sees none of
+# these three: `tokio` appears as the `#[tokio::test]` attribute macro, and
+# `tracing` and `serde_json` are called fully-qualified at the point of use
+# (`tracing::info!`, `serde_json::from_str`) without ever being imported.
+#
+# That is the same blind spot obc-observability's manifest records for attribute
+# macros, now seen twice more. The survey answers "what does this module need
+# from the agent"; it has never answered "what does it need at all".
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = { version = "0.1", default-features = false }
+tokio = { version = "1.42", default-features = false, features = ["rt", "macros", "process", "io-util", "time"] }
