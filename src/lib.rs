@@ -34,7 +34,19 @@
 /// shape as a release gate — which is exactly the kind of consumer a source-only
 /// survey misses. Kept.
 pub mod a2a;
-pub mod aerial;
+// `aerial` and `gnss` are the only two of the twenty-nine modules here that
+// nothing outside this crate names — not `src/main.rs`, not `src/bin/*`, not
+// `tests/*`. Measured 2026-08-06 by flipping each `pub mod` to `pub(crate) mod`
+// in turn and running `cargo check --all-targets`; these two were the only ones
+// that came back exit 0.
+//
+// The point of tightening them is not tidiness. `dead_code` does not fire on a
+// `pub` item in a library crate, because `pub` means "someone outside may use
+// this" and the compiler stops asking. `pub(crate)` starts it asking again — so
+// if anything in these two modules stops being reached, the build says so
+// instead of a person noticing eighteen months later. See the README's note on
+// A2A for what that costs when nobody notices.
+pub(crate) mod aerial;
 pub mod agent;
 pub mod approval;
 pub mod audio;
@@ -58,7 +70,7 @@ pub mod gateway;
 /// [`obc_planner`] crate, where it sits next to the site optimizer that consumes
 /// it. `oh_ben_claw::geo::X` is unchanged.
 pub use obc_planner::geo;
-pub mod gnss;
+pub(crate) mod gnss;
 pub mod harness;
 pub mod learning;
 pub mod mcp;
