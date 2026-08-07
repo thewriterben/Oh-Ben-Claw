@@ -176,7 +176,10 @@ impl std::fmt::Display for ReplayReport {
             writeln!(
                 f,
                 "  [{}] {:?}: recorded allowed={}, now allowed={}",
-                tag, m.input_summary(), m.record.verdict.allowed, m.recomputed.allowed
+                tag,
+                m.input_summary(),
+                m.record.verdict.allowed,
+                m.recomputed.allowed
             )?;
         }
         Ok(())
@@ -248,7 +251,13 @@ fn canonical_json(v: &serde_json::Value) -> String {
             let sorted: BTreeMap<&String, &serde_json::Value> = map.iter().collect();
             let inner: Vec<String> = sorted
                 .iter()
-                .map(|(k, val)| format!("{}:{}", serde_json::to_string(k).unwrap_or_default(), canonical_json(val)))
+                .map(|(k, val)| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(k).unwrap_or_default(),
+                        canonical_json(val)
+                    )
+                })
                 .collect();
             format!("{{{}}}", inner.join(","))
         }
@@ -312,7 +321,10 @@ mod tests {
             .collect();
 
         let report = replay(&records, &c, &cfg);
-        assert!(report.all_matched(), "pure gate must reproduce every verdict");
+        assert!(
+            report.all_matched(),
+            "pure gate must reproduce every verdict"
+        );
         assert_eq!(report.matched, 4);
         assert_eq!(report.undrifted_mismatches(), 0);
     }
@@ -360,13 +372,20 @@ mod tests {
         let bad = DecisionRecord {
             ts: 1,
             input: perceive("person", 0.9),
-            verdict: Verdict { allowed: true, reason: None }, // wrong
-            config_fingerprint: Some(fingerprint(&cfg)),       // claims same policy
+            verdict: Verdict {
+                allowed: true,
+                reason: None,
+            }, // wrong
+            config_fingerprint: Some(fingerprint(&cfg)), // claims same policy
         };
         let report = replay(&[bad], &c, &cfg);
         assert_eq!(report.mismatches.len(), 1);
         assert!(!report.mismatches[0].config_drift);
-        assert_eq!(report.undrifted_mismatches(), 1, "flagged for investigation");
+        assert_eq!(
+            report.undrifted_mismatches(),
+            1,
+            "flagged for investigation"
+        );
     }
 
     #[test]
@@ -378,7 +397,11 @@ mod tests {
 
         let mut cfg2 = cfg.clone();
         cfg2.confidence_threshold = 0.99; // one setting changed
-        assert_ne!(a, fingerprint(&cfg2), "a changed setting changes the fingerprint");
+        assert_ne!(
+            a,
+            fingerprint(&cfg2),
+            "a changed setting changes the fingerprint"
+        );
     }
 
     #[test]
@@ -400,8 +423,24 @@ mod tests {
         let c = Conscience::new(&cfg);
 
         let recs = vec![
-            record(1, DecisionInput::Reach { tool: "http".into(), host: "api.allowed.example".into() }, &c, &cfg),
-            record(2, DecisionInput::Reach { tool: "http".into(), host: "evil.example".into() }, &c, &cfg),
+            record(
+                1,
+                DecisionInput::Reach {
+                    tool: "http".into(),
+                    host: "api.allowed.example".into(),
+                },
+                &c,
+                &cfg,
+            ),
+            record(
+                2,
+                DecisionInput::Reach {
+                    tool: "http".into(),
+                    host: "evil.example".into(),
+                },
+                &c,
+                &cfg,
+            ),
         ];
         assert!(recs[0].verdict.allowed);
         assert!(!recs[1].verdict.allowed);
@@ -413,7 +452,15 @@ mod tests {
         let (c, cfg) = wildlife_conscience();
         let recs = vec![
             record(1, perceive("deer", 0.9), &c, &cfg),
-            record(2, DecisionInput::Reach { tool: "http".into(), host: "h".into() }, &c, &cfg),
+            record(
+                2,
+                DecisionInput::Reach {
+                    tool: "http".into(),
+                    host: "h".into(),
+                },
+                &c,
+                &cfg,
+            ),
         ];
         let json = serde_json::to_string(&recs).unwrap();
         let back: Vec<DecisionRecord> = serde_json::from_str(&json).unwrap();

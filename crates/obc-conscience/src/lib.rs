@@ -43,9 +43,7 @@ pub mod reach;
 pub mod replay;
 
 pub use classifier::{Classification, ClassifierConfig, SubjectClassifier};
-pub use consent::{
-    ConsentRule, PerceptionDecision, PerceptionGate, PerceptionRefusal, Transmit,
-};
+pub use consent::{ConsentRule, PerceptionDecision, PerceptionGate, PerceptionRefusal, Transmit};
 pub use detector_eval::{measure as measure_false_negatives, ClassStats, EvalFrame, FnReport};
 pub use multiparty::{
     decide_frame, ConsentGrant, ConsentLedger, ConsentPolicy, FrameConsent, SubjectPresence,
@@ -133,7 +131,10 @@ impl Conscience {
     /// choice explicitly; the spec's strong recommendation is to leave it on.
     pub fn may_perceive(&self, class: &str, confidence: f32) -> PerceptionDecision {
         if !self.enabled {
-            return PerceptionDecision::Allow { retain_days: 0, transmit: Transmit::None };
+            return PerceptionDecision::Allow {
+                retain_days: 0,
+                transmit: Transmit::None,
+            };
         }
         self.perception.check(class, confidence)
     }
@@ -146,7 +147,10 @@ impl Conscience {
     /// classifier being unbuilt is now closed here.
     pub fn may_perceive_label(&self, label: &str, confidence: f32) -> PerceptionDecision {
         if !self.enabled {
-            return PerceptionDecision::Allow { retain_days: 0, transmit: Transmit::None };
+            return PerceptionDecision::Allow {
+                retain_days: 0,
+                transmit: Transmit::None,
+            };
         }
         let c = self.classifier.classify(label);
         if !c.recognized {
@@ -185,9 +189,15 @@ mod tests {
                 ConsentRule::allow("wildlife", 30, Transmit::WeightsOnly),
                 ConsentRule::deny("human"),
             ],
-            hosts: vec![HostRule { host: "api.anthropic.com".into(), purpose: "brain".into(),
-                                   credential: Some("brain-key".into()) }],
-            tools: vec![ToolReach { tool: "brain".into(), scope: ReachScope::Egress }],
+            hosts: vec![HostRule {
+                host: "api.anthropic.com".into(),
+                purpose: "brain".into(),
+                credential: Some("brain-key".into()),
+            }],
+            tools: vec![ToolReach {
+                tool: "brain".into(),
+                scope: ReachScope::Egress,
+            }],
             confidence_threshold: 0.6,
             classifier: Default::default(),
         };

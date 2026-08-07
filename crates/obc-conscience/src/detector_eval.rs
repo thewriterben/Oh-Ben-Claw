@@ -251,7 +251,10 @@ pub fn measure(frames: &[EvalFrame], classifier: &SubjectClassifier) -> FnReport
             .collect();
 
         // Every class mentioned on either side gets a cell this frame.
-        let classes: BTreeSet<&String> = truth_classes.iter().chain(detected_classes.iter()).collect();
+        let classes: BTreeSet<&String> = truth_classes
+            .iter()
+            .chain(detected_classes.iter())
+            .collect();
         for class in classes {
             let e = acc.entry(class.clone()).or_insert((0, 0, 0, 0));
             let in_truth = truth_classes.contains(class);
@@ -334,7 +337,10 @@ mod tests {
         assert_eq!(human.present, 10);
         assert_eq!(human.missed, 0);
         assert_eq!(human.miss_rate(), Some(0.0));
-        assert!(human.miss_rate_upper95().unwrap() > 0.0, "bound must be > 0");
+        assert!(
+            human.miss_rate_upper95().unwrap() > 0.0,
+            "bound must be > 0"
+        );
         assert!(r.headline().contains("too small")); // <30 frames
     }
 
@@ -372,7 +378,10 @@ mod tests {
         // "gremlin" isn't in the vocabulary — it must not fabricate a class.
         let frames = vec![frame("f1", &["gremlin"], &[])];
         let r = measure(&frames, &c);
-        assert!(r.per_class.is_empty(), "no class fabricated from a bad label");
+        assert!(
+            r.per_class.is_empty(),
+            "no class fabricated from a bad label"
+        );
         assert_eq!(r.unrecognized_truth_labels, vec!["gremlin".to_string()]);
     }
 

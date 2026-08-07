@@ -214,15 +214,21 @@ impl OrchestratorAgent {
     ) -> Result<Self> {
         // The pool carries the conscience reach gate so every sub-agent it spawns
         // is gated too — delegation is not an egress bypass.
-        let pool = AgentPool::new(provider_config.clone(), Arc::clone(&memory))
-            .with_reach_gate(deps.reach.clone(), deps.auditor.clone(), deps.resolver.clone());
+        let pool = AgentPool::new(provider_config.clone(), Arc::clone(&memory)).with_reach_gate(
+            deps.reach.clone(),
+            deps.auditor.clone(),
+            deps.resolver.clone(),
+        );
         let session_arc = Arc::new(Mutex::new(session_id));
 
         // Build the orchestrator's inner tool registry: default tools (egress
         // reach-gated + audited + credential-injecting when conscience is on) +
         // delegation tools — the inner agent has the plain agent's full posture.
-        let mut tools =
-            default_tools_with_reach(deps.reach.clone(), deps.auditor.clone(), deps.resolver.clone());
+        let mut tools = default_tools_with_reach(
+            deps.reach.clone(),
+            deps.auditor.clone(),
+            deps.resolver.clone(),
+        );
         tools.extend(delegation_tools(pool.clone(), Arc::clone(&session_arc)));
 
         // Extend the system prompt with orchestrator instructions

@@ -64,7 +64,10 @@ impl std::fmt::Display for ReachRefusal {
                 write!(f, "conscience: egress to '{host}' denied (not allowlisted)")
             }
             ReachRefusal::ToolHasNoEgress { tool, scope } => {
-                write!(f, "conscience: tool '{tool}' has no egress (scope {scope:?})")
+                write!(
+                    f,
+                    "conscience: tool '{tool}' has no egress (scope {scope:?})"
+                )
             }
         }
     }
@@ -76,7 +79,9 @@ impl std::error::Error for ReachRefusal {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReachDecision {
     /// Reach permitted; inject this named credential (if any) at the boundary.
-    Allow { credential: Option<String> },
+    Allow {
+        credential: Option<String>,
+    },
     Refuse(ReachRefusal),
 }
 
@@ -118,8 +123,12 @@ impl ReachGate {
             });
         }
         match self.hosts.iter().find(|h| h.host == host) {
-            None => ReachDecision::Refuse(ReachRefusal::HostNotAllowed { host: host.to_string() }),
-            Some(rule) => ReachDecision::Allow { credential: rule.credential.clone() },
+            None => ReachDecision::Refuse(ReachRefusal::HostNotAllowed {
+                host: host.to_string(),
+            }),
+            Some(rule) => ReachDecision::Allow {
+                credential: rule.credential.clone(),
+            },
         }
     }
 }
@@ -136,8 +145,14 @@ mod tests {
                 credential: Some("brain-key".into()),
             }],
             vec![
-                ToolReach { tool: "brain".into(), scope: ReachScope::Egress },
-                ToolReach { tool: "clawcam".into(), scope: ReachScope::LanOnly },
+                ToolReach {
+                    tool: "brain".into(),
+                    scope: ReachScope::Egress,
+                },
+                ToolReach {
+                    tool: "clawcam".into(),
+                    scope: ReachScope::LanOnly,
+                },
             ],
         )
     }
@@ -145,25 +160,39 @@ mod tests {
     #[test]
     fn allows_scoped_tool_to_allowlisted_host_with_named_credential() {
         let d = gate().check("brain", "api.anthropic.com");
-        assert_eq!(d, ReachDecision::Allow { credential: Some("brain-key".into()) });
+        assert_eq!(
+            d,
+            ReachDecision::Allow {
+                credential: Some("brain-key".into())
+            }
+        );
     }
 
     #[test]
     fn denies_egress_to_unlisted_host() {
         let d = gate().check("brain", "evil.example.com");
-        assert!(matches!(d, ReachDecision::Refuse(ReachRefusal::HostNotAllowed { .. })));
+        assert!(matches!(
+            d,
+            ReachDecision::Refuse(ReachRefusal::HostNotAllowed { .. })
+        ));
     }
 
     #[test]
     fn perception_tool_has_no_general_egress() {
         // the "camera becomes a launchpad" chain, refused by config
         let d = gate().check("clawcam", "api.anthropic.com");
-        assert!(matches!(d, ReachDecision::Refuse(ReachRefusal::ToolHasNoEgress { .. })));
+        assert!(matches!(
+            d,
+            ReachDecision::Refuse(ReachRefusal::ToolHasNoEgress { .. })
+        ));
     }
 
     #[test]
     fn unlisted_tool_defaults_to_no_reach() {
         let d = gate().check("mystery_tool", "api.anthropic.com");
-        assert!(matches!(d, ReachDecision::Refuse(ReachRefusal::ToolHasNoEgress { .. })));
+        assert!(matches!(
+            d,
+            ReachDecision::Refuse(ReachRefusal::ToolHasNoEgress { .. })
+        ));
     }
 }

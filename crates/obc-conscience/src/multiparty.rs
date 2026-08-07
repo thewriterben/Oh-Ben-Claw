@@ -53,23 +53,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// What to do with a frame containing a person who has not consented.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConsentPolicy {
     /// Any un-consented restricted subject refuses the **whole frame**. The most
     /// conservative policy and the default: it never singles anyone out and never
     /// stores a frame anyone in it didn't agree to.
+    #[default]
     RequireAll,
     /// Keep the frame but redact the un-consented subjects. Requires the body to
     /// localize and blank per subject; a body that can't must treat this as
     /// [`FrameConsent::Refuse`] (fail closed).
     Redact,
-}
-
-impl Default for ConsentPolicy {
-    fn default() -> Self {
-        ConsentPolicy::RequireAll
-    }
 }
 
 /// An affirmative, scoped, expiring, revocable consent grant, keyed to a token
@@ -219,16 +214,29 @@ mod tests {
         }
     }
 
-    fn decide(subjects: &[SubjectPresence], ledger: &ConsentLedger, now: u64, p: ConsentPolicy) -> FrameConsent {
+    fn decide(
+        subjects: &[SubjectPresence],
+        ledger: &ConsentLedger,
+        now: u64,
+        p: ConsentPolicy,
+    ) -> FrameConsent {
         decide_frame(subjects, ledger, "human", "record", now, p)
     }
 
     #[test]
     fn an_empty_or_wildlife_only_frame_is_allowed() {
         let led = ConsentLedger::default();
-        assert_eq!(decide(&[], &led, 100, ConsentPolicy::RequireAll), FrameConsent::Allow);
         assert_eq!(
-            decide(&[wildlife(), wildlife()], &led, 100, ConsentPolicy::RequireAll),
+            decide(&[], &led, 100, ConsentPolicy::RequireAll),
+            FrameConsent::Allow
+        );
+        assert_eq!(
+            decide(
+                &[wildlife(), wildlife()],
+                &led,
+                100,
+                ConsentPolicy::RequireAll
+            ),
             FrameConsent::Allow
         );
     }
@@ -237,7 +245,12 @@ mod tests {
     fn a_human_with_a_valid_grant_is_allowed() {
         let led = ConsentLedger::from_grants([grant("tok-alice", "record", 1_000)]);
         assert_eq!(
-            decide(&[human(Some("tok-alice"))], &led, 500, ConsentPolicy::RequireAll),
+            decide(
+                &[human(Some("tok-alice"))],
+                &led,
+                500,
+                ConsentPolicy::RequireAll
+            ),
             FrameConsent::Allow
         );
     }
@@ -295,13 +308,17 @@ mod tests {
 
     #[test]
     fn all_consented_is_allowed_under_both_policies() {
-        let led = ConsentLedger::from_grants([
-            grant("a", "record", 9_999),
-            grant("b", "record", 9_999),
-        ]);
+        let led =
+            ConsentLedger::from_grants([grant("a", "record", 9_999), grant("b", "record", 9_999)]);
         let frame = [human(Some("a")), human(Some("b")), wildlife()];
-        assert_eq!(decide(&frame, &led, 1, ConsentPolicy::RequireAll), FrameConsent::Allow);
-        assert_eq!(decide(&frame, &led, 1, ConsentPolicy::Redact), FrameConsent::Allow);
+        assert_eq!(
+            decide(&frame, &led, 1, ConsentPolicy::RequireAll),
+            FrameConsent::Allow
+        );
+        assert_eq!(
+            decide(&frame, &led, 1, ConsentPolicy::Redact),
+            FrameConsent::Allow
+        );
     }
 
     #[test]

@@ -50,12 +50,22 @@ pub struct ConsentRule {
 impl ConsentRule {
     /// A permitted class with the given retention/transmit (builder for tests/config).
     pub fn allow(class: impl Into<String>, retain_days: u32, transmit: Transmit) -> Self {
-        Self { class: class.into(), capture: true, retain_days, transmit }
+        Self {
+            class: class.into(),
+            capture: true,
+            retain_days,
+            transmit,
+        }
     }
 
     /// An explicit denial for a class (e.g. humans on a wildlife body).
     pub fn deny(class: impl Into<String>) -> Self {
-        Self { class: class.into(), capture: false, retain_days: 0, transmit: Transmit::None }
+        Self {
+            class: class.into(),
+            capture: false,
+            retain_days: 0,
+            transmit: Transmit::None,
+        }
     }
 }
 
@@ -67,7 +77,11 @@ pub enum PerceptionRefusal {
     /// A rule exists but forbids capture of this class.
     CaptureDenied { class: String },
     /// Classifier confidence below threshold — fail closed, treat as restricted.
-    LowConfidence { class: String, confidence: f32, threshold: f32 },
+    LowConfidence {
+        class: String,
+        confidence: f32,
+        threshold: f32,
+    },
     /// The classifier did not recognize the detector's label at all — fail
     /// closed and refuse outright, never mapping it onto a permitted class.
     Unrecognized { label: String },
@@ -100,7 +114,10 @@ impl std::error::Error for PerceptionRefusal {}
 #[derive(Debug, Clone, PartialEq)]
 pub enum PerceptionDecision {
     /// Capture permitted with these bounds.
-    Allow { retain_days: u32, transmit: Transmit },
+    Allow {
+        retain_days: u32,
+        transmit: Transmit,
+    },
     /// Refused — the frame is dropped, never stored, never sent to the reasoner.
     Refuse(PerceptionRefusal),
 }
@@ -121,7 +138,10 @@ pub struct PerceptionGate {
 
 impl PerceptionGate {
     pub fn new(rules: Vec<ConsentRule>, confidence_threshold: f32) -> Self {
-        Self { rules, confidence_threshold }
+        Self {
+            rules,
+            confidence_threshold,
+        }
     }
 
     fn rule_for(&self, class: &str) -> Option<&ConsentRule> {
@@ -146,9 +166,11 @@ impl PerceptionGate {
             None => PerceptionDecision::Refuse(PerceptionRefusal::NoRule {
                 class: class.to_string(),
             }),
-            Some(rule) if !rule.capture => PerceptionDecision::Refuse(
-                PerceptionRefusal::CaptureDenied { class: class.to_string() },
-            ),
+            Some(rule) if !rule.capture => {
+                PerceptionDecision::Refuse(PerceptionRefusal::CaptureDenied {
+                    class: class.to_string(),
+                })
+            }
             Some(rule) => PerceptionDecision::Allow {
                 retain_days: rule.retain_days,
                 transmit: rule.transmit,
@@ -175,26 +197,41 @@ mod tests {
     #[test]
     fn permits_declared_class() {
         let d = gate().check("wildlife", 0.95);
-        assert_eq!(d, PerceptionDecision::Allow { retain_days: 30, transmit: Transmit::WeightsOnly });
+        assert_eq!(
+            d,
+            PerceptionDecision::Allow {
+                retain_days: 30,
+                transmit: Transmit::WeightsOnly
+            }
+        );
     }
 
     #[test]
     fn denies_human_by_default_even_when_confident() {
         let d = gate().check("human", 0.99);
-        assert!(matches!(d, PerceptionDecision::Refuse(PerceptionRefusal::CaptureDenied { .. })));
+        assert!(matches!(
+            d,
+            PerceptionDecision::Refuse(PerceptionRefusal::CaptureDenied { .. })
+        ));
     }
 
     #[test]
     fn unlisted_class_is_default_denied() {
         let d = gate().check("license_plate", 0.99);
-        assert!(matches!(d, PerceptionDecision::Refuse(PerceptionRefusal::NoRule { .. })));
+        assert!(matches!(
+            d,
+            PerceptionDecision::Refuse(PerceptionRefusal::NoRule { .. })
+        ));
     }
 
     #[test]
     fn fails_closed_on_low_confidence() {
         // Might be a person mislabeled wildlife — refuse before consulting the rule.
         let d = gate().check("wildlife", 0.40);
-        assert!(matches!(d, PerceptionDecision::Refuse(PerceptionRefusal::LowConfidence { .. })));
+        assert!(matches!(
+            d,
+            PerceptionDecision::Refuse(PerceptionRefusal::LowConfidence { .. })
+        ));
     }
 
     #[test]

@@ -422,7 +422,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     "conscience: credential resolver using the unlocked vault (env fallback)"
                 );
                 Some(std::sync::Arc::new(vault)
-                    as std::sync::Arc<dyn oh_ben_claw::tools::credentials::CredentialResolver>)
+                    as std::sync::Arc<
+                        dyn oh_ben_claw::tools::credentials::CredentialResolver,
+                    >)
             })
         } else {
             None
@@ -2116,8 +2118,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 // perception decision so `replay-decisions` runs on real history.
                 let poll_decision_log: Option<Arc<oh_ben_claw::decision_log::DecisionLog>> =
                     std::env::var("OBC_DECISION_LOG").ok().and_then(|path| {
-                        match oh_ben_claw::decision_log::DecisionLog::open(&path, &config.conscience)
-                        {
+                        match oh_ben_claw::decision_log::DecisionLog::open(
+                            &path,
+                            &config.conscience,
+                        ) {
                             Ok(l) => {
                                 info!(path = %path, "conscience: perception decision log active");
                                 Some(Arc::new(l))

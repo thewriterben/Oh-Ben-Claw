@@ -390,12 +390,14 @@ impl McpRegistry {
         let Some(cred_name) = credential else {
             return Ok(config.clone()); // allowed, no credential required
         };
-        let secret = resolver.and_then(|r| r.resolve(&cred_name)).ok_or_else(|| {
-            anyhow::anyhow!(
-                "conscience: MCP server '{name}' requires credential '{cred_name}' but it \
+        let secret = resolver
+            .and_then(|r| r.resolve(&cred_name))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "conscience: MCP server '{name}' requires credential '{cred_name}' but it \
                  could not be resolved (not in the vault or environment)"
-            )
-        })?;
+                )
+            })?;
         let mut effective = config.clone();
         match effective.transport.as_str() {
             "http" => effective.token = Some(secret),
@@ -652,7 +654,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            cfg.env.as_ref().and_then(|e| e.get("gh-token")).map(String::as_str),
+            cfg.env
+                .as_ref()
+                .and_then(|e| e.get("gh-token"))
+                .map(String::as_str),
             Some("ghp_secret")
         );
     }

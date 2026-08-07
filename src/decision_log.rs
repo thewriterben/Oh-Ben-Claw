@@ -125,12 +125,18 @@ mod tests {
             let log = DecisionLog::open(&path, &cfg).unwrap();
             log.record(
                 1,
-                DecisionInput::Perception { label: "deer".into(), confidence: 0.9 },
+                DecisionInput::Perception {
+                    label: "deer".into(),
+                    confidence: 0.9,
+                },
                 &conscience,
             );
             log.record(
                 2,
-                DecisionInput::Perception { label: "person".into(), confidence: 0.9 },
+                DecisionInput::Perception {
+                    label: "person".into(),
+                    confidence: 0.9,
+                },
                 &conscience,
             );
         } // drop → flush

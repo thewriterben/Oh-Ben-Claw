@@ -187,7 +187,10 @@ pub struct ConscienceFilter {
 /// recognize is refused outright (fail closed). A detection with no confidence
 /// value also fails closed. Refusals are logged (first-class) and returned for
 /// the audit log.
-pub fn conscience_filter(detections: &[ClawCamDetection], conscience: &Conscience) -> ConscienceFilter {
+pub fn conscience_filter(
+    detections: &[ClawCamDetection],
+    conscience: &Conscience,
+) -> ConscienceFilter {
     let mut kept = Vec::new();
     let mut refused = Vec::new();
     for d in detections {
@@ -208,6 +211,14 @@ pub fn conscience_filter(detections: &[ClawCamDetection], conscience: &Conscienc
     ConscienceFilter { kept, refused }
 }
 
+/// What a gated ingest produced: the entity keys folded into world memory, and
+/// the detections the perception gate refused, each with its reason.
+///
+/// A named type rather than a bare tuple because the pair is returned from three
+/// places and clippy is right that `Result<(Vec<String>, Vec<(String,
+/// PerceptionRefusal)>)>` tells a reader nothing about which half is which.
+pub type GatedIngest = (Vec<String>, Vec<(String, PerceptionRefusal)>);
+
 /// Conscience-gated ingest: filter detections through the perception gate, then
 /// fold only the permitted ones into world memory. Drop-in replacement for
 /// [`ingest_clawcam_detections`] wherever a [`Conscience`] is available. Returns
@@ -218,7 +229,7 @@ pub fn ingest_clawcam_detections_gated(
     ingested_at_ms: u64,
     source: &str,
     conscience: &Conscience,
-) -> anyhow::Result<(Vec<String>, Vec<(String, PerceptionRefusal)>)> {
+) -> anyhow::Result<GatedIngest> {
     let filtered = conscience_filter(detections, conscience);
     let entities = ingest_clawcam_detections(world, &filtered.kept, ingested_at_ms, source)?;
     Ok((entities, filtered.refused))
@@ -308,7 +319,7 @@ pub fn ingest_tool_result_gated(
     ingested_at_ms: u64,
     source: &str,
     conscience: &Conscience,
-) -> anyhow::Result<(Vec<String>, Vec<(String, PerceptionRefusal)>)> {
+) -> anyhow::Result<GatedIngest> {
     let detections = extract_detections(tool_result);
     ingest_clawcam_detections_gated(world, &detections, ingested_at_ms, source, conscience)
 }
@@ -391,7 +402,9 @@ pub fn multiparty_filter(
                 consent_token: detections[i].consent_token.clone(),
             })
             .collect();
-        match decide_frame(&subjects, cx.ledger, restricted, cx.purpose, now_ms, cx.policy) {
+        match decide_frame(
+            &subjects, cx.ledger, restricted, cx.purpose, now_ms, cx.policy,
+        ) {
             FrameConsent::Allow => {
                 for &i in &idxs {
                     kept.push(detections[i].clone());
@@ -399,7 +412,9 @@ pub fn multiparty_filter(
             }
             FrameConsent::Refuse { unconsented } => refusals.push((
                 frame_key,
-                format!("multi-party consent: {unconsented} subject(s) without consent; frame dropped"),
+                format!(
+                    "multi-party consent: {unconsented} subject(s) without consent; frame dropped"
+                ),
             )),
             FrameConsent::Redact { indices } => {
                 // `indices` index into this frame's subject list; redact those,
@@ -500,6 +515,19 @@ pub async fn poll_clawcam_guarded(
 /// runtime-default perception path. Gate-only (no decision log, no multi-party
 /// consent; see [`poll_clawcam_guarded`] for those). When conscience is disabled
 /// the gate admits everything, so this is a safe drop-in for the plain poll.
+///
+/// **This has no callers.** `main.rs` calls [`poll_clawcam_guarded`] directly,
+/// building the [`PerceptionGuard`] itself, which is the only thing this
+/// function does before delegating. Kept rather than deleted because it is
+/// `pub` and the conscience work is still landing — but it is the shape this
+/// project has twice decided to cut (`src/runtime/`, `personality.rs`), so it
+/// wants a decision rather than an allow-forever.
+///
+/// The `allow` is here rather than a refactor for the same reason: taking a
+/// `&PerceptionGuard` would drop it to seven arguments and make it a verbatim
+/// alias of the function it calls, which is a worse answer than either keeping
+/// it as a convenience or removing it.
+#[allow(clippy::too_many_arguments)]
 pub async fn poll_clawcam_into_world_gated(
     client: Arc<Mutex<McpClient>>,
     world: &WorldMemory,
@@ -1017,7 +1045,10 @@ mod tests {
         let events: Vec<&str> = kept.iter().map(|k| k.event_id.as_str()).collect();
         assert!(events.contains(&"a"), "consented person kept");
         assert!(events.contains(&"c"), "wildlife kept");
-        assert!(!events.contains(&"b"), "un-consented person's frame dropped");
+        assert!(
+            !events.contains(&"b"),
+            "un-consented person's frame dropped"
+        );
         assert_eq!(refusals.len(), 1, "one frame refused");
     }
 
@@ -1288,7 +1319,10 @@ mod tests {
         let dets = vec![det("e", Some("deer"), 0.40, "unreviewed", None)];
         let out = conscience_filter(&dets, &c);
         assert!(out.kept.is_empty());
-        assert!(matches!(out.refused[0].1, PerceptionRefusal::LowConfidence { .. }));
+        assert!(matches!(
+            out.refused[0].1,
+            PerceptionRefusal::LowConfidence { .. }
+        ));
     }
 
     #[test]
@@ -1299,7 +1333,10 @@ mod tests {
         let dets = vec![det("e", Some("drone"), 0.99, "unreviewed", None)];
         let out = conscience_filter(&dets, &c);
         assert!(out.kept.is_empty());
-        assert!(matches!(out.refused[0].1, PerceptionRefusal::Unrecognized { .. }));
+        assert!(matches!(
+            out.refused[0].1,
+            PerceptionRefusal::Unrecognized { .. }
+        ));
     }
 
     #[test]

@@ -381,10 +381,7 @@ impl BrowserNavigateTool {
     }
 
     /// Attach a Track 0 auditor so refused navigations become tamper-evident records.
-    pub fn with_auditor(
-        mut self,
-        auditor: Arc<Mutex<crate::security::ActionAuditor>>,
-    ) -> Self {
+    pub fn with_auditor(mut self, auditor: Arc<Mutex<crate::security::ActionAuditor>>) -> Self {
         self.auditor = Some(auditor);
         self
     }

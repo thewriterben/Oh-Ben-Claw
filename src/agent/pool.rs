@@ -26,8 +26,8 @@ use crate::config::{AgentConfig, ProviderConfig};
 use crate::memory::MemoryStore;
 use crate::providers;
 use crate::tools::{default_tools_with_reach, Tool};
-use obc_conscience::ReachGate;
 use anyhow::{bail, Result};
+use obc_conscience::ReachGate;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -203,8 +203,11 @@ impl AgentPool {
         // Sub-agents get the SAME credential resolver (item (b)) as the
         // orchestrator, so a reach-named credential is injected at their egress
         // boundary too — delegation is not an injection bypass either.
-        let all_tools =
-            default_tools_with_reach(self.reach.clone(), self.auditor.clone(), self.resolver.clone());
+        let all_tools = default_tools_with_reach(
+            self.reach.clone(),
+            self.auditor.clone(),
+            self.resolver.clone(),
+        );
         let tools: Vec<Box<dyn Tool>> = if spec.tools.is_empty() {
             // Give all default tools
             all_tools

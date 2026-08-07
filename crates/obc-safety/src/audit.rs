@@ -405,14 +405,22 @@ mod tests {
         {
             let mut a = ActionAuditor::open(key.to_vec(), path.clone()).unwrap();
             let r1 = a
-                .record_conscience_refusal(1_000, "conscience.perception", "human",
-                                           "capture of class 'human' is denied")
+                .record_conscience_refusal(
+                    1_000,
+                    "conscience.perception",
+                    "human",
+                    "capture of class 'human' is denied",
+                )
                 .unwrap();
             assert!(matches!(r1.decision, Decision::Denied(_)));
             assert!(!r1.risk.physical); // conscience is not actuation
-            a.record_conscience_refusal(1_100, "conscience.reach", "evil.example.com",
-                                        "egress denied (not allowlisted)")
-                .unwrap();
+            a.record_conscience_refusal(
+                1_100,
+                "conscience.reach",
+                "evil.example.com",
+                "egress denied (not allowlisted)",
+            )
+            .unwrap();
         }
         // both refusals are in the same tamper-evident chain as physical actions
         assert_eq!(verify(&path, key).unwrap(), 2);

@@ -70,7 +70,10 @@ mod tests {
 
     #[test]
     fn resolves_a_known_name() {
-        let r = MapResolver(HashMap::from([("github".to_string(), "ghp_secret".to_string())]));
+        let r = MapResolver(HashMap::from([(
+            "github".to_string(),
+            "ghp_secret".to_string(),
+        )]));
         assert_eq!(r.resolve("github").as_deref(), Some("ghp_secret"));
     }
 

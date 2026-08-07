@@ -150,16 +150,49 @@ impl Default for SubjectClassifier {
 fn default_labels() -> HashMap<String, String> {
     let mut m = HashMap::new();
     for h in [
-        "person", "people", "pedestrian", "human", "man", "woman", "child",
-        "boy", "girl", "face", "head", "body",
+        "person",
+        "people",
+        "pedestrian",
+        "human",
+        "man",
+        "woman",
+        "child",
+        "boy",
+        "girl",
+        "face",
+        "head",
+        "body",
     ] {
         m.insert(h.to_string(), "human".to_string());
     }
     for w in [
-        "animal", "wildlife", "deer", "elk", "moose", "bird", "bear", "coyote",
-        "wolf", "fox", "rabbit", "hare", "squirrel", "raccoon", "skunk",
-        "opossum", "bobcat", "cougar", "mountain_lion", "turkey", "duck",
-        "goose", "owl", "hawk", "eagle", "boar", "hog",
+        "animal",
+        "wildlife",
+        "deer",
+        "elk",
+        "moose",
+        "bird",
+        "bear",
+        "coyote",
+        "wolf",
+        "fox",
+        "rabbit",
+        "hare",
+        "squirrel",
+        "raccoon",
+        "skunk",
+        "opossum",
+        "bobcat",
+        "cougar",
+        "mountain_lion",
+        "turkey",
+        "duck",
+        "goose",
+        "owl",
+        "hawk",
+        "eagle",
+        "boar",
+        "hog",
     ] {
         m.insert(w.to_string(), "wildlife".to_string());
     }
