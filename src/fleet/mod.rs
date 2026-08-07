@@ -37,33 +37,22 @@ fn dist2(a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)
 }
 
-/// A node's last-reported state (a heartbeat).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct NodeState {
-    pub id: String,
-    #[serde(default)]
-    pub x: Option<f64>,
-    #[serde(default)]
-    pub y: Option<f64>,
-    /// Battery state of charge (percent), if reported.
-    #[serde(default)]
-    pub battery: Option<f64>,
-    /// The node's power/operating mode (e.g. `"normal"`, `"critical"`).
-    #[serde(default)]
-    pub mode: String,
-    /// Whether the node is currently assigned a task.
-    #[serde(default)]
-    pub busy: bool,
-    /// When this heartbeat was recorded (ms).
-    pub last_seen_ms: u64,
-}
-
-impl NodeState {
-    /// Online if its last heartbeat is within `stale_ms` of `now`.
-    pub fn online(&self, now_ms: u64, stale_ms: u64) -> bool {
-        now_ms.saturating_sub(self.last_seen_ms) <= stale_ms
-    }
-}
+/// A node's last-reported state (a heartbeat) — re-exported from
+/// [`obc_telemetry`], where it moved on 2026-08-06.
+///
+/// It lived here, and being here was the only thing stopping `aerial` and
+/// `gnss` from extracting: each had exactly one `use crate::fleet::…` line and
+/// it was this type, so a 177-line and a 336-line module were pinned to an
+/// 823-line coordinator they otherwise never touch. Same shape as `RiskClass`
+/// before it was turned around.
+///
+/// The coordinator *reads* a heartbeat; it does not define one. `NodeState.mode`
+/// even uses the vocabulary `obc_telemetry::power` derives.
+///
+/// Re-exported rather than renamed, so `crate::fleet::NodeState` still resolves
+/// at all thirty-odd call sites across fleet, spine, gnss, aerial, tools and
+/// tests.
+pub use obc_telemetry::NodeState;
 
 /// Tracks the last-known state of every node.
 #[derive(Debug, Clone, Default)]

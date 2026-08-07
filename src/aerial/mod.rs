@@ -12,8 +12,8 @@
 //! site geofence. Pure and hardware-free — a real MAVLink/PX4 link would feed
 //! [`AerialTelemetry`] in; here it's just data.
 
-use crate::fleet::NodeState;
 use crate::geo::{GeoFrame, GeoPoint, Site};
+use obc_telemetry::NodeState;
 use serde::{Deserialize, Serialize};
 
 /// A snapshot of an aerial vehicle's state (MAVLink-ish), in geodetic coordinates.

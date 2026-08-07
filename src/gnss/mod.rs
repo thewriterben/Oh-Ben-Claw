@@ -11,8 +11,8 @@
 //! text. Only `GGA` (the canonical fix-and-altitude sentence) is decoded; other talkers
 //! are rejected so callers fail loudly rather than silently mis-parse.
 
-use crate::fleet::NodeState;
 use crate::geo::{GeoFrame, GeoPoint};
+use obc_telemetry::NodeState;
 use serde::{Deserialize, Serialize};
 
 /// The NMEA `GGA` fix-quality code, named for readability.
