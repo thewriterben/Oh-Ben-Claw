@@ -1,17 +1,17 @@
-//! GNSS tier — turn a node's raw satellite fix into a positioned fleet node (G3).
+//! GNSS tier ΓÇö turn a node's raw satellite fix into a positioned fleet node (G3).
 //!
 //! Where [`crate::aerial`] adapts an *already-decoded* lat/lon (MAVLink-style) into the
 //! fleet, this module sits one layer lower: it decodes the **NMEA 0183 `GGA`** sentence a
 //! bare GPS/GNSS receiver emits (`$GPGGA,...` / `$GNGGA,...`) into a [`GnssFix`], then
 //! projects that into a geodetic [`GeoPoint`] or a fleet [`NodeState`] via a site
 //! [`GeoFrame`]. So a ground node with nothing but a u-blox module joins the same local
-//! metric frame — and the same auction/exploration geometry — as everything else.
+//! metric frame ΓÇö and the same auction/exploration geometry ΓÇö as everything else.
 //!
 //! Pure and hardware-free: a real serial link feeds the sentence string in; here it's just
 //! text. Only `GGA` (the canonical fix-and-altitude sentence) is decoded; other talkers
 //! are rejected so callers fail loudly rather than silently mis-parse.
 
-use crate::geo::{GeoFrame, GeoPoint};
+use obc_planner::geo::{GeoFrame, GeoPoint};
 use obc_telemetry::NodeState;
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +28,7 @@ pub enum FixQuality {
     Rtk,
     /// RTK float (code 5).
     RtkFloat,
-    /// Any other code (estimated/manual/simulation/…).
+    /// Any other code (estimated/manual/simulation/ΓÇª).
     Other(u8),
 }
 
@@ -84,7 +84,7 @@ impl GnssFix {
     ///
     /// The `frame`'s ENU east/north become the fleet `x`/`y`. GNSS carries no battery, so
     /// `battery` is `None`; `mode` reports `"gnss_fix"` when a fix is present, else
-    /// `"gnss_nofix"`. A receiver is never "busy" — it only reports position.
+    /// `"gnss_nofix"`. A receiver is never "busy" ΓÇö it only reports position.
     pub fn to_node_state(&self, frame: &GeoFrame, id: impl Into<String>, now_ms: u64) -> NodeState {
         let enu = frame.to_enu(self.to_geopoint());
         NodeState {
@@ -156,7 +156,7 @@ fn parse_coord(val: &str, hemi: &str, is_lat: bool) -> Result<f64, String> {
 
 /// Parse an NMEA `GGA` sentence into a [`GnssFix`].
 ///
-/// Accepts any talker id ending in `GGA` (`GP`/`GN`/`GL`/`GA`/…). Validates the `*hh`
+/// Accepts any talker id ending in `GGA` (`GP`/`GN`/`GL`/`GA`/ΓÇª). Validates the `*hh`
 /// checksum when present. Returns a descriptive error for non-GGA sentences, bad
 /// checksums, or truncated/garbled fields.
 pub fn parse_gga(sentence: &str) -> Result<GnssFix, String> {
@@ -208,7 +208,7 @@ pub fn parse_gga(sentence: &str) -> Result<GnssFix, String> {
 mod tests {
     use super::*;
 
-    // Canonical GGA example (Wikipedia): 48°07.038'N, 011°31.000'E, fix=1, 8 sats, 545.4 m.
+    // Canonical GGA example (Wikipedia): 48┬░07.038'N, 011┬░31.000'E, fix=1, 8 sats, 545.4 m.
     const GGA: &str = "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47";
 
     #[test]
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn southern_and_western_hemispheres_are_negative() {
-        // 33°51.9'S, 151°12.6'E (Sydney-ish) and a western case.
+        // 33┬░51.9'S, 151┬░12.6'E (Sydney-ish) and a western case.
         let s = "$GPGGA,010203,3351.900,S,15112.600,E,1,07,1.2,10.0,M,,M,,*5C";
         // Fix the checksum by recomputing (test the parse, not a hand-typed csum):
         let body = &s[1..s.find('*').unwrap()];

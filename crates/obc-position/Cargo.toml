@@ -1,0 +1,26 @@
+[package]
+name = "obc-position"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's position sources: geodetic (MAVLink-style) telemetry and NMEA 0183 GGA fixes, projected through a site frame into the node state the fleet coordinates on."
+
+# The eighth and ninth pieces of the agent extracted (2026-08-06), and the first
+# pair unlocked deliberately rather than found already loose.
+#
+# `aerial` and `gnss` each named exactly one thing from `fleet` -- NodeState --
+# and that one import pinned a 177-line and a 336-line module to an 823-line
+# coordinator neither otherwise touches. Moving that 25-line struct into
+# obc-telemetry, where it belonged, took both from one blocking edge to zero,
+# and `scripts/extractability.py` said so before this crate existed.
+#
+# One crate rather than two because they are one pattern: real-world position
+# report -> site frame -> NodeState. The same reason obc-telemetry is one crate
+# and not three.
+#
+# Compiled verbatim in a scratch crate against serde plus the two crates already
+# extracted, 16 tests passing, before any of this was written.
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+obc-planner = { path = "../obc-planner" }
+obc-telemetry = { path = "../obc-telemetry" }
