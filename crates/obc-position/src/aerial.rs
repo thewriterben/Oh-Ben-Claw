@@ -1,18 +1,18 @@
-//! Aerial tier — plug a drone into the existing fleet as a body-agnostic node (G8).
+//! Aerial tier ΓÇö plug a drone into the existing fleet as a body-agnostic node (G8).
 //!
-//! The fleet coordinator ([`crate::fleet`]) is deliberately body-agnostic: it allocates
+//! The fleet coordinator (the core crate) is deliberately body-agnostic: it allocates
 //! tasks to any node that reports a [`NodeState`] (pose / battery / mode). This module is
-//! the thin adapter that lets an aerial vehicle be one of those nodes — it maps a drone's
+//! the thin adapter that lets an aerial vehicle be one of those nodes ΓÇö it maps a drone's
 //! **geodetic** telemetry (lat/lon/alt, MAVLink-style) into the fleet's **local metric**
 //! frame using a site [`GeoFrame`], so a UAV joins the same auction and coordinated
 //! exploration as a ground robot with no new coordination code.
 //!
 //! It also carries the aerial-specific safety check the fleet layer doesn't: a
 //! Track-0-flavoured [`flight_safe`] that refuses flight on low battery or outside the
-//! site geofence. Pure and hardware-free — a real MAVLink/PX4 link would feed
+//! site geofence. Pure and hardware-free ΓÇö a real MAVLink/PX4 link would feed
 //! [`AerialTelemetry`] in; here it's just data.
 
-use crate::geo::{GeoFrame, GeoPoint, Site};
+use obc_planner::geo::{GeoFrame, GeoPoint, Site};
 use obc_telemetry::NodeState;
 use serde::{Deserialize, Serialize};
 
@@ -68,8 +68,8 @@ impl AerialTelemetry {
 
 /// Aerial safety verdict: `None` = clear to fly, `Some(reason)` = must not.
 ///
-/// Refuses flight when the battery is below `min_battery_percent`, or — when a `geofence`
-/// site is supplied — when the vehicle is outside its boundary polygon. This is the
+/// Refuses flight when the battery is below `min_battery_percent`, or ΓÇö when a `geofence`
+/// site is supplied ΓÇö when the vehicle is outside its boundary polygon. This is the
 /// aerial Track-0 gate; the fleet layer treats it as advisory and the autopilot keeps its
 /// own limits.
 pub fn flight_safe(
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn north_offset_gives_positive_north() {
-        // ~0.001 deg north → ~111 m north, ~0 east.
+        // ~0.001 deg north ΓåÆ ~111 m north, ~0 east.
         let ns = drone(45.501, -122.6, 80.0, true).to_node_state(&frame(), 0);
         assert!(ns.y.unwrap() > 100.0 && ns.y.unwrap() < 120.0);
         assert!(ns.x.unwrap().abs() < 1e-3);

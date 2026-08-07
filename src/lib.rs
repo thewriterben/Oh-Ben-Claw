@@ -34,7 +34,16 @@
 /// shape as a release gate — which is exactly the kind of consumer a source-only
 /// survey misses. Kept.
 pub mod a2a;
-pub mod aerial;
+// `aerial` and `gnss` left for `obc-position` on 2026-08-06 — one crate, because
+// they are one pattern: a real-world position report projected through a site
+// frame into the `NodeState` the fleet coordinates on. They became extractable
+// the day before, when `NodeState` moved out of `fleet`; that one 25-line struct
+// was the only thing pinning a 177-line and a 336-line module to an 823-line
+// coordinator.
+//
+// Re-exported under the old names, so `crate::aerial::…` and `crate::gnss::…`
+// are unchanged at every call site.
+pub use obc_position::{aerial, gnss};
 pub mod agent;
 pub mod approval;
 pub mod audio;
@@ -58,7 +67,6 @@ pub mod gateway;
 /// [`obc_planner`] crate, where it sits next to the site optimizer that consumes
 /// it. `oh_ben_claw::geo::X` is unchanged.
 pub use obc_planner::geo;
-pub mod gnss;
 pub mod harness;
 pub mod learning;
 pub mod mcp;

@@ -9,6 +9,7 @@ members = [
     "crates/obc-telemetry",
     "crates/obc-observability",
     "crates/obc-scheduler",
+    "crates/obc-position",
     "crates/obc-conscience",
 ]
 exclude = [
@@ -68,6 +69,7 @@ obc-safety = { path = "crates/obc-safety" }
 obc-telemetry = { path = "crates/obc-telemetry" }
 obc-observability = { path = "crates/obc-observability" }
 obc-scheduler = { path = "crates/obc-scheduler" }
+obc-position = { path = "crates/obc-position" }
 obc-conscience = { path = "crates/obc-conscience" }
 toml = "1.0"
 shellexpand = "3.1"
