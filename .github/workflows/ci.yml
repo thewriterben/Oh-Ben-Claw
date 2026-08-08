@@ -38,6 +38,73 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Format check
         run: cargo fmt --all --check
+  # ── Each crate compiled alone ─────────────────────────────────────────────
+  # `cargo test --workspace` unifies Cargo features across every member, so a
+  # crate can use a feature of a shared dependency that it never declared, as
+  # long as some sibling declares it. The workspace build stays green and the
+  # crate is quietly broken for anyone who takes it on its own.
+  #
+  # obc-tunnel did exactly this, twice. It declared tokio `rt` while calling
+  # `tokio::runtime::Runtime::new()` (needs `rt-multi-thread`) and importing
+  # `tokio::sync::Mutex` (needs `sync`), and both were supplied by the root
+  # binary's tokio features. The first was caught only when the crate was
+  # vendored into OBC-Prime and built with no binary alongside it. The second
+  # survived even that -- and not via a sibling, since no crate in either
+  # workspace declares tokio `sync`; it arrives through hyper-util, levels down
+  # someone else's dependency tree. Only `cargo test -p obc-tunnel` -- one
+  # crate, its own feature resolution, no neighbours -- found it.
+  #
+  # So this job is per-crate on purpose. A second workspace, however
+  # independent, is still a workspace: it hides the same class of defect behind
+  # a different set of neighbours, and the neighbours that matter are not the
+  # ones visible in the manifests. The crate list is read from cargo metadata
+  # rather than written down, so a newly extracted crate is covered the day it
+  # lands instead of the day someone remembers to add it here.
+  crates-alone:
+    name: Each crate compiled alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-alone-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build and test each crate with no siblings
+        run: |
+          set -euo pipefail
+          # `tr -d '\r'` is not decoration: on Windows python's print emits CRLF,
+          # every crate name picks up a trailing carriage return, and cargo
+          # rejects it with "invalid character". Harmless on the runner, fatal
+          # for anyone running this script by hand to check it before pushing --
+          # and a gate nobody can run locally is a gate that rots.
+          crates=$(cargo metadata --no-deps --format-version 1 | python3 -c \
+            'import json,sys; [print(p["name"]) for p in json.load(sys.stdin)["packages"] if p["name"].startswith("obc-")]' \
+            | tr -d '\r' | sort)
+          if [ -z "$crates" ]; then
+            echo "no obc-* crates found -- the discovery query is wrong, not the workspace"
+            exit 1
+          fi
+          echo "$crates" | tr '\n' ' '; echo
+          failed=""
+          for c in $crates; do
+            echo "::group::$c"
+            if cargo test -p "$c" --all-targets; then
+              echo "$c ok"
+            else
+              failed="$failed $c"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "crates that do not stand alone:$failed"
+            exit 1
+          fi
   # ── MCP against a real third-party server ─────────────────────────────────
   # Blocking, unlike the conformance job below, and deliberately so. It found
   # three bugs the moment it was first run by hand -- a legacy server classified
