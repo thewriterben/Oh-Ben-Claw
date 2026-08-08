@@ -492,8 +492,13 @@ impl Tool for Stm32ListProbesTool {
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         let probes = Stm32NucleoPeripheral::list_probes().await?;
         if probes.is_empty() {
+            // No `.into()`: `ToolResult::ok` takes `impl Into<String>`, so an
+            // explicit `.into()` here asks the compiler to pick a target type it
+            // has no way to pin down -- and every crate in the graph offering
+            // `From<&'static str>` makes the ambiguity worse. It is E0283, not a
+            // style note, and it is why this module has never compiled.
             Ok(ToolResult::ok(
-                "No debug probes detected. Is the Nucleo board connected via USB?".into(),
+                "No debug probes detected. Is the Nucleo board connected via USB?",
             ))
         } else {
             Ok(ToolResult::ok(format!(
