@@ -24,6 +24,15 @@
 //! tamper-evident audit log (`obc_safety::audit`) by the caller — a conscience
 //! that isn't audited is just a promise.
 //!
+//! That sentence was true and unhelpful for as long as this crate shipped no
+//! way to write one down. [`decision_log`] is the sink it was describing: an
+//! append-only JSONL record of every decision, allows included, stamped with
+//! the config fingerprint in force — which is what makes [`replay`] able to
+//! tell a policy change from a determinism bug. It lived in the private
+//! runtime, so the crate that defines the record format could neither write
+//! one nor read one back, and the format was documented in a repository nobody
+//! could check it against.
+//!
 //! ## Honest limits (see spec §4/§6)
 //! The perception classifier ([`classifier`]) is a heuristic label→class map,
 //! fail-closed on any label it doesn't recognize; it is not a proof and a
@@ -37,6 +46,7 @@
 
 pub mod classifier;
 pub mod consent;
+pub mod decision_log;
 pub mod detector_eval;
 pub mod multiparty;
 pub mod reach;
