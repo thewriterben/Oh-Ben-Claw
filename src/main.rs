@@ -111,6 +111,23 @@ enum Commands {
         mode: String,
     },
 
+    /// Serve this agent over the A2A protocol: the well-known agent card and
+    /// the JSON-RPC endpoint other agents call.
+    A2aServe {
+        /// Port to bind.
+        #[arg(long, default_value = "4311")]
+        port: u16,
+        /// The base URL to advertise in the agent card's interface entry.
+        /// Other agents call this, so it must be reachable from where they run
+        /// — not necessarily the bind address.
+        #[arg(long)]
+        advertise: Option<String>,
+        /// Serve the protocol without a model: `SendMessage` completes and
+        /// echoes the message back. For conformance testing the wire shape.
+        #[arg(long)]
+        echo: bool,
+    },
+
     /// Measure LLM-judge calibration against a gold label set (Cohen's κ).
     /// The judge is configured via `OBC_JUDGE_PROVIDER`/`OBC_JUDGE_MODEL`
     /// (+ optional `OBC_JUDGE_API_KEY`/`OBC_JUDGE_BASE_URL`).
@@ -308,6 +325,13 @@ async fn main() -> Result<()> {
             mode,
         } => {
             run_mcp_serve(&config, &transport, port, &mode).await?;
+        }
+        Commands::A2aServe {
+            port,
+            advertise,
+            echo,
+        } => {
+            run_a2a_serve(&config, port, advertise.as_deref(), echo).await?;
         }
         Commands::JudgeCalibrate { gold, threshold } => {
             run_judge_calibrate(gold.as_deref(), threshold).await?;
@@ -3460,6 +3484,97 @@ async fn run_mcp_serve(config: &Config, transport: &str, port: u16, mode: &str) 
         }
         other => anyhow::bail!("unknown transport '{other}' (stdio | http)"),
     }
+}
+
+/// `oh-ben-claw a2a-serve` — expose this agent to other agents.
+///
+/// Serves the two things the A2A spec requires to be reachable: the well-known
+/// agent card (discovery) and the JSON-RPC endpoint. The card advertises the
+/// agent's tools as skills, so a caller can see what it is being offered.
+///
+/// This is the entry point the module spent five months without. `--echo` keeps
+/// the old stub behaviour available on purpose: it serves the protocol with no
+/// model behind it, which is what a conformance run wants and is the honest way
+/// to describe what `SendMessage` did for everyone before today.
+async fn run_a2a_serve(
+    config: &Config,
+    port: u16,
+    advertise: Option<&str>,
+    echo: bool,
+) -> Result<()> {
+    use oh_ben_claw::a2a::{A2AServer, EchoExecutor, TaskExecutor};
+    use oh_ben_claw::a2a_agent::AgentExecutor;
+    use oh_ben_claw::agent::Agent;
+    use oh_ben_claw::memory::MemoryStore;
+    use oh_ben_claw::tools::{default_tools, default_tools_with_reach};
+
+    let addr = format!("127.0.0.1:{port}");
+    // `[a2a]` in the config file was parsed and never read by anything —
+    // `config.a2a` had zero reads in `src/` and `tests/`, so `enabled = true`
+    // changed nothing. It is read here. `enabled` gates the command rather than
+    // being ignored, and the card fields are the config's, with `--advertise`
+    // as the override for the common case where the reachable URL differs from
+    // the bind address.
+    if !config.a2a.enabled {
+        anyhow::bail!(
+            "A2A is disabled — set `enabled = true` under [a2a] in your config to serve it"
+        );
+    }
+    let url = advertise
+        .map(str::to_string)
+        .unwrap_or_else(|| config.a2a.agent_url.clone());
+
+    // Same reasoning as mcp-serve: an A2A caller is an external party driving
+    // this agent's tools, so the conscience reach allowlist gates them when it
+    // is enabled.
+    let conscience = obc_conscience::Conscience::new(&config.conscience);
+    let tools = if conscience.enabled {
+        default_tools_with_reach(Some(conscience.reach.clone()), None, None)
+    } else {
+        default_tools()
+    };
+    // Skills advertised on the card: the config's list when it names any,
+    // otherwise the agent's actual tool names. A card that advertises a skill
+    // the agent does not have is a lie told at discovery time, so the fallback
+    // is what is really loaded rather than a hopeful default.
+    let skill_names: Vec<String> = if config.a2a.skills.is_empty() {
+        tools.iter().map(|t| t.name().to_string()).collect()
+    } else {
+        config.a2a.skills.clone()
+    };
+
+    let (executor, how): (Arc<dyn TaskExecutor>, &str) = if echo {
+        (Arc::new(EchoExecutor), "echo (no model)")
+    } else {
+        let provider = providers::from_config(&config.provider)?;
+        let memory = Arc::new(MemoryStore::open()?);
+        let agent = Arc::new(Agent::new(config.agent.clone(), provider, memory, tools));
+        (
+            Arc::new(AgentExecutor::new(agent, config.provider.clone())),
+            "agent dispatch",
+        )
+    };
+
+    let card = A2AServer::build_card(
+        &config.a2a.agent_name,
+        &config.a2a.agent_description,
+        &url,
+        env!("CARGO_PKG_VERSION"),
+        &skill_names,
+    );
+    let router = oh_ben_claw::a2a::http_router(A2AServer::new(card), executor);
+
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    info!(
+        card = %format!("http://{addr}/.well-known/agent-card.json"),
+        rpc = %format!("http://{addr}/a2a"),
+        advertised = %url,
+        execution = how,
+        skills = skill_names.len(),
+        "A2A server listening"
+    );
+    axum::serve(listener, router).await?;
+    Ok(())
 }
 
 /// `oh-ben-claw judge-calibrate` — measure whether the configured LLM judge
