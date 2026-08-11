@@ -1,0 +1,45 @@
+[package]
+name = "obc-navigation"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's navigation stack: Monte Carlo localization with a beam/likelihood-field sensor model, pose-graph SLAM with loop closure, occupancy and cost maps, A* planning, frontier exploration, and pose fusion."
+
+# The fourteenth piece extracted (2026-08-08), and the largest: 3714 lines
+# across nine files.
+#
+# It is also the clearest demonstration of what an extraction queue is made of.
+# `scripts/extractability.py` had it at one blocking edge — `movement` — for as
+# long as the script has existed. `movement` in turn had one blocking edge,
+# `spine`, which was one `Arc<SpineClient>` field in a single actuator sink.
+# Turning that one edge took 39 lines on 2026-08-08; obc-movement came out the
+# same day; and this crate, six times its size, followed with no further design
+# work at all. Nothing here was refactored to make it possible.
+#
+# The lesson recorded for the next candidate: measure the edges, not the line
+# count. `doctor` is 807 lines and harder to move than this was.
+#
+# What it is: Monte Carlo localization (particle filter, low-variance
+# resampling, adaptive KLD-style sizing) against a beam model and a likelihood
+# field; pose-graph SLAM with loop-closure detection and graph relaxation;
+# occupancy grids, inflation cost maps, A* with an admissible heuristic;
+# frontier-based exploration; and pose fusion across odometry, scan matching and
+# an external fix. The README's "Navigation / SLAM" row pointed at this and this
+# repository could not run it.
+#
+# Dependencies were guessed and corrected by the compiler. obc-movement is here
+# because the controller drives a plan; obc-memory because a pose is a fact with
+# provenance; obc-safety because a movement command is bounded before it goes
+# anywhere. Note that none of the three would have been declarable a week ago —
+# all three were modules in the agent.
+[dependencies]
+anyhow = "1.0"
+obc-memory = { path = "../obc-memory" }
+obc-movement = { path = "../obc-movement" }
+obc-safety = { path = "../obc-safety" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1.42", default-features = false, features = ["rt", "macros"] }

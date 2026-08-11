@@ -15,7 +15,7 @@
 //!  * [`BeamModelParams`] + [`LikelihoodField::scan_log_likelihood`] — the mixture
 //!    model `z_hit·𝒩(dist; σ) + z_rand` summed in log-space over beams.
 //!
-//! The filter calls [`crate::navigation::particle::ParticleFilter::update_scan`]
+//! The filter calls [`crate::particle::ParticleFilter::update_scan`]
 //! with these; a wrong pose makes the beams miss the walls and its weight
 //! collapses, so the cloud converges on the pose that *explains the scan*.
 
