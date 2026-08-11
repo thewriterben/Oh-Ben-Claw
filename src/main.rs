@@ -1043,7 +1043,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 let sink: Arc<dyn oh_ben_claw::movement::ActuatorSink> = match &reflex_spine {
                     Some(spine) => {
                         info!("Movement actuation dispatches over the spine");
-                        Arc::new(oh_ben_claw::movement::SpineActuatorSink::new(Arc::clone(
+                        Arc::new(oh_ben_claw::spine::SpineActuatorSink::new(Arc::clone(
                             spine,
                         )))
                     }
