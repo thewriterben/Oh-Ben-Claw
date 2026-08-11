@@ -15,8 +15,8 @@
 //! The format is JSON Lines (one record per line) because that is what an
 //! append-only log wants; the replay reader accepts both a JSON array and JSONL.
 
+use crate::{Conscience, ConscienceConfig, DecisionInput, DecisionRecord};
 use anyhow::{Context, Result};
-use obc_conscience::{Conscience, ConscienceConfig, DecisionInput, DecisionRecord};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -48,7 +48,7 @@ impl DecisionLog {
             .with_context(|| format!("opening decision log {path:?}"))?;
         Ok(Self {
             file: Mutex::new(file),
-            fingerprint: obc_conscience::config_fingerprint(config),
+            fingerprint: crate::config_fingerprint(config),
         })
     }
 
@@ -58,7 +58,7 @@ impl DecisionLog {
     /// a full disk must not take down perception (the gate already decided; this
     /// only records it).
     pub fn record(&self, ts: u64, input: DecisionInput, conscience: &Conscience) {
-        let verdict = obc_conscience::replay::evaluate(&input, conscience);
+        let verdict = crate::replay::evaluate(&input, conscience);
         let rec = DecisionRecord {
             ts,
             input,
@@ -100,7 +100,7 @@ pub fn parse_log(text: &str) -> Result<Vec<DecisionRecord>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use obc_conscience::{ConsentRule, Transmit};
+    use crate::{ConsentRule, Transmit};
 
     fn armed() -> ConscienceConfig {
         ConscienceConfig {
@@ -148,7 +148,7 @@ mod tests {
         assert!(!records[1].verdict.allowed, "person refused");
 
         // The persisted log replays cleanly under the same config.
-        let report = obc_conscience::replay_decisions(&records, &conscience, &cfg);
+        let report = crate::replay_decisions(&records, &conscience, &cfg);
         assert!(report.all_matched());
         let _ = std::fs::remove_file(&path);
     }

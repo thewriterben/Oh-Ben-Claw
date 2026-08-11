@@ -56,6 +56,16 @@ pub mod channels;
 // every call site.
 pub use obc_telemetry::comms;
 pub mod config;
+/// The persistent sink for conscience decisions, moved into [`obc_conscience`]
+/// where the record format, the replay reader and the config fingerprint it
+/// stamps already live. It was the only piece of that story outside the crate,
+/// which meant the public crate defined a log format it could not write.
+///
+/// Not an extraction — 163 lines do not want their own crate. `obc-conscience`
+/// gains `anyhow` and `std::fs` by taking it; that is the whole cost, and it
+/// buys a crate that can produce the evidence its own doc comment demands.
+/// `oh_ben_claw::decision_log::…` and `crate::decision_log::…` are unchanged.
+pub use obc_conscience::decision_log;
 // Token accounting and the spending budget left for `obc-cost` on 2026-08-06.
 // Its only edge outside itself was `CostConfig`, its own config block sitting in
 // the root config module — so the config struct went with it, the way
@@ -63,7 +73,6 @@ pub mod config;
 // obc-conscience. `crate::cost::…` and `crate::config::CostConfig` are both
 // unchanged.
 pub use obc_cost as cost;
-pub mod decision_log;
 pub mod deployment;
 pub mod doctor;
 pub mod fleet;
