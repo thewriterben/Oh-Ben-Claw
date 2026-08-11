@@ -114,7 +114,19 @@ pub mod mcp;
 pub use obc_memory as memory;
 pub use obc_planner;
 pub mod mission;
-pub mod movement;
+/// Typed, safety-bounded actuation — the act side of the
+/// perceive→remember→reflex→act loop, extracted to [`obc_movement`] on
+/// 2026-08-08.
+///
+/// It was blocked for months by exactly one edge: `Arc<crate::spine::SpineClient>`
+/// in one struct field and one constructor parameter of the single
+/// `ActuatorSink` implementation that talked to the spine. Two lines of type
+/// against a 741-line module. That sink now lives in [`spine::actuator`] and
+/// implements this crate's trait from there, which is the same direction
+/// `obc_a2a::TaskExecutor` and `RiskClass` were turned.
+///
+/// `crate::movement::…` is unchanged at every call site.
+pub use obc_movement as movement;
 pub mod navigation;
 // The agent's self-instrumentation lives in its own crate (2026-08-02) — spans,
 // the span ring buffer, and the counters `/api/v1/metrics` serves. Re-exported

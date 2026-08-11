@@ -14,6 +14,7 @@ members = [
     "crates/obc-tunnel",
     "crates/obc-conscience",
     "crates/obc-a2a",
+    "crates/obc-movement",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
@@ -77,6 +78,7 @@ obc-cost = { path = "crates/obc-cost" }
 obc-tunnel = { path = "crates/obc-tunnel" }
 obc-conscience = { path = "crates/obc-conscience" }
 obc-a2a = { path = "crates/obc-a2a" }
+obc-movement = { path = "crates/obc-movement" }
 toml = "1.0"
 shellexpand = "3.1"
 
