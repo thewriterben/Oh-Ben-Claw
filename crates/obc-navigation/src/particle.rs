@@ -14,7 +14,7 @@
 
 use super::sensor_model::{BeamModelParams, LikelihoodField};
 use super::slam::{compose, Pose2, RelPose};
-use crate::memory::world::WorldMemory;
+use obc_memory::world::WorldMemory;
 use serde_json::json;
 use std::f64::consts::PI;
 use std::sync::{Arc, Mutex};
@@ -517,8 +517,8 @@ mod tests {
 
     #[test]
     fn scan_update_pulls_cloud_toward_the_pose_that_explains_it() {
-        use crate::navigation::planning::{Cell, OccupancyGrid};
-        use crate::navigation::sensor_model::{BeamModelParams, LikelihoodField};
+        use crate::planning::{Cell, OccupancyGrid};
+        use crate::sensor_model::{BeamModelParams, LikelihoodField};
 
         // 16×16 @ 0.5 m → covers [0,8). A vertical wall at world x≈6 (cell col 12).
         let mut g = OccupancyGrid::new(0.0, 0.0, 0.5, 16, 16);

@@ -21,8 +21,8 @@ pub mod pose_fusion;
 pub mod sensor_model;
 pub mod slam;
 
-use crate::memory::world::WorldMemory;
-use crate::movement::{MovementCommand, MovementController};
+use obc_memory::world::WorldMemory;
+use obc_movement::{MovementCommand, MovementController};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
@@ -560,8 +560,8 @@ impl NavController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::movement::LoggingActuatorSink;
-    use crate::security::limits::{SafetyGate, SafetyLimit};
+    use obc_movement::LoggingActuatorSink;
+    use obc_safety::limits::{SafetyGate, SafetyLimit};
 
     fn nav(world: &Arc<WorldMemory>) -> NavController {
         let mut steer_lim = SafetyLimit::new("rover", "servo_angle");

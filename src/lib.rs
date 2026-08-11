@@ -127,7 +127,18 @@ pub mod mission;
 ///
 /// `crate::movement::…` is unchanged at every call site.
 pub use obc_movement as movement;
-pub mod navigation;
+/// Monte Carlo localization, pose-graph SLAM, occupancy and cost maps, A*
+/// planning, frontier exploration and pose fusion — extracted to
+/// [`obc_navigation`] on 2026-08-08, the same day as [`obc_movement`].
+///
+/// 3714 lines across nine files, and nothing in it was refactored to make the
+/// move possible. Its one blocking edge was `movement`, whose one blocking edge
+/// was a single `Arc<SpineClient>` field. Turning that edge took 39 lines;
+/// this crate — six times the size of the one it was waiting on — followed with
+/// no further design work. Measure the edges, not the line count.
+///
+/// `crate::navigation::…` is unchanged at every call site.
+pub use obc_navigation as navigation;
 // The agent's self-instrumentation lives in its own crate (2026-08-02) — spans,
 // the span ring buffer, and the counters `/api/v1/metrics` serves. Re-exported
 // under the old name so `crate::observability::…` is unchanged at every call

@@ -12,7 +12,7 @@
 //! fusion layer that a SLAM front-end would feed, and the seam where one can land.
 
 use super::{value_of, Pose};
-use crate::memory::world::WorldMemory;
+use obc_memory::world::WorldMemory;
 use serde_json::json;
 use std::sync::Arc;
 

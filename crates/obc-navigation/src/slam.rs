@@ -15,7 +15,7 @@
 //! that proposes closures) is approximated here by spatial proximity
 //! ([`PoseGraph::find_revisit`]); a real system would use scan/feature matching.
 
-use crate::memory::world::WorldMemory;
+use obc_memory::world::WorldMemory;
 use serde_json::json;
 use std::f64::consts::PI;
 use std::sync::{Arc, Mutex};
