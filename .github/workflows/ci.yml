@@ -60,6 +60,20 @@ jobs:
   # ones visible in the manifests. The crate list is read from cargo metadata
   # rather than written down, so a newly extracted crate is covered the day it
   # lands instead of the day someone remembers to add it here.
+  #
+  # It runs `check` *and* `test`, and the two are not redundant. Building the
+  # lib as a test target links [dev-dependencies] into it, so a dependency the
+  # library genuinely needs can be declared dev-only and never noticed. obc-a2a
+  # arrived that way on 2026-08-08 -- `A2AClient` uses reqwest, reqwest was
+  # under [dev-dependencies], and:
+  #
+  #     cargo test  -p obc-a2a --all-targets  -> 0
+  #     cargo check -p obc-a2a                -> 101   E0433 unresolved reqwest
+  #
+  # This job at the time ran only the first command. It was itself the gate
+  # that missed it, one day after being written to catch exactly this family of
+  # under-declared dependency. `check` first, so the failure names the real
+  # problem instead of a test that cannot build.
   crates-alone:
     name: Each crate compiled alone
     runs-on: ubuntu-latest
@@ -94,7 +108,7 @@ jobs:
           failed=""
           for c in $crates; do
             echo "::group::$c"
-            if cargo test -p "$c" --all-targets; then
+            if cargo check -p "$c" && cargo test -p "$c" --all-targets; then
               echo "$c ok"
             else
               failed="$failed $c"

@@ -1,0 +1,59 @@
+[package]
+name = "obc-a2a"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's Agent-to-Agent v1.0 endpoint: the wire types, the JSON-RPC task lifecycle, and the HTTP transport that makes an agent discoverable and callable by other agents."
+
+# The twelfth piece extracted (2026-08-08), and the first one that had to be
+# made worth extracting before it could be.
+#
+# It was the cleanest candidate on the board by the only measure that matters
+# for extraction -- it named nothing else in the agent, zero edges -- and that
+# was exactly the problem. `src/main.rs` named it zero times, `src/gateway/`
+# zero times, and flipping `pub mod a2a` to `pub(crate)` so `dead_code` could
+# see it produced 34 items never constructed. Extracting it in that state would
+# have published a crate nobody could call, which is worse in a public
+# repository than in a private one: it reads as a feature.
+#
+# So it got an entry point first (`oh-ben-claw a2a-serve`, agent dispatch, a
+# read of the `[a2a]` config that had never been read), and is extracted now
+# that there is something to extract.
+#
+# The zero-edge property was preserved on purpose rather than by luck. Wiring it
+# needed an executor that calls `Agent::process`, and the obvious place to put
+# that was here, next to everything else A2A. It is instead in the agent, at
+# `src/a2a_agent.rs`, implementing the `TaskExecutor` trait this crate declares.
+# Trait here, implementation there: one file's worth of inconvenience to keep a
+# crate boundary that already existed.
+#
+# axum is a real dependency of this crate, not an accident of the workspace. A
+# protocol crate that cannot be served is the state this one spent five months
+# in; `http_router` is part of what it is for. `crates-alone` in CI compiles it
+# with no siblings, which is the check that would have caught the tokio feature
+# gap in obc-tunnel and is what proves this dependency list is complete.
+# reqwest is a real dependency, not a test one, and this crate proved why. It
+# was first declared under [dev-dependencies] -- `A2AClient` needs it and the
+# socket tests need it, and only the second fact registered. `cargo test -p
+# obc-a2a --all-targets` passed: when cargo builds the lib as a test target it
+# links dev-dependencies into it, so the missing declaration was invisible.
+# `cargo check -p obc-a2a` failed immediately with E0433.
+#
+#     cargo test  -p obc-a2a --all-targets  -> 0
+#     cargo check -p obc-a2a                -> 101
+#
+# That is the crates-alone CI job's own blind spot, found by using it: running
+# each crate's *tests* alone does not prove the crate *builds* for anyone who
+# is not running its tests. The job now does both.
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.42", default-features = false, features = ["sync"] }
+uuid = { version = "1.11", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1.42", default-features = false, features = ["rt", "rt-multi-thread", "macros", "net"] }

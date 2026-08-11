@@ -30,23 +30,31 @@
 // tests, and future integrations). A library legitimately exposes more surface than
 // its own binary uses; that is an argument for `pub`, not for silencing the lint.
 
-/// Agent-to-agent protocol, served over HTTP by `oh-ben-claw a2a-serve`.
+/// Agent-to-agent protocol, extracted to [`obc_a2a`] on 2026-08-08 and served
+/// over HTTP by `oh-ben-claw a2a-serve`.
 ///
 /// This comment used to read "No `src/` consumer, but `tests/evals.rs` pins its
 /// wire shape as a release gate — which is exactly the kind of consumer a
 /// source-only survey misses. Kept." All true, and it undersold the problem.
-/// Measured on 2026-08-08: `src/main.rs` named this module zero times,
+/// Measured before the extraction: `src/main.rs` named this module zero times,
 /// `src/gateway/` zero times, and with `pub` removed so `dead_code` could see
 /// it, rustc reported 34 items never constructed. 791 conformant, tested lines
 /// implementing a server nobody could start.
 ///
-/// "Kept" was the right call and it was not a plan. It has an entry point now.
-pub mod a2a;
+/// It was the cleanest extraction candidate in the crate — zero edges to
+/// anything else here — and that was the same fact seen from the other side.
+/// So it was wired first and extracted second, in that order and deliberately:
+/// a public crate nobody can call is worse in public than in private, because
+/// there it reads as a feature.
+///
+/// `crate::a2a::…` and `oh_ben_claw::a2a::…` are unchanged.
+pub use obc_a2a as a2a;
 /// The [`a2a::TaskExecutor`] implementation that dispatches to the real agent.
 ///
-/// Deliberately not inside `a2a`: that module names nothing else in this crate,
-/// which is the property that makes it separable, and an agent-dispatching
-/// executor would end that. Trait there, implementation here.
+/// Deliberately not inside `obc-a2a`: that crate names nothing in this one,
+/// which is the property that let it become a crate at all. Trait there,
+/// implementation here — one file's worth of inconvenience for a boundary that
+/// already existed.
 pub mod a2a_agent;
 // `aerial` and `gnss` left for `obc-position` on 2026-08-06 — one crate, because
 // they are one pattern: a real-world position report projected through a site
