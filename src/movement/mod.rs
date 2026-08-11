@@ -160,45 +160,6 @@ impl ActuatorSink for LoggingActuatorSink {
     }
 }
 
-/// Drives a real movement node over the MQTT spine: invokes the node's typed
-/// movement tool (`servo_angle` / `motor_speed` / `stop`), which the node bounds
-/// again with its own firmware Track 0 limits. Best-effort — spine errors are
-/// logged, not propagated, so one unreachable node never stalls the controller.
-pub struct SpineActuatorSink {
-    spine: Arc<crate::spine::SpineClient>,
-}
-
-impl SpineActuatorSink {
-    /// Build a sink over a (connected) spine client.
-    pub fn new(spine: Arc<crate::spine::SpineClient>) -> Self {
-        Self { spine }
-    }
-}
-
-#[async_trait]
-impl ActuatorSink for SpineActuatorSink {
-    async fn drive(&self, applied: &AppliedMovement) -> anyhow::Result<()> {
-        let args = match applied.tool.as_str() {
-            "servo_angle" => json!({ "channel": applied.channel, "degrees": applied.value }),
-            "motor_speed" => json!({ "channel": applied.channel, "speed": applied.value }),
-            _ => json!({ "channel": applied.channel }), // "stop"
-        };
-        if let Err(e) = self
-            .spine
-            .invoke_tool(&applied.node_id, &applied.tool, args)
-            .await
-        {
-            tracing::warn!(
-                node_id = %applied.node_id,
-                tool = %applied.tool,
-                error = %e,
-                "movement over spine failed"
-            );
-        }
-        Ok(())
-    }
-}
-
 /// Orchestrates safety-bounded actuation: gate → remember → dispatch.
 pub struct MovementController {
     node_id: String,
