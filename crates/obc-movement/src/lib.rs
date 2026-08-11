@@ -14,15 +14,15 @@
 //!   [`ActuatorSink`] (dry-run logging today; spine/firmware driver later) so the
 //!   same caller works regardless of the physical backend.
 //!
-//! Where vision *perceives into* memory ([`crate::vision::clawcam_ingest`]),
+//! Where vision *perceives into* memory (`vision::clawcam_ingest`, upstream),
 //! movement *acts and records into* memory — closing the perceive→remember→
 //! reflex→act loop on the actuation side.
 
 pub mod feedback;
 
-use crate::memory::world::WorldMemory;
-use crate::security::limits::{SafetyGate, SafetyViolation};
 use async_trait::async_trait;
+use obc_memory::world::WorldMemory;
+use obc_safety::limits::{SafetyGate, SafetyViolation};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -262,7 +262,7 @@ impl MovementController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security::limits::SafetyLimit;
+    use obc_safety::limits::SafetyLimit;
 
     fn servo_limit(node: &str, channel: i64, min: i64, max: i64) -> SafetyLimit {
         let mut l = SafetyLimit::new(node, "servo_angle");

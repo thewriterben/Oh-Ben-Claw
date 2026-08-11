@@ -11,8 +11,8 @@
 //! perception and actuation close the loop through the same shared memory the
 //! rest of the system uses.
 
-use crate::memory::world::WorldMemory;
-use crate::movement::{MovementCommand, MovementController};
+use crate::{MovementCommand, MovementController};
+use obc_memory::world::WorldMemory;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -146,8 +146,8 @@ impl ClosedLoopServo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::movement::LoggingActuatorSink;
-    use crate::security::limits::{SafetyGate, SafetyLimit};
+    use crate::LoggingActuatorSink;
+    use obc_safety::limits::{SafetyGate, SafetyLimit};
     use serde_json::json;
 
     fn pcontroller() -> PController {
