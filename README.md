@@ -223,40 +223,49 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 > is worth more attention than any one instance — a control with tests and a config
 > key reads as present to every check except running it.
 
-**MCP Integration** exposes all tools as a Model Context Protocol server (stdio + HTTP/SSE, dual-mode for the 2026 spec) and imports tools from external MCP servers. **A2A Protocol** — the wire format of Google's Agent-to-Agent v1.0, implemented and conformance-tested. Not reachable; see below.
+**MCP Integration** exposes all tools as a Model Context Protocol server (stdio + HTTP/SSE, dual-mode for the 2026 spec) and imports tools from external MCP servers. **A2A Protocol** — Google's Agent-to-Agent v1.0, implemented, conformance-tested, and served by `oh-ben-claw a2a-serve`.
 
-> **A2A is not served.** This line claimed A2A "implements Google's
-> Agent-to-Agent v1.0 for cross-platform agent interop", and the comparison table
-> below marked it "✅ Client + server (both)". What exists is 871 lines and 18
-> unit tests in `src/a2a/`, plus wire-shape goldens in `tests/evals.rs` — the v1.0
-> `AgentCard` shape, proto-name enum serialization, the no-`kind`-discriminator
-> rule, `google.rpc.ErrorInfo` error bodies, version-header rejection. That work
-> is real and the goldens are worth having.
+> **A2A is served now (2026-08-08).** This block said "**A2A is not served**",
+> and it was right for five months. Keeping the finding rather than deleting it,
+> because what it measured is the useful part:
 >
-> What does not exist is any way to reach it:
+> - `src/main.rs` named `a2a` **zero** times; `src/gateway/` **zero** times.
+> - With `pub mod a2a` flipped to `pub(crate)` so `dead_code` could see it,
+>   rustc reported **34 items never constructed or used** — `pub` had been
+>   silencing the lint over the whole module.
+> - `[a2a]` parsed and was read by nothing: `config.a2a` had **zero** reads in
+>   `src/` and `tests/`, so `enabled = true` changed nothing. It was not in
+>   `config.example.toml` either, so it was inert *and* undiscoverable.
+> - `A2AServer::execute` was a stub that filed the message in history and
+>   returned `TASK_STATE_COMPLETED`, having done nothing.
 >
-> - `A2AServer` is constructed **only in its own tests and `tests/evals.rs`**;
->   `A2AClient` is constructed **nowhere at all**, tests included.
-> - The gateway serves no `/.well-known/agent-card.json` and no A2A endpoint —
->   every mention of that path in `src/` is inside `src/a2a/mod.rs` itself.
-> - `[a2a]` parses and is never read. `A2AConfig` — `enabled`, `agent_name`,
->   `agent_description`, `agent_url`, `skills` — is a field on the root config,
->   and `config.a2a` has **zero** reads in `src/` and `tests/`. Setting
->   `enabled = true` changes nothing. It is not in `config.example.toml` either,
->   so it is undiscoverable as well as inert — the same shape as
->   `[clawhub.install_policy]` above.
-> - `A2AServer::execute` is a documented stub: it files the inbound message in
->   history and returns `TASK_STATE_COMPLETED`, having done nothing. Its own
->   comment says "real deployments dispatch to the agent loop here."
+> What changed:
 >
-> So serving it as-is would be worse than not serving it — a conformant endpoint
-> that reports every task complete. Wiring it means deciding task dispatch, auth
-> on the endpoint, and sync-vs-streaming, which is a design, not a hookup.
+> - `oh-ben-claw a2a-serve` binds an HTTP listener serving
+>   `/.well-known/agent-card.json` and the JSON-RPC endpoint at `/a2a`.
+> - `SendMessage` dispatches to `Agent::process` through a `TaskExecutor` trait;
+>   the reply comes back as a text artifact on a completed task, and a model or
+>   tool failure returns a **failed task**, not a JSON-RPC error — the request
+>   was well formed and the protocol worked. `--echo` keeps the old stub
+>   reachable on purpose, for conformance runs with no model behind them.
+> - `[a2a]` is read: `a2a-serve` refuses to start unless `enabled = true`, and
+>   the card is built from `agent_name`, `agent_description`, `agent_url` and
+>   `skills`. The block is in `config.example.toml` now.
+> - 5 tests drive a real socket — card fetch, version-header refusal, send and
+>   retrieve across two requests, and a marker executor proving the transport
+>   uses the executor it was given rather than the old hard-coded path.
 >
-> This is the fourth control found in this shape, after node pairing, the tool
-> sandbox and ClawHub install. Two of those are now fixed. Worth noting which
-> check would have caught this one: not the tests — they pass, and they are
-> testing the right things. Only asking *who constructs this type* finds it.
+> **Still not true of it:** the endpoint has **no authentication** — anyone who
+> can reach the port can drive this agent's tools, so bind it to localhost or
+> put it behind something. `A2AClient` is still constructed **nowhere**: this
+> agent can be called, and cannot call out. Streaming (`SendStreamingMessage`,
+> `SubscribeToTask`) still returns `UNSUPPORTED_OPERATION`, which is a
+> conformant answer and not an implementation.
+>
+> This was the fourth control found in this shape, after node pairing, the tool
+> sandbox and ClawHub install. Worth noting which check found it: not the tests
+> — they passed, and they were testing the right things. Only asking *who
+> constructs this type*, and then removing the `pub` that was hiding the answer.
 
 **Operations** — `oh-ben-claw doctor` health checks (now including subsystem/safing coherence), token **cost tracking** with persistent budgets, **observability** (metrics + spans), scheduled tasks, encrypted secrets **vault**, and a tamper-evident **audit chain**.
 
@@ -750,7 +759,8 @@ Oh-Ben-Claw/
 │   ├── mcp/            # Model Context Protocol client/server (dual-mode)
 │   ├── peripherals/    # Hardware drivers + registry SSOT
 │   ├── providers/      # LLM provider adapters + failover + retry
-│   ├── a2a/            # A2A wire format — implemented, not served (see above)
+│   ├── a2a/            # A2A protocol + HTTP transport — `oh-ben-claw a2a-serve`
+│   ├── a2a_agent.rs    # The A2A executor that dispatches to the agent
 │   ├── scheduler/      # Scheduled tasks and cron jobs
 │   ├── security.rs     # Re-exports obc-safety under the old module path
 │   ├── skill_forge/    # Skill discovery, synthesis, ClawHub registry
@@ -797,7 +807,7 @@ Oh-Ben-Claw is built on the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw
 | Vision / audio / fusion | ✗ | ✅ |
 | Deployment planner | ✗ | ✅ LLM + rule-based swarm |
 | GUI | ✗ | ✅ Tauri 2 + React 18 |
-| MCP / A2A | ✗ | MCP: ✅ client + server. A2A: wire format only — implemented, conformance-tested, not served |
+| MCP / A2A | ✗ | MCP: ✅ client + server. A2A: ✅ server (`a2a-serve`, no auth on the endpoint); no client — this agent can be called, not call out |
 | Human approval | ✗ | ✅ 3 autonomy levels |
 | Tool sandboxing | ✗ | ✗ — see Operations. Host-side policy allowlist instead (`[[security.policies]]`) |
 | Edge-native mode | ✗ | ✅ (ESP32-S3, NanoPi) |

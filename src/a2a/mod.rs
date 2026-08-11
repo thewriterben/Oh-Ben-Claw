@@ -626,6 +626,157 @@ impl A2AServer {
     pub fn task_count(&self) -> usize {
         self.tasks.len()
     }
+
+    /// Handle one JSON-RPC request, running `SendMessage` through `executor`.
+    ///
+    /// Everything except `SendMessage` is pure protocol and defers to
+    /// [`Self::handle_jsonrpc`]; only task execution needs to await anything.
+    /// That split is why the 18 protocol tests and the wire-shape goldens in
+    /// `tests/evals.rs` are unchanged by the arrival of a real executor: they
+    /// exercise the sync path, which still behaves exactly as it did.
+    pub async fn handle_jsonrpc_with(
+        &mut self,
+        req: &A2AMessage,
+        executor: &dyn TaskExecutor,
+    ) -> Value {
+        if req.method != "SendMessage" {
+            return self.handle_jsonrpc(req);
+        }
+
+        let id = req.id.clone().unwrap_or(Value::Null);
+        let params = req.params.clone().unwrap_or(json!({}));
+
+        let message: Message = match serde_json::from_value(params["message"].clone()) {
+            Ok(m) => m,
+            Err(e) => {
+                return json!({"jsonrpc": "2.0", "id": id, "error": json!({
+                    "code": -32602,
+                    "message": format!("invalid SendMessage params: {e}"),
+                })})
+            }
+        };
+        if !message.parts.iter().all(Part::is_valid_oneof) {
+            return json!({"jsonrpc": "2.0", "id": id, "error": json!({
+                "code": -32602,
+                "message": "each part must contain exactly one of text/raw/url/data",
+            })});
+        }
+
+        let task = executor.execute(message).await;
+        self.tasks.insert(task.id.clone(), task.clone());
+        json!({"jsonrpc": "2.0", "id": id, "result": json!({ "task": task })})
+    }
+}
+
+// ── Task execution ────────────────────────────────────────────────────────────
+
+/// What a `SendMessage` actually *does*.
+///
+/// The protocol half of this module was complete and tested from the day it
+/// landed; what it never had was an implementation of this trait that did
+/// anything, or a transport to reach it through. [`EchoExecutor`] is the
+/// behaviour that was hard-coded before — it completes the task and returns the
+/// message unchanged — kept because every existing test asserts it.
+///
+/// The trait is deliberately defined here and implemented elsewhere. This
+/// module names nothing else in the crate, which is the property that makes it
+/// separable; an agent-dispatching executor lives next to the agent
+/// (`src/a2a_agent.rs`) so that stays true.
+#[async_trait::async_trait]
+pub trait TaskExecutor: Send + Sync {
+    /// Run one inbound message to a terminal task.
+    async fn execute(&self, message: Message) -> Task;
+}
+
+/// The no-op executor: completes immediately, returns the message as history,
+/// produces no artifacts.
+///
+/// This is what `SendMessage` did for everyone, always. Useful for conformance
+/// testing the protocol without standing up a model, and honest about being
+/// nothing more than that.
+pub struct EchoExecutor;
+
+#[async_trait::async_trait]
+impl TaskExecutor for EchoExecutor {
+    async fn execute(&self, message: Message) -> Task {
+        let context_id = message
+            .context_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        Task {
+            id: uuid::Uuid::new_v4().to_string(),
+            context_id: Some(context_id),
+            status: TaskStatus {
+                state: TaskState::Completed,
+                message: None,
+                timestamp: None,
+            },
+            artifacts: Vec::new(),
+            history: vec![message],
+            metadata: None,
+        }
+    }
+}
+
+// ── HTTP transport ────────────────────────────────────────────────────────────
+
+/// Everything an axum router needs to serve one agent.
+struct ServeState {
+    server: tokio::sync::Mutex<A2AServer>,
+    executor: std::sync::Arc<dyn TaskExecutor>,
+}
+
+/// Serve this agent over HTTP: the well-known agent card and the JSON-RPC
+/// endpoint, which are the two things the A2A spec requires to be reachable.
+///
+/// Until 2026-08-08 this function did not exist, and neither did any caller of
+/// this module outside its own tests. The protocol was implemented, conformant
+/// and unreachable — `src/main.rs` named `a2a` zero times, `src/gateway/` zero
+/// times, and with `pub` removed so `dead_code` could see it rustc reported 34
+/// items never constructed. A server nobody can start.
+pub fn http_router(server: A2AServer, executor: std::sync::Arc<dyn TaskExecutor>) -> axum::Router {
+    use axum::routing::{get, post};
+
+    let state = std::sync::Arc::new(ServeState {
+        server: tokio::sync::Mutex::new(server),
+        executor,
+    });
+    axum::Router::new()
+        .route(WELL_KNOWN_AGENT_CARD_PATH, get(card_handler))
+        .route("/a2a", post(rpc_handler))
+        .with_state(state)
+}
+
+async fn card_handler(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<ServeState>>,
+) -> axum::Json<AgentCard> {
+    axum::Json(state.server.lock().await.handle_discover())
+}
+
+async fn rpc_handler(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<ServeState>>,
+    headers: axum::http::HeaderMap,
+    axum::Json(req): axum::Json<A2AMessage>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    // An absent A2A-Version means 0.3 per spec, which this agent does not
+    // speak. Refusing here rather than in the handler keeps the version rule
+    // in one place and out of every method.
+    let version = headers.get("a2a-version").and_then(|v| v.to_str().ok());
+    if let Err(error) = A2AServer::validate_version(version) {
+        let id = req.id.clone().unwrap_or(Value::Null);
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            axum::Json(json!({"jsonrpc": "2.0", "id": id, "error": error})),
+        )
+            .into_response();
+    }
+
+    let executor = state.executor.clone();
+    let mut server = state.server.lock().await;
+    let body = server.handle_jsonrpc_with(&req, executor.as_ref()).await;
+    (axum::http::StatusCode::OK, axum::Json(body)).into_response()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -867,5 +1018,142 @@ mod tests {
         let err = A2AServer::validate_version(Some("0.3")).unwrap_err();
         assert_eq!(err["code"], error_codes::VERSION_NOT_SUPPORTED);
         assert_eq!(err["data"]["reason"], "VERSION_NOT_SUPPORTED");
+    }
+
+    // ── HTTP transport ────────────────────────────────────────────────────
+    //
+    // These drive a real socket rather than calling the handlers directly.
+    // Everything above this line passed for five months while the module was
+    // unreachable, because none of it needed a transport to exist. A test that
+    // cannot fail when the server cannot be started is not testing the server.
+
+    /// Bind an ephemeral port, serve, and return the base URL.
+    async fn serve_for_test(executor: std::sync::Arc<dyn TaskExecutor>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = http_router(server(), executor);
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        format!("http://{addr}")
+    }
+
+    async fn rpc(base: &str, version: Option<&str>, body: Value) -> (u16, Value) {
+        let mut req = reqwest::Client::new().post(format!("{base}/a2a"));
+        if let Some(v) = version {
+            req = req.header("A2A-Version", v);
+        }
+        let resp = req.json(&body).send().await.unwrap();
+        let status = resp.status().as_u16();
+        (status, resp.json().await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn the_agent_card_is_served_at_the_well_known_path() {
+        let base = serve_for_test(std::sync::Arc::new(EchoExecutor)).await;
+        let card: Value = reqwest::get(format!("{base}{WELL_KNOWN_AGENT_CARD_PATH}"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(card["name"], "test-agent");
+        assert_eq!(card["supportedInterfaces"][0]["protocolVersion"], "1.0");
+    }
+
+    #[tokio::test]
+    async fn a_request_without_a_version_header_is_refused_over_http() {
+        let base = serve_for_test(std::sync::Arc::new(EchoExecutor)).await;
+        let (status, body) = rpc(
+            &base,
+            None,
+            json!({"jsonrpc": "2.0", "id": 1, "method": "SendMessage",
+                   "params": {"message": Message::user_text("hi")}}),
+        )
+        .await;
+        assert_eq!(status, 400);
+        assert_eq!(body["error"]["code"], error_codes::VERSION_NOT_SUPPORTED);
+    }
+
+    #[tokio::test]
+    async fn send_message_over_http_runs_the_executor_and_stores_the_task() {
+        let base = serve_for_test(std::sync::Arc::new(EchoExecutor)).await;
+        let (status, body) = rpc(
+            &base,
+            Some("1.0"),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "SendMessage",
+                   "params": {"message": Message::user_text("hello")}}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            body["result"]["task"]["status"]["state"],
+            "TASK_STATE_COMPLETED"
+        );
+
+        // The task must survive into the next request: one server, shared state,
+        // which is the thing a router-per-request would silently get wrong.
+        let id = body["result"]["task"]["id"].as_str().unwrap().to_string();
+        let (status, body) = rpc(
+            &base,
+            Some("1.0"),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "GetTask", "params": {"id": id}}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(body["result"]["id"], id);
+    }
+
+    #[tokio::test]
+    async fn a_custom_executor_is_what_actually_answers() {
+        struct Marker;
+        #[async_trait::async_trait]
+        impl TaskExecutor for Marker {
+            async fn execute(&self, message: Message) -> Task {
+                Task {
+                    id: "fixed-id".into(),
+                    context_id: None,
+                    status: TaskStatus {
+                        state: TaskState::Failed,
+                        message: None,
+                        timestamp: None,
+                    },
+                    artifacts: Vec::new(),
+                    history: vec![message],
+                    metadata: None,
+                }
+            }
+        }
+
+        let base = serve_for_test(std::sync::Arc::new(Marker)).await;
+        let (_, body) = rpc(
+            &base,
+            Some("1.0"),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "SendMessage",
+                   "params": {"message": Message::user_text("hi")}}),
+        )
+        .await;
+        // If the transport ignored the executor and used the old hard-coded
+        // path, this would come back Completed with a generated id.
+        assert_eq!(body["result"]["task"]["id"], "fixed-id");
+        assert_eq!(
+            body["result"]["task"]["status"]["state"],
+            "TASK_STATE_FAILED"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_non_send_method_still_takes_the_pure_protocol_path() {
+        let base = serve_for_test(std::sync::Arc::new(EchoExecutor)).await;
+        let (status, body) = rpc(
+            &base,
+            Some("1.0"),
+            json!({"jsonrpc": "2.0", "id": 7, "method": "GetTask",
+                   "params": {"id": "nope"}}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(body["error"]["code"], error_codes::TASK_NOT_FOUND);
+        assert_eq!(body["error"]["data"]["domain"], "a2a-protocol.org");
     }
 }
