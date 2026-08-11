@@ -154,10 +154,23 @@ pub mod providers;
 // last module the extractability survey listed with zero blocking edges.
 // Re-exported under the old name so `crate::scheduler::…` is unchanged in
 // main.rs and the four gateway routes that drive it.
-pub use obc_scheduler as scheduler;
-pub mod security;
 /// The site coverage optimizer — re-exported from the [`obc_planner`] crate.
 pub use obc_planner::siteplan;
+/// Track 0 — an alias for the [`obc_safety`] crate, which has held the
+/// implementation since 2026-07-30.
+///
+/// This was `pub mod security;` over a twelve-line `src/security.rs` whose
+/// entire body was `pub use obc_safety::*;`. Identical to a reader and to the
+/// compiler, and not identical to a survey: every tool that measures module
+/// edges counted `crate::security::…` as a dependency on a module still in
+/// this tree. It is 44 crossings from the core — 27% of everything
+/// `scripts/core_endgame.py` measured — pointing at a crate that left months
+/// ago.
+///
+/// The map said the core was more tangled than it is, because a file existed
+/// whose only content was a redirect. `crate::security::…` is unchanged.
+pub use obc_safety as security;
+pub use obc_scheduler as scheduler;
 pub use obc_telemetry::sensing;
 pub mod skill_forge;
 pub mod spine;
