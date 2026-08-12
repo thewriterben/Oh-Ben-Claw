@@ -74,6 +74,20 @@ days.
 surprise in this document: the core is not densely coupled. It is *cyclically*
 coupled, which is a different disease and mostly a cheaper one.
 
+*Superseded the same day by step 1 below. After `obc-tool-api` the same table
+reads:*
+
+| module | loc | blocking edges | crossings |
+|---|---:|---:|---:|
+| `agent` | 9244 | 6 | **42** |
+| `tools` | 8886 | 4 | 13 |
+| `spine` | 4680 | **2** | 9 |
+| `gateway` | 2313 | **5** | 12 |
+| `config` | 3371 | 6 | 11 |
+
+*87 crossings, 16 cycles. Both tables are kept because the delta between them is
+the only evidence that any of this works.*
+
 Three specifics carry most of it.
 
 **`tools::traits` is a trait crate wearing a 9052-line module.** `agent` names
