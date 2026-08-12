@@ -21,7 +21,7 @@
 
 use crate::config::{AutonomyConfig, AutonomyLevel};
 use crate::security::trust::{self, TrustGate, TrustScorer};
-use crate::tools::traits::RiskClass;
+use obc_tool_api::RiskClass;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -72,9 +72,9 @@ pub fn risk_summary(risk: &RiskClass) -> String {
         "irreversible"
     };
     let blast = match risk.blast {
-        crate::tools::traits::BlastRadius::None => "no blast radius",
-        crate::tools::traits::BlastRadius::Low => "low blast radius",
-        crate::tools::traits::BlastRadius::High => "high blast radius",
+        obc_tool_api::BlastRadius::None => "no blast radius",
+        obc_tool_api::BlastRadius::Low => "low blast radius",
+        obc_tool_api::BlastRadius::High => "high blast radius",
     };
     let tail = if risk.requires_per_call_approval() {
         " - defaults to per-call approval"
@@ -819,12 +819,12 @@ mod tests {
         Arc::new(s)
     }
     fn phys_low() -> RiskClass {
-        RiskClass::physical(true, crate::tools::traits::BlastRadius::Low)
+        RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
     }
 
     fn phys_critical() -> RiskClass {
         // Irreversible + high blast: the "unlock the front door" class.
-        RiskClass::physical(false, crate::tools::traits::BlastRadius::High)
+        RiskClass::physical(false, obc_tool_api::BlastRadius::High)
     }
 
     // ── Track 0: risk-driven approval defaults ────────────────────────────────

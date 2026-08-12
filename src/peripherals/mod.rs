@@ -51,8 +51,8 @@ pub use traits::Peripheral;
 
 use crate::config::{PeripheralBoardConfig, PeripheralsConfig};
 use crate::spine::{NodeAnnouncement, NodeToolSpec, SpineClient};
-use crate::tools::traits::Tool;
 use anyhow::Result;
+use obc_tool_api::Tool;
 use std::sync::Arc;
 
 /// Create the unified tool registry from all configured peripheral boards.

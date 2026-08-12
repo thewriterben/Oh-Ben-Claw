@@ -540,12 +540,12 @@ pub async fn demote_skill(
 /// Response body for a tool that ran to completion but did not succeed.
 ///
 /// Carries `error` as well as `output`. A refused or failed tool puts its reason in
-/// [`crate::tools::traits::ToolResult::error`] and leaves `output` empty, so a body built
+/// [`obc_tool_api::ToolResult::error`] and leaves `output` empty, so a body built
 /// from `output` alone is `{"output":"","success":false}` — the caller can see *that*
 /// something failed but never *why*. On the bench (2026-07-17) that turned a working
 /// Track 0 refusal ("safety: pin 99 not in allow-list") into an hour of hunting a
 /// delivery problem that did not exist.
-fn tool_failure_body(name: &str, result: &crate::tools::traits::ToolResult) -> Value {
+fn tool_failure_body(name: &str, result: &obc_tool_api::ToolResult) -> Value {
     json!({
         "tool": name,
         "success": false,
@@ -862,7 +862,7 @@ mod tests {
         // The bench case: mesh_command refused by the node's Track 0 allow-list. The
         // reason lives in `error`; `output` is empty. A body built from `output` alone
         // told the operator only that something failed.
-        use crate::tools::traits::ToolResult;
+        use obc_tool_api::ToolResult;
         let refused = ToolResult::err("safety: pin 99 not in allow-list");
         let body = tool_failure_body("mesh_command", &refused);
 
@@ -878,7 +878,7 @@ mod tests {
     #[test]
     fn an_approval_refusal_also_says_why() {
         // The other refusal an operator hits: the approval gate, not the node.
-        use crate::tools::traits::ToolResult;
+        use obc_tool_api::ToolResult;
         let body = tool_failure_body(
             "mesh_command",
             &ToolResult::err("requires operator approval (autonomy is supervised)"),

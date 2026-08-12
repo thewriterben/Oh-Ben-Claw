@@ -36,9 +36,9 @@
 //! (`src/tunnel/`).
 
 use crate::spine::{NodeAnnouncement, ToolCallRequest, ToolCallResult};
-use crate::tools::traits::{Tool, ToolResult};
 use anyhow::{bail, Result};
 use async_trait::async_trait;
+use obc_tool_api::{Tool, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;

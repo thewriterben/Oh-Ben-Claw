@@ -23,9 +23,9 @@
 
 use crate::config::ProviderConfig;
 use crate::providers::{from_config, ChatCompletion, ChatMessage, Provider};
-use crate::tools::traits::Tool;
 use anyhow::Result;
 use async_trait::async_trait;
+use obc_tool_api::Tool;
 use std::sync::Arc;
 
 /// A provider that tries each of an ordered list of providers and returns the

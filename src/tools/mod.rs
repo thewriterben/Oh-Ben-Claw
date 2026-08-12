@@ -6,7 +6,16 @@
 
 pub mod builtin;
 pub mod credentials;
-pub mod traits;
+/// The tool contract — the `Tool` trait, `ToolResult`, and the Track 0
+/// vocabulary — extracted to [`obc_tool_api`] on 2026-08-08.
+///
+/// It left because it was the reason three other modules had an edge into this
+/// one. `agent` named `tools::traits` 23 times, `gateway` 5, `spine` 2: 30 of
+/// the core's 117 crossings were the contract, not the 9052 lines of tools
+/// implementing it. See docs/ENDGAME.md.
+///
+/// `crate::tools::traits::…` is unchanged at every call site.
+pub use obc_tool_api as traits;
 
 pub use builtin::{
     audio::{AudioTranscribeTool, TextToSpeechTool},

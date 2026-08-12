@@ -8,9 +8,9 @@
 
 use crate::config::ProviderConfig;
 use crate::providers::{ChatCompletion, ChatMessage, Provider};
-use crate::tools::traits::Tool;
 use anyhow::Result;
 use async_trait::async_trait;
+use obc_tool_api::Tool;
 use std::sync::Arc;
 use std::time::Duration;
 

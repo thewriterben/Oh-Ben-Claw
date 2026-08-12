@@ -29,9 +29,9 @@ pub mod p2p;
 pub use actuator::SpineActuatorSink;
 
 use crate::config::SpineConfig; // SpineConfig is defined in config::mod
-use crate::tools::traits::{Tool, ToolResult};
 use anyhow::{bail, Result};
 use async_trait::async_trait;
+use obc_tool_api::{Tool, ToolResult};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
