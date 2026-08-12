@@ -35,8 +35,8 @@ use crate::security::trust::{self, TrustGate, TrustScorer};
 use crate::security::PolicyEngine;
 use crate::skill_forge::rollout::RolloutTracker;
 use crate::skill_forge::{SkillForge, SkillTool};
-use crate::tools::traits::{RiskClass, RolloutStage, Tool};
 use anyhow::Result;
+use obc_tool_api::{RiskClass, RolloutStage, Tool};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
@@ -763,7 +763,7 @@ impl Agent {
         name: &str,
         args_str: &str,
         taint: Option<&crate::security::taint::TaintPool>,
-    ) -> Result<crate::tools::traits::ToolResult> {
+    ) -> Result<obc_tool_api::ToolResult> {
         self.execute_tool_inner(name, args_str, false, taint).await
     }
 
@@ -777,7 +777,7 @@ impl Agent {
         args_str: &str,
         in_sequence: bool,
         taint: Option<&crate::security::taint::TaintPool>,
-    ) -> Result<crate::tools::traits::ToolResult> {
+    ) -> Result<obc_tool_api::ToolResult> {
         let mut name = name.to_string();
         let mut args_str = args_str.to_string();
 
@@ -806,7 +806,7 @@ impl Agent {
                         reason = %reason,
                         "Tool call blocked by policy"
                     );
-                    return Ok(crate::tools::traits::ToolResult::err(format!(
+                    return Ok(obc_tool_api::ToolResult::err(format!(
                         "Tool '{}' blocked by security policy '{}': {}",
                         name, policy_name, reason
                     )));
@@ -833,7 +833,7 @@ impl Agent {
                         obs.metrics.counter("skill_simulations_total").inc();
                     }
                     tracing::info!(skill = %name, "staged skill simulated (stage=simulate)");
-                    return Ok(crate::tools::traits::ToolResult::ok(format!(
+                    return Ok(obc_tool_api::ToolResult::ok(format!(
                         "SIMULATION — Track 0 staged rollout (stage=simulate): skill '{}' did \
                          NOT execute. It {}. Clean simulated runs count toward promotion; an \
                          operator can promote with `oh-ben-claw skill promote {}`.",
@@ -852,7 +852,7 @@ impl Agent {
                             skill = %name,
                             "supervised-stage skill refused: no explicit operator grant"
                         );
-                        return Ok(crate::tools::traits::ToolResult::err(format!(
+                        return Ok(obc_tool_api::ToolResult::err(format!(
                             "Skill '{}' is at rollout stage 'supervised' and requires an \
                              explicit operator grant (auto_approve list, session, or forever \
                              grant) before it may execute",
@@ -868,7 +868,7 @@ impl Agent {
                 Some((target, fixed_args)) => {
                     hops += 1;
                     if hops > MAX_DELEGATE_HOPS {
-                        return Ok(crate::tools::traits::ToolResult::err(format!(
+                        return Ok(obc_tool_api::ToolResult::err(format!(
                             "Delegate chain exceeded {} hops at '{}' (cycle?)",
                             MAX_DELEGATE_HOPS, name
                         )));
@@ -889,7 +889,7 @@ impl Agent {
         // the first failing step aborts the recipe.
         if let Some(steps) = tool.as_sequence() {
             if in_sequence {
-                return Ok(crate::tools::traits::ToolResult::err(format!(
+                return Ok(obc_tool_api::ToolResult::err(format!(
                     "Sequence skill '{}' cannot run inside another sequence",
                     name
                 )));
@@ -905,7 +905,7 @@ impl Agent {
                     }
                     Ok(r) => {
                         self.record_staged_run(&staged_skill, false);
-                        return Ok(crate::tools::traits::ToolResult::err(format!(
+                        return Ok(obc_tool_api::ToolResult::err(format!(
                             "Sequence '{}' failed at step {} ({}): {}",
                             name,
                             i + 1,
@@ -915,7 +915,7 @@ impl Agent {
                     }
                     Err(e) => {
                         self.record_staged_run(&staged_skill, false);
-                        return Ok(crate::tools::traits::ToolResult::err(format!(
+                        return Ok(obc_tool_api::ToolResult::err(format!(
                             "Sequence '{}' failed at step {} ({}): {}",
                             name,
                             i + 1,
@@ -926,7 +926,7 @@ impl Agent {
                 }
             }
             self.record_staged_run(&staged_skill, true);
-            return Ok(crate::tools::traits::ToolResult::ok(outputs.join("\n")));
+            return Ok(obc_tool_api::ToolResult::ok(outputs.join("\n")));
         }
 
         // Track 0: for physical actions, enforce deterministic safety limits and
@@ -944,7 +944,7 @@ impl Agent {
                 reason = %reason,
                 "Physical action refused by Track 0 safety gate"
             );
-            return Ok(crate::tools::traits::ToolResult::err(format!(
+            return Ok(obc_tool_api::ToolResult::err(format!(
                 "Tool '{}' refused by safety gate: {}",
                 name, reason
             )));
@@ -966,7 +966,7 @@ impl Agent {
                         node = %node_id,
                         "Physical action denied: node is untrusted (Track 0 dynamic trust)"
                     );
-                    return Ok(crate::tools::traits::ToolResult::err(format!(
+                    return Ok(obc_tool_api::ToolResult::err(format!(
                         "Tool '{}' denied: node '{}' is untrusted",
                         name, node_id
                     )));
@@ -980,7 +980,7 @@ impl Agent {
         // blocking on a prompt; Full autonomy and granted/auto-approved tools pass.
         if let Err(reason) = approval_authorize(self.approval.as_deref(), name, &node_id, risk) {
             tracing::warn!(tool = %name, node = %node_id, reason = %reason, "tool call refused by approval policy");
-            return Ok(crate::tools::traits::ToolResult::err(format!(
+            return Ok(obc_tool_api::ToolResult::err(format!(
                 "Tool '{}' refused: {}",
                 name, reason
             )));
@@ -1009,7 +1009,7 @@ impl Agent {
                             tool = %name, arg = %hit.arg_path, source = %hit.source,
                             "privileged call refused: argument derives from untrusted content (Track 0 taint)"
                         );
-                        return Ok(crate::tools::traits::ToolResult::err(format!(
+                        return Ok(obc_tool_api::ToolResult::err(format!(
                             "Tool '{}' refused (Track 0 taint): argument '{}' (={:?}) echoes \
                              untrusted content from '{}'. A value derived from external content \
                              may not parameterize a privileged action without an explicit \
@@ -1038,7 +1038,7 @@ impl Agent {
         // so later privileged calls this run can be checked against it.
         if self.taint_mode != TaintMode::Off {
             if let (Some(pool), Ok(r)) = (taint, &result) {
-                if r.success && tool.output_trust() == crate::tools::traits::OutputTrust::External {
+                if r.success && tool.output_trust() == obc_tool_api::OutputTrust::External {
                     pool.add(name, &r.output);
                 }
             }
@@ -1091,7 +1091,7 @@ impl Agent {
         &self,
         name: &str,
         args: serde_json::Value,
-    ) -> Result<crate::tools::traits::ToolResult> {
+    ) -> Result<obc_tool_api::ToolResult> {
         let args_str = args.to_string();
         self.execute_tool(name, &args_str, None).await
     }
@@ -1355,7 +1355,7 @@ mod tests {
         assert_eq!(ctx.len() - 1, MAX_HISTORY_MESSAGES.min(40));
     }
     use crate::security::limits::{SafetyGate, SafetyLimit};
-    use crate::tools::traits::BlastRadius;
+    use obc_tool_api::BlastRadius;
     use serde_json::json;
 
     #[test]

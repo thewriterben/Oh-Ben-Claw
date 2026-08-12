@@ -19,7 +19,7 @@ use super::synthesis::{
 };
 use super::{SkillForge, SkillManifest};
 use crate::memory::trajectory::{Episode, Outcome, TrajectoryStore};
-use crate::tools::traits::{BlastRadius, RiskClass};
+use obc_tool_api::{BlastRadius, RiskClass};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -592,7 +592,7 @@ mod tests {
         );
         assert_eq!(
             m.stage,
-            crate::tools::traits::RolloutStage::Simulate,
+            obc_tool_api::RolloutStage::Simulate,
             "physical learned skill starts at the simulate stage"
         );
         assert!(m.tags.iter().any(|t| t == "track0:supervised"));
@@ -814,7 +814,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             m.stage,
-            crate::tools::traits::RolloutStage::Simulate,
+            obc_tool_api::RolloutStage::Simulate,
             "sensor evidence never advances a physical skill past simulate"
         );
         assert!(m.tags.contains(&"track0:sensor-verified".to_string()));

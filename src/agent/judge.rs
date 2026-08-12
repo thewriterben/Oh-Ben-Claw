@@ -268,8 +268,8 @@ pub fn cohens_kappa(pairs: &[(bool, bool)]) -> f64 {
 mod tests {
     use super::*;
     use crate::providers::ChatCompletion;
-    use crate::tools::traits::Tool;
     use async_trait::async_trait;
+    use obc_tool_api::Tool;
 
     struct FixedJudgeProvider(&'static str);
     #[async_trait]

@@ -141,7 +141,7 @@ impl TtsSpeechSink {
 #[async_trait]
 impl SpeechSink for TtsSpeechSink {
     async fn speak(&self, u: &Utterance) -> anyhow::Result<()> {
-        use crate::tools::traits::Tool;
+        use obc_tool_api::Tool;
         let path = self.out_path(u.at_ms);
         let args = json!({ "text": u.text, "voice": u.voice, "output_path": path });
         match self.tts.execute(args).await {

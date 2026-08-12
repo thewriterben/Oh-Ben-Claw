@@ -14,7 +14,7 @@
 //! to `simulate` on its first real-run failure.
 
 use super::SkillForge;
-use crate::tools::traits::RolloutStage;
+use obc_tool_api::RolloutStage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

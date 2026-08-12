@@ -255,7 +255,7 @@ pub fn tag_physical(mut manifest: SkillManifest) -> SkillManifest {
     if !manifest.tags.iter().any(|t| t == "track0:supervised") {
         manifest.tags.push("track0:supervised".to_string());
     }
-    manifest.stage = crate::tools::traits::RolloutStage::Simulate;
+    manifest.stage = obc_tool_api::RolloutStage::Simulate;
     manifest.enabled = true;
     manifest
 }
@@ -279,7 +279,7 @@ pub fn verify(
 /// (only ever reached by non-physical, replay-safe recipes).
 pub fn approve(mut manifest: SkillManifest) -> SkillManifest {
     manifest.enabled = true;
-    manifest.stage = crate::tools::traits::RolloutStage::Autonomous;
+    manifest.stage = obc_tool_api::RolloutStage::Autonomous;
     manifest
 }
 
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn track0_interlock_detects_and_tags_physical() {
-        use crate::tools::traits::RolloutStage;
+        use obc_tool_api::RolloutStage;
         let ep = success_episode("unlock door", "gpio_write", true);
         assert!(touches_actuator(&ep, &["gpio_write", "relay"]));
         assert!(!touches_actuator(&ep, &["camera_capture"]));

@@ -100,7 +100,7 @@ pub async fn require_operate(
                 "remote-operator",
                 &format!("gateway:{} {}", method.as_str(), path),
                 &args,
-                crate::tools::traits::RiskClass::default(),
+                obc_tool_api::RiskClass::default(),
                 crate::security::audit::Decision::Allowed,
             );
         }

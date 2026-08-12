@@ -1,7 +1,7 @@
 //! Peripheral trait — the interface all hardware peripheral drivers must implement.
 
-use crate::tools::traits::Tool;
 use async_trait::async_trait;
+use obc_tool_api::Tool;
 
 /// A hardware peripheral that exposes a set of tools to the agent.
 ///

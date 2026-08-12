@@ -847,7 +847,7 @@ mod tests {
         // the `sense` tool — being the agent's boundary by construction — now says so.
         use crate::memory::world::Origin;
         use crate::sensing::{QuantitySpec, Sample, SensingController};
-        use crate::tools::traits::Tool;
+        use obc_tool_api::Tool;
         use std::sync::Arc;
 
         // Two stores, deliberately. `SenseTool` stamps the real clock, so a

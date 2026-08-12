@@ -163,7 +163,7 @@ pub struct SkillManifest {
     /// Defaults to `autonomous` (authored/installed skills behave as before);
     /// synthesized physical skills start at `simulate`.
     #[serde(default)]
-    pub stage: crate::tools::traits::RolloutStage,
+    pub stage: obc_tool_api::RolloutStage,
     /// Free-form tags for categorisation.
     #[serde(default)]
     pub tags: Vec<String>,
@@ -304,7 +304,7 @@ impl Tool for SkillTool {
         }
     }
 
-    fn rollout_stage(&self) -> crate::tools::traits::RolloutStage {
+    fn rollout_stage(&self) -> obc_tool_api::RolloutStage {
         self.manifest.stage
     }
 

@@ -45,8 +45,8 @@ use crate::providers;
 use crate::security::PolicyEngine;
 use crate::spine::p2p::{P2pConfig, P2pSpine};
 use crate::spine::NodeAnnouncement;
-use crate::tools::traits::Tool;
 use anyhow::Result;
+use obc_tool_api::Tool;
 use std::sync::Arc;
 
 // ── EdgeAgent ─────────────────────────────────────────────────────────────────

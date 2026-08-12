@@ -274,8 +274,8 @@ mod tests {
     use crate::memory::trajectory::{Episode, EpisodeStep, Outcome};
     use crate::providers::ChatCompletion;
     use crate::skill_forge::SkillKind;
-    use crate::tools::traits::{RolloutStage, Tool};
     use async_trait::async_trait;
+    use obc_tool_api::{RolloutStage, Tool};
     use serde_json::json;
     use std::sync::Mutex;
 

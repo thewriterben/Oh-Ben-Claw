@@ -209,7 +209,7 @@ impl AgentHandle {
 
     /// The declared physical-risk class of a registered tool (default-safe
     /// when unknown). Powers physical-aware approval surfaces (Track 0).
-    pub fn tool_risk(&self, name: &str) -> crate::tools::traits::RiskClass {
+    pub fn tool_risk(&self, name: &str) -> obc_tool_api::RiskClass {
         self.agent.tool_risk(name)
     }
 
@@ -254,7 +254,7 @@ impl AgentHandle {
         &self,
         name: &str,
         args: serde_json::Value,
-    ) -> anyhow::Result<crate::tools::traits::ToolResult> {
+    ) -> anyhow::Result<obc_tool_api::ToolResult> {
         let call_id = uuid::Uuid::new_v4().to_string();
 
         // Broadcast the tool call event
