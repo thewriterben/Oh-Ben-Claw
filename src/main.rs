@@ -1626,8 +1626,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         if let Some(world) = &world_mem {
             use oh_ben_claw::agent::reflex::{
                 ActionSink, EscalationBudget, LoggingActionSink, MovementActionSink,
-                ReflexController, ReflexEngine, SpineActionSink,
+                ReflexController, ReflexEngine,
             };
+            use oh_ben_claw::spine::SpineActionSink;
             let engine = ReflexEngine::new(reflex_rules.clone());
             let base_sink: Arc<dyn ActionSink> = match &reflex_spine {
                 Some(spine) => {
@@ -1851,9 +1852,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 || config.learning.enabled
                 || config.perception.vision_rules.enabled
             {
-                use oh_ben_claw::agent::reflex::{
-                    ActionSink, EscalationBudget, LoggingActionSink, SpineActionSink,
-                };
+                use oh_ben_claw::agent::reflex::{ActionSink, EscalationBudget, LoggingActionSink};
+                use oh_ben_claw::spine::SpineActionSink;
                 let mut foresight_rules = config.foresight.rules.clone();
                 if config.perception.vision_rules.enabled {
                     let vc = &config.perception.vision_rules;
