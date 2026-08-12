@@ -24,7 +24,8 @@ use async_trait::async_trait;
 use obc_movement::MovementCommand;
 use serde_json::Value;
 
-use crate::agent::reflex::ActionSink;
+use obc_reflex::ActionSink;
+
 use crate::spine::{SpineClient, TOPIC_PREFIX};
 
 /// Routes reflex actions over the MQTT spine: a GPIO write becomes a `gpio_write`

@@ -15,8 +15,8 @@
 //! live reflex/foresight controllers with no engine changes and remain bounded by
 //! Track 0 / the escalation budget.
 
-use crate::agent::reflex::{Action, Cmp, Condition, ReflexRule};
 use crate::foresight::ForesightRule;
+use obc_reflex::{Action, Cmp, Condition, ReflexRule};
 use serde_json::json;
 
 /// How to turn detections into behavior.

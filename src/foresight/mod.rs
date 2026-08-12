@@ -13,8 +13,8 @@
 //! a forecast, not a snapshot. Forecasts are recorded back into world memory
 //! (`foresight.{entity}`) so the prediction itself is observable and auditable.
 
-use crate::agent::reflex::{Action, ActionSink, Cmp, EscalationBudget, FiredReflex};
 use crate::memory::world::WorldMemory;
+use obc_reflex::{Action, ActionSink, Cmp, EscalationBudget, FiredReflex};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;

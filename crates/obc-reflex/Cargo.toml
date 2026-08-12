@@ -1,0 +1,46 @@
+[package]
+name = "obc-reflex"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's System 1: a rule language of conditions and actions evaluated against world memory without waking the reasoner, with debounce, rate limits, an escalation budget, and a pluggable action sink."
+
+# Step 2 of docs/ENDGAME.md, and the fifteenth crate.
+#
+# System 2 is the LLM: slow, general, host- or cloud-side. This is System 1 --
+# fast, local, near-deterministic rules that react to world state without waking
+# it. A rule is *when this condition holds, do this action*, subject to debounce
+# and rate limits, and the same evaluator runs host-side against world memory
+# and mirrored on the node with no host in the loop.
+#
+# It could not leave while `SpineActionSink` lived in it. That sink was the only
+# thing in the file naming a module still in the tree -- one field, one
+# constructor parameter, two topic constants -- and it moved to
+# `src/spine/action.rs` on 2026-08-12, implementing this crate's `ActionSink`
+# from the other side. Third time that manoeuvre has been the answer this week:
+# `SpineActuatorSink` left movement the same way, and `TaskExecutor` was
+# declared in obc-a2a and implemented next to the agent for the same reason.
+#
+# One test did not come. `content_relayed_by_a_trusted_writer_is_now_gated`
+# asserts that an agent-*reported* temperature must not actuate while a
+# driver-*measured* one must, and it needs `SenseTool` from the tool layer to
+# say so. It is an integration test that had been wearing a unit test's clothes,
+# and it is now `tests/reflex_boundary.rs` upstream, where it can keep naming
+# both sides.
+#
+# Dependencies were guessed and corrected by the compiler, as always. All four
+# were already crates -- this module had simply been spelling them through the
+# agent's re-exports, which is why the rewrite was 18 paths and no logic.
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+obc-memory = { path = "../obc-memory" }
+obc-movement = { path = "../obc-movement" }
+obc-observability = { path = "../obc-observability" }
+obc-safety = { path = "../obc-safety" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1.42", default-features = false, features = ["rt", "rt-multi-thread", "macros"] }

@@ -162,9 +162,9 @@ mod tests {
         // The tool is the agent's boundary, so what it writes is a claim. `power.mode`
         // still says "critical" — the derivation is honest — but it is an assertion, and
         // safing acts only on evidence.
-        use crate::agent::reflex::ReflexEngine;
         use crate::agent::safing::{standard_safing_rules, SafingOptions};
         use crate::memory::world::Origin;
+        use obc_reflex::ReflexEngine;
 
         let (t, world) = tool();
         let r = t
@@ -208,10 +208,10 @@ mod tests {
     async fn a_measured_reading_still_drives_safing() {
         // The other half: the gate must not have broken real safing. Same value, same
         // rules — only this time something actually measured it.
-        use crate::agent::reflex::ReflexEngine;
         use crate::agent::safing::{standard_safing_rules, SafingOptions};
         use crate::memory::world::Origin;
         use crate::power::{BatteryReading, ChargeState, PowerController, PowerThresholds};
+        use obc_reflex::ReflexEngine;
 
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let ctrl = PowerController::new(PowerThresholds {

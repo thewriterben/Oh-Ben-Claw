@@ -1352,7 +1352,7 @@ pub struct ReflexConfig {
     pub max_escalations_per_min: Option<u32>,
     /// The reflex rules to evaluate.
     #[serde(default)]
-    pub rules: Vec<crate::agent::reflex::ReflexRule>,
+    pub rules: Vec<obc_reflex::ReflexRule>,
     /// Append the standard safing rules (power/comms mode → safing actions).
     #[serde(default)]
     pub safing: bool,
@@ -1624,7 +1624,7 @@ pub struct LearningOutcomeConfig {
     /// Numeric entity whose threshold crossing is the "bad event".
     pub entity: String,
     /// Comparison operator.
-    pub op: crate::agent::reflex::Cmp,
+    pub op: obc_reflex::Cmp,
     /// Threshold value.
     pub threshold: f64,
 }
