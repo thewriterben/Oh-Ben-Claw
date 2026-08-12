@@ -480,58 +480,6 @@ impl ActionSink for LoggingActionSink {
     }
 }
 
-/// Routes reflex actions over the MQTT spine: a GPIO write becomes a `gpio_write`
-/// tool call to the node (bounded there by the firmware Track 0 `SafetyGate`),
-/// publishes go to the topic, and escalations are published to `obc/escalation`
-/// for System 2 (the gateway/agent) to act on. Best-effort: spine errors are
-/// logged, not propagated, so one unreachable node never stalls the reflex loop.
-pub struct SpineActionSink {
-    spine: Arc<crate::spine::SpineClient>,
-}
-
-impl SpineActionSink {
-    /// Build a sink over a (connected) spine client.
-    pub fn new(spine: Arc<crate::spine::SpineClient>) -> Self {
-        Self { spine }
-    }
-}
-
-#[async_trait]
-impl ActionSink for SpineActionSink {
-    async fn gpio_write(&self, node_id: &str, pin: i64, value: i64) -> anyhow::Result<()> {
-        let args = serde_json::json!({ "pin": pin, "value": value });
-        if let Err(e) = self.spine.invoke_tool(node_id, "gpio_write", args).await {
-            tracing::warn!(node_id, pin, value, error = %e, "reflex gpio_write over spine failed");
-        }
-        Ok(())
-    }
-    async fn publish(&self, topic: &str, payload: &Value) -> anyhow::Result<()> {
-        if let Err(e) = self.spine.publish(topic, payload).await {
-            tracing::warn!(topic, error = %e, "reflex publish over spine failed");
-        }
-        Ok(())
-    }
-    async fn escalate(&self, reason: &str) -> anyhow::Result<()> {
-        let topic = format!("{}/escalation", crate::spine::TOPIC_PREFIX);
-        let payload = serde_json::json!({ "reason": reason });
-        if let Err(e) = self.spine.publish(&topic, &payload).await {
-            tracing::warn!(error = %e, "reflex escalation publish failed");
-        }
-        tracing::info!(reason, "reflex: escalated to System 2");
-        Ok(())
-    }
-    async fn move_actuator(&self, command: &MovementCommand) -> anyhow::Result<()> {
-        // Publish the typed command to the movement topic; the movement node /
-        // controller applies it under its own Track 0 bounds.
-        let topic = format!("{}/movement", crate::spine::TOPIC_PREFIX);
-        let payload = serde_json::to_value(command).unwrap_or(Value::Null);
-        if let Err(e) = self.spine.publish(&topic, &payload).await {
-            tracing::warn!(actuator = command.name(), error = %e, "reflex movement publish failed");
-        }
-        Ok(())
-    }
-}
-
 /// An [`ActionSink`] that applies reflex `Move` actions through the safety-bounded
 /// [`MovementController`] (Track 0 gate + world-memory record), delegating GPIO /
 /// publish / escalate to an inner sink. This is how a reflex actuates *typed*
@@ -1447,20 +1395,5 @@ mod tests {
         assert_eq!(f2.len(), 1); // the reflex still fires both ticks
                                  // but only one escalation was actually dispatched (budget = 1/min)
         assert_eq!(sink.calls.lock().unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn spine_sink_is_best_effort_when_disconnected() {
-        use crate::config::SpineConfig;
-        let spine = Arc::new(crate::spine::SpineClient::new(
-            SpineConfig::default(),
-            "test",
-        ));
-        let sink = SpineActionSink::new(spine);
-        // An unconnected spine makes the underlying calls fail, but the sink logs
-        // and returns Ok so a reflex tick is never broken by a transient outage.
-        assert!(sink.gpio_write("node-1", 18, 1).await.is_ok());
-        assert!(sink.publish("obc/x", &json!({"a": 1})).await.is_ok());
-        assert!(sink.escalate("why").await.is_ok());
     }
 }

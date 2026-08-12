@@ -20,12 +20,14 @@
 //!     +-- command    # Brain publishes a command to all nodes
 //! ```
 
+pub mod action;
 pub mod actuator;
 pub mod lora_gateway;
 pub mod lora_mesh;
 pub mod mesh_supervisor;
 pub mod p2p;
 
+pub use action::SpineActionSink;
 pub use actuator::SpineActuatorSink;
 
 use crate::config::SpineConfig; // SpineConfig is defined in config::mod
