@@ -11,7 +11,14 @@ pub mod judge;
 pub mod notify;
 pub mod orchestrator;
 pub mod pool;
-pub mod reflex;
+/// System 1 — the reflex rule language, engine, escalation budget and action
+/// sink — extracted to [`obc_reflex`] on 2026-08-12.
+///
+/// It named four things outside itself and three had been crates for days. The
+/// fourth was `crate::spine`, entirely inside `SpineActionSink`, which moved to
+/// [`crate::spine::action`] the same day and implements this crate's trait from
+/// there. `crate::agent::reflex::…` is unchanged at every call site.
+pub use obc_reflex as reflex;
 pub mod reflexion;
 pub mod safing;
 pub mod streaming;

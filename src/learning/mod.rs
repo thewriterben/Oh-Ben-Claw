@@ -12,9 +12,9 @@
 //! it learns *what to predict* — gated by approval so a wrong correlation can
 //! never silently start driving behavior.
 
-use crate::agent::reflex::{Action, Cmp};
 use crate::foresight::ForesightRule;
 use crate::memory::world::WorldMemory;
+use obc_reflex::{Action, Cmp};
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 

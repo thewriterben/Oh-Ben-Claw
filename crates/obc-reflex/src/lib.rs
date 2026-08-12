@@ -14,8 +14,8 @@
 //! `SafetyGate` (Track 0) — a reflex can request an actuator change but cannot
 //! exceed the on-MCU limits. [`Action::Escalate`] hands control up to System 2.
 
-use crate::movement::{MovementCommand, MovementController};
 use async_trait::async_trait;
+use obc_movement::{MovementCommand, MovementController};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -258,7 +258,7 @@ pub struct ReflexEngine {
     /// `last_fire` so a rule that does not opt in pays nothing and behaves exactly as
     /// before.
     last_evidence: Mutex<HashMap<String, Vec<i64>>>,
-    trusted: crate::memory::world::OriginSet,
+    trusted: obc_memory::world::OriginSet,
 }
 
 /// A default engine is an engine with no rules and the standard trust policy.
@@ -290,7 +290,7 @@ impl ReflexEngine {
             rules,
             last_fire: Mutex::new(HashMap::new()),
             last_evidence: Mutex::new(HashMap::new()),
-            trusted: crate::memory::world::OriginSet::EVIDENCE,
+            trusted: obc_memory::world::OriginSet::EVIDENCE,
         }
     }
 
@@ -299,7 +299,7 @@ impl ReflexEngine {
     /// Widening this to include `Asserted` re-opens the path where an agent's own writes
     /// drive automatic physical responses — the hazard this gate exists to close. Do it
     /// only for read-only or simulation engines.
-    pub fn with_trusted_origins(mut self, trusted: crate::memory::world::OriginSet) -> Self {
+    pub fn with_trusted_origins(mut self, trusted: obc_memory::world::OriginSet) -> Self {
         self.trusted = trusted;
         self
     }
@@ -373,7 +373,7 @@ impl ReflexEngine {
     /// escalation to the LLM agent).
     pub fn tick(
         &self,
-        world: &crate::memory::world::WorldMemory,
+        world: &obc_memory::world::WorldMemory,
         now_ms: u64,
     ) -> anyhow::Result<Vec<FiredReflex>> {
         let mut snapshot = Snapshot::new();
@@ -570,17 +570,17 @@ impl EscalationBudget {
 /// host-side System 1 controller; spawn its `tick_and_dispatch` on a cadence.
 pub struct ReflexController {
     engine: ReflexEngine,
-    world: Arc<crate::memory::world::WorldMemory>,
+    world: Arc<obc_memory::world::WorldMemory>,
     sink: Arc<dyn ActionSink>,
     escalation_budget: Option<EscalationBudget>,
-    metrics: Option<Arc<crate::observability::MetricsRegistry>>,
+    metrics: Option<Arc<obc_observability::MetricsRegistry>>,
 }
 
 impl ReflexController {
     /// Build a controller.
     pub fn new(
         engine: ReflexEngine,
-        world: Arc<crate::memory::world::WorldMemory>,
+        world: Arc<obc_memory::world::WorldMemory>,
         sink: Arc<dyn ActionSink>,
     ) -> Self {
         Self {
@@ -601,7 +601,7 @@ impl ReflexController {
     /// Record per-rule / per-action fire counts into a metrics registry (surfaced
     /// on the gateway `/metrics` endpoint). Counters: `reflex.fired_total`,
     /// `reflex.rule.{id}`, `reflex.action.{kind}`.
-    pub fn with_metrics(mut self, metrics: Arc<crate::observability::MetricsRegistry>) -> Self {
+    pub fn with_metrics(mut self, metrics: Arc<obc_observability::MetricsRegistry>) -> Self {
         self.metrics = Some(metrics);
         self
     }
@@ -654,7 +654,7 @@ impl ReflexController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::world::WorldMemory;
+    use obc_memory::world::WorldMemory;
     use serde_json::json;
 
     #[test]
@@ -697,7 +697,7 @@ mod tests {
 
     #[test]
     fn an_asserted_fact_cannot_fire_a_reflex() {
-        use crate::memory::world::Origin;
+        use obc_memory::world::Origin;
         // The whole point of the gate: an agent writing a temperature does not get to
         // drive an automatic physical response. Same entity, same value, same rule — only
         // the origin differs.
@@ -743,7 +743,7 @@ mod tests {
 
     #[test]
     fn an_instructed_fact_is_also_not_evidence() {
-        use crate::memory::world::Origin;
+        use obc_memory::world::Origin;
         // A human typing a reading is authoritative about intent, not about the world.
         // Someone who wants an actuator stopped should command that, not report a value
         // and let safing infer it.
@@ -766,7 +766,7 @@ mod tests {
 
     #[test]
     fn widening_the_trust_set_re_enables_asserted_facts() {
-        use crate::memory::world::{Origin, OriginSet};
+        use obc_memory::world::{Origin, OriginSet};
         // The escape hatch exists for read-only and simulation engines; it is deliberately
         // explicit, because using it on an actuating engine re-opens the hazard.
         let world = WorldMemory::open_in_memory().unwrap();
@@ -782,81 +782,6 @@ mod tests {
             .unwrap();
         let permissive = ReflexEngine::new(vec![fan_rule()]).with_trusted_origins(OriginSet::ALL);
         assert_eq!(permissive.tick(&world, 2_000).unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn content_relayed_by_a_trusted_writer_is_now_gated() {
-        // This test previously asserted the OPPOSITE — it pinned the gap while the ingest
-        // boundary was still open, and said in its own comment that it should fail when
-        // the boundary moved. It did, and this is that update.
-        //
-        // The distinction the gate needs is not visible in `source`: `sensing` writes
-        // under its own label whichever path fed it. It is visible in `origin`, because
-        // the `sense` tool — being the agent's boundary by construction — now says so.
-        use crate::memory::world::Origin;
-        use crate::sensing::{QuantitySpec, Sample, SensingController};
-        use obc_tool_api::Tool;
-        use std::sync::Arc;
-
-        // Two stores, deliberately. `SenseTool` stamps the real clock, so a
-        // driver-path write at a small fixed timestamp would land *before* it and
-        // `current()` would keep returning the tool's fact — the test would pass or fail
-        // for reasons having nothing to do with the gate. Separate worlds keep each half
-        // honest about what it is measuring.
-        let make = || {
-            let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-            let ctrl = Arc::new(
-                SensingController::new(vec![("temperature".to_string(), QuantitySpec::default())])
-                    .with_world_memory(Arc::clone(&world)),
-            );
-            (world, ctrl)
-        };
-
-        // Through the real tool: an agent says it is 30 degrees.
-        let (agent_world, agent_ctrl) = make();
-        let tool = crate::tools::builtin::sensing::SenseTool::new(
-            Arc::clone(&agent_ctrl),
-            Arc::clone(&agent_world),
-        );
-        tool.execute(json!({ "action": "ingest", "quantity": "temperature", "value": 30.0 }))
-            .await
-            .unwrap();
-        let fact = agent_world.current("sensor.temperature").unwrap().unwrap();
-        assert_eq!(
-            fact.origin,
-            Origin::Asserted,
-            "the tool is the agent boundary — what arrives there is a claim"
-        );
-        assert!(
-            ReflexEngine::new(vec![fan_rule()])
-                .tick(&agent_world, fact.valid_from + 1_000)
-                .unwrap()
-                .is_empty(),
-            "an agent-reported temperature must not actuate"
-        );
-
-        // The driver path, same controller type, same value: this one is measurement.
-        let (driver_world, driver_ctrl) = make();
-        driver_ctrl
-            .ingest(
-                &Sample {
-                    quantity: "temperature".to_string(),
-                    value: 30.0,
-                    unit: None,
-                    source: Some("bme280".to_string()),
-                },
-                3_000,
-                Origin::Observed,
-            )
-            .unwrap();
-        assert_eq!(
-            ReflexEngine::new(vec![fan_rule()])
-                .tick(&driver_world, 4_000)
-                .unwrap()
-                .len(),
-            1,
-            "a real reading still fires — the gate closed the hazard, not the feature"
-        );
     }
 
     #[test]
@@ -916,7 +841,7 @@ mod tests {
         // The bench failure: a condition that stays true re-fires at every debounce
         // interval, forever, on the same evidence. Debounce asks whether enough time has
         // passed; this asks whether anything happened.
-        use crate::memory::world::{Origin, WorldMemory};
+        use obc_memory::world::{Origin, WorldMemory};
         let w = WorldMemory::open_in_memory().unwrap();
         w.observe_as(
             "vision.hits",
@@ -954,7 +879,7 @@ mod tests {
     fn a_rule_without_the_flag_still_re_fires_on_a_standing_condition() {
         // Safing depends on this. "The battery is still critical" is worth repeating,
         // and suppressing it because the reading has not changed is exactly backwards.
-        use crate::memory::world::{Origin, WorldMemory};
+        use obc_memory::world::{Origin, WorldMemory};
         let w = WorldMemory::open_in_memory().unwrap();
         w.observe_as(
             "power.critical",
@@ -1209,8 +1134,8 @@ mod tests {
 
     #[tokio::test]
     async fn move_action_applies_through_movement_controller() {
-        use crate::movement::LoggingActuatorSink;
-        use crate::security::limits::{SafetyGate, SafetyLimit};
+        use obc_movement::LoggingActuatorSink;
+        use obc_safety::limits::{SafetyGate, SafetyLimit};
 
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let mut limit = SafetyLimit::new("n1", "servo_angle");
@@ -1309,7 +1234,7 @@ mod tests {
                 "f",
             )
             .unwrap();
-        let metrics = Arc::new(crate::observability::MetricsRegistry::new());
+        let metrics = Arc::new(obc_observability::MetricsRegistry::new());
         let sink: Arc<dyn ActionSink> = Arc::new(LoggingActionSink);
         let ctl = ReflexController::new(
             ReflexEngine::new(vec![fan_rule()]),

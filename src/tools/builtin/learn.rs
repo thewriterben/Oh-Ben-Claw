@@ -114,7 +114,7 @@ impl Tool for LearnTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::reflex::Cmp;
+    use obc_reflex::Cmp;
     use std::sync::Mutex;
 
     fn obs(world: &WorldMemory, entity: &str, t: u64, v: f64) {

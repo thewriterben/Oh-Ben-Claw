@@ -931,8 +931,8 @@ mod tests {
 
     #[tokio::test]
     async fn escalation_raises_the_count_that_drives_a_reflex() {
-        use crate::agent::reflex::{Action, ReflexEngine};
         use crate::agent::safing::{standard_safing_rules, SafingOptions};
+        use obc_reflex::{Action, ReflexEngine};
 
         let world = WorldMemory::open_in_memory().unwrap();
         world

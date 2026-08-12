@@ -14,10 +14,10 @@
 //! reactive — call [`MissionRunner::tick`] on a cadence; it advances at most one
 //! step per tick and aborts the moment a guard trips.
 
-use crate::agent::reflex::{Condition, Snapshot};
 use crate::audio::suite::AudioController;
 use crate::memory::world::WorldMemory;
 use crate::navigation::{NavController, NavGoal};
+use obc_reflex::{Condition, Snapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -438,7 +438,7 @@ fn now_or_zero() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::reflex::Cmp;
+    use obc_reflex::Cmp;
     use serde_json::json;
 
     fn runner() -> (MissionRunner, Arc<WorldMemory>) {
