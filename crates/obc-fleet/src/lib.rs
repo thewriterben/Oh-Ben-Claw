@@ -13,9 +13,9 @@
 //! and the assignment advisories. Optionally records the fleet view to world
 //! memory for observability.
 
-use crate::memory::world::WorldMemory;
-use crate::navigation::planning::{plan, OccupancyGrid};
-use crate::navigation::{exploration, NavGoal};
+use obc_memory::world::WorldMemory;
+use obc_navigation::planning::{plan, OccupancyGrid};
+use obc_navigation::{exploration, NavGoal};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -611,7 +611,7 @@ mod tests {
         assert_eq!(coord.tick(1_000).len(), 1);
     }
 
-    use crate::navigation::planning::{Cell, OccupancyGrid};
+    use obc_navigation::planning::{Cell, OccupancyGrid};
 
     #[test]
     fn coordinated_exploration_gives_each_node_a_distinct_separated_frontier() {

@@ -1,0 +1,46 @@
+[package]
+name = "obc-fleet"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's multi-node coordinator: a registry of node states, a task auction that allocates by cost rather than by turn, and frontier exploration assignment with minimum separation between nodes."
+
+# The nineteenth crate, and the first one whose extraction was the *point* of
+# the commit before it rather than a side effect.
+#
+# It is the answer to "who does what": nodes report where they are and what they
+# have left, tasks are auctioned to whichever node can do them most cheaply, and
+# exploration frontiers are handed out with a minimum separation so two robots
+# do not crowd the same pocket. None of it knows how a node is reached.
+#
+# That last clause is new. Until 2026-08-13 this module carried a 60-line spine
+# bridge -- an MQTT heartbeat handler, an assignment topic and payload, a
+# publish call, a topic filter -- and those were its only references to
+# anything still in the core tree. Two `use` lines. They were simultaneously the
+# whole `spine <-> fleet` cycle and the only thing keeping the coordinator out
+# of a crate.
+#
+# The bridge is in `src/spine/fleet_bridge.rs` now, on the transport's side,
+# where `lora_mesh` was already bridging the other transport into this same
+# coordinator. That is what the cycle actually was: one integration built from
+# both ends, with only one of the ends being the transport. Worth distinguishing
+# from the five edge-turns before it this month, which were each a single
+# misplaced impl or sink -- this one was a duplicated responsibility.
+#
+# Two things left with the bridge and are worth recording because a survey would
+# have kept both. `now_ms()` turned out to have exactly one consumer, the
+# bridge: the coordinator takes a timestamp as a parameter everywhere, so it
+# never needed a clock. And `HEARTBEAT_FILTER`, an MQTT topic filter, was a
+# public const on the coordinator. Clippy found the first the moment the bridge
+# left; the second was found by asking what a topic filter is a fact about.
+#
+# `NodeState` is re-exported from obc-telemetry rather than defined here -- it
+# moved there on 2026-08-06, because it is telemetry a coordinator consumes
+# rather than coordination, and defining it here was the single edge that kept
+# `aerial` and `gnss` from extracting at all.
+[dependencies]
+obc-memory = { path = "../obc-memory" }
+obc-navigation = { path = "../obc-navigation" }
+obc-telemetry = { path = "../obc-telemetry" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

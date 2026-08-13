@@ -97,7 +97,16 @@ pub use obc_conscience::decision_log;
 pub use obc_cost as cost;
 pub mod deployment;
 pub mod doctor;
-pub mod fleet;
+/// Multi-node coordination — the node registry, the cost-based task auction and
+/// frontier exploration assignment. Extracted to [`obc_fleet`] on 2026-08-13.
+///
+/// It was blocked by two `use` lines: the spine bridge at the bottom of the
+/// module, which is now `crate::spine::fleet_bridge` where the transport is.
+/// The coordinator never needed to know MQTT exists.
+///
+/// Six import sites in three modules name `obc_fleet` directly; this alias is
+/// for `src/main.rs` and `tests/`.
+pub use obc_fleet as fleet;
 /// Track 1 — the predictive control layer: trend forecasts over bitemporal
 /// world memory, and rules that fire on a *predicted* threshold crossing
 /// rather than a present one. Extracted to [`obc_foresight`] on 2026-08-13.
