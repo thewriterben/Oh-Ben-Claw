@@ -48,41 +48,13 @@ pub trait ReplayExecutor: Send + Sync {
     }
 }
 
-/// The agent itself is a replay executor (runs the tool through its normal
-/// chokepoint, including policy + Track 0).
-#[async_trait::async_trait]
-impl ReplayExecutor for crate::agent::Agent {
-    async fn replay(&self, tool: &str, args: &Value) -> Outcome {
-        match self.execute_tool_direct(tool, args.clone()).await {
-            Ok(r) if r.success => Outcome::Success,
-            _ => Outcome::Failure,
-        }
-    }
-
-    fn risk_of(&self, tool: &str) -> RiskClass {
-        self.tool_risk(tool)
-    }
-
-    fn on_skills_changed(&self, forge: &SkillForge) {
-        let (added, removed, shadowed) = self.sync_skills(forge);
-        if added + removed + shadowed > 0 {
-            tracing::info!(
-                added,
-                removed,
-                shadowed,
-                "Agent tool registry synced with skill forge"
-            );
-        }
-    }
-
-    async fn replay_capture(&self, tool: &str, args: &Value) -> (Outcome, String) {
-        match self.execute_tool_direct(tool, args.clone()).await {
-            Ok(r) if r.success => (Outcome::Success, r.output),
-            Ok(r) => (Outcome::Failure, r.error.unwrap_or_default()),
-            Err(e) => (Outcome::Failure, e.to_string()),
-        }
-    }
-}
+// The `impl ReplayExecutor for Agent` lived here until 2026-08-13. It is in
+// src/agent/skill_replay.rs now, next to the type it is implemented for.
+//
+// It was this module's only reference to the agent, and `agent -> skill_forge`
+// is nine references the other way, so that one impl block was the whole
+// `skill_forge <-> agent` cycle. Trait where the abstraction is, implementation
+// where the dependency is -- fifth time that has been the answer this month.
 
 /// A configured verification requirement applied to synthesized skills whose
 /// name matches `skill_pattern` (exact, or prefix with a trailing `*`).
