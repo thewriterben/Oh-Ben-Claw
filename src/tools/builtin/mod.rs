@@ -2,6 +2,9 @@
 
 pub mod aerial;
 pub mod audio;
+/// The tool layer's `SpeechSink` — utterances rendered to files via the TTS
+/// tool. Moved here from `audio::suite` on 2026-08-13.
+pub mod audio_speech;
 pub mod audio_suite;
 pub mod browser;
 pub mod comms;

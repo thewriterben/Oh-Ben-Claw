@@ -1146,12 +1146,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             .clone()
                             .unwrap_or_else(|| "/tmp".to_string());
                         info!(dir = %dir, "Audio: speech rendered locally via TTS");
-                        Arc::new(oh_ben_claw::audio::suite::TtsSpeechSink::new(dir))
+                        Arc::new(oh_ben_claw::tools::builtin::audio_speech::TtsSpeechSink::new(dir))
                     } else {
                         match &reflex_spine {
                             Some(spine) => {
                                 info!("Audio: speech emitted over the spine");
-                                Arc::new(oh_ben_claw::audio::suite::SpineSpeechSink::new(
+                                Arc::new(oh_ben_claw::spine::speech::SpineSpeechSink::new(
                                     Arc::clone(spine),
                                 ))
                             }
@@ -1696,21 +1696,23 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 if config.notifications.speak_escalations {
                     // Speak escalations aloud through a speech sink (same TTS / spine /
                     // dry-run selection as the audio suite). Best-effort, headline only.
-                    let speech: Arc<dyn oh_ben_claw::audio::suite::SpeechSink> =
-                        if config.audio_suite.render_tts {
-                            let dir = config
-                                .audio_suite
-                                .tts_out_dir
-                                .clone()
-                                .unwrap_or_else(|| "/tmp".to_string());
-                            Arc::new(oh_ben_claw::audio::suite::TtsSpeechSink::new(dir))
-                        } else if let Some(spine) = &reflex_spine {
-                            Arc::new(oh_ben_claw::audio::suite::SpineSpeechSink::new(Arc::clone(
-                                spine,
-                            )))
-                        } else {
-                            Arc::new(oh_ben_claw::audio::suite::LoggingSpeechSink)
-                        };
+                    let speech: Arc<dyn oh_ben_claw::audio::suite::SpeechSink> = if config
+                        .audio_suite
+                        .render_tts
+                    {
+                        let dir = config
+                            .audio_suite
+                            .tts_out_dir
+                            .clone()
+                            .unwrap_or_else(|| "/tmp".to_string());
+                        Arc::new(oh_ben_claw::tools::builtin::audio_speech::TtsSpeechSink::new(dir))
+                    } else if let Some(spine) = &reflex_spine {
+                        Arc::new(oh_ben_claw::spine::speech::SpineSpeechSink::new(
+                            Arc::clone(spine),
+                        ))
+                    } else {
+                        Arc::new(oh_ben_claw::audio::suite::LoggingSpeechSink)
+                    };
                     let voice = config
                         .audio_suite
                         .voice

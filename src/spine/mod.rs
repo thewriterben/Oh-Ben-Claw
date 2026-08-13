@@ -31,6 +31,9 @@ pub mod lora_gateway;
 pub mod lora_mesh;
 pub mod mesh_supervisor;
 pub mod p2p;
+/// The spine's `SpeechSink` — utterances out over MQTT. Moved here from
+/// `audio::suite` on 2026-08-13, where it was holding a `SpineClient`.
+pub mod speech;
 
 pub use action::SpineActionSink;
 pub use actuator::SpineActuatorSink;

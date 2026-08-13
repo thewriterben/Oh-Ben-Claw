@@ -83,75 +83,19 @@ impl SpeechSink for LoggingSpeechSink {
     }
 }
 
-/// Emits utterances over the MQTT spine to `obc/speech`, where a speaker node /
-/// TTS bridge renders them. Best-effort like the movement spine sink: a publish
-/// failure is logged, not propagated, so a transient outage never breaks the
-/// caller (or a reflex that spoke).
-pub struct SpineSpeechSink {
-    spine: Arc<crate::spine::SpineClient>,
-}
-
-impl SpineSpeechSink {
-    /// Build a sink over a (connected) spine client.
-    pub fn new(spine: Arc<crate::spine::SpineClient>) -> Self {
-        Self { spine }
-    }
-}
-
-#[async_trait]
-impl SpeechSink for SpineSpeechSink {
-    async fn speak(&self, u: &Utterance) -> anyhow::Result<()> {
-        let topic = format!("{}/speech", crate::spine::TOPIC_PREFIX);
-        let payload = json!({ "text": u.text, "voice": u.voice, "at_ms": u.at_ms });
-        if let Err(e) = self.spine.publish(&topic, &payload).await {
-            tracing::warn!(voice = %u.voice, error = %e, "speech publish over spine failed");
-        }
-        Ok(())
-    }
-}
-
-/// Renders utterances to local audio files via the OpenAI TTS tool. Best-effort:
-/// with no `OPENAI_API_KEY` configured (or any render error) the utterance is
-/// logged and skipped — `speak` never errors, so a reflex/agent that spoke is
-/// never broken by a missing renderer.
-pub struct TtsSpeechSink {
-    tts: crate::tools::builtin::audio::TextToSpeechTool,
-    out_dir: String,
-}
-
-impl TtsSpeechSink {
-    /// Render into `out_dir` (created on demand by the TTS tool's file write).
-    pub fn new(out_dir: impl Into<String>) -> Self {
-        Self {
-            tts: crate::tools::builtin::audio::TextToSpeechTool::default(),
-            out_dir: out_dir.into(),
-        }
-    }
-
-    /// The output file path for an utterance at `at_ms`.
-    pub fn out_path(&self, at_ms: u64) -> String {
-        format!(
-            "{}/obc_tts_{}.mp3",
-            self.out_dir.trim_end_matches('/'),
-            at_ms
-        )
-    }
-}
-
-#[async_trait]
-impl SpeechSink for TtsSpeechSink {
-    async fn speak(&self, u: &Utterance) -> anyhow::Result<()> {
-        use obc_tool_api::Tool;
-        let path = self.out_path(u.at_ms);
-        let args = json!({ "text": u.text, "voice": u.voice, "output_path": path });
-        match self.tts.execute(args).await {
-            Ok(res) if res.success => tracing::info!(path = %path, "rendered speech via TTS"),
-            Ok(res) => tracing::warn!(error = ?res.error, "TTS render skipped (best-effort)"),
-            Err(e) => tracing::warn!(error = %e, "TTS render failed (best-effort)"),
-        }
-        Ok(())
-    }
-}
+// `SpineSpeechSink` and `TtsSpeechSink` lived here until 2026-08-13. They are
+// in src/spine/speech.rs and src/tools/builtin/audio_speech.rs now, next to the
+// things they depend on.
+//
+// Between them they were this module's only references to anything still in the
+// core tree: one `Arc<SpineClient>` field and one `TextToSpeechTool` field. A
+// 389-line module about hearing and speaking was pulling in the spine and an
+// 8802-line tool module through two struct fields, and that was the last cycle
+// in the graph.
+//
+// `SpeechSink` stays here, and `LoggingSpeechSink` with it -- the trait is this
+// module's own notion of "somewhere an utterance can go", and the logging sink
+// depends on nothing, which is what makes it the safe default.
 
 /// The Audio suite controller: perceive ([`observe`](Self::observe)) and act
 /// ([`speak`](Self::speak)), both recorded into world memory.
@@ -338,33 +282,5 @@ mod tests {
         let e = heard("mic0", Some("x"), Some("speech"), 0.7);
         let back: HeardEvent = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
         assert_eq!(back, e);
-    }
-
-    #[test]
-    fn tts_sink_out_path_is_stable() {
-        let sink = TtsSpeechSink::new("/tmp/obc/");
-        assert_eq!(sink.out_path(42), "/tmp/obc/obc_tts_42.mp3"); // trailing slash trimmed
-        assert_eq!(
-            TtsSpeechSink::new("/var/audio").out_path(7),
-            "/var/audio/obc_tts_7.mp3"
-        );
-    }
-
-    #[tokio::test]
-    async fn spine_speech_sink_is_best_effort_when_disconnected() {
-        use crate::config::SpineConfig;
-        let spine = Arc::new(crate::spine::SpineClient::new(
-            SpineConfig::default(),
-            "test",
-        ));
-        let sink = SpineSpeechSink::new(spine);
-        // An unconnected spine fails the publish, but the sink logs and returns Ok
-        // so a reflex/agent that spoke is never broken by a transient outage.
-        let u = Utterance {
-            text: "hello".into(),
-            voice: "nova".into(),
-            at_ms: 1,
-        };
-        assert!(sink.speak(&u).await.is_ok());
     }
 }
