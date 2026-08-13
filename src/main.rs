@@ -2011,8 +2011,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         if let Some(spine) = &reflex_spine {
             match spine
                 .subscribe_handler(
-                    oh_ben_claw::fleet::HEARTBEAT_FILTER,
-                    oh_ben_claw::fleet::spine_heartbeat_handler(Arc::clone(&coord)),
+                    oh_ben_claw::spine::fleet_bridge::HEARTBEAT_FILTER,
+                    oh_ben_claw::spine::fleet_bridge::spine_heartbeat_handler(Arc::clone(&coord)),
                 )
                 .await
             {
@@ -2084,8 +2084,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                 y,
                                 tolerance: 0.5,
                             };
-                            let _ =
-                                oh_ben_claw::fleet::publish_assignment(spine, &node, &goal).await;
+                            let _ = oh_ben_claw::spine::fleet_bridge::publish_assignment(
+                                spine, &node, &goal,
+                            )
+                            .await;
                         }
                         #[cfg(feature = "hardware")]
                         if let Some((radio, hops)) = &lora_eg {
