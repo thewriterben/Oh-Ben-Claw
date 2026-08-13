@@ -98,14 +98,37 @@ pub use obc_cost as cost;
 pub mod deployment;
 pub mod doctor;
 pub mod fleet;
-pub mod foresight;
+/// Track 1 — the predictive control layer: trend forecasts over bitemporal
+/// world memory, and rules that fire on a *predicted* threshold crossing
+/// rather than a present one. Extracted to [`obc_foresight`] on 2026-08-13.
+///
+/// It was blocked by `reflex` alone, and went to zero blocking edges when that
+/// became a crate the day before — the extraction moved no logic, only seven
+/// `crate::memory::world::` paths that had been a crate since July.
+///
+/// As with [`reflex`](crate::agent::reflex), this alias is not a compatibility
+/// shim: the four import sites in `config`, `learning`, `tools` and `vision`
+/// name `obc_foresight` directly. What is left behind it is `src/main.rs`,
+/// which is the binary, and `tests/`, which exercises the public surface on
+/// purpose.
+pub use obc_foresight as foresight;
 pub mod gateway;
 /// Local-tangent-plane geometry and site models — re-exported from the
 /// [`obc_planner`] crate, where it sits next to the site optimizer that consumes
 /// it. `oh_ben_claw::geo::X` is unchanged.
 pub use obc_planner::geo;
 pub mod harness;
-pub mod learning;
+/// Self-authored reflexes — rule synthesis from experience, extracted to
+/// [`obc_learning`] on 2026-08-13.
+///
+/// It was blocked by `foresight`, which was blocked by `reflex`, which was
+/// blocked by one action sink holding an `Arc<SpineClient>`. Three crates came
+/// out from behind one field.
+///
+/// The invariant worth knowing before reading it: a mined proposal is never
+/// activated. It is inert until approved, and `tests/learning_approval_gate.rs`
+/// asserts that from the outside against a real `ForesightEngine`.
+pub use obc_learning as learning;
 pub mod mcp;
 // The memory substrate lives in its own crate (2026-07-30). Re-exported under the
 // old name so all twenty-three consumers keep compiling against `crate::memory::…`

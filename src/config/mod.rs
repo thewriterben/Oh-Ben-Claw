@@ -1579,7 +1579,7 @@ pub struct ForesightConfig {
     pub max_escalations_per_min: Option<u32>,
     /// The predictive rules (`[[foresight.rule]]`).
     #[serde(default, rename = "rule")]
-    pub rules: Vec<crate::foresight::ForesightRule>,
+    pub rules: Vec<obc_foresight::ForesightRule>,
 }
 
 /// Self-authored reflexes configuration (`[learning]`). Mines world-memory

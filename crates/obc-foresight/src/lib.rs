@@ -13,7 +13,7 @@
 //! a forecast, not a snapshot. Forecasts are recorded back into world memory
 //! (`foresight.{entity}`) so the prediction itself is observable and auditable.
 
-use crate::memory::world::WorldMemory;
+use obc_memory::world::WorldMemory;
 use obc_reflex::{Action, ActionSink, Cmp, EscalationBudget, FiredReflex};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -105,7 +105,7 @@ pub struct Forecaster {
     /// `Asserted` points would let an agent's own guesses about a value bend the
     /// prediction of that value — a short loop from a model's opinion back into what
     /// looks like measurement.
-    trusted: crate::memory::world::OriginSet,
+    trusted: obc_memory::world::OriginSet,
 }
 
 impl Default for Forecaster {
@@ -113,7 +113,7 @@ impl Default for Forecaster {
         Self {
             window: 16,
             decay: 1.0,
-            trusted: crate::memory::world::OriginSet::EVIDENCE,
+            trusted: obc_memory::world::OriginSet::EVIDENCE,
         }
     }
 }
@@ -123,12 +123,12 @@ impl Forecaster {
         Self {
             window: window.max(1),
             decay: 1.0,
-            trusted: crate::memory::world::OriginSet::EVIDENCE,
+            trusted: obc_memory::world::OriginSet::EVIDENCE,
         }
     }
 
     /// Override which fact origins this forecaster fits a trend to.
-    pub fn with_trusted_origins(mut self, trusted: crate::memory::world::OriginSet) -> Self {
+    pub fn with_trusted_origins(mut self, trusted: obc_memory::world::OriginSet) -> Self {
         self.trusted = trusted;
         self
     }
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn asserted_points_do_not_bend_the_forecast() {
-        use crate::memory::world::Origin;
+        use obc_memory::world::Origin;
         // A real declining series: 100 → 80 → 60 over 0..2s ⇒ -20/s.
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         for (t, v) in [(0u64, 100.0), (1_000, 80.0), (2_000, 60.0)] {
@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn an_entity_with_only_asserted_history_has_no_forecast() {
-        use crate::memory::world::Origin;
+        use obc_memory::world::Origin;
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         for (t, v) in [(0u64, 10.0), (1_000, 20.0)] {
             world
