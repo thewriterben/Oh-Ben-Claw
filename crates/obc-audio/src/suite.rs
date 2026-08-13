@@ -12,8 +12,8 @@
 //! Recording happens *before* emission (as in movement), so memory reflects
 //! intent even if the sink fails.
 
-use crate::memory::world::WorldMemory;
 use async_trait::async_trait;
+use obc_memory::world::WorldMemory;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -148,7 +148,7 @@ impl AudioController {
         &self,
         event: &HeardEvent,
         now_ms: u64,
-        origin: crate::memory::world::Origin,
+        origin: obc_memory::world::Origin,
     ) -> anyhow::Result<ClassifiedHeard> {
         let reliable = event.confidence >= self.min_confidence;
         if let Some(world) = &self.world {
@@ -223,7 +223,7 @@ mod tests {
             .observe(
                 &heard("mic0", Some("lights on"), None, 0.92),
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
         assert!(c.reliable);
@@ -240,7 +240,7 @@ mod tests {
             .observe(
                 &heard("mic0", Some("maybe?"), None, 0.3),
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
         assert!(!c.reliable);
@@ -254,7 +254,7 @@ mod tests {
         ctrl.observe(
             &heard("mic0", None, Some("alarm"), 0.99),
             1_000,
-            crate::memory::world::Origin::Observed,
+            obc_memory::world::Origin::Observed,
         )
         .unwrap();
         let fact = world.current("audio.mic0").unwrap().unwrap();

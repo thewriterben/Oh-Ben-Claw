@@ -14,9 +14,9 @@
 //! render error, the utterance is logged and skipped. `speak` never errors, so
 //! a reflex or agent that spoke is never broken by a missing renderer.
 
-use crate::audio::suite::{SpeechSink, Utterance};
 use crate::tools::builtin::audio::TextToSpeechTool;
 use async_trait::async_trait;
+use obc_audio::suite::{SpeechSink, Utterance};
 use serde_json::json;
 
 /// Renders utterances to local audio files via the OpenAI TTS tool.

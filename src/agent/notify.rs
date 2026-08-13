@@ -143,12 +143,12 @@ fn speech_headline(reason: &str) -> String {
 /// a speaker over the spine) so a nearby human *hears* the alarm, not just sees a log.
 /// Speaks only the [`speech_headline`] — reasons may carry a full triage directive.
 pub struct SpeechChannel {
-    speech: Arc<dyn crate::audio::suite::SpeechSink>,
+    speech: Arc<dyn obc_audio::suite::SpeechSink>,
     voice: String,
 }
 
 impl SpeechChannel {
-    pub fn new(speech: Arc<dyn crate::audio::suite::SpeechSink>) -> Self {
+    pub fn new(speech: Arc<dyn obc_audio::suite::SpeechSink>) -> Self {
         Self {
             speech,
             voice: "nova".to_string(),
@@ -166,7 +166,7 @@ impl NotificationChannel for SpeechChannel {
         "speech"
     }
     async fn deliver(&self, esc: &Escalation) -> anyhow::Result<()> {
-        let u = crate::audio::suite::Utterance {
+        let u = obc_audio::suite::Utterance {
             text: speech_headline(&esc.reason),
             voice: self.voice.clone(),
             at_ms: esc.ts_ms,
@@ -452,8 +452,8 @@ mod tests {
         spoken: Mutex<Vec<String>>,
     }
     #[async_trait]
-    impl crate::audio::suite::SpeechSink for SpeakRecorder {
-        async fn speak(&self, u: &crate::audio::suite::Utterance) -> anyhow::Result<()> {
+    impl obc_audio::suite::SpeechSink for SpeakRecorder {
+        async fn speak(&self, u: &obc_audio::suite::Utterance) -> anyhow::Result<()> {
             self.spoken.lock().unwrap().push(u.text.clone());
             Ok(())
         }
@@ -464,7 +464,7 @@ mod tests {
         let rec = Arc::new(SpeakRecorder {
             spoken: Mutex::new(vec![]),
         });
-        let ch = SpeechChannel::new(Arc::clone(&rec) as Arc<dyn crate::audio::suite::SpeechSink>);
+        let ch = SpeechChannel::new(Arc::clone(&rec) as Arc<dyn obc_audio::suite::SpeechSink>);
         ch.deliver(&Escalation::new(
             "A mesh node is presumed lost (LoRa escalation). Triage: call mesh_status and \
              then mesh_command a capabilities ping.",
