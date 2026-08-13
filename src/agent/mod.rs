@@ -17,7 +17,14 @@ pub mod pool;
 /// It named four things outside itself and three had been crates for days. The
 /// fourth was `crate::spine`, entirely inside `SpineActionSink`, which moved to
 /// [`crate::spine::action`] the same day and implements this crate's trait from
-/// there. `crate::agent::reflex::…` is unchanged at every call site.
+/// there.
+///
+/// This alias is *not* the compatibility shim it looks like. Thirteen import
+/// sites across seven modules were repointed at `obc_reflex` directly in the
+/// same commit, because a re-export keeps a build green while leaving the
+/// dependency graph identical — see `docs/ENDGAME.md`, step 1. What is left
+/// here is the four sites inside `agent` itself, where reaching for a crate to
+/// find this module's own vocabulary would be the wrong shape, and `src/main.rs`.
 pub use obc_reflex as reflex;
 pub mod reflexion;
 pub mod safing;

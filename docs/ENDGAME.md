@@ -169,17 +169,99 @@ The lesson generalises past this repository: a facade keeps a build green while
 leaving the architecture exactly as it was. Both halves are needed, and only the
 second one is visible to a dependency graph.
 
+### Step 2, done — and the plan was wrong about what it would buy
+
+`obc-reflex` landed 2026-08-12: 1324 lines, 28 tests, the whole engine.
+
+**The plan said "lift the reflex *vocabulary*".** It proposed splitting
+`Action`, `ActionSink`, `Cmp`, `FiredReflex` and `EscalationBudget` away from
+the engine and the sinks that drive them, on the theory that the vocabulary was
+shared System 1/System 2 language and the wiring was not movable. The split was
+never made, because it turned out not to be necessary: `reflex.rs` named exactly
+four things outside itself, three had been crates for days, and the fourth —
+`crate::spine` — was entirely inside one struct. `SpineActionSink` moved to
+`src/spine/action.rs` in a separate commit (one field, one constructor
+parameter, two topic constants) and implements the crate's `ActionSink` from
+there. After that the engine had no local names left and moved whole.
+
+That is the third time this week the same manoeuvre has been the answer, and it
+is worth naming as a rule rather than a coincidence: **trait where the
+abstraction is, implementation where the dependency is.** `SpineActuatorSink`
+left `movement` the same way on 2026-08-08; `TaskExecutor` was declared in
+`obc-a2a` and implemented next to the agent for the same reason.
+
+**Both halves were done this time.** `src/agent/mod.rs` carries
+`pub use obc_reflex as reflex;` — the facade step 1 warned about — and the
+consumers were repointed in the same commit anyway: thirteen import sites across
+seven modules (`config`, `foresight`, `learning`, `mission`, `spine`, `vision`,
+`tools`) now name `obc_reflex::…` directly. Seven sites still go through the
+facade: four inside `agent` itself, where a module reaching for a crate to find
+its own vocabulary would be the wrong shape, and three in `src/main.rs`, which
+is the binary and outside this measurement either way.
+
+One correction to make in passing: that re-export's doc comment says
+"`crate::agent::reflex::…` is unchanged at every call site." That was true of
+the commit that added it and stopped being true in the same commit that
+repointed thirteen of them. It is the smallest possible instance of the thing
+this whole document is about.
+
+Then the numbers moved:
+
+| | after step 1 | after step 2 |
+|---|---:|---:|
+| cycles | 16 | **13** |
+| crossings | 87 | **77** |
+| `agent` loc | 9244 | **7785** |
+| `agent` crossings | 42 | 37 |
+| `tools` crossings | 13 | 10 |
+| `config` crossings | 11 | 9 |
+| `spine` crossings | 9 | 9 |
+
+**And the plan's specific prediction was wrong.** It said step 2 "breaks the
+`tools -> agent` and `spine -> agent` back-edges." It broke neither. Both
+survive:
+
+    tools -> agent    1 symbol,  2 crossings    safing x2
+    spine -> agent    3 symbols, 4 crossings    notify x2, reflex, safing
+
+`reflex` was not the only thing those modules reached into `agent` for — it was
+the one that had been *counted*, in a paragraph that listed the reflex crossings
+by name and read the rest as background. `safing` is a second System 1 module
+sitting next to the first, and `notify` is a third. The measurement showed all
+three before the plan was written; the plan named the one it had a story for.
+The `spine -> agent : reflex` crossing that remains is a doc comment in
+`src/spine/action.rs` explaining where the sink came from — which the Caveats
+section below already says this script cannot tell from a call.
+
+What the prediction got right: `foresight` (677 loc) is now at **zero** blocking
+edges, and `learning` (454) is blocked only by `foresight`. Those two are the
+next extractions and need no design work.
+
+The generalisation, one level up from step 1's: **a count of blocking edges says
+nothing about what each edge costs to turn.** `obc-reflex` was listed at
+thirteen blocking edges by `extractability.py` on 2026-08-01, and left on one
+39-line move, because
+twelve of the thirteen were names that had already become crates and were still
+being spelled through `agent`'s re-exports. `obc-navigation` was listed at one
+and was worth 3714 lines. The ranking is a starting point for reading, not a
+work order.
+
 ## What may never move, and why that is an answer
 
 `agent` is the reasoning loop: provider calls, tool dispatch, memory, policy,
 observability, cost, approval. It is the thing this project *is*, and steps 1–3
-would leave it a genuinely self-contained 9000-line module rather than an
-entangled one. Whether it should then be public is a decision about the project,
-not about its dependency graph, and this document deliberately does not make it.
+would leave it a genuinely self-contained module rather than an entangled one —
+7785 lines as of step 2, down from 9244, and shrinking each time something that
+was never the reasoning loop leaves it. Whether it should then be public is a
+decision about the project, not about its dependency graph, and this document
+deliberately does not make it.
 
 What this document does claim is narrower and checkable: **there is no technical
-reason the core cannot be separated, and the work is two crates and a
-re-measurement, not a rewrite.** If that turns out to be wrong, it will be wrong
+reason the core cannot be separated, and the work is a handful of small edges
+turned around, not a rewrite.** Both crates that sentence originally budgeted
+for — `obc-tool-api` and `obc-reflex` — exist, and the number that moved was
+crossings, not lines rewritten: 117 to 77 across two commits and one 39-line
+move. If that turns out to be wrong, it will be wrong
 in a way `core_endgame.py` can show, which is the only kind of plan worth
 writing here.
 
