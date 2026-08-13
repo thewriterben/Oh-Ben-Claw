@@ -14,9 +14,9 @@
 //! Best-effort like the other two: a publish failure is logged, not propagated,
 //! so a transient outage never breaks the caller — or a reflex that spoke.
 
-use crate::audio::suite::{SpeechSink, Utterance};
 use crate::spine::{SpineClient, TOPIC_PREFIX};
 use async_trait::async_trait;
+use obc_audio::suite::{SpeechSink, Utterance};
 use serde_json::json;
 use std::sync::Arc;
 

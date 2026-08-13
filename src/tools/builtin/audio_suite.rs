@@ -6,11 +6,11 @@
 //! classed physical with a **low** blast radius: recorded into world memory but
 //! not approval-gated (speech is reversible and contained; Suite §7).
 
-use crate::audio::suite::{AudioController, HeardEvent};
 use crate::memory::world::Origin;
 use crate::memory::world::WorldMemory;
 use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_audio::suite::{AudioController, HeardEvent};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -197,7 +197,7 @@ impl Tool for SpeakTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::suite::LoggingSpeechSink;
+    use obc_audio::suite::LoggingSpeechSink;
 
     fn tools() -> (HearTool, SpeakTool, Arc<WorldMemory>) {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());

@@ -15,5 +15,20 @@
 //! It is recoverable from git history if the staged
 //! microphone-to-speaker shape is wanted back — but it would be wanted back as a
 //! wiring decision, not as a restoration, because it was never wired.
+//!
+//! ## Why this is a crate
+//!
+//! Extracted 2026-08-13, and it took two struct fields to make it possible.
+//! `SpineSpeechSink` held an `Arc<SpineClient>` and `TtsSpeechSink` held a
+//! `TextToSpeechTool`; between them they were this module's only edges into the
+//! agent tree, and the `audio <-> tools` cycle was the second of them. Both are
+//! now implemented on the far side of the trait they satisfy —
+//! `crate::spine::speech` and `crate::tools::builtin::audio_speech` upstream.
+//!
+//! What stayed is what belongs: the vocabulary ([`suite::HeardEvent`],
+//! [`suite::Utterance`]), the [`suite::SpeechSink`] trait, the one sink that
+//! depends on nothing ([`suite::LoggingSpeechSink`], which is what makes it the
+//! safe default), and the controller that records both directions into world
+//! memory.
 
 pub mod suite;

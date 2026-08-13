@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn audio_alarm_escalates_end_to_end() {
-        use crate::audio::suite::{AudioController, HeardEvent, LoggingSpeechSink};
+        use obc_audio::suite::{AudioController, HeardEvent, LoggingSpeechSink};
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let audio =
             AudioController::new(Arc::new(LoggingSpeechSink)).with_world_memory(Arc::clone(&world));

@@ -68,7 +68,17 @@ pub mod a2a_agent;
 pub use obc_position::{aerial, gnss};
 pub mod agent;
 pub mod approval;
-pub mod audio;
+/// Hearing and speaking — heard events and utterances recorded into world
+/// memory, behind a pluggable [`obc_audio::suite::SpeechSink`]. Extracted to
+/// [`obc_audio`] on 2026-08-13.
+///
+/// It was blocked by two struct fields, one per sink with a dependency. Both
+/// sinks now live on the far side of the trait they implement:
+/// `crate::spine::speech` and `crate::tools::builtin::audio_speech`.
+///
+/// Thirteen import sites in seven modules name `obc_audio` directly; this alias
+/// is for `src/main.rs`.
+pub use obc_audio as audio;
 pub mod channels;
 // The three body-telemetry suites live in their own crate (2026-08-01), the
 // first piece picked by `scripts/extractability.py` rather than by hand. They

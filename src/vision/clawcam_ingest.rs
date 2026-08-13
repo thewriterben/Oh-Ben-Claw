@@ -550,9 +550,9 @@ pub async fn poll_clawcam_into_world_gated(
 // managed power source, a glassbreak is an audio-suite alarm, and a camera going
 // offline is a comms event — each then visible to reflexes, safing, and foresight.
 
-use crate::audio::suite::HeardEvent;
 use crate::comms::LinkReading;
 use crate::power::{BatteryReading, ChargeState};
+use obc_audio::suite::HeardEvent;
 
 /// A ClawCam node-health row (from `get_node_health`). Tolerant: every field but
 /// the id is optional, so partial payloads still parse.
