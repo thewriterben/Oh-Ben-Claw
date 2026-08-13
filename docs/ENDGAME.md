@@ -364,6 +364,62 @@ in a hot path. The instrument that made this project measurable is the same one
 that hid the answer for five days, and it hid it by summarising. Both facts
 belong on this page.
 
+### Two of the last four, same day
+
+`mcp <-> vision` and `agent <-> skill_forge` were cut on 2026-08-13, a few hours
+after step 3, and they were cheaper than step 3 was.
+
+**`mcp -> vision` was a rustdoc link.** One line, in `src/mcp/mod.rs`, pointing
+readers at the perception loop that reuses a live MCP connection. `vision -> mcp`
+is three real `use` lines. The comment was the entire return arrow, so rewording
+it — describing the caller instead of linking to it — cut the cycle and changed
+no code at all.
+
+That is the doc-comment caveat at the bottom of this page collecting its second
+scalp in two days, and it is worth being uncomfortable about rather than pleased.
+The link was *useful*. It told a reader where to look. Removing it is a small
+loss of navigability paid for a real gain in graph shape, and the only reason
+the trade is worth making is that the measurement drives decisions. A project
+that did not measure would have been right to keep the link.
+
+**`skill_forge -> agent` was one `impl` block.** `impl ReplayExecutor for
+crate::agent::Agent`, 36 lines, sitting next to the trait instead of next to the
+type. `agent -> skill_forge` is nine references the other way and all of them are
+real. Moving the impl to `src/agent/skill_replay.rs` reversed it.
+
+Fifth instance of the same manoeuvre this month — `SpineActuatorSink`,
+`SpineActionSink`, `AgentExecutor` for `obc-a2a`, `Severity` out of `notify`,
+now this. At five occurrences it is not a knack, it is a shape the codebase
+keeps producing: **a trait declared next to its caller, implemented next to its
+caller, for a type that lives somewhere else.** Rust permits the impl in either
+crate as long as one of them owns the trait, and the graph is the only thing
+that objects.
+
+One honest cost, because the table below does not show it:
+
+| | before | after |
+|---|---:|---:|
+| cycles | 4 | **2** |
+| `agent -> skill_forge` crossings | 8 | **11** |
+
+Moving the impl *increased* the crossings on that edge by three, because the
+file now names `skill_forge` from inside `agent`. The edge was already there and
+already one-directional, so a cycle died and a count went up. Anyone optimising
+the crossing total rather than the cycle list would have scored this a
+regression. It is the second time on this page that the summary statistic points
+the wrong way.
+
+What is left is two cycles, and neither is a relocation:
+
+- **`audio <-> tools`** — `audio::suite` holds a `TextToSpeechTool` as a
+  *field*. The suite owns a tool; the tool layer also wraps the suite. That is a
+  question about which one is the primitive, and it has an answer, but not one
+  that can be reached by moving a file.
+- **`spine <-> fleet`** — `fleet` needs `SpineClient` and `TOPIC_PREFIX` to
+  assign a task to a node. Same sink shape as the three above and therefore
+  tractable: `fleet` declares what it needs to publish, `spine` implements it.
+  That is a trait to design rather than a block to cut and paste.
+
 ## What may never move, and why that is an answer
 
 `agent` is the reasoning loop: provider calls, tool dispatch, memory, policy,

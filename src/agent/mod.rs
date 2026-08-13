@@ -28,6 +28,15 @@ pub mod pool;
 pub use obc_reflex as reflex;
 pub mod reflexion;
 pub mod safing;
+/// The `ReplayExecutor` impl for [`Agent`], moved here from `skill_forge` on
+/// 2026-08-13. It was that module's only reference to this one, and therefore
+/// the whole `agent <-> skill_forge` cycle.
+///
+/// Private, and correctly so: a trait impl is visible wherever both the trait
+/// and the type are, regardless of the module it is written in. Nothing needs
+/// to name this module — which is also why forgetting to declare it failed at
+/// the *use* site in main.rs rather than here.
+mod skill_replay;
 pub mod streaming;
 pub mod system2;
 pub mod world_context;

@@ -451,8 +451,13 @@ impl McpRegistry {
     /// Return a shared handle to a connected server's client, if present.
     ///
     /// Lets callers reuse the live connection for out-of-band polling — e.g. a
-    /// perception loop that pulls ClawCam detections into world memory via
-    /// [`crate::vision::clawcam_ingest::poll_clawcam_into_world`].
+    /// perception loop that pulls camera detections into world memory.
+    ///
+    /// The vision module's ingest function is the caller this was written for.
+    /// It is described rather than linked: this was `mcp`'s only reference to
+    /// `vision` of any kind, so the rustdoc link was the entire `mcp -> vision`
+    /// edge, and `vision -> mcp` is three real `use` lines. One doc link, one
+    /// cycle. See docs/ENDGAME.md — the script counts text, not calls.
     pub fn client(&self, server_name: &str) -> Option<Arc<Mutex<client::McpClient>>> {
         self.clients.get(server_name).cloned()
     }
