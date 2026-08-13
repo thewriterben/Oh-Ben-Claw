@@ -246,6 +246,52 @@ being spelled through `agent`'s re-exports. `obc-navigation` was listed at one
 and was worth 3714 lines. The ranking is a starting point for reading, not a
 work order.
 
+### Step 2's dividend, collected the next day
+
+`obc-foresight` (677 loc, 11 tests) and `obc-learning` (454 loc, 4 tests) landed
+2026-08-13. This is the one prediction on this page that held exactly, so it is
+worth being precise about what "held" means: the plan said these two would come
+free, and they did — no design work, no logic changed, eight paths spelled
+`crate::memory::world::` rewritten to `obc_memory::` and five import sites
+repointed. That is the whole extraction.
+
+| | after step 2 | after the dividend |
+|---|---:|---:|
+| crossings | 77 | **75** |
+| `tools` blocking edges | 7 | **5** |
+| `config` blocking edges | 6 | **5** |
+| `vision` blocking edges | 3 | **2** |
+| cycles | 13 | 13 |
+
+Cycles unchanged, and correctly: neither module was in one. These were leaves.
+The `tools` row moves by two because `tools` named both of them — a 9052-line
+module reaching for a rule miner and a forecaster, which is the same shape as
+its reaching for `traits` in step 1 and will keep being the shape until `tools`
+is asked what it actually is.
+
+Three notes for whoever runs the next one.
+
+**The chain was one field deep, three times over.** `learning` waited on
+`foresight`, which waited on `reflex`, which waited on one action sink holding
+an `Arc<SpineClient>`. 2455 lines across three crates came out from behind one
+field. Read as a queue that is three jobs; read as edges it is one, and the
+difference between those two readings is the whole subject of this section.
+
+**Re-measure after every edge-turning commit, before deciding what is next.**
+Neither of these two was the target of the commit that freed them; the step-2
+commit named neither, and both were at zero blocking edges by the time it
+merged. A survey is a photograph, and the thing it photographs moves when you
+turn an edge.
+
+**And one dependency was found by the compiler that no survey could have
+found.** `obc-learning` needs `anyhow`; it appears in no `use` line in the file.
+Both call sites write `anyhow::Result<…>` inline in a return type — the exact
+shape that made `extractability.py`'s first version report `config` as
+edge-free, which the section above already records as the near-miss that would
+have cost a week. Same blind spot, second time: once in a script that read
+`use` lines, once in a human reading them. Both times the compiler caught it in
+seconds. The scripts rank. The compiler decides. Nothing here has changed that.
+
 ## What may never move, and why that is an answer
 
 `agent` is the reasoning loop: provider calls, tool dispatch, memory, policy,
