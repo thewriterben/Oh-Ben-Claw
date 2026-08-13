@@ -1560,7 +1560,7 @@ pub struct MissionConfig {
     pub interval_ms: Option<u64>,
     /// The named mission library (`[[mission.definition]]`).
     #[serde(default, rename = "definition")]
-    pub missions: Vec<crate::mission::Mission>,
+    pub missions: Vec<obc_mission::Mission>,
 }
 
 /// Foresight (Track 1) configuration (`[foresight]`). Predictive rules that fire

@@ -14,9 +14,9 @@
 //! reactive — call [`MissionRunner::tick`] on a cadence; it advances at most one
 //! step per tick and aborts the moment a guard trips.
 
-use crate::memory::world::WorldMemory;
-use crate::navigation::{NavController, NavGoal};
 use obc_audio::suite::AudioController;
+use obc_memory::world::WorldMemory;
+use obc_navigation::{NavController, NavGoal};
 use obc_reflex::{Condition, Snapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
