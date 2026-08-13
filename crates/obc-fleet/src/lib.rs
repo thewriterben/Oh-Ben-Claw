@@ -13,25 +13,13 @@
 //! and the assignment advisories. Optionally records the fleet view to world
 //! memory for observability.
 
-use crate::memory::world::WorldMemory;
-use crate::navigation::planning::{plan, OccupancyGrid};
-use crate::navigation::{exploration, NavGoal};
-use crate::spine::{MessageHandler, SpineClient};
+use obc_memory::world::WorldMemory;
+use obc_navigation::planning::{plan, OccupancyGrid};
+use obc_navigation::{exploration, NavGoal};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-/// MQTT topic filter for fleet node heartbeats (`obc/fleet/heartbeat/{node}`).
-pub const HEARTBEAT_FILTER: &str = "obc/fleet/heartbeat/+";
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 fn dist2(a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)
@@ -502,59 +490,15 @@ impl Default for Coordinator {
     }
 }
 
-// ── Spine bridge (distributed fleet over MQTT) ──────────────────────────────────
-
-/// A spine message handler that ingests node heartbeats (`obc/fleet/heartbeat/
-/// {node}`) into the coordinator: the node id is the last topic segment and the
-/// payload carries `{x, y, battery, mode}`. Register with
-/// [`SpineClient::subscribe_handler`].
-pub fn spine_heartbeat_handler(coord: Arc<Coordinator>) -> MessageHandler {
-    Arc::new(move |topic: &str, payload: &[u8]| {
-        let id = topic.rsplit('/').next().unwrap_or("").to_string();
-        if id.is_empty() {
-            return;
-        }
-        let Ok(v) = serde_json::from_slice::<Value>(payload) else {
-            return;
-        };
-        coord.report(NodeState {
-            id,
-            x: v.get("x").and_then(Value::as_f64),
-            y: v.get("y").and_then(Value::as_f64),
-            battery: v.get("battery").and_then(Value::as_f64),
-            mode: v
-                .get("mode")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_string(),
-            busy: false,
-            last_seen_ms: now_ms(),
-        });
-    })
-}
-
-/// The spine topic an assignment for `node` is published on (`obc/fleet/assign/{node}`).
-/// Pure — the wire contract, testable without a broker.
-pub fn assignment_topic(node: &str) -> String {
-    format!("{}/fleet/assign/{node}", crate::spine::TOPIC_PREFIX)
-}
-
-/// The assignment payload for `goal`. Pure — the wire contract, testable without
-/// a broker (mirrors the LoRa side's `MeshFrame::Assign`).
-pub fn assignment_payload(goal: &NavGoal) -> Value {
-    json!({ "x": goal.x, "y": goal.y, "tolerance": goal.tolerance })
-}
-
-/// Publish an assignment back to a node over the spine (`obc/fleet/assign/{node}`).
-pub async fn publish_assignment(
-    spine: &SpineClient,
-    node: &str,
-    goal: &NavGoal,
-) -> anyhow::Result<()> {
-    spine
-        .publish(&assignment_topic(node), &assignment_payload(goal))
-        .await
-}
+// The spine bridge lived here until 2026-08-13 and is in
+// src/spine/fleet_bridge.rs now: the heartbeat handler, the assignment topic
+// and payload, and the publish call.
+//
+// It was this module's only reference to anything still in the core tree -- two
+// lines of it -- and it was therefore both the whole spine/fleet cycle and the
+// only thing keeping this coordinator here. A bridge belongs with the
+// transport, not with the domain: topics and payload shapes are facts about
+// MQTT, and allocation is correct without knowing any of them.
 
 #[cfg(test)]
 mod tests {
@@ -667,7 +611,7 @@ mod tests {
         assert_eq!(coord.tick(1_000).len(), 1);
     }
 
-    use crate::navigation::planning::{Cell, OccupancyGrid};
+    use obc_navigation::planning::{Cell, OccupancyGrid};
 
     #[test]
     fn coordinated_exploration_gives_each_node_a_distinct_separated_frontier() {
@@ -778,21 +722,6 @@ mod tests {
         let awards2 = coord.auction_tick(1_000);
         assert_eq!(awards2.len(), 1);
         assert_eq!(awards2[0].1, "b");
-    }
-
-    #[test]
-    fn heartbeat_handler_ingests_a_node_report() {
-        let coord = Arc::new(Coordinator::new());
-        let handler = spine_heartbeat_handler(Arc::clone(&coord));
-        let payload =
-            serde_json::to_vec(&json!({ "x": 3.0, "y": 4.0, "battery": 72.0, "mode": "normal" }))
-                .unwrap();
-        handler("obc/fleet/heartbeat/rover-7", &payload);
-        let status = coord.status(now_ms());
-        let nodes = status["nodes"].as_array().unwrap();
-        assert!(nodes
-            .iter()
-            .any(|n| n["id"] == "rover-7" && n["battery"] == 72.0));
     }
 
     #[test]

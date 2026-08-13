@@ -15,10 +15,14 @@
 //! Together with `mesh_fleet_e2e`, this shows the coordinator is transport-blind:
 //! the identical auction runs whether heartbeats arrive over MQTT or LoRa.
 
-use oh_ben_claw::fleet::{
-    assignment_payload, assignment_topic, spine_heartbeat_handler, Coordinator, Task,
-};
+// The bridge moved to `spine` on 2026-08-13 -- it is transport glue, and it was
+// `fleet`'s only edge into the core tree. This test now names both sides
+// explicitly, which is a fair description of what it has always been testing.
+use oh_ben_claw::fleet::{Coordinator, Task};
 use oh_ben_claw::navigation::NavGoal;
+use oh_ben_claw::spine::fleet_bridge::{
+    assignment_payload, assignment_topic, spine_heartbeat_handler,
+};
 use std::sync::Arc;
 
 /// Wall-clock milliseconds — the same clock `spine_heartbeat_handler` stamps

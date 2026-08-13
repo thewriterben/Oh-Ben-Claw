@@ -5,9 +5,9 @@
 //! its own Track 0 gate). `fleet_status` reports heartbeats, shows the fleet
 //! view, and completes tasks — all safe.
 
-use crate::fleet::{Coordinator, NodeState, Task};
 use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_fleet::{Coordinator, NodeState, Task};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

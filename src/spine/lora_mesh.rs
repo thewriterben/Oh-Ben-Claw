@@ -17,8 +17,8 @@
 //! to a Meshtastic device over serial; tests use an in-memory loopback. Everything
 //! here is hardware-free and testable.
 
-use crate::fleet::{Coordinator, NodeState};
 use async_trait::async_trait;
+use obc_fleet::{Coordinator, NodeState};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -592,7 +592,7 @@ mod tests {
         // Coordinator with the off-grid outbox enabled; one idle node reports in.
         let coord = Coordinator::new().with_assignment_outbox();
         coord.report(idle_node("rover-a", 1_000));
-        coord.add_task(crate::fleet::Task {
+        coord.add_task(obc_fleet::Task {
             id: "t".into(),
             x: 5.0,
             y: 6.0,
@@ -690,7 +690,7 @@ mod tests {
         let rebc = ingest_line_relayed(&bytes, &coord, &relay, 5_000);
         assert!(rebc.is_some(), "hops remain, so caller should rebroadcast");
         // The heartbeat was bridged: the node is now auctionable.
-        coord.add_task(crate::fleet::Task {
+        coord.add_task(obc_fleet::Task {
             id: "t".into(),
             x: 2.0,
             y: 3.0,
@@ -707,7 +707,7 @@ mod tests {
         // Default coordinator (no outbox) collects nothing — single-brain pays zero.
         let coord = Coordinator::new();
         coord.report(idle_node("rover-a", 1_000));
-        coord.add_task(crate::fleet::Task {
+        coord.add_task(obc_fleet::Task {
             id: "t".into(),
             x: 5.0,
             y: 6.0,
@@ -819,7 +819,7 @@ mod tests {
         };
         assert!(ingest_line(&hb.encode(), &coord, 1_000));
         // the node is now known: a task at the origin is auctioned to it
-        coord.add_task(crate::fleet::Task {
+        coord.add_task(obc_fleet::Task {
             id: "t".into(),
             x: 0.0,
             y: 0.0,
