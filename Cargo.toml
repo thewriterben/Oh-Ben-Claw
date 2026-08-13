@@ -18,6 +18,7 @@ members = [
     "crates/obc-navigation",
     "crates/obc-tool-api",
     "crates/obc-reflex",
+    "crates/obc-foresight",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
@@ -85,6 +86,7 @@ obc-movement = { path = "crates/obc-movement" }
 obc-navigation = { path = "crates/obc-navigation" }
 obc-tool-api = { path = "crates/obc-tool-api" }
 obc-reflex = { path = "crates/obc-reflex" }
+obc-foresight = { path = "crates/obc-foresight" }
 toml = "1.0"
 shellexpand = "3.1"
 

@@ -98,7 +98,20 @@ pub use obc_cost as cost;
 pub mod deployment;
 pub mod doctor;
 pub mod fleet;
-pub mod foresight;
+/// Track 1 — the predictive control layer: trend forecasts over bitemporal
+/// world memory, and rules that fire on a *predicted* threshold crossing
+/// rather than a present one. Extracted to [`obc_foresight`] on 2026-08-13.
+///
+/// It was blocked by `reflex` alone, and went to zero blocking edges when that
+/// became a crate the day before — the extraction moved no logic, only seven
+/// `crate::memory::world::` paths that had been a crate since July.
+///
+/// As with [`reflex`](crate::agent::reflex), this alias is not a compatibility
+/// shim: the four import sites in `config`, `learning`, `tools` and `vision`
+/// name `obc_foresight` directly. What is left behind it is `src/main.rs`,
+/// which is the binary, and `tests/`, which exercises the public surface on
+/// purpose.
+pub use obc_foresight as foresight;
 pub mod gateway;
 /// Local-tangent-plane geometry and site models — re-exported from the
 /// [`obc_planner`] crate, where it sits next to the site optimizer that consumes

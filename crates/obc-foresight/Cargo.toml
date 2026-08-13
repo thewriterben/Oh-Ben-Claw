@@ -1,0 +1,45 @@
+[package]
+name = "obc-foresight"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's Track 1: a predictive control layer over bitemporal world memory. Rules fire on a forecast threshold crossing rather than a present one, so an action lands before the event instead of after it."
+
+# The seventeenth crate, and the first one that step 2 of docs/ENDGAME.md freed
+# as a side effect rather than as a target.
+#
+# Reflexes (System 1) react to the present. This reacts to the predicted future.
+# World memory is bitemporal and append-only, so every entity carries a
+# time-series; fit its recent trend and you can forecast *when* a value will
+# cross a threshold. `battery predicted <= 10% within 60s -> return to base`
+# fires while the pack is still at 20% and draining, which is time a purely
+# reactive rule cannot buy. Forecasts are written back into world memory under
+# `foresight.{entity}` so the prediction itself is auditable -- a rule that
+# fired on a bad forecast leaves the bad forecast behind as evidence.
+#
+# It is the same shape as obc-reflex, deliberately: rules -> Actions through an
+# ActionSink, with debounce and an escalation budget. Only the condition
+# differs. That is why this crate depends on obc-reflex rather than restating
+# the vocabulary -- Action, ActionSink, Cmp, EscalationBudget and FiredReflex
+# are shared System 1 / Track 1 language, and were the reason the two could not
+# be separated until obc-reflex existed.
+#
+# How it got here: it was blocked by exactly one module, `reflex`, for as long
+# as `extractability.py` has been reporting. When obc-reflex landed on
+# 2026-08-12 this went to zero blocking edges in the same commit, unplanned.
+# The extraction then moved 0 lines of logic: seven paths spelled
+# `crate::memory::world::` became `obc_memory::` -- names that had been a crate
+# since 2026-07-30 and were still being read through the agent's re-export
+# table. Four import sites in four modules were repointed. `src/main.rs` and
+# `tests/` were left on the facade on purpose; see docs/ENDGAME.md step 1 for
+# why that distinction is the whole point.
+[dependencies]
+anyhow = "1.0"
+obc-memory = { path = "../obc-memory" }
+obc-reflex = { path = "../obc-reflex" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1.42", default-features = false, features = ["rt", "rt-multi-thread", "macros"] }
