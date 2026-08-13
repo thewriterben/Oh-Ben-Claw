@@ -460,3 +460,127 @@ build proving the crate stands alone, and nothing here replaces that step.
 The first draft of this paragraph said 162, from memory of an earlier run. It is
 139. A document about the cost of trusting unmeasured numbers is a poor place to
 put one, and the correction is left visible rather than quietly applied.
+
+## The instrument was wrong, and every number above is low
+
+On 2026-08-13, after the last two-module cycle was cut, `core_endgame.py`
+printed:
+
+    === CYCLES (no extraction order exists through these) ===
+      none
+
+That was false. There were sixteen.
+
+### How it was found
+
+Two instruments disagreed about one module. `extractability.py` said `spine` had
+one blocking edge — `config`. `core_endgame.py` said `spine` had zero blocking
+edges and zero crossings, for a 4935-line module. Both cannot be true.
+
+They had never been checked against each other. The disagreement only surfaced
+because `spine` at zero would have been a large enough claim to write down, and
+writing it down meant looking twice.
+
+### What was wrong
+
+One regex, on the third line of the script's body:
+
+```python
+gone = set(re.findall(r"^pub use (?:obc_\w+ as )?(\w+)", lib, re.M))
+```
+
+`gone` is the set of names that have already left for a crate and are therefore
+free to depend on. The `(?:obc_\w+ as )?` group is **optional**, so the pattern
+also matches any line beginning `pub use <word>`. The last line of `src/lib.rs`
+is:
+
+```rust
+pub use config::Config;
+```
+
+— a convenience re-export of the root config struct. So `config` went into
+`gone`, and `config` is not a crate. It is 3371 lines in the middle of the tree.
+
+The effect was asymmetric, which is what made it invisible. `config` was still
+in `here`, so `config -> agent` and its four siblings were counted and printed
+normally — the module has had a row in every table on this page. But every edge
+pointing *into* it was dropped: `agent -> config`, `spine -> config`,
+`gateway -> config`, `tools -> config`. A cycle detector that can see one
+direction of a mutual pair and not the other cannot report the pair at all.
+
+### What the numbers actually are
+
+| | printed | true |
+|---|---:|---:|
+| cycles after step 3 | 4 | 20 |
+| cycles after the last two-module cut | **0** | **16** |
+| `agent` crossings | 33 | 50 |
+| `spine` blocking edges | 0 | 1 |
+| `tools` blocking edges | 1 | 1 |
+
+Every cycle count and crossing total printed on this page before this date is
+low by an unknown amount, and the specific claim "no cycles remain" was wrong.
+The tables above are left as they were printed, with this section as the
+correction, because a page arguing that documents quietly stop being true is a
+poor place to quietly edit history.
+
+### What the true picture shows
+
+All sixteen remaining cycles run through `config`. Not most — all.
+
+    config -> deployment -> config
+    config -> providers -> config
+    agent -> config -> agent
+    … and thirteen longer ones, every one of which passes through config
+
+This is not a new problem; it is the problem this page identified in its third
+paragraph and then lost sight of, because the instrument stopped showing it.
+`config` has five outward edges and every one is a config struct typed by the
+module it configures — `world_context` and `OrchestratorConfig` into `agent`,
+`retry` and `ResponseFormat` into `providers`, `inventory` and `planner` into
+`deployment`, `McpServerConfig`, `Mission`. Eight crossings, five modules.
+
+The fix is the one this repository has already used five times: **the crate owns
+its own config block, and the root `Config` composes it.** `obc-planner` has
+`DeploymentConfig`, `obc-conscience` has `ConscienceConfig`, `obc-cost` has
+`CostConfig`, `obc-tunnel` has its own, and `obc-fleet` needed nothing because
+its config had already gone with the bridge. Doing that for the five above cuts
+every remaining cycle in the tree, and the traffic in the other direction —
+`agent -> config` at 17 crossings, `spine -> config` at 4 — is fine, because a
+module reading its own configuration is not a cycle.
+
+### The lesson, which is not "regexes are hard"
+
+This page has spent five sections arguing that a measurement is worth more than
+a judgement, and it was right about that. What it did not say, and now does:
+**a measurement nothing cross-checks is a judgement wearing a number.**
+
+`core_endgame.py` was written to answer a question `extractability.py` could not.
+The two were never run against each other on a case where they should agree,
+because each was trusted for its own purpose. The bug survived every extraction
+on this page. It was found by an accident of scale — a claim large enough to
+warrant a second look — and not by any process.
+
+The cheapest possible guard would have caught it: assert that `gone` and `here`
+are disjoint. `config` was in both, and had been from the first run.
+
+That assertion is now in the script.
+
+And the sibling was right for a structural reason worth copying.
+`extractability.py` does not pattern-match `lib.rs` at all. It asks a question
+about the module itself:
+
+```python
+def is_shim(m):  # a single file whose only content is `pub use obc_*::…`
+    return bool(body) and all(line.startswith("pub use obc_") for line in body)
+```
+
+`src/config/mod.rs` is 3371 lines of struct definitions, so it fails that test
+and stays in the tree, correctly, with no special case and no regex to get
+wrong. The two scripts were asking the same sub-question — *has this left yet* —
+one by looking at how it is referenced and one by looking at what it contains.
+Only the second one is hard to fool.
+
+`core_endgame.py` now anchors every pattern on `obc_`, which fixes this
+instance. The structural test is the better answer and this script does not use
+it yet; that is a known gap, written down rather than left as an intention.

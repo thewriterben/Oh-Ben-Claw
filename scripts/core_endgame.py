@@ -25,11 +25,44 @@ from pathlib import Path
 SRC = Path("src")
 lib = (SRC / "lib.rs").read_text(encoding="utf-8")
 
-gone = set(re.findall(r"^pub use (?:obc_\w+ as )?(\w+)", lib, re.M))
+# Names that have already left for a crate, and are therefore free to depend on.
+#
+# Every pattern here must anchor on `obc_`. The first one did not until
+# 2026-08-13 — it read `^pub use (?:obc_\w+ as )?(\w+)`, where the group is
+# optional, so `pub use config::Config;` on the last line of lib.rs matched and
+# put `config` in this set. `config` is not a crate. It is 3371 lines sitting in
+# the middle of the tree, and for as long as that regex stood, **every edge
+# pointing into it was invisible to this script**: `spine -> config`,
+# `agent -> config`, `gateway -> config`, `tools -> config`, all dropped, while
+# `config -> agent` and the rest were counted normally.
+#
+# That asymmetry is the worst possible shape for a cycle detector. A mutual pair
+# through `config` could not be seen from one side, so it could not be seen at
+# all. Every cycle count and crossing total this script printed before this date
+# was low by an unknown amount, and the "no cycles remain" it printed on
+# 2026-08-13 was wrong.
+#
+# Found by two instruments disagreeing: `extractability.py` said `spine` had one
+# blocking edge and this said zero. Neither was checked against the other until
+# the disagreement made it necessary. The lesson is not "regexes are hard" — it
+# is that a measurement nothing cross-checks is a claim, and this document's
+# whole argument rests on the difference.
+gone = set(re.findall(r"^pub use (obc_\w+);", lib, re.M))
+gone |= set(re.findall(r"^pub use obc_\w+ as (\w+);", lib, re.M))
 gone |= {m for m in re.findall(r"^pub use obc_\w+::\{([^}]*)\}", lib, re.M)
          for m in (x.strip() for x in m.split(","))}
 gone |= set(re.findall(r"^pub use obc_\w+::(\w+);", lib, re.M))
 here = sorted(set(re.findall(r"^pub mod (\w+);$", lib, re.M)))
+
+# The cheapest guard that would have caught the bug above, and did not exist for
+# the five weeks it was live: a name cannot be both extracted and still here.
+# `config` was in both from the first run of this script.
+both = sorted(set(gone) & set(here))
+assert not both, (
+    f"{both} are listed as both extracted and still in the tree. "
+    "One of the two patterns above is over-matching; every edge into these "
+    "modules is being silently dropped."
+)
 
 
 def files_of(m: str) -> list[Path]:
