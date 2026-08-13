@@ -1,6 +1,6 @@
 //! The action sink that routes reflex output over the spine.
 //!
-//! This lived in `crate::agent::reflex` until 2026-08-12, and it was the only
+//! This lived in the agent's reflex module until 2026-08-12, and it was the only
 //! thing keeping that module in this tree. `reflex.rs` names exactly four
 //! things outside itself — `obc_movement`, `obc_memory`, `obc_observability`
 //! and `crate::spine` — and the first three have been crates for days. All four

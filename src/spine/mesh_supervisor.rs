@@ -350,7 +350,7 @@ pub fn rssi_series(world: &WorldMemory, node: &str, limit: usize) -> Vec<i64> {
 /// to `limit` entries as `{ ts_ms, age_s, severity, reason }` (reason trimmed to its
 /// first sentence). Shared by the `mesh_status` tool and the gateway route.
 pub fn recent_escalations(world: &WorldMemory, limit: usize) -> Vec<serde_json::Value> {
-    use crate::agent::notify::{Severity, DIGEST_PREFIX};
+    use obc_reflex::{Severity, DIGEST_PREFIX};
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -929,56 +929,15 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn escalation_raises_the_count_that_drives_a_reflex() {
-        use crate::agent::safing::{standard_safing_rules, SafingOptions};
-        use obc_reflex::{Action, ReflexEngine};
-
-        let world = WorldMemory::open_in_memory().unwrap();
-        world
-            .observe_as(
-                "mesh.n",
-                json!({ "last_type": "link_state" }),
-                1_000,
-                1_000,
-                SOURCE,
-                Origin::Observed,
-            )
-            .unwrap();
-        world
-            .observe(
-                "mesh.n.health",
-                json!({ "status": "offline" }),
-                1_000,
-                1_000,
-                "test",
-            )
-            .unwrap();
-        let mut c = esc_cfg();
-        c.recover = None; // observe-only; escalation is time-based and still fires
-
-        // Supervisor escalates the long-offline node → publishes the aggregate count.
-        tick(&world, None, &c, 30_000).await;
-        assert_eq!(
-            world
-                .current("mesh.escalated_count")
-                .unwrap()
-                .unwrap()
-                .value
-                .as_u64(),
-            Some(1)
-        );
-
-        // A standard safing engine reads world memory and fires the health-driven
-        // escalate — the mesh's presumed-lost node wakes System 2.
-        let engine = ReflexEngine::new(standard_safing_rules(&SafingOptions::default()));
-        let fired = engine.tick(&world, 40_000).unwrap();
-        assert!(
-            fired.iter().any(|f| f.rule_id == "safe-mesh-node-lost"
-                && matches!(f.action, Action::Escalate { .. })),
-            "mesh health drives a reflex escalation"
-        );
-    }
+    // `escalation_raises_the_count_that_drives_a_reflex` moved to
+    // tests/mesh_escalation_drives_safing.rs on 2026-08-13. Its `use` of the
+    // agent's safing rules was this 4781-line module's only reference to the
+    // agent at all, and it sat in five of the nine dependency cycles the
+    // endgame script reported -- one line, inside one test, holding the return
+    // arrow that made every path through this module circular.
+    //
+    // The path is not spelled here on purpose: core_endgame.py counts textual
+    // crossings and cannot tell a comment from a call.
 
     #[tokio::test]
     async fn the_count_records_the_escalation_facts_it_was_computed_from() {
@@ -1481,7 +1440,7 @@ mod tests {
         world
             .observe(
                 "notifications.escalation",
-                json!({ "reason": format!("{} 3 events", crate::agent::notify::DIGEST_PREFIX) }),
+                json!({ "reason": format!("{} 3 events", obc_reflex::DIGEST_PREFIX) }),
                 3_000,
                 3_000,
                 "notify",
