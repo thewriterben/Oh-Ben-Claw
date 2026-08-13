@@ -154,8 +154,14 @@ pub mod mcp;
 // — a crate split that renamed every call site would be two changes at once, and
 // only one of them is the point.
 pub use obc_memory as memory;
-pub use obc_planner;
-pub mod mission;
+/// Declarative multi-step missions — a sequence of steps with guards, run
+/// against world memory and the navigation controller. Extracted to
+/// [`obc_mission`] on 2026-08-13.
+///
+/// It reached zero blocking edges when `audio` became a crate the same day, and
+/// this is the first extraction that reduces `config`'s outward edge count:
+/// the root `Config` composes a `Vec<Mission>`, and that edge is now free.
+pub use obc_mission as mission;
 /// Typed, safety-bounded actuation — the act side of the
 /// perceive→remember→reflex→act loop, extracted to [`obc_movement`] on
 /// 2026-08-08.
@@ -181,6 +187,7 @@ pub use obc_movement as movement;
 ///
 /// `crate::navigation::…` is unchanged at every call site.
 pub use obc_navigation as navigation;
+pub use obc_planner;
 // The agent's self-instrumentation lives in its own crate (2026-08-02) — spans,
 // the span ring buffer, and the counters `/api/v1/metrics` serves. Re-exported
 // under the old name so `crate::observability::…` is unchanged at every call
