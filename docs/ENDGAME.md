@@ -127,6 +127,10 @@ module waiting for its dependents to leave.
 4. Only then ask which of `agent`, `tools`, `spine` is extractable, because only
    then is the question well-formed.
 
+*Steps 1–3 are done. Each has a section below saying what it actually cost,
+including where this list was wrong — and it was wrong about step 2's effect and
+right about step 3's shape. Step 4 is now the open question.*
+
 ### Step 1, done — and half of it was wrong
 
 `obc-tool-api` landed 2026-08-08. Extracting the file was the easy half and, on
@@ -292,12 +296,80 @@ have cost a week. Same blind spot, second time: once in a script that read
 `use` lines, once in a human reading them. Both times the compiler caught it in
 seconds. The scripts rank. The compiler decides. Nothing here has changed that.
 
+### Step 3, done — and the cheapest thing in this document
+
+Step 2 was supposed to break `tools -> agent` and `spine -> agent`. It broke
+neither, and the section above says so. This is what breaking them actually
+took, on 2026-08-13:
+
+| | | |
+|---|---|---:|
+| `tools -> agent` | two `use` lines in one `#[cfg(test)]` module | 4 cycles |
+| `spine -> agent` | one `use` of `Severity`/`DIGEST_PREFIX`, plus one `use` line in one test | 5 cycles |
+
+**Nine of the thirteen cycles were held open by four `use` lines, three of them
+inside test modules.**
+
+That is not a figure of speech. `tools` is 8802 lines and named `agent` exactly
+twice, both times inside `#[cfg(test)]` in `tools/builtin/power.rs`, importing
+`standard_safing_rules`. `spine` is 4740 lines and named `agent` once in
+production — `Severity` and `DIGEST_PREFIX`, to classify an escalation for its
+mesh view — and once in a test, the same safing import. Four lines, in a
+28,000-line core, sitting in nine cycles.
+
+What was done to each, and why it is not a trick:
+
+- **The escalation vocabulary moved to `obc-reflex`.** `Severity` and
+  `DIGEST_PREFIX` are what an `Action::Escalate` *is* — how urgent, and whether
+  it is a digest of earlier escalations rather than a fresh event. They were
+  living inside the escalation *delivery*. Same arrangement as `RiskClass`
+  inside `tools::traits` and `NodeState` inside `fleet`, and it produced the
+  same back-edge for the same reason: something outside needed the noun and had
+  to name the implementation to get it. 45 lines, no dependencies.
+- **Three tests moved to `tests/`.** Each spans two layers and asserts something
+  neither layer can assert alone: a reported battery must not stop an actuator
+  while a measured one must; a mesh node going quiet must reach System 2 through
+  the *shipped* safing rules. They were integration tests wearing unit tests'
+  clothes, which is the third time that phrase has been the right diagnosis this
+  week. None was weakened to make it move — the mesh test still calls
+  `standard_safing_rules`, because a test that built its own rule would prove
+  the engine works and prove nothing about the rules anyone runs.
+
+| | after step 2 | after the dividend | after step 3 |
+|---|---:|---:|---:|
+| cycles | 13 | 13 | **4** |
+| `spine` blocking edges | 2 | 2 | **1** |
+| `tools` blocking edges | 7 | 5 | **2** |
+| `spine` crossings | 9 | 9 | **5** |
+
+The four that remain are exactly the shape step 3 predicted, and it named three
+of the four: `spine <-> fleet`, `agent <-> skill_forge`, `audio <-> tools`,
+`mcp <-> vision`. All two-module. None routes through `agent -> tools` or
+`agent -> spine` any more, because those arrows now only point one way.
+
+Two things to take from this rather than one.
+
+The first is the obvious one and it is real: **a test in the wrong file is a
+dependency edge, and the graph cannot tell it from a call.** Nothing here was
+architecture. The production code of `tools` never needed `agent`, and it is
+worth asking how long a claim like "these two modules are mutually entangled"
+would have survived if anyone had looked at *which lines*.
+
+The second is less comfortable. This document confidently listed the work as
+"two crates and a re-measurement" and then predicted, in writing, that step 2
+would break these two edges. It did not, and the reason it did not is that the
+prediction was made from a table of module-level totals. `tools -> agent` read
+as `safing x2` in that table — two crossings, indistinguishable from two calls
+in a hot path. The instrument that made this project measurable is the same one
+that hid the answer for five days, and it hid it by summarising. Both facts
+belong on this page.
+
 ## What may never move, and why that is an answer
 
 `agent` is the reasoning loop: provider calls, tool dispatch, memory, policy,
 observability, cost, approval. It is the thing this project *is*, and steps 1–3
 would leave it a genuinely self-contained module rather than an entangled one —
-7785 lines as of step 2, down from 9244, and shrinking each time something that
+7726 lines after step 3, down from 9244, and shrinking each time something that
 was never the reasoning loop leaves it. Whether it should then be public is a
 decision about the project, not about its dependency graph, and this document
 deliberately does not make it.
@@ -306,8 +378,9 @@ What this document does claim is narrower and checkable: **there is no technical
 reason the core cannot be separated, and the work is a handful of small edges
 turned around, not a rewrite.** Both crates that sentence originally budgeted
 for — `obc-tool-api` and `obc-reflex` — exist, and the number that moved was
-crossings, not lines rewritten: 117 to 77 across two commits and one 39-line
-move. If that turns out to be wrong, it will be wrong
+crossings, not lines rewritten: 117 to 69, and 25 cycles to 4, across four
+commits, one 39-line move and four `use` lines. If that turns out to be wrong,
+it will be wrong
 in a way `core_endgame.py` can show, which is the only kind of plan worth
 writing here.
 
@@ -318,6 +391,13 @@ limits: it resolves `crate::x::y` and not `super::` — `extractability.py`
 reports 139 unresolved `super::` paths and this script shares that blind spot
 without counting them; it counts textual crossings, not compile edges; and a
 symbol named once in a doc comment counts the same as one called in a hot loop.
+
+That last one stopped being hypothetical on 2026-08-13. `spine -> agent :
+reflex` was, for a day, a doc comment in `src/spine/action.rs` explaining where
+a sink had come from — a live edge on the graph, describing code that had
+already left. Two comments written that day deliberately describe a move without
+spelling the path it moved from, for that reason. A measurement you can pollute
+by writing prose is a measurement worth knowing the shape of.
 It ranks; the compiler decides. Every extraction so far has ended with a scratch
 build proving the crate stands alone, and nothing here replaces that step.
 

@@ -1678,7 +1678,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             let sink: Arc<dyn ActionSink> = if config.notifications.enabled {
                 let mut notifier = oh_ben_claw::agent::notify::Notifier::new()
                     .with_dedup_window(config.notifications.dedup_window_ms);
-                use oh_ben_claw::agent::notify::Severity;
+                use obc_reflex::Severity;
                 if config.notifications.log_to_world_memory {
                     notifier = notifier.with_channel_min(
                         Arc::new(oh_ben_claw::agent::notify::WorldMemoryChannel::new(
@@ -1769,10 +1769,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                         )
                                     })
                                     // Don't fold prior digests back into the next digest.
-                                    .filter(|r| {
-                                        !r.reason
-                                            .starts_with(oh_ben_claw::agent::notify::DIGEST_PREFIX)
-                                    })
+                                    .filter(|r| !r.reason.starts_with(obc_reflex::DIGEST_PREFIX))
                                     .collect();
                             let lines =
                                 oh_ben_claw::agent::notify::build_digest(&records, interval, now);
@@ -3268,7 +3265,7 @@ async fn run_status(config: &Config) -> Result<()> {
                         .and_then(|r| r.as_str())
                         .map(|r| (f.valid_from, r.to_string()))
                 })
-                .filter(|(_, r)| !r.starts_with(oh_ben_claw::agent::notify::DIGEST_PREFIX))
+                .filter(|(_, r)| !r.starts_with(obc_reflex::DIGEST_PREFIX))
                 .collect();
             if !escalations.is_empty() {
                 let now = std::time::SystemTime::now()
@@ -3277,7 +3274,7 @@ async fn run_status(config: &Config) -> Result<()> {
                     .unwrap_or(0);
                 println!("\nRecent escalations ({}):", escalations.len());
                 for (ts, reason) in escalations.iter().rev().take(5) {
-                    let sev = oh_ben_claw::agent::notify::Severity::classify(reason);
+                    let sev = obc_reflex::Severity::classify(reason);
                     let head = reason.split_once(". ").map(|(h, _)| h).unwrap_or(reason);
                     let age_s = now.saturating_sub(*ts) / 1000;
                     println!("  [{}] {} ({}s ago)", sev.as_str(), head, age_s);

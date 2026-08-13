@@ -149,105 +149,21 @@ mod tests {
         (PowerTool::new(ctrl, Arc::clone(&world)), world)
     }
 
-    #[tokio::test]
-    async fn a_reported_reading_is_an_assertion_and_cannot_drive_safing() {
-        // The hazard from 2026-07-19, reproduced through the real tool and shown closed.
-        //
-        //   LLM: power {action:"report", soc_pct: 5}
-        //     -> PowerController::ingest
-        //     -> power.mode == "critical"
-        //     -> safe-power-critical-escalate fires
-        //     -> safe-power-critical-stop issues Stop to a physical actuator
-        //
-        // The tool is the agent's boundary, so what it writes is a claim. `power.mode`
-        // still says "critical" — the derivation is honest — but it is an assertion, and
-        // safing acts only on evidence.
-        use crate::agent::safing::{standard_safing_rules, SafingOptions};
-        use crate::memory::world::Origin;
-        use obc_reflex::ReflexEngine;
-
-        let (t, world) = tool();
-        let r = t
-            .execute(json!({ "action": "report", "soc_pct": 5.0, "charging": "discharging" }))
-            .await
-            .unwrap();
-        assert!(r.success, "{:?}", r.error);
-
-        let mode = world.current("power.mode").unwrap().unwrap();
-        assert_eq!(
-            mode.value["mode"],
-            json!("critical"),
-            "the derivation is still honest"
-        );
-        assert_eq!(
-            mode.origin,
-            Origin::Asserted,
-            "but it is a claim, not a measurement"
-        );
-        assert_eq!(
-            world.current("power.battery").unwrap().unwrap().origin,
-            Origin::Asserted
-        );
-
-        let opts = SafingOptions {
-            stop_actuator: Some(("arm".to_string(), 0)),
-            debounce_ms: 1,
-            ..Default::default()
-        };
-        let fired = ReflexEngine::new(standard_safing_rules(&opts))
-            .tick(&world, 10_000)
-            .unwrap();
-        assert!(
-            fired.is_empty(),
-            "an agent-reported battery level must not stop an actuator: {:?}",
-            fired.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
-        );
-    }
-
-    #[tokio::test]
-    async fn a_measured_reading_still_drives_safing() {
-        // The other half: the gate must not have broken real safing. Same value, same
-        // rules — only this time something actually measured it.
-        use crate::agent::safing::{standard_safing_rules, SafingOptions};
-        use crate::memory::world::Origin;
-        use crate::power::{BatteryReading, ChargeState, PowerController, PowerThresholds};
-        use obc_reflex::ReflexEngine;
-
-        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
-        let ctrl = PowerController::new(PowerThresholds {
-            low_pct: 20.0,
-            critical_pct: 10.0,
-        })
-        .with_world_memory(Arc::clone(&world));
-        ctrl.ingest(
-            &BatteryReading {
-                soc_pct: 5.0,
-                voltage: None,
-                current_a: None,
-                charging: ChargeState::Discharging,
-                source: Some("bms".to_string()),
-            },
-            1_000,
-            Origin::Observed, // a fuel gauge said so
-        )
-        .unwrap();
-
-        let opts = SafingOptions {
-            stop_actuator: Some(("arm".to_string(), 0)),
-            debounce_ms: 1,
-            ..Default::default()
-        };
-        let fired = ReflexEngine::new(standard_safing_rules(&opts))
-            .tick(&world, 10_000)
-            .unwrap();
-        assert!(
-            fired
-                .iter()
-                .any(|f| f.rule_id == "safe-power-critical-escalate"),
-            "a real critical battery must still escalate: {:?}",
-            fired.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
-        );
-    }
+    // Two tests lived here until 2026-08-13:
+    //   a_reported_reading_is_an_assertion_and_cannot_drive_safing
+    //   a_measured_reading_still_drives_safing
+    // They are in tests/reflex_boundary.rs now. They named the agent's safing
+    // module, and they were the *only* thing in this 8886-line
+    // module that named `agent` at all -- a back-edge that put four cycles in
+    // the dependency graph, held open by two test functions. The claim they
+    // make spans the tool layer and the safing layer, so it belongs somewhere
+    // that can name both without either owning the other.
+    //
+    // Written without spelling the path, deliberately: scripts/core_endgame.py
+    // counts textual crossings and cannot tell a comment from a call, so a
+    // comment naming the old path would leave the edge on the graph after the
+    // code was gone. Its own Caveats section says so; this is the first time
+    // that caveat has changed what got written.
 
     #[test]
     fn classed_safe_no_approval() {

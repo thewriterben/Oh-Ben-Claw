@@ -653,6 +653,25 @@ impl ReflexController {
 
 #[cfg(test)]
 mod tests {
+    // Relocated with Severity from the agent's notify module,
+    // 2026-08-13. It travels with the type it tests.
+    #[test]
+    fn severity_classifies_from_the_reason() {
+        assert_eq!(
+            Severity::classify("a mesh node is presumed lost"),
+            Severity::Critical
+        );
+        assert_eq!(
+            Severity::classify("battery critical — safing"),
+            Severity::Critical
+        );
+        assert_eq!(
+            Severity::classify("sensor humidity out of range"),
+            Severity::Warning
+        );
+        assert!(Severity::Critical > Severity::Warning && Severity::Warning > Severity::Info);
+    }
+
     use super::*;
     use obc_memory::world::WorldMemory;
     use serde_json::json;
@@ -1322,3 +1341,68 @@ mod tests {
         assert_eq!(sink.calls.lock().unwrap().len(), 1);
     }
 }
+
+// ── The vocabulary of an escalation ─────────────────────────────────────────
+// `Action::Escalate` above hands control to System 2. These two say what that
+// escalation *is*: how urgent, and whether it is a periodic digest of earlier
+// ones rather than a fresh event.
+//
+// They lived in the agent's `notify` module until 2026-08-13 — the escalation
+// vocabulary inside the escalation *delivery*, which is the same arrangement
+// `RiskClass` had inside `tools::traits` and `NodeState` had inside `fleet`.
+// It is the arrangement that keeps producing back-edges: `spine` needed to
+// classify an escalation for its mesh view and had to name `agent` to do it,
+// and that one `use` line was in five dependency cycles.
+//
+// Nothing here has a dependency. Forty-five lines, and moving them turned an
+// edge that four modules were routed through.
+
+/// Escalation severity, for routing (a channel can require a minimum). `Info < Warning
+/// < Critical`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum Severity {
+    Info,
+    #[default]
+    Warning,
+    Critical,
+}
+
+impl Severity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::Info => "info",
+            Severity::Warning => "warning",
+            Severity::Critical => "critical",
+        }
+    }
+    /// Parse a severity name for a channel's *minimum*; unknown/none → `Info` (accept all).
+    pub fn from_name(s: Option<&str>) -> Severity {
+        match s.map(|x| x.trim().to_ascii_lowercase()).as_deref() {
+            Some("critical") => Severity::Critical,
+            Some("warning") => Severity::Warning,
+            _ => Severity::Info,
+        }
+    }
+    /// Classify an escalation reason by keywords. Escalations default to `Warning`; clear
+    /// danger words raise it to `Critical`.
+    pub fn classify(reason: &str) -> Severity {
+        let r = reason.to_ascii_lowercase();
+        const CRIT: [&str; 6] = [
+            "critical",
+            "presumed lost",
+            "alarm",
+            "overheat",
+            "emergency",
+            "over limit",
+        ];
+        if CRIT.iter().any(|k| r.contains(k)) {
+            Severity::Critical
+        } else {
+            Severity::Warning
+        }
+    }
+}
+
+/// Prefix on every periodic digest message. Also used to exclude prior digests from the
+/// raw escalation history when the next digest is built (so digests don't compound).
+pub const DIGEST_PREFIX: &str = "OBC escalation digest";
