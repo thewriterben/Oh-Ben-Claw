@@ -118,7 +118,17 @@ pub mod gateway;
 /// it. `oh_ben_claw::geo::X` is unchanged.
 pub use obc_planner::geo;
 pub mod harness;
-pub mod learning;
+/// Self-authored reflexes — rule synthesis from experience, extracted to
+/// [`obc_learning`] on 2026-08-13.
+///
+/// It was blocked by `foresight`, which was blocked by `reflex`, which was
+/// blocked by one action sink holding an `Arc<SpineClient>`. Three crates came
+/// out from behind one field.
+///
+/// The invariant worth knowing before reading it: a mined proposal is never
+/// activated. It is inert until approved, and `tests/learning_approval_gate.rs`
+/// asserts that from the outside against a real `ForesightEngine`.
+pub use obc_learning as learning;
 pub mod mcp;
 // The memory substrate lives in its own crate (2026-07-30). Re-exported under the
 // old name so all twenty-three consumers keep compiling against `crate::memory::…`
