@@ -10,6 +10,20 @@
 //! That is an integration test that had been wearing a unit test's clothes, and
 //! it only ever compiled in place because everything happened to live in one
 //! crate. Here it can keep naming both sides after `obc-reflex` leaves.
+//!
+//! Two more joined it on 2026-08-13, from `tools::builtin::power`'s test
+//! module, for a sharper reason. They were the *only* thing in the 8886-line
+//! `tools` module that named `agent` — `crate::agent::safing::{...}`, twice,
+//! both inside `#[cfg(test)]`. That one back-edge was in four of the thirteen
+//! cycles `scripts/core_endgame.py` reports, which is to say: four cycles in
+//! the dependency graph of a robot control system existed because two test
+//! functions were filed under the wrong module.
+//!
+//! They are the same claim as the one above, measured with a different
+//! instrument — the standard safing rules rather than a hand-written reflex
+//! rule, a battery rather than a thermometer. Origin decides whether a reading
+//! may actuate. That claim spans the tool layer and the safing layer, so it
+//! belongs where both can be named.
 
 use std::sync::Arc;
 
@@ -107,5 +121,115 @@ async fn content_relayed_by_a_trusted_writer_is_now_gated() {
             .len(),
         1,
         "a real reading still fires — the gate closed the hazard, not the feature"
+    );
+}
+
+// ── The same boundary, measured at the battery ──────────────────────────────
+// Relocated from `src/tools/builtin/power.rs`'s test module on 2026-08-13. See
+// the header: these two were `tools`' only reference to `agent`, and it was a
+// test-module reference.
+
+use oh_ben_claw::agent::safing::{standard_safing_rules, SafingOptions};
+use oh_ben_claw::power::{BatteryReading, ChargeState, PowerController, PowerThresholds};
+use oh_ben_claw::tools::builtin::power::PowerTool;
+
+fn power_tool() -> (PowerTool, Arc<WorldMemory>) {
+    let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+    let ctrl = Arc::new(
+        PowerController::new(PowerThresholds {
+            low_pct: 20.0,
+            critical_pct: 10.0,
+        })
+        .with_world_memory(Arc::clone(&world)),
+    );
+    (PowerTool::new(ctrl, Arc::clone(&world)), world)
+}
+
+fn stop_the_arm() -> SafingOptions {
+    SafingOptions {
+        stop_actuator: Some(("arm".to_string(), 0)),
+        debounce_ms: 1,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn a_reported_reading_is_an_assertion_and_cannot_drive_safing() {
+    // The hazard from 2026-07-19, reproduced through the real tool and shown closed.
+    //
+    //   LLM: power {action:"report", soc_pct: 5}
+    //     -> PowerController::ingest
+    //     -> power.mode == "critical"
+    //     -> safe-power-critical-escalate fires
+    //     -> safe-power-critical-stop issues Stop to a physical actuator
+    //
+    // The tool is the agent's boundary, so what it writes is a claim. `power.mode`
+    // still says "critical" — the derivation is honest — but it is an assertion, and
+    // safing acts only on evidence.
+    let (t, world) = power_tool();
+    let r = t
+        .execute(json!({ "action": "report", "soc_pct": 5.0, "charging": "discharging" }))
+        .await
+        .unwrap();
+    assert!(r.success, "{:?}", r.error);
+
+    let mode = world.current("power.mode").unwrap().unwrap();
+    assert_eq!(
+        mode.value["mode"],
+        json!("critical"),
+        "the derivation is still honest"
+    );
+    assert_eq!(
+        mode.origin,
+        Origin::Asserted,
+        "but it is a claim, not a measurement"
+    );
+    assert_eq!(
+        world.current("power.battery").unwrap().unwrap().origin,
+        Origin::Asserted
+    );
+
+    let fired = ReflexEngine::new(standard_safing_rules(&stop_the_arm()))
+        .tick(&world, 10_000)
+        .unwrap();
+    assert!(
+        fired.is_empty(),
+        "an agent-reported battery level must not stop an actuator: {:?}",
+        fired.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn a_measured_reading_still_drives_safing() {
+    // The other half: the gate must not have broken real safing. Same value, same
+    // rules — only this time something actually measured it.
+    let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+    let ctrl = PowerController::new(PowerThresholds {
+        low_pct: 20.0,
+        critical_pct: 10.0,
+    })
+    .with_world_memory(Arc::clone(&world));
+    ctrl.ingest(
+        &BatteryReading {
+            soc_pct: 5.0,
+            voltage: None,
+            current_a: None,
+            charging: ChargeState::Discharging,
+            source: Some("bms".to_string()),
+        },
+        1_000,
+        Origin::Observed, // a fuel gauge said so
+    )
+    .unwrap();
+
+    let fired = ReflexEngine::new(standard_safing_rules(&stop_the_arm()))
+        .tick(&world, 10_000)
+        .unwrap();
+    assert!(
+        fired
+            .iter()
+            .any(|f| f.rule_id == "safe-power-critical-escalate"),
+        "a real critical battery must still escalate: {:?}",
+        fired.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
     );
 }
