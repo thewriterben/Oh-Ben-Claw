@@ -5,10 +5,17 @@
 Oh-Ben-Claw is the **upstream core**: the Rust agent, the world model, the
 reflex/System-2 layer, the tool and channel surface, the MQTT/LoRa spine.
 
-[**OBC-Prime**](https://github.com/thewriterben/OBC-Prime) is the **public
-project**: the reference bodies you can actually run, the board registry, the
-tri-implementation planner parity harness, and the documentation a newcomer
-meets first.
+**OBC-Prime** is the **public project**: the reference bodies you can actually
+run, the board registry, the tri-implementation planner parity harness, and the
+documentation a newcomer meets first.
+
+> **It is not published yet.** This page used to link to it, which meant the one
+> repository that *is* public sent readers to a 404 while calling the target
+> "the public project" — so the error read as *does not exist* rather than *not
+> open yet*. The link returns when the repo does. Nothing here checks that: the
+> doc-link gates in both repositories deliberately do not fetch absolute URLs,
+> because a link checker that needs the network goes red on a Tuesday for
+> reasons nobody caused. This one needed a person to click it.
 
 Which repo a change belongs in:
 

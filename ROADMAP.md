@@ -848,6 +848,10 @@ crates stay here where the rest of the agent compiles against them, and
 OBC-Prime carries a SHA-256-checked copy it builds and tests in CI. Rationale
 and the wider blockers: `OBC-Prime/docs/MIGRATION.md`.
 
+`OBC-Prime` is not published yet, so the paths this section cites into it are
+not readable from here. They are named rather than linked for that reason, and
+this file says so once instead of qualifying each mention.
+
 ### Moved so far
 
 | crate | LOC | tests | when | what it let the public repo check |
