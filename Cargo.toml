@@ -25,6 +25,7 @@ members = [
     "crates/obc-mission",
     "crates/obc-approval",
     "crates/obc-spine",
+    "crates/obc-tools",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
@@ -99,6 +100,7 @@ obc-audio = { path = "crates/obc-audio" }
 obc-mission = { path = "crates/obc-mission" }
 obc-approval = { path = "crates/obc-approval" }
 obc-spine = { path = "crates/obc-spine" }
+obc-tools = { path = "crates/obc-tools" }
 toml = "1.0"
 shellexpand = "3.1"
 

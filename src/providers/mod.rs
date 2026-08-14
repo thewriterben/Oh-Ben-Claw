@@ -10,9 +10,9 @@
 //! * **Retry policy** — configure `[provider.retry]` to automatically retry
 //!   transient errors (rate-limits, network blips) with exponential back-off.
 
-use crate::tools::Tool;
 use anyhow::Result;
 use async_trait::async_trait;
+use obc_tools::Tool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

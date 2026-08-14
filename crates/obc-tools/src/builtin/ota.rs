@@ -6,7 +6,7 @@
 //! - STM32: Flash via probe-rs (USB debug probe)
 //! - Arduino: Serial flash via avrdude
 
-use crate::tools::traits::{Tool, ToolResult};
+use crate::traits::{Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};

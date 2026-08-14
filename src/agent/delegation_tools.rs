@@ -14,9 +14,9 @@
 
 use crate::agent::pool::{AgentPool, SubAgentSpec};
 use crate::providers::ProviderConfig;
-use crate::tools::{Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
+use obc_tools::{Tool, ToolResult};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;

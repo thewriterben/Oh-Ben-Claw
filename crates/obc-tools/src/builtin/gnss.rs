@@ -6,19 +6,19 @@
 //! GPS module joins the same coordinate frame as the drones and cameras.
 //!
 //! Frame resolution order: an explicit `origin` argument wins; otherwise the
-//! world-memory-anchored site frame (G0, [`crate::geo::anchor`]) when the tool is built
+//! world-memory-anchored site frame (G0, [`obc_planner::geo::anchor`]) when the tool is built
 //! `with_world` and a site is anchored; otherwise the fix's own position (node at 0,0).
 //! The output's `frame` field says which one was used.
 //!
 //! Pure computation: no world change, so it's safe (no approval). Backed by
-//! [`crate::gnss`].
+//! [`obc_position::gnss`].
 
-use crate::geo::anchor as geo_anchor;
-use crate::geo::{GeoFrame, GeoPoint};
-use crate::gnss::{parse_gga, FixQuality};
-use crate::memory::world::WorldMemory;
-use crate::tools::traits::{RiskClass, Tool, ToolResult};
+use crate::traits::{RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_memory::world::WorldMemory;
+use obc_planner::geo::anchor as geo_anchor;
+use obc_planner::geo::{GeoFrame, GeoPoint};
+use obc_position::gnss::{parse_gga, FixQuality};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -201,7 +201,7 @@ mod tests {
 
     #[tokio::test]
     async fn anchored_site_frame_is_used_when_no_origin() {
-        use crate::geo::Site;
+        use obc_planner::geo::Site;
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         // Anchor a site origin one arc-minute west of the fix (48.1173 N, 11.5 E).
         let site = Site {
@@ -211,7 +211,7 @@ mod tests {
             boundary: vec![],
             dem_ref: None,
         };
-        crate::geo::anchor::anchor_site(&world, &site, 1_000, "test").unwrap();
+        obc_planner::geo::anchor::anchor_site(&world, &site, 1_000, "test").unwrap();
 
         let r = GnssFixTool::with_world(world)
             .execute(json!({ "sentence": GGA }))
@@ -239,7 +239,7 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_origin_beats_the_anchored_frame() {
-        use crate::geo::Site;
+        use obc_planner::geo::Site;
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let site = Site {
             id: "s1".into(),
@@ -248,7 +248,7 @@ mod tests {
             boundary: vec![],
             dem_ref: None,
         };
-        crate::geo::anchor::anchor_site(&world, &site, 1_000, "test").unwrap();
+        obc_planner::geo::anchor::anchor_site(&world, &site, 1_000, "test").unwrap();
 
         let r = GnssFixTool::with_world(world)
             .execute(json!({ "sentence": GGA, "origin": [48.1173, 11.5] }))

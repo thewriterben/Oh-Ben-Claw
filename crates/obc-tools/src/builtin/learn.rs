@@ -7,10 +7,10 @@
 //! only — `RiskClass::safe`. (The activated rule still only escalates, so nothing
 //! physical happens without separate approval.)
 
-use crate::memory::world::WorldMemory;
-use crate::tools::traits::{RiskClass, Tool, ToolResult};
+use crate::traits::{RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use obc_learning::{OutcomeSpec, ProposalStore, RuleMiner};
+use obc_memory::world::WorldMemory;
 use serde_json::{json, Value};
 use std::sync::Arc;
 

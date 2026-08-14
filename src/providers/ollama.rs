@@ -2,9 +2,9 @@
 
 use crate::providers::ProviderConfig;
 use crate::providers::{ChatCompletion, ChatMessage, ChatRole, Provider, ResponseFormat, ToolCall};
-use crate::tools::Tool;
 use anyhow::Result;
 use async_trait::async_trait;
+use obc_tools::Tool;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -4,10 +4,10 @@
 //! value, trend (rate of change), the extrapolated value at a horizon, and the
 //! predicted time until it crosses a threshold. Non-actuating — `RiskClass::safe`.
 
-use crate::memory::world::WorldMemory;
-use crate::tools::traits::{RiskClass, Tool, ToolResult};
+use crate::traits::{RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use obc_foresight::Forecaster;
+use obc_memory::world::WorldMemory;
 use serde_json::{json, Value};
 use std::sync::Arc;
 

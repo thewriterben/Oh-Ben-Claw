@@ -3,7 +3,7 @@
 //! Supports local file paths (JPEG, PNG, WebP, GIF) and URLs.
 //! Compatible with GPT-5.4 and Claude Opus 4.6 vision APIs.
 
-use crate::tools::{Tool, ToolResult};
+use crate::{Tool, ToolResult};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};

@@ -14,7 +14,7 @@ pub mod credentials;
 /// the core's 117 crossings were the contract, not the 9052 lines of tools
 /// implementing it. See docs/ENDGAME.md.
 ///
-/// `crate::tools::traits::…` is unchanged at every call site.
+/// `crate::traits::…` is unchanged at every call site.
 pub use obc_tool_api as traits;
 
 pub use builtin::{
@@ -58,8 +58,8 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
 /// credential fails closed.
 pub fn default_tools_with_reach(
     reach: Option<obc_conscience::ReachGate>,
-    auditor: Option<std::sync::Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
-    resolver: Option<std::sync::Arc<dyn crate::tools::credentials::CredentialResolver>>,
+    auditor: Option<std::sync::Arc<std::sync::Mutex<obc_safety::ActionAuditor>>>,
+    resolver: Option<std::sync::Arc<dyn crate::credentials::CredentialResolver>>,
 ) -> Vec<Box<dyn Tool>> {
     let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
     let cdp_url = std::env::var("OBC_BROWSER_CDP_URL").ok();

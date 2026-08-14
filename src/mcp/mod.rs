@@ -12,9 +12,9 @@
 //! - MCP Spec: <https://spec.modelcontextprotocol.io>
 //! - Rust SDK: `rmcp` crate (Linux Foundation project, v0.16+)
 
-use crate::tools::{Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
+use obc_tools::{Tool, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -364,7 +364,7 @@ impl McpRegistry {
         name: &str,
         config: &McpServerConfig,
         reach: Option<&obc_conscience::ReachGate>,
-        resolver: Option<&dyn crate::tools::credentials::CredentialResolver>,
+        resolver: Option<&dyn obc_tools::credentials::CredentialResolver>,
     ) -> Result<usize> {
         let effective = match reach {
             Some(gate) => Self::apply_conscience_to_config(name, config, gate, resolver)?,
@@ -381,7 +381,7 @@ impl McpRegistry {
         name: &str,
         config: &McpServerConfig,
         reach: &obc_conscience::ReachGate,
-        resolver: Option<&dyn crate::tools::credentials::CredentialResolver>,
+        resolver: Option<&dyn obc_tools::credentials::CredentialResolver>,
     ) -> Result<McpServerConfig> {
         let credential = match reach.check("mcp", name) {
             obc_conscience::ReachDecision::Allow { credential } => credential,
@@ -593,7 +593,7 @@ mod tests {
     }
 
     struct OneKey(&'static str, &'static str);
-    impl crate::tools::credentials::CredentialResolver for OneKey {
+    impl obc_tools::credentials::CredentialResolver for OneKey {
         fn resolve(&self, name: &str) -> Option<String> {
             (name == self.0).then(|| self.1.to_string())
         }

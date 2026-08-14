@@ -25,8 +25,8 @@ use crate::agent::{Agent, AgentHandle, AgentResponse};
 use crate::memory::MemoryStore;
 use crate::providers;
 use crate::providers::ProviderConfig;
-use crate::tools::default_tools_with_reach;
 use anyhow::Result;
+use obc_tools::default_tools_with_reach;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -51,7 +51,7 @@ pub struct InnerAgentDeps {
     /// Conscience credential resolver (item (b)). Applied to the inner agent and
     /// every spawned sub-agent so a reach-named credential is injected at their
     /// egress boundary too — same as the plain agent.
-    pub resolver: Option<Arc<dyn crate::tools::credentials::CredentialResolver>>,
+    pub resolver: Option<Arc<dyn obc_tools::credentials::CredentialResolver>>,
     /// Phase 16 trajectory capture.
     pub trajectory: Option<Arc<crate::memory::trajectory::TrajectoryStore>>,
     /// Tool security policy engine.

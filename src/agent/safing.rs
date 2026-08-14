@@ -575,7 +575,7 @@ mod tests {
         );
         // The branch is worthless if the status it names is not one record_incident takes.
         assert!(
-            crate::tools::builtin::incident::STATUSES.contains(&"investigating"),
+            obc_tools::builtin::incident::STATUSES.contains(&"investigating"),
             "the status the playbook names must be one the typed tool actually accepts"
         );
     }

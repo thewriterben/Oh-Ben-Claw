@@ -1,12 +1,12 @@
 //! World-memory tool — record and query time-valid facts about the world (Phase 18).
 //!
-//! Exposes [`crate::memory::world::WorldMemory`] to the agent so it (and the
+//! Exposes [`obc_memory::world::WorldMemory`] to the agent so it (and the
 //! subsystem suites) can `observe` real-world state and recall it with
 //! `current`/`at`/`history`. Writes are non-destructive and time-valid.
 
-use crate::memory::world::{Origin, WorldMemory};
-use crate::tools::traits::{Tool, ToolResult};
+use crate::traits::{Tool, ToolResult};
 use async_trait::async_trait;
+use obc_memory::world::{Origin, WorldMemory};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -2,17 +2,17 @@
 //!
 //! `site_anchor` lets the agent (or an operator through it) anchor a survey [`Site`]
 //! as the fleet's shared earth frame, and convert poses through it: local ENU metres
-//! ↔ `(lat, lon)`. Backed by [`crate::geo::anchor`] over the shared [`WorldMemory`],
+//! ↔ `(lat, lon)`. Backed by [`obc_planner::geo::anchor`] over the shared [`WorldMemory`],
 //! so the anchor survives restarts and re-anchoring stays auditable (time-valid,
 //! non-destructive).
 //!
 //! Pure bookkeeping + math — no physical effect, so the risk class is safe.
 
-use crate::geo::anchor as geo_anchor;
-use crate::geo::{Enu, GeoPoint, Site};
-use crate::memory::world::WorldMemory;
-use crate::tools::traits::{RiskClass, Tool, ToolResult};
+use crate::traits::{RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_memory::world::WorldMemory;
+use obc_planner::geo::anchor as geo_anchor;
+use obc_planner::geo::{Enu, GeoPoint, Site};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

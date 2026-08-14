@@ -5,7 +5,7 @@
 //! **non-actuating**: every action here is reversible and has no real-world
 //! blast radius, so the tool is classed [`RiskClass::safe`] and runs without
 //! per-call approval. The value sensing adds over a raw memory read is the
-//! **quality** verdict (ok / out_of_range / stale) — see [`crate::sensing`].
+//! **quality** verdict (ok / out_of_range / stale) — see [`obc_telemetry::sensing`].
 //!
 //! Actions (via the `action` field):
 //! - `ingest`   — record a reading (`quantity`, `value`, optional `unit`/`source`).
@@ -13,11 +13,11 @@
 //! - `history`  — full bitemporal history of `sensor.{quantity}`.
 //! - `anomalies`— every quantity currently out-of-range or stale.
 
-use crate::memory::world::Origin;
-use crate::memory::world::WorldMemory;
-use crate::sensing::{Sample, SensingController};
-use crate::tools::traits::{RiskClass, Tool, ToolResult};
+use crate::traits::{RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_memory::world::Origin;
+use obc_memory::world::WorldMemory;
+use obc_telemetry::sensing::{Sample, SensingController};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -174,7 +174,7 @@ impl Tool for SenseTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sensing::QuantitySpec;
+    use obc_telemetry::sensing::QuantitySpec;
 
     fn tool() -> SenseTool {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());

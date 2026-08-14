@@ -1,7 +1,7 @@
 //! HTTP request tool — make HTTP requests and return responses.
 
-use crate::tools::credentials::CredentialResolver;
-use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
+use crate::credentials::CredentialResolver;
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use obc_conscience::{ReachDecision, ReachGate};
 use reqwest::Client;
@@ -18,7 +18,7 @@ pub struct HttpTool {
     reach: Option<ReachGate>,
     /// Optional Track 0 auditor. When present, a reach refusal is written to the
     /// tamper-evident chain as a `conscience.reach` denial — same as perception.
-    auditor: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
+    auditor: Option<Arc<std::sync::Mutex<obc_safety::ActionAuditor>>>,
     /// Optional credential resolver (conscience item (b)). When the reach gate
     /// allows a host *and* names a credential, the secret is resolved through
     /// this and injected as a bearer token at the boundary. If a credential is
@@ -49,7 +49,7 @@ impl HttpTool {
     /// Attach a Track 0 auditor so reach refusals become tamper-evident records.
     pub fn with_auditor(
         mut self,
-        auditor: Arc<std::sync::Mutex<crate::security::ActionAuditor>>,
+        auditor: Arc<std::sync::Mutex<obc_safety::ActionAuditor>>,
     ) -> Self {
         self.auditor = Some(auditor);
         self
@@ -127,9 +127,9 @@ impl Tool for HttpTool {
         "http"
     }
 
-    fn output_trust(&self) -> crate::tools::traits::OutputTrust {
+    fn output_trust(&self) -> crate::traits::OutputTrust {
         // Fetches arbitrary web content — a prompt-injection vector (Track 0).
-        crate::tools::traits::OutputTrust::External
+        crate::traits::OutputTrust::External
     }
 
     fn description(&self) -> &str {
@@ -386,7 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn refused_reach_is_written_to_the_audit_chain() {
-        use crate::security::ActionAuditor;
+        use obc_safety::ActionAuditor;
         use std::sync::{Arc, Mutex};
         let mut path = std::env::temp_dir();
         let nanos = std::time::SystemTime::now()
@@ -409,7 +409,7 @@ mod tests {
         assert!(!result.success); // refused, no connection
 
         // the refusal is a tamper-evident record in the same chain as actions
-        assert_eq!(crate::security::audit::verify(&path, &key).unwrap(), 1);
+        assert_eq!(obc_safety::audit::verify(&path, &key).unwrap(), 1);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -492,7 +492,7 @@ mod tests {
 
     #[tokio::test]
     async fn credential_refusal_is_written_to_the_audit_chain() {
-        use crate::security::ActionAuditor;
+        use obc_safety::ActionAuditor;
         use std::sync::Mutex;
         let mut path = std::env::temp_dir();
         let nanos = std::time::SystemTime::now()
@@ -513,7 +513,7 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert_eq!(crate::security::audit::verify(&path, &key).unwrap(), 1);
+        assert_eq!(obc_safety::audit::verify(&path, &key).unwrap(), 1);
         let _ = std::fs::remove_file(&path);
     }
 }

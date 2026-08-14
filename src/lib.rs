@@ -82,7 +82,7 @@ pub use obc_approval as approval;
 ///
 /// It was blocked by two struct fields, one per sink with a dependency. Both
 /// sinks now live on the far side of the trait they implement:
-/// `obc_spine::speech` and `crate::tools::builtin::audio_speech`.
+/// `obc_spine::speech` and `obc_tools::builtin::audio_speech`.
 ///
 /// Thirteen import sites in seven modules name `obc_audio` directly; this alias
 /// is for `src/main.rs`.
@@ -246,7 +246,19 @@ pub mod skill_forge;
 /// What it unblocks is the point. `tools` — 8880 lines, the largest module
 /// left — was blocked by exactly one edge, and that edge was this one.
 pub use obc_spine as spine;
-pub mod tools;
+/// The tool layer — an alias for the [`obc_tools`] crate, which has held the
+/// registry and every built-in tool since 2026-08-14.
+///
+/// 8880 lines across 29 files: the largest module in this tree, and the one the
+/// rest of the endgame was queued behind. It was blocked by exactly one edge.
+/// `spine` left the same day and this reached zero within the hour.
+///
+/// Not one of its 63 outward references pointed at a module still in this tree
+/// — they went to memory, security, geo, movement, sensing, siteplan,
+/// navigation, power, aerial, comms, gnss and audio, every one of them already
+/// a crate. By line count this looked like the hardest thing left for months.
+/// It was the loosest.
+pub use obc_tools as tools;
 // Network tunnels left for `obc-tunnel` on 2026-08-06, same day and same shape
 // as obc-cost: its only edge outside itself was `TunnelConfig`, its own config
 // block in the root config module, so the struct went with the providers that

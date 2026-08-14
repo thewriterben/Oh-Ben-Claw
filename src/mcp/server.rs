@@ -4,7 +4,6 @@
 //! Cursor, VS Code, etc.) and HTTP+SSE transports.
 
 use super::{JsonRpcRequest, JsonRpcResponse, McpContent, McpToolDef, ProtocolMode};
-use crate::tools::Tool;
 use anyhow::Result;
 use axum::{
     extract::State,
@@ -13,6 +12,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use obc_tools::Tool;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -368,7 +368,7 @@ async fn http_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::builtin::shell::ShellTool;
+    use obc_tools::builtin::shell::ShellTool;
 
     fn make_server() -> McpServer {
         McpServer::new(vec![Box::new(ShellTool::new())])

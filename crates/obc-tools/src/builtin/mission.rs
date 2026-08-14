@@ -5,7 +5,7 @@
 //! only observes or **aborts** (always-safe stop), so it is `safe` — and abort
 //! halts navigation immediately.
 
-use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use obc_mission::{Mission, MissionRunner};
 use serde_json::{json, Value};
@@ -135,7 +135,7 @@ impl Tool for MissionStatusTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::world::WorldMemory;
+    use obc_memory::world::WorldMemory;
     use obc_mission::{Mission, MissionStep};
 
     fn setup() -> (Arc<MissionRunner>, Arc<MissionLibrary>) {

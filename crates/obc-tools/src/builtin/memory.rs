@@ -1,6 +1,6 @@
 //! Memory tool — store and retrieve notes in a persistent key-value store.
 
-use crate::tools::traits::{Tool, ToolResult};
+use crate::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use serde_json::{json, Value};

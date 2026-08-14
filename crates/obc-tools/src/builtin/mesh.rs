@@ -11,9 +11,9 @@
 //! within the node's on-MCU allow-list / range / rate limits. This tool therefore
 //! declares a physical risk class so the host approval layer treats it accordingly.
 
-use crate::memory::world::WorldMemory;
-use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_memory::world::WorldMemory;
 use obc_spine::lora_gateway::{CommandSink, NodeCommand, MESH_LINE_BUDGET};
 use obc_spine::mesh_supervisor;
 use serde_json::{json, Value};
@@ -175,7 +175,7 @@ impl Tool for MeshStatusTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::world::{Origin, WorldMemory};
+    use obc_memory::world::{Origin, WorldMemory};
 
     #[tokio::test]
     async fn mesh_status_summarizes_node_health() {
