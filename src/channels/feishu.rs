@@ -42,11 +42,11 @@
 // would make the struct a worse description of the wire than the vendor's own docs.
 // Scoped to this file deliberately — the crate root carries no blanket allow.
 #![allow(dead_code)]
-use crate::agent::Agent;
 use crate::channels::utils::chunk_text;
 use crate::config::{FeishuConfig, ProviderConfig};
 use anyhow::{Context, Result};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
+use obc_agent::Agent;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;

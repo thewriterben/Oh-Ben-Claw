@@ -21,10 +21,10 @@
 //!    records the wake + outcome back into world memory
 //!    (`system2.last_wake`), closing the perceive → reflex → reason loop.
 
-use crate::agent::reflex::ActionSink;
-use crate::memory::world::WorldMemory;
-use crate::movement::MovementCommand;
+use crate::reflex::ActionSink;
 use async_trait::async_trait;
+use obc_memory::world::WorldMemory;
+use obc_movement::MovementCommand;
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -152,7 +152,7 @@ pub struct System2Reasoner {
     gate: NoveltyGate,
     reasoner: Arc<dyn Reasoner>,
     world: Option<Arc<WorldMemory>>,
-    obs: Option<Arc<crate::observability::ObsContext>>,
+    obs: Option<Arc<obc_observability::ObsContext>>,
 }
 
 impl System2Reasoner {
@@ -170,7 +170,7 @@ impl System2Reasoner {
         self
     }
 
-    pub fn with_obs(mut self, obs: Arc<crate::observability::ObsContext>) -> Self {
+    pub fn with_obs(mut self, obs: Arc<obc_observability::ObsContext>) -> Self {
         self.obs = Some(obs);
         self
     }

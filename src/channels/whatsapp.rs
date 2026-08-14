@@ -23,7 +23,6 @@
 //! Only text (`type == "text"`) messages are processed.  Media, templates, and
 //! interactive messages are acknowledged but not forwarded to the agent.
 
-use crate::agent::Agent;
 use crate::channels::utils::chunk_text;
 use crate::config::{ProviderConfig, WhatsAppConfig};
 use anyhow::{Context, Result};
@@ -34,6 +33,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use obc_agent::Agent;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

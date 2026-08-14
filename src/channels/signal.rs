@@ -20,9 +20,9 @@
 //! allowed_numbers = ["+10987654321"]
 //! ```
 
-use crate::agent::Agent;
 use crate::config::{ProviderConfig, SignalConfig};
 use anyhow::{Context, Result};
+use obc_agent::Agent;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;

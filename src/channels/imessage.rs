@@ -25,9 +25,9 @@
 // would make the struct a worse description of the wire than the vendor's own docs.
 // Scoped to this file deliberately — the crate root carries no blanket allow.
 #![allow(dead_code)]
-use crate::agent::Agent;
 use crate::config::{IMessageConfig, ProviderConfig};
 use anyhow::Result;
+use obc_agent::Agent;
 use std::sync::Arc;
 
 // ── Channel ───────────────────────────────────────────────────────────────────

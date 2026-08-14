@@ -20,9 +20,9 @@
 //! The set is appended to the operator's configured rules; nothing here fires
 //! unless the corresponding suite is producing the mode fact.
 
-use crate::agent::reflex::{Action, ActionSink, Cmp, Condition, ReflexRule};
-use crate::movement::MovementCommand;
+use crate::reflex::{Action, ActionSink, Cmp, Condition, ReflexRule};
 use async_trait::async_trait;
+use obc_movement::MovementCommand;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -450,10 +450,10 @@ impl ActionSink for SafingSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::reflex::{Action, ReflexEngine};
-    use crate::comms::{CommsController, LinkReading, LinkThresholds};
-    use crate::memory::world::WorldMemory;
-    use crate::power::{BatteryReading, ChargeState, PowerController, PowerThresholds};
+    use crate::reflex::{Action, ReflexEngine};
+    use obc_memory::world::WorldMemory;
+    use obc_telemetry::comms::{CommsController, LinkReading, LinkThresholds};
+    use obc_telemetry::power::{BatteryReading, ChargeState, PowerController, PowerThresholds};
     use std::sync::Arc;
 
     fn opts_with_actuator() -> SafingOptions {
@@ -603,7 +603,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
         for f in engine.tick(&world, 1_000).unwrap() {
@@ -624,7 +624,7 @@ mod tests {
                     source: None,
                 },
                 2_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
         for f in engine.tick(&world, 2_000).unwrap() {
@@ -666,7 +666,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
         assert_eq!(status.mode.as_str(), "critical");
@@ -700,7 +700,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
         let engine = ReflexEngine::new(standard_safing_rules(&SafingOptions::default()));
@@ -768,7 +768,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
 
@@ -786,7 +786,7 @@ mod tests {
 
     #[test]
     fn out_of_range_sensor_escalates_end_to_end() {
-        use crate::sensing::{QuantitySpec, Sample, SensingController};
+        use obc_telemetry::sensing::{QuantitySpec, Sample, SensingController};
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         let sensing = SensingController::new(vec![(
             "temperature".to_string(),
@@ -807,7 +807,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
 
@@ -824,7 +824,7 @@ mod tests {
 
     #[test]
     fn overheat_escalates_on_numeric_threshold_end_to_end() {
-        use crate::sensing::{QuantitySpec, Sample, SensingController};
+        use obc_telemetry::sensing::{QuantitySpec, Sample, SensingController};
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());
         // No range limits, so the reading is in-range (quality ok) — the overheat
         // guard fires purely on the numeric value crossing the threshold.
@@ -840,7 +840,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
 
@@ -863,7 +863,7 @@ mod tests {
                 source: None,
             },
             1_000,
-            crate::memory::world::Origin::Observed,
+            obc_memory::world::Origin::Observed,
         )
         .unwrap();
         let engine2 = ReflexEngine::new(standard_safing_rules(&opts));
@@ -884,7 +884,7 @@ mod tests {
 
     #[tokio::test]
     async fn safing_sink_taps_advisory_and_forwards() {
-        use crate::agent::reflex::LoggingActionSink;
+        use crate::reflex::LoggingActionSink;
         let state = Arc::new(SafingState::new());
         let sink = SafingSink::new(Arc::clone(&state), Arc::new(LoggingActionSink));
         // a power-low safing publish flips shed_load (and is still forwarded).
@@ -920,7 +920,7 @@ mod tests {
                     source: None,
                 },
                 1_000,
-                crate::memory::world::Origin::Observed,
+                obc_memory::world::Origin::Observed,
             )
             .unwrap();
         let engine = ReflexEngine::new(standard_safing_rules(&SafingOptions::default()));

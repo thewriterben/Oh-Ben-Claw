@@ -71,7 +71,7 @@ pub use obc_spine::{MeshSupervisorConfig, SpineConfig};
 
 /// The agent's own configuration blocks, which live with the agent.
 ///
-/// Moved to [`crate::agent`] on 2026-08-13 and re-exported here. The root
+/// Moved to [`obc_agent`] on 2026-08-13 and re-exported here. The root
 /// `Config` composes them, and `crate::approval` reads `AutonomyConfig` and
 /// `AutonomyLevel` through this path deliberately: routing that module at the
 /// agent instead would trade one mutual pair in the dependency graph for
@@ -81,7 +81,7 @@ pub use obc_spine::{MeshSupervisorConfig, SpineConfig};
 /// config block, the root `Config` composes it. `ProviderConfig` went to
 /// `providers`, `SpineConfig` and `MeshSupervisorConfig` went to `spine`, and
 /// these four close the final cycle in the core.
-pub use crate::agent::{AgentConfig, EdgeConfig};
+pub use obc_agent::{AgentConfig, EdgeConfig};
 pub use obc_approval::{AutonomyConfig, AutonomyLevel};
 
 // ── Agent Configuration ──────────────────────────────────────────────────────
@@ -686,7 +686,7 @@ pub struct PerceptionConfig {
     /// were not connected. Defaults are deliberately modest (24 facts, 5 withdrawals,
     /// a 2400-character hard cap) because this renders on every turn.
     #[serde(default)]
-    pub context: crate::agent::world_context::WorldContextConfig,
+    pub context: obc_agent::world_context::WorldContextConfig,
 }
 
 /// Vision-driven reflex + foresight rules (`[perception.vision_rules]`). Detections
@@ -1515,7 +1515,7 @@ pub struct Config {
     #[serde(default)]
     pub gateway: GatewayConfig,
     #[serde(default)]
-    pub orchestrator: crate::agent::OrchestratorConfig,
+    pub orchestrator: obc_agent::OrchestratorConfig,
     #[serde(default)]
     pub edge: EdgeConfig,
     #[serde(default)]

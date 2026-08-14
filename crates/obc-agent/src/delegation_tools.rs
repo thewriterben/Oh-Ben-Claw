@@ -12,7 +12,7 @@
 //! | `list_agents` | List all sub-agents and their current status |
 //! | `stop_agent` | Stop a sub-agent and remove it from the active pool |
 
-use crate::agent::pool::{AgentPool, SubAgentSpec};
+use crate::pool::{AgentPool, SubAgentSpec};
 use anyhow::Result;
 use async_trait::async_trait;
 use obc_providers::ProviderConfig;
@@ -309,7 +309,7 @@ impl Tool for ListAgentsTool {
 
         let filtered: Vec<_> = agents
             .iter()
-            .filter(|a| include_stopped || a.status != crate::agent::pool::SubAgentStatus::Stopped)
+            .filter(|a| include_stopped || a.status != crate::pool::SubAgentStatus::Stopped)
             .collect();
 
         if filtered.is_empty() {
@@ -404,8 +404,8 @@ pub fn delegation_tools(pool: AgentPool, session_id: Arc<Mutex<String>>) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::pool::AgentPool;
-    use crate::memory::MemoryStore;
+    use crate::pool::AgentPool;
+    use obc_memory::MemoryStore;
     use obc_providers::ProviderConfig;
     use serde_json::json;
     use std::sync::Arc;
