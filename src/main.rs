@@ -3503,8 +3503,8 @@ async fn run_a2a_serve(
     advertise: Option<&str>,
     echo: bool,
 ) -> Result<()> {
+    use obc_agent::a2a_executor::AgentExecutor;
     use oh_ben_claw::a2a::{A2AServer, EchoExecutor, TaskExecutor};
-    use oh_ben_claw::a2a_agent::AgentExecutor;
     use oh_ben_claw::agent::Agent;
     use oh_ben_claw::memory::MemoryStore;
     use oh_ben_claw::tools::{default_tools, default_tools_with_reach};

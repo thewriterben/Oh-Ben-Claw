@@ -701,3 +701,61 @@ people's work:
 
 Five errors, four of them in the analysis rather than the code. The extractions
 themselves went almost entirely to plan; it was the map that kept being wrong.
+
+
+---
+
+## Where it ended, and what stays
+
+*Added 2026-08-14, when `a2a_agent` moved into `obc-agent`.*
+
+The extraction queue is empty. Not "short" — empty. Every module left in
+`src/` has zero blocking edges, and has since `obc-peripherals` left earlier
+today. There is nothing waiting on anything.
+
+That makes the remaining question a different one, and it is worth writing the
+change down rather than letting the page trail off. For eight months "what
+comes out next" was answered by measurement: run `extractability.py`, take the
+module with zero blocking edges and the most lines. That question has no answer
+left. What replaces it is a judgement — *should this be a crate at all* — and
+judgement should be recorded with its reasons or it reads as neglect.
+
+### Deliberately staying in the binary
+
+| module | loc | why it stays |
+|---|---:|---|
+| `doctor` | 807 | Diagnostics for an installation. It reads config, probes peripherals and prints what it finds. Nothing imports it; only the binary runs it. A crate would be a package with one consumer that ships in the same artifact. |
+| `deployment` | 658 | Swarm rollout driven from the CLI. Same shape as `doctor` — an operator-facing command, not a library anything links. |
+| `harness` | 577 | The evaluation harness: runs scenarios against a live agent and scores them. It is test infrastructure that happens to ship, and its only caller is a subcommand. |
+
+None of the three is blocked. All three could be extracted this afternoon and
+the workspace would stay green. The argument against is that a crate boundary
+buys reuse, independent testing and a place to draw a public/private line, and
+these three offer nowhere to spend that: one consumer each, no second caller in
+prospect, and nothing about them that another repository would want.
+
+Extracting them would raise a number and change nothing about the software.
+That is the definition of the work this page spent eight months arguing against
+when it was called "a re-export is not a cut".
+
+### What the last move actually was
+
+`a2a_agent` was 133 lines and did not become a crate either. It implements
+`obc-a2a`'s `TaskExecutor` by dispatching to `Agent`, and the rule this project
+has now applied nine times says the implementation belongs beside the
+dependency it holds. While `agent` was a module in this tree, "beside `Agent`"
+and "in the root crate" were the same place, so nothing forced the question.
+Extracting `obc-agent` separated them, and the file followed the type.
+
+It is the first application of that rule that *removed* a module from the tree
+instead of releasing one. The same sentence, read from the other end.
+
+### The final shape
+
+Measured on this branch:
+
+    35 names extracted, 4 modules remaining, 0 cycles
+
+The fourth is `gateway`, whose extraction is open and not yet merged; when it
+lands the count is 36 and 3. The three that remain after that are the binary's
+own commands. That is not a leftover. That is what a binary is.

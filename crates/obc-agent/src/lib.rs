@@ -4,6 +4,7 @@
 //! calls the LLM, executes any requested tool calls, feeds results back to the
 //! LLM, and repeats until the model produces a final text response.
 
+pub mod a2a_executor;
 pub mod delegation_tools;
 pub mod edge;
 pub mod handle;
