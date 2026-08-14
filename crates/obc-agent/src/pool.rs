@@ -21,11 +21,11 @@
 //!     └─ list_agents()                   ──► [researcher, coder, ...]
 //! ```
 
-use crate::agent::AgentConfig;
-use crate::agent::{Agent, AgentHandle};
-use crate::memory::MemoryStore;
+use crate::AgentConfig;
+use crate::{Agent, AgentHandle};
 use anyhow::{bail, Result};
 use obc_conscience::ReachGate;
+use obc_memory::MemoryStore;
 use obc_providers::ProviderConfig;
 use obc_tools::{default_tools_with_reach, Tool};
 use serde::{Deserialize, Serialize};
@@ -138,7 +138,7 @@ pub struct AgentPool {
     /// so a delegated agent cannot bypass the allowlist the orchestrator honors.
     reach: Option<ReachGate>,
     /// Track 0 auditor, so a sub-agent's reach refusal is a tamper-evident record.
-    auditor: Option<Arc<Mutex<crate::security::ActionAuditor>>>,
+    auditor: Option<Arc<Mutex<obc_safety::ActionAuditor>>>,
     /// Conscience credential resolver (item (b)), so a spawned sub-agent injects
     /// a reach-named credential at its egress boundary too.
     resolver: Option<Arc<dyn obc_tools::credentials::CredentialResolver>>,
@@ -164,7 +164,7 @@ impl AgentPool {
     pub fn with_reach_gate(
         mut self,
         reach: Option<ReachGate>,
-        auditor: Option<Arc<Mutex<crate::security::ActionAuditor>>>,
+        auditor: Option<Arc<Mutex<obc_safety::ActionAuditor>>>,
         resolver: Option<Arc<dyn obc_tools::credentials::CredentialResolver>>,
     ) -> Self {
         self.reach = reach;
@@ -400,7 +400,7 @@ pub struct SubAgentInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::MemoryStore;
+    use obc_memory::MemoryStore;
 
     fn make_pool() -> AgentPool {
         let memory = Arc::new(MemoryStore::open_in_memory().unwrap());

@@ -47,15 +47,15 @@ pub use orchestrator::{OrchestratorAgent, OrchestratorConfig, RoutingStrategy};
 #[allow(unused_imports)]
 pub use pool::{AgentPool, SubAgentInfo, SubAgentSpec, SubAgentStatus};
 
-use crate::memory::trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};
-use crate::memory::MemoryStore;
-use crate::security::audit::{ActionAuditor, Decision};
-use crate::security::limits::SafetyGate;
-use crate::security::trust::{self, TrustGate, TrustScorer};
-use crate::security::PolicyEngine;
 use anyhow::Result;
 use obc_approval::ApprovalManager;
+use obc_memory::trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};
+use obc_memory::MemoryStore;
 use obc_providers::{ChatMessage, ChatRole, Provider};
+use obc_safety::audit::{ActionAuditor, Decision};
+use obc_safety::limits::SafetyGate;
+use obc_safety::trust::{self, TrustGate, TrustScorer};
+use obc_safety::PolicyEngine;
 use obc_skill_forge::rollout::RolloutTracker;
 use obc_skill_forge::{SkillForge, SkillTool};
 use obc_tool_api::{RiskClass, RolloutStage, Tool};
@@ -88,7 +88,7 @@ pub struct Agent {
     /// Optional observability context (Phase 15 WS5): when attached, every
     /// run records an `agent.process` span, each tool call an `agent.tool`
     /// span, and the turn/tool/error counters are incremented.
-    obs: Option<Arc<crate::observability::ObsContext>>,
+    obs: Option<Arc<obc_observability::ObsContext>>,
     /// Track 0: deterministic, model-independent safety limits applied to
     /// physical tool calls before execution.
     safety: Option<Arc<SafetyGate>>,
@@ -97,7 +97,7 @@ pub struct Agent {
     /// World memory, for the state preamble. Read-only from here: the agent's own
     /// writes go through the `world_memory` tool, which stamps provenance the agent
     /// cannot forge.
-    world: Option<Arc<crate::memory::world::WorldMemory>>,
+    world: Option<Arc<obc_memory::world::WorldMemory>>,
     /// How much of that state to render, and which.
     world_context: world_context::WorldContextConfig,
     /// Phase 16: when attached, each run is captured as an `Episode` for
@@ -118,7 +118,7 @@ pub struct Agent {
     /// Phase 15/9: token cost tracking — `(tracker, in_price/M, out_price/M)`.
     /// Each run records an estimated `TokenUsage` (chars/4 heuristic, same as
     /// episode metrics) so the gateway can show a live cost summary.
-    cost: Option<(Arc<crate::cost::CostTracker>, f64, f64)>,
+    cost: Option<(Arc<obc_cost::CostTracker>, f64, f64)>,
     /// Track 0 staged rollout (Phase 16 P3): clean-run/failure record for
     /// staged skills. Without it, simulate/supervised gating still applies —
     /// runs just aren't counted toward promotion.
@@ -130,7 +130,7 @@ pub struct Agent {
     /// untrusted (external-origin) tool output are handled. `Off` disables
     /// scanning; `Warn` (default) logs + counts; `Enforce` refuses unless the
     /// tool is explicitly operator-granted.
-    taint_mode: crate::security::taint::TaintMode,
+    taint_mode: obc_safety::taint::TaintMode,
     /// How many recent messages to replay into context. Defaults to
     /// [`MAX_HISTORY_MESSAGES`]; an edge device lowers it to bound RAM. This used to
     /// be the constant, read directly, which is why `edge.max_history_messages` could
@@ -169,7 +169,7 @@ impl Agent {
             cost: None,
             rollout: None,
             forge_dir: None,
-            taint_mode: crate::security::taint::TaintMode::Off,
+            taint_mode: obc_safety::taint::TaintMode::Off,
             max_history: MAX_HISTORY_MESSAGES,
         }
     }
@@ -193,7 +193,7 @@ impl Agent {
     }
 
     /// Attach an observability context (spans + counters per run).
-    pub fn with_obs(mut self, obs: Arc<crate::observability::ObsContext>) -> Self {
+    pub fn with_obs(mut self, obs: Arc<obc_observability::ObsContext>) -> Self {
         self.obs = Some(obs);
         self
     }
@@ -213,7 +213,7 @@ impl Agent {
     /// something prompts it to, and nothing does.
     pub fn with_world_context(
         mut self,
-        world: Arc<crate::memory::world::WorldMemory>,
+        world: Arc<obc_memory::world::WorldMemory>,
         cfg: world_context::WorldContextConfig,
     ) -> Self {
         self.world = Some(world);
@@ -246,7 +246,7 @@ impl Agent {
     /// `TokenUsage` priced at the given USD-per-million-token rates.
     pub fn with_cost(
         mut self,
-        tracker: Arc<crate::cost::CostTracker>,
+        tracker: Arc<obc_cost::CostTracker>,
         input_price_per_million: f64,
         output_price_per_million: f64,
     ) -> Self {
@@ -272,7 +272,7 @@ impl Agent {
     /// each run pools output from `External`-trust tools and gated calls whose
     /// argument values echo that content are flagged (`Warn`) or refused
     /// (`Enforce`).
-    pub fn with_taint_mode(mut self, mode: crate::security::taint::TaintMode) -> Self {
+    pub fn with_taint_mode(mut self, mode: obc_safety::taint::TaintMode) -> Self {
         self.taint_mode = mode;
         self
     }
@@ -401,8 +401,8 @@ impl Agent {
         // Track 0 taint tracking: a fresh per-run pool of untrusted (external-
         // origin) tool output. `None` when scanning is off — no allocation, no
         // work in the chokepoint. Never shared across runs (no cross-turn taint).
-        let taint_pool = (self.taint_mode != crate::security::taint::TaintMode::Off)
-            .then(crate::security::taint::TaintPool::new);
+        let taint_pool = (self.taint_mode != obc_safety::taint::TaintMode::Off)
+            .then(obc_safety::taint::TaintPool::new);
 
         // 1. Store the user message
         self.memory
@@ -614,7 +614,7 @@ impl Agent {
 
         // Phase 15/9: record estimated usage against the cost budget.
         if let Some((tracker, in_price, out_price)) = &self.cost {
-            tracker.record_usage(crate::cost::TokenUsage::new(
+            tracker.record_usage(obc_cost::TokenUsage::new(
                 provider_config.model.clone(),
                 input_est,
                 output_est,
@@ -666,7 +666,7 @@ impl Agent {
     /// episodes, both ranked by deterministic token overlap. `None` when
     /// nothing relevant is known — no prompt noise on novel tasks.
     fn experience_block(&self, objective: &str, k: usize) -> Option<String> {
-        use crate::memory::trajectory::lexical_score;
+        use obc_memory::trajectory::lexical_score;
         const MIN_SCORE: f32 = 0.2;
 
         // Relevant learned skills currently registered as tools.
@@ -784,7 +784,7 @@ impl Agent {
         &self,
         name: &str,
         args_str: &str,
-        taint: Option<&crate::security::taint::TaintPool>,
+        taint: Option<&obc_safety::taint::TaintPool>,
     ) -> Result<obc_tool_api::ToolResult> {
         self.execute_tool_inner(name, args_str, false, taint).await
     }
@@ -798,7 +798,7 @@ impl Agent {
         name: &str,
         args_str: &str,
         in_sequence: bool,
-        taint: Option<&crate::security::taint::TaintPool>,
+        taint: Option<&obc_safety::taint::TaintPool>,
     ) -> Result<obc_tool_api::ToolResult> {
         let mut name = name.to_string();
         let mut args_str = args_str.to_string();
@@ -1012,7 +1012,7 @@ impl Agent {
         // its argument values echo untrusted (external-origin) content pooled
         // earlier this run. This is the CaMeL data-flow guard: fetched web/MCP
         // text must not steer a physical/irreversible action.
-        use crate::security::taint::{self, TaintMode};
+        use obc_safety::taint::{self, TaintMode};
         if self.taint_mode != TaintMode::Off && taint::gated(risk) {
             if let Some(pool) = taint {
                 if let Some(hit) = taint::scan_args(&args, pool) {
@@ -1330,7 +1330,7 @@ mod tests {
     }
 
     fn agent_with_history(n: Option<usize>) -> (Agent, String) {
-        let memory = Arc::new(crate::memory::MemoryStore::open_in_memory().unwrap());
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
         let session = memory.create_session("history").unwrap();
         for i in 0..40 {
             memory
@@ -1376,7 +1376,7 @@ mod tests {
         let ctx = agent.build_context(&session).unwrap();
         assert_eq!(ctx.len() - 1, MAX_HISTORY_MESSAGES.min(40));
     }
-    use crate::security::limits::{SafetyGate, SafetyLimit};
+    use obc_safety::limits::{SafetyGate, SafetyLimit};
     use obc_tool_api::BlastRadius;
     use serde_json::json;
 

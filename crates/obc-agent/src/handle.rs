@@ -22,7 +22,7 @@
 //! └─────────────────────────────────────────────────────────┘
 //! ```
 
-use crate::agent::{Agent, AgentResponse};
+use crate::{Agent, AgentResponse};
 use anyhow::Result;
 use obc_providers::ProviderConfig;
 use serde::{Deserialize, Serialize};

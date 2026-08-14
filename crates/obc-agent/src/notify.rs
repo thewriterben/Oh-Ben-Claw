@@ -10,8 +10,8 @@
 //! and best-effort (a down webhook never stalls System 1).
 
 use super::reflex::ActionSink;
-use crate::movement::MovementCommand;
 use async_trait::async_trait;
+use obc_movement::MovementCommand;
 use obc_reflex::{Severity, DIGEST_PREFIX};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -50,11 +50,11 @@ pub trait NotificationChannel: Send + Sync {
 /// Log-of-record: append each escalation to world memory as a `notifications.escalation`
 /// fact (non-destructive, so `history` gives the full trail; `current` the latest).
 pub struct WorldMemoryChannel {
-    world: Arc<crate::memory::world::WorldMemory>,
+    world: Arc<obc_memory::world::WorldMemory>,
 }
 
 impl WorldMemoryChannel {
-    pub fn new(world: Arc<crate::memory::world::WorldMemory>) -> Self {
+    pub fn new(world: Arc<obc_memory::world::WorldMemory>) -> Self {
         Self { world }
     }
 }
@@ -365,7 +365,7 @@ impl ActionSink for NotifyingActionSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::world::WorldMemory;
+    use obc_memory::world::WorldMemory;
     use std::sync::Mutex;
 
     #[tokio::test]

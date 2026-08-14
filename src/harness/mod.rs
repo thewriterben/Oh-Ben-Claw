@@ -17,10 +17,10 @@
 //! - Every tool touch (verification reads included) goes through the agent's
 //!   execution chokepoint: policy → Track 0 → trust → approval.
 
-use crate::agent::Agent;
 use crate::config::ProviderConfig;
 use crate::memory::world::WorldMemory;
 use anyhow::Result;
+use obc_agent::Agent;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;

@@ -24,10 +24,10 @@
 // would make the struct a worse description of the wire than the vendor's own docs.
 // Scoped to this file deliberately — the crate root carries no blanket allow.
 #![allow(dead_code)]
-use crate::agent::Agent;
 use crate::channels::utils::chunk_text;
 use crate::config::{MatrixConfig, ProviderConfig};
 use anyhow::{Context, Result};
+use obc_agent::Agent;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;

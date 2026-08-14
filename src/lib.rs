@@ -65,8 +65,21 @@ pub mod a2a_agent;
 //
 // Re-exported under the old names, so `crate::aerial::…` and `crate::gnss::…`
 // are unchanged at every call site.
-pub use obc_position::{aerial, gnss};
-pub mod agent;
+/// The reasoning loop — an alias for the [`obc_agent`] crate, which has held it
+/// since 2026-08-14.
+///
+/// 7885 lines, and the largest module in this tree for every day the
+/// extractability survey has existed. It did not become extractable by being
+/// changed: its four blocking edges were `providers`, `skill_forge`, `spine`
+/// and `tools`, and all four left in the four days before it, each released by
+/// the one before. spine → tools → providers → skill_forge → here.
+///
+/// Ninety-one paths were rewritten to move it, and every one of them but the
+/// nineteen self-references pointed at a crate that had already gone: memory
+/// 32, security 24, observability 5, cost 4, movement 3, sensing 2, comms 1,
+/// power 1. The most connected module in the tree turned out, by the end, to be
+/// connected almost entirely to things outside it.
+pub use obc_agent as agent;
 /// Human-in-the-loop approval — autonomy levels, the per-call gate, forever
 /// grants, and the trust score a tool's output carries. Extracted to
 /// [`obc_approval`] on 2026-08-13.
@@ -87,6 +100,7 @@ pub use obc_approval as approval;
 /// Thirteen import sites in seven modules name `obc_audio` directly; this alias
 /// is for `src/main.rs`.
 pub use obc_audio as audio;
+pub use obc_position::{aerial, gnss};
 pub mod channels;
 // The three body-telemetry suites live in their own crate (2026-08-01), the
 // first piece picked by `scripts/extractability.py` rather than by hand. They
@@ -133,7 +147,7 @@ pub use obc_fleet as fleet;
 /// became a crate the day before — the extraction moved no logic, only seven
 /// `crate::memory::world::` paths that had been a crate since July.
 ///
-/// As with [`reflex`](crate::agent::reflex), this alias is not a compatibility
+/// As with [`reflex`](obc_agent::reflex), this alias is not a compatibility
 /// shim: the four import sites in `config`, `learning`, `tools` and `vision`
 /// name `obc_foresight` directly. What is left behind it is `src/main.rs`,
 /// which is the binary, and `tests/`, which exercises the public surface on

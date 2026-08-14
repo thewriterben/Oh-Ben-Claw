@@ -16,8 +16,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::a2a::{Artifact, Message, Part, Role, Task, TaskExecutor, TaskState, TaskStatus};
-use crate::agent::Agent;
 use crate::config::ProviderConfig;
+use obc_agent::Agent;
 
 /// Runs an inbound A2A message through [`Agent::process`] and returns the
 /// reply as a completed task with one text artifact.

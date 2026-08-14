@@ -16,12 +16,12 @@
 //! attempt a full voice-gateway or slash-command integration — plain text
 //! messages only.
 
-use crate::agent::Agent;
 use crate::channels::typing::TypingTask;
 use crate::channels::utils::chunk_text;
 use crate::config::{DiscordConfig, ProviderConfig};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
+use obc_agent::Agent;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;

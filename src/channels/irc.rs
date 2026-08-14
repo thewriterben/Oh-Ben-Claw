@@ -22,9 +22,9 @@
 //! channels   = ["#ai-bots"]
 //! ```
 
-use crate::agent::Agent;
 use crate::config::{IrcConfig, ProviderConfig};
 use anyhow::{Context, Result};
+use obc_agent::Agent;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;

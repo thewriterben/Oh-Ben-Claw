@@ -1,0 +1,68 @@
+[package]
+name = "obc-agent"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's reasoning loop: the agent that turns a request into tool calls against a real body -- orchestration, delegation to sub-agents, a worker pool, edge agents, System 2 deliberation, reflexion, judging, streaming, safing, and the world context a turn is given."
+
+# The twenty-eighth crate, 7885 lines in fourteen files, and the last structural
+# piece of the endgame. For every day this project has measured extractability,
+# this was the largest module in the tree, and for most of them it was blocked
+# by four edges.
+#
+# It did not become extractable by being changed. Its four blocking edges were
+# providers, skill_forge, spine and tools, and all four left in the four days
+# before this commit -- each one released by the one before it. spine unblocked
+# tools, tools unblocked providers, providers unblocked skill_forge, and
+# skill_forge unblocked this. Not one of the five needed its own code altered to
+# become extractable; the work was entirely in the four sinks that moved to the
+# spine a week earlier.
+#
+# The rewrite here is ninety-one paths, and the shape of them is the argument
+# for having measured rather than guessed: memory 32, security 24, self 19,
+# observability 5, cost 4, movement 3, sensing 2, comms 1, power 1. Every one of
+# those but the self-references points at a crate that had already left. The
+# largest, most connected module in the tree was, by the end, connected almost
+# entirely to things outside it.
+#
+# What it is: the loop that turns a request into tool calls against a real body.
+# Orchestration and delegation to sub-agents, a worker pool, edge agents that
+# run beside a node rather than in the brain, System 2 deliberation for when the
+# reflexes are not enough, reflexion and judging over what a turn actually did,
+# streaming, and `safing` -- the path that brings a body to a safe state when
+# the reasoning cannot continue. That last one is why this crate depends on
+# obc-approval and obc-spine rather than only on the tool layer.
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+obc-approval = { path = "../obc-approval" }
+obc-audio = { path = "../obc-audio" }
+obc-conscience = { path = "../obc-conscience" }
+obc-cost = { path = "../obc-cost" }
+obc-memory = { path = "../obc-memory" }
+obc-movement = { path = "../obc-movement" }
+obc-observability = { path = "../obc-observability" }
+obc-providers = { path = "../obc-providers" }
+obc-reflex = { path = "../obc-reflex" }
+obc-safety = { path = "../obc-safety" }
+obc-skill-forge = { path = "../obc-skill-forge" }
+obc-spine = { path = "../obc-spine" }
+obc-telemetry = { path = "../obc-telemetry" }
+obc-tool-api = { path = "../obc-tool-api" }
+obc-tools = { path = "../obc-tools" }
+parking_lot = "0.12"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json", "rustls-tls", "blocking", "multipart", "stream"
+] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+tokio = { version = "1.42", default-features = false, features = [
+    "rt-multi-thread", "macros", "time", "sync", "process", "fs"
+] }
+# Forty-six references in no `use` line anywhere: tracing 42, uuid 2, reqwest 2.
+# Tenth crate this month to need the compiler rather than an import survey, and
+# the largest count of the ten -- which is unsurprising for the largest module,
+# and is also why the pattern was worth naming after the first three rather than
+# after the tenth.
+tracing = { version = "0.1", default-features = false }
+uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }

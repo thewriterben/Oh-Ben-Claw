@@ -38,12 +38,12 @@
 /// tools, to allow initial discovery broadcasts to arrive.
 const P2P_DISCOVERY_DELAY_MS: u64 = 500;
 
-use crate::agent::{Agent, AgentResponse};
-use crate::agent::{AgentConfig, EdgeConfig};
-use crate::memory::MemoryStore;
-use crate::security::PolicyEngine;
+use crate::{Agent, AgentResponse};
+use crate::{AgentConfig, EdgeConfig};
 use anyhow::Result;
+use obc_memory::MemoryStore;
 use obc_providers::ProviderConfig;
+use obc_safety::PolicyEngine;
 use obc_spine::p2p::{P2pConfig, P2pSpine};
 use obc_spine::NodeAnnouncement;
 use obc_tool_api::Tool;
@@ -400,8 +400,8 @@ impl EdgeAgentBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::EdgeConfig;
-    use crate::memory::MemoryStore;
+    use crate::EdgeConfig;
+    use obc_memory::MemoryStore;
 
     #[test]
     fn edge_config_defaults_are_resource_friendly() {

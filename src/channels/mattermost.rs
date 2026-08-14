@@ -22,11 +22,11 @@
 //! * Only processes posts in channels the bot belongs to.
 //! * The bot ignores its own messages to avoid feedback loops.
 
-use crate::agent::Agent;
 use crate::channels::utils::chunk_text;
 use crate::config::{MattermostConfig, ProviderConfig};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
+use obc_agent::Agent;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;

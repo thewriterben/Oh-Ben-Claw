@@ -18,12 +18,12 @@
 //! | `RoundRobin` | Tasks are distributed evenly across all idle sub-agents |
 //! | `LeastBusy` | Tasks go to the sub-agent with the fewest completed tasks |
 
-use crate::agent::delegation_tools::delegation_tools;
-use crate::agent::pool::{AgentPool, SubAgentSpec};
-use crate::agent::AgentConfig;
-use crate::agent::{Agent, AgentHandle, AgentResponse};
-use crate::memory::MemoryStore;
+use crate::delegation_tools::delegation_tools;
+use crate::pool::{AgentPool, SubAgentSpec};
+use crate::AgentConfig;
+use crate::{Agent, AgentHandle, AgentResponse};
 use anyhow::Result;
+use obc_memory::MemoryStore;
 use obc_providers::ProviderConfig;
 use obc_tools::default_tools_with_reach;
 use serde::{Deserialize, Serialize};
@@ -40,9 +40,9 @@ use tokio::sync::Mutex;
 #[derive(Default)]
 pub struct InnerAgentDeps {
     /// Track 0 deterministic safety gate.
-    pub safety: Option<Arc<crate::security::SafetyGate>>,
+    pub safety: Option<Arc<obc_safety::SafetyGate>>,
     /// Track 0 tamper-evident action auditor.
-    pub auditor: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
+    pub auditor: Option<Arc<std::sync::Mutex<obc_safety::ActionAuditor>>>,
     /// Conscience egress reach gate. Applied to BOTH the orchestrator's inner
     /// agent and every sub-agent the pool spawns, so orchestration is not an
     /// egress bypass of the allowlist the plain agent honors.
@@ -52,17 +52,17 @@ pub struct InnerAgentDeps {
     /// egress boundary too — same as the plain agent.
     pub resolver: Option<Arc<dyn obc_tools::credentials::CredentialResolver>>,
     /// Phase 16 trajectory capture.
-    pub trajectory: Option<Arc<crate::memory::trajectory::TrajectoryStore>>,
+    pub trajectory: Option<Arc<obc_memory::trajectory::TrajectoryStore>>,
     /// Tool security policy engine.
-    pub policy: Option<crate::security::PolicyEngine>,
+    pub policy: Option<obc_safety::PolicyEngine>,
     /// Approval manager (autonomy level + grants; gates supervised skills).
     pub approval: Option<Arc<obc_approval::ApprovalManager>>,
     /// Observability context (spans + counters).
-    pub obs: Option<Arc<crate::observability::ObsContext>>,
+    pub obs: Option<Arc<obc_observability::ObsContext>>,
     /// Track 0 dynamic trust scorer.
-    pub trust: Option<Arc<crate::security::trust::TrustScorer>>,
+    pub trust: Option<Arc<obc_safety::trust::TrustScorer>>,
     /// Cost tracking: `(tracker, input_price_per_million, output_price_per_million)`.
-    pub cost: Option<(Arc<crate::cost::CostTracker>, f64, f64)>,
+    pub cost: Option<(Arc<obc_cost::CostTracker>, f64, f64)>,
     /// Phase 16 P3 staged-rollout run record.
     pub rollout: Option<Arc<obc_skill_forge::rollout::RolloutTracker>>,
     /// Skill-forge directory (enables supervised-skill auto-demotion).
@@ -70,7 +70,7 @@ pub struct InnerAgentDeps {
     /// Phase 16 P1 experience retrieval top-k (None = disabled).
     pub experience_k: Option<usize>,
     /// Track 0 taint-tracking mode.
-    pub taint_mode: crate::security::taint::TaintMode,
+    pub taint_mode: obc_safety::taint::TaintMode,
 }
 
 // ── Routing Strategy ──────────────────────────────────────────────────────────
@@ -180,9 +180,9 @@ impl OrchestratorAgent {
         memory: Arc<MemoryStore>,
         orchestrator_config: OrchestratorConfig,
         session_id: String,
-        safety: Option<Arc<crate::security::SafetyGate>>,
-        auditor: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
-        trajectory: Option<Arc<crate::memory::trajectory::TrajectoryStore>>,
+        safety: Option<Arc<obc_safety::SafetyGate>>,
+        auditor: Option<Arc<std::sync::Mutex<obc_safety::ActionAuditor>>>,
+        trajectory: Option<Arc<obc_memory::trajectory::TrajectoryStore>>,
     ) -> Result<Self> {
         let experience_k = trajectory.as_ref().map(|_| 3);
         Self::new_with_deps(
@@ -331,7 +331,7 @@ impl OrchestratorAgent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestratorStatus {
     pub active_agents: usize,
-    pub agents: Vec<crate::agent::pool::SubAgentInfo>,
+    pub agents: Vec<crate::pool::SubAgentInfo>,
     pub routing: String,
 }
 
@@ -340,8 +340,8 @@ pub struct OrchestratorStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::AgentConfig;
-    use crate::memory::MemoryStore;
+    use crate::AgentConfig;
+    use obc_memory::MemoryStore;
     use obc_providers::ProviderConfig;
     use std::sync::Arc;
 
@@ -404,7 +404,7 @@ mod tests {
             "parity-session".to_string(),
             InnerAgentDeps {
                 approval: Some(approval),
-                policy: Some(crate::security::PolicyEngine::new(vec![])),
+                policy: Some(obc_safety::PolicyEngine::new(vec![])),
                 ..Default::default()
             },
         )

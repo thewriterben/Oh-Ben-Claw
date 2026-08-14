@@ -299,7 +299,7 @@ pub async fn chat(
         loop {
             match agent_events.recv().await {
                 Ok(ev) => {
-                    use crate::agent::AgentEvent;
+                    use obc_agent::AgentEvent;
                     let gev = match ev {
                         AgentEvent::Started {
                             session_id,
@@ -1006,7 +1006,7 @@ pub async fn spawn_agent(
             .into_response();
     };
 
-    let mut spec = crate::agent::SubAgentSpec::new(&body.name, &body.role);
+    let mut spec = obc_agent::SubAgentSpec::new(&body.name, &body.role);
     if let Some(prompt) = body.system_prompt {
         spec.system_prompt = prompt;
     }

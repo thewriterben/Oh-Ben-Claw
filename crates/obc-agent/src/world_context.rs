@@ -36,7 +36,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::memory::world::{Closure, Fact, Origin, WorldMemory};
+use obc_memory::world::{Closure, Fact, Origin, WorldMemory};
 
 /// How much world state to put in front of the model, and which.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,13 +277,13 @@ pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Opt
 /// Exposed because the preamble is the one place a model sees origin at all, and a caller
 /// building a narrower view should not have to re-derive the rule.
 pub fn is_evidence(origin: Origin) -> bool {
-    crate::memory::world::OriginSet::EVIDENCE.accepts(origin)
+    obc_memory::world::OriginSet::EVIDENCE.accepts(origin)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::liveness::{stopped, Stopped};
+    use obc_memory::liveness::{stopped, Stopped};
     use serde_json::json;
 
     fn store() -> WorldMemory {
