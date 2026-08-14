@@ -1,0 +1,55 @@
+[package]
+name = "obc-approval"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's human-in-the-loop gate: autonomy levels, per-call approval, forever grants, and the trust score a tool's output carries into the next decision."
+
+# The twenty-second crate. 1348 lines, and the one that decides how much a
+# person has to confirm before the agent acts.
+#
+# Three autonomy levels -- full, supervised, manual -- and a gate that consults
+# the tool's declared risk class before asking. A grant can be given once or
+# forever; forever grants are persisted, so "yes, always" survives a restart
+# rather than quietly meaning "yes, until you reboot".
+#
+# It also carries the trust half: a tool's output has an `OutputTrust`, and
+# relayed content from an untrusted writer does not get the same standing as a
+# driver-measured reading. `obc-safety`'s taint guard is the other end of that.
+#
+# How it reached zero blocking edges, which is a two-step story worth keeping:
+#
+#   1. `crate::config::paths::in_data_dir` -- where forever grants are written
+#      -- was naming the root config module to reach `obc-paths`, which had been
+#      a crate since July. A facade nobody had noticed was one.
+#   2. `AutonomyLevel` and `AutonomyConfig` were in the root config module.
+#      They moved here on 2026-08-13, after an hour in `agent` that kept a cycle
+#      alive. Autonomy *level* is the approval policy -- how much a human has to
+#      confirm -- and this is the module that turns it into an ApprovalManager.
+#
+# That second one was found by the cycle count refusing to reach zero, not by
+# anyone rereading the code. The rule was right and the noun was wrong.
+#
+# `chrono`, `uuid` and `tracing` are here because `cargo check -p` asked. None
+# appears in a `use` line -- seven call sites write `chrono::Utc::now()`,
+# `uuid::Uuid::new_v4()` and `tracing::warn!` at their full paths. Fifth crate
+# this month to need a dependency that no import survey could have found, and
+# the reason the CI job compiles each crate with nothing beside it.
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+obc-observability = { path = "../obc-observability" }
+obc-paths = { path = "../obc-paths" }
+obc-safety = { path = "../obc-safety" }
+obc-tool-api = { path = "../obc-tool-api" }
+parking_lot = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = { version = "0.1", default-features = false }
+uuid = { version = "1", features = ["v4"] }
+
+# And one more the check could not see. `cargo check -p obc-approval` was green
+# with the list above; `cargo test -p obc-approval --all-targets` was not,
+# because the forever-grants persistence test writes to a temp dir. Fourth crate
+# this month to split on that exact line, which is why the CI job runs both.
+[dev-dependencies]
+tempfile = "3"

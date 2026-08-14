@@ -1237,7 +1237,7 @@ pub async fn post_approval_decision(
     Path(tool): Path<String>,
     Json(body): Json<ApprovalDecisionRequest>,
 ) -> impl IntoResponse {
-    use crate::approval::{ApprovalRequest, ApprovalResponse};
+    use obc_approval::{ApprovalRequest, ApprovalResponse};
 
     let Some(approval) = &state.approval else {
         return (

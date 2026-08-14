@@ -126,7 +126,7 @@ pub struct GatewayState {
     pub world: Option<Arc<crate::memory::world::WorldMemory>>,
     /// Approval manager — powers the remote approval endpoints (I4 Operate
     /// mode). `None` if not wired.
-    pub approval: Option<Arc<crate::approval::ApprovalManager>>,
+    pub approval: Option<Arc<obc_approval::ApprovalManager>>,
     /// Track 0 tamper-evident action audit — remote mutating requests are
     /// chained into it so remote operation is signed like any physical action.
     pub action_audit: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
@@ -224,7 +224,7 @@ impl GatewayState {
 
     /// Attach the approval manager so remote consoles can inspect and manage
     /// approval grants (I4 Operate mode).
-    pub fn with_approval(mut self, approval: Arc<crate::approval::ApprovalManager>) -> Self {
+    pub fn with_approval(mut self, approval: Arc<obc_approval::ApprovalManager>) -> Self {
         self.approval = Some(approval);
         self
     }

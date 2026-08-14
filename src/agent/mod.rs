@@ -47,7 +47,6 @@ pub use orchestrator::{OrchestratorAgent, OrchestratorConfig, RoutingStrategy};
 #[allow(unused_imports)]
 pub use pool::{AgentPool, SubAgentInfo, SubAgentSpec, SubAgentStatus};
 
-use crate::approval::ApprovalManager;
 use crate::memory::trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};
 use crate::memory::MemoryStore;
 use crate::providers::{ChatMessage, ChatRole, Provider};
@@ -58,6 +57,7 @@ use crate::security::PolicyEngine;
 use crate::skill_forge::rollout::RolloutTracker;
 use crate::skill_forge::{SkillForge, SkillTool};
 use anyhow::Result;
+use obc_approval::ApprovalManager;
 use obc_tool_api::{RiskClass, RolloutStage, Tool};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -1174,9 +1174,9 @@ fn approval_authorize(
         return Ok(());
     };
     match approval.decide(tool, Some(node_id), risk) {
-        crate::approval::Decision::Allow => Ok(()),
-        crate::approval::Decision::Deny => Err("denied by approval policy".to_string()),
-        crate::approval::Decision::NeedsApproval => Err(
+        obc_approval::Decision::Allow => Ok(()),
+        obc_approval::Decision::Deny => Err("denied by approval policy".to_string()),
+        obc_approval::Decision::NeedsApproval => Err(
             "requires operator approval (autonomy is supervised/manual and it is not auto-approved or granted)"
                 .to_string(),
         ),
@@ -1388,16 +1388,16 @@ mod tests {
     }
 
     fn autonomy(
-        level: crate::approval::AutonomyLevel,
+        level: obc_approval::AutonomyLevel,
         auto_approve: Vec<String>,
-    ) -> crate::approval::AutonomyConfig {
-        crate::approval::AutonomyConfig {
+    ) -> obc_approval::AutonomyConfig {
+        obc_approval::AutonomyConfig {
             level,
             auto_approve,
             always_ask: vec![],
         }
     }
-    fn approval_mgr(cfg: &crate::approval::AutonomyConfig) -> ApprovalManager {
+    fn approval_mgr(cfg: &obc_approval::AutonomyConfig) -> ApprovalManager {
         let path = std::env::temp_dir().join(format!(
             "obc_agent_grants_{}.json",
             std::time::SystemTime::now()
@@ -1405,7 +1405,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        ApprovalManager::with_grants(cfg, crate::approval::ForeverGrants::load(path), false)
+        ApprovalManager::with_grants(cfg, obc_approval::ForeverGrants::load(path), false)
     }
 
     #[test]
@@ -1415,16 +1415,13 @@ mod tests {
 
     #[test]
     fn approval_full_autonomy_permits() {
-        let mgr = approval_mgr(&autonomy(crate::approval::AutonomyLevel::Full, vec![]));
+        let mgr = approval_mgr(&autonomy(obc_approval::AutonomyLevel::Full, vec![]));
         assert!(approval_authorize(Some(&mgr), "shell", "local", RiskClass::safe()).is_ok());
     }
 
     #[test]
     fn approval_supervised_refuses_ungranted_tool() {
-        let mgr = approval_mgr(&autonomy(
-            crate::approval::AutonomyLevel::Supervised,
-            vec![],
-        ));
+        let mgr = approval_mgr(&autonomy(obc_approval::AutonomyLevel::Supervised, vec![]));
         let err = approval_authorize(Some(&mgr), "shell", "local", RiskClass::safe());
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("approval"));
@@ -1433,7 +1430,7 @@ mod tests {
     #[test]
     fn approval_supervised_permits_auto_approved_tool() {
         let mgr = approval_mgr(&autonomy(
-            crate::approval::AutonomyLevel::Supervised,
+            obc_approval::AutonomyLevel::Supervised,
             vec!["sensor_read".to_string()],
         ));
         assert!(approval_authorize(Some(&mgr), "sensor_read", "local", RiskClass::safe()).is_ok());
