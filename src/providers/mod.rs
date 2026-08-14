@@ -10,7 +10,6 @@
 //! * **Retry policy** — configure `[provider.retry]` to automatically retry
 //!   transient errors (rate-limits, network blips) with exponential back-off.
 
-use crate::config::ProviderConfig;
 use crate::tools::Tool;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -223,5 +222,122 @@ mod tests {
         let input = r#"{"type":"json_object"}"#;
         let decoded: ResponseFormat = serde_json::from_str(input).unwrap();
         assert!(matches!(decoded, ResponseFormat::JsonObject));
+    }
+}
+
+// ── The provider's own configuration block ──────────────────────────────────
+// Moved here from the root config module on 2026-08-13. That module
+// re-exports it, so every call site outside this directory is unchanged.
+//
+// Why it had to move: two of its fields are typed from this module
+// (`RetryConfig`, `ResponseFormat`) while all ten files in here imported the
+// struct from `config`. One struct, split across two modules, pointing both
+// ways — a mutual pair in the dependency graph and most of the core's
+// remaining cycles.
+//
+// Every extracted crate here already works this way: obc-planner owns
+// `DeploymentConfig`, obc-conscience owns `ConscienceConfig`, obc-cost owns
+// `CostConfig`. This was the exception, and it was the expensive one.
+//
+// `SecretString` comes from obc-safety, not from config: it is a
+// redact-in-Debug wrapper, which is secret hygiene rather than configuration,
+// and it moved to the crate that already owns the vault on the same day. That
+// is what let this struct leave without dragging its edge along with it.
+
+use obc_safety::SecretString;
+
+/// Configuration for the LLM provider.
+///
+/// ## Reliability (inspired by OpenClaw)
+///
+/// Add `[[provider.fallbacks]]` tables to define an ordered list of backup
+/// providers.  If the primary provider fails the next fallback is tried
+/// automatically via the `FailoverProvider` wrapper.
+///
+/// Add a `[provider.retry]` table to enable transparent exponential-back-off
+/// retries on transient errors (rate-limits, network blips).
+///
+/// ```toml
+/// [provider]
+/// name    = "openai"
+/// model   = "gpt-4o"
+/// api_key = "sk-..."
+///
+/// [provider.retry]
+/// max_retries      = 3
+/// initial_backoff_ms = 500
+///
+/// [[provider.fallbacks]]
+/// name    = "anthropic"
+/// model   = "claude-3-5-sonnet-20241022"
+/// api_key = "sk-ant-..."
+///
+/// [[provider.fallbacks]]
+/// name  = "ollama"
+/// model = "llama3.2"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConfig {
+    /// The provider name (e.g., "openai", "anthropic", "gemini", "ollama").
+    #[serde(default = "default_provider_name")]
+    pub name: String,
+    /// The model to use (e.g., "gpt-4o", "claude-3-5-sonnet-20241022").
+    #[serde(default = "default_model")]
+    pub model: String,
+    /// The API key for the provider — **prefer the environment variable**.
+    ///
+    /// Leave this unset and export `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+    /// `OPENROUTER_API_KEY` (etc.) instead. That is the supported path, and it is the
+    /// one that keeps a credential out of the file people paste into issues, commit to
+    /// a repo, or hand over when asking for help. An inline key here works and warns at
+    /// startup.
+    ///
+    /// [`SecretString`] redacts itself in `Debug` and `Display`, so a config that ends
+    /// up in a log line or a panic message does not carry the key with it.
+    #[serde(default)]
+    pub api_key: Option<SecretString>,
+    /// The base URL for the provider API (for OpenAI-compatible endpoints).
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// The default temperature for LLM calls.
+    #[serde(default = "default_temperature")]
+    pub temperature: f64,
+    /// Ordered list of fallback provider configurations to try when the
+    /// primary provider fails (model failover, inspired by OpenClaw).
+    #[serde(default)]
+    pub fallbacks: Vec<ProviderConfig>,
+    /// Optional retry policy for transient errors (rate-limits, network
+    /// issues).  If unset, no automatic retries are performed.
+    #[serde(default)]
+    pub retry: Option<retry::RetryConfig>,
+    /// Optional response format (structured output / JSON mode).
+    #[serde(default)]
+    pub response_format: Option<ResponseFormat>,
+}
+
+fn default_provider_name() -> String {
+    "openai".to_string()
+}
+
+fn default_model() -> String {
+    "gpt-4o".to_string()
+}
+
+fn default_temperature() -> f64 {
+    0.7
+}
+
+impl Default for ProviderConfig {
+    fn default() -> Self {
+        Self {
+            name: default_provider_name(),
+            model: default_model(),
+            api_key: None,
+            base_url: None,
+            temperature: default_temperature(),
+            fallbacks: vec![],
+            retry: None,
+            response_format: None,
+        }
     }
 }
