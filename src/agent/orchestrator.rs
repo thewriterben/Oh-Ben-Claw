@@ -57,7 +57,7 @@ pub struct InnerAgentDeps {
     /// Tool security policy engine.
     pub policy: Option<crate::security::PolicyEngine>,
     /// Approval manager (autonomy level + grants; gates supervised skills).
-    pub approval: Option<Arc<crate::approval::ApprovalManager>>,
+    pub approval: Option<Arc<obc_approval::ApprovalManager>>,
     /// Observability context (spans + counters).
     pub obs: Option<Arc<crate::observability::ObsContext>>,
     /// Track 0 dynamic trust scorer.
@@ -377,8 +377,8 @@ mod tests {
     /// tool security policies were skipped.
     #[test]
     fn orchestrator_inner_agent_enforces_policy_and_approval() {
-        use crate::approval::{ApprovalManager, ForeverGrants};
-        use crate::approval::{AutonomyConfig, AutonomyLevel};
+        use obc_approval::{ApprovalManager, ForeverGrants};
+        use obc_approval::{AutonomyConfig, AutonomyLevel};
 
         let grants = std::env::temp_dir().join(format!(
             "obc-orch-parity-grants-{}.json",

@@ -67,7 +67,15 @@ pub mod a2a_agent;
 // are unchanged at every call site.
 pub use obc_position::{aerial, gnss};
 pub mod agent;
-pub mod approval;
+/// Human-in-the-loop approval — autonomy levels, the per-call gate, forever
+/// grants, and the trust score a tool's output carries. Extracted to
+/// [`obc_approval`] on 2026-08-13.
+///
+/// It reached zero blocking edges the same day, when `AutonomyLevel` and
+/// `AutonomyConfig` moved here from the root config module. They had spent an
+/// hour in `agent` first, which kept a cycle alive; autonomy level is the
+/// approval policy, so this is where it belongs.
+pub use obc_approval as approval;
 /// Hearing and speaking — heard events and utterances recorded into world
 /// memory, behind a pluggable [`obc_audio::suite::SpeechSink`]. Extracted to
 /// [`obc_audio`] on 2026-08-13.

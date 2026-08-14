@@ -82,7 +82,7 @@ pub use crate::spine::{MeshSupervisorConfig, SpineConfig};
 /// `providers`, `SpineConfig` and `MeshSupervisorConfig` went to `spine`, and
 /// these four close the final cycle in the core.
 pub use crate::agent::{AgentConfig, EdgeConfig};
-pub use crate::approval::{AutonomyConfig, AutonomyLevel};
+pub use obc_approval::{AutonomyConfig, AutonomyLevel};
 
 // ── Agent Configuration ──────────────────────────────────────────────────────
 

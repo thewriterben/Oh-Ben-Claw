@@ -19,7 +19,7 @@
 //! **Funnel analytics**: every ask/approve/deny is counted per tool in the
 //! [`ApprovalFunnel`], so policy can be tuned (which tools ask too often?).
 
-use crate::security::trust::{self, TrustGate, TrustScorer};
+use obc_safety::trust::{self, TrustGate, TrustScorer};
 use obc_tool_api::RiskClass;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -456,7 +456,7 @@ pub struct ApprovalManager {
     /// Ask/approve/deny statistics per tool.
     funnel: Arc<ApprovalFunnel>,
     /// Optional observability context (WS5): counts approval asks centrally.
-    obs: Option<Arc<crate::observability::ObsContext>>,
+    obs: Option<Arc<obc_observability::ObsContext>>,
     /// When true, all approval requests are auto-denied (non-interactive mode).
     non_interactive: bool,
     /// Optional behavioral trust scorer: when set, an anomalous node loses its
@@ -506,7 +506,7 @@ impl ApprovalManager {
     }
 
     /// Attach an observability context so approval asks count centrally (WS5).
-    pub fn with_obs(mut self, obs: Arc<crate::observability::ObsContext>) -> Self {
+    pub fn with_obs(mut self, obs: Arc<obc_observability::ObsContext>) -> Self {
         self.obs = Some(obs);
         self
     }
@@ -1307,7 +1307,7 @@ mod tests {
 // before I did: with them in `agent`, `approval -> config -> agent -> approval`
 // stayed a cycle, and moving them one module further made it disappear.
 //
-// `crate::config` re-exports both names, and `agent` reads them from here --
+// The root config module re-exports both names, and `agent` reads them from
 // which is free, because `agent -> approval` already existed.
 
 /// Autonomy level for tool execution.
