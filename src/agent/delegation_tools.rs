@@ -13,7 +13,7 @@
 //! | `stop_agent` | Stop a sub-agent and remove it from the active pool |
 
 use crate::agent::pool::{AgentPool, SubAgentSpec};
-use crate::config::ProviderConfig;
+use crate::providers::ProviderConfig;
 use crate::tools::{Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -405,8 +405,8 @@ pub fn delegation_tools(pool: AgentPool, session_id: Arc<Mutex<String>>) -> Vec<
 mod tests {
     use super::*;
     use crate::agent::pool::AgentPool;
-    use crate::config::ProviderConfig;
     use crate::memory::MemoryStore;
+    use crate::providers::ProviderConfig;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::Mutex;

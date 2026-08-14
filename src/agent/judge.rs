@@ -20,7 +20,7 @@
 //! met. Even a calibrated judge must never gate actuation safety — the Track 0
 //! deterministic layers own that.
 
-use crate::config::ProviderConfig;
+use crate::providers::ProviderConfig;
 use crate::providers::{ChatMessage, ChatRole, Provider};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};

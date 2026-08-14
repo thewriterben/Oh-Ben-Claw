@@ -39,9 +39,10 @@
 const P2P_DISCOVERY_DELAY_MS: u64 = 500;
 
 use crate::agent::{Agent, AgentResponse};
-use crate::config::{AgentConfig, EdgeConfig, ProviderConfig};
+use crate::agent::{AgentConfig, EdgeConfig};
 use crate::memory::MemoryStore;
 use crate::providers;
+use crate::providers::ProviderConfig;
 use crate::security::PolicyEngine;
 use crate::spine::p2p::{P2pConfig, P2pSpine};
 use crate::spine::NodeAnnouncement;
@@ -402,7 +403,7 @@ impl EdgeAgentBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::EdgeConfig;
+    use crate::agent::EdgeConfig;
     use crate::memory::MemoryStore;
 
     #[test]

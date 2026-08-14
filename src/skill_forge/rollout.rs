@@ -53,9 +53,9 @@ impl RolloutTracker {
         }
     }
 
-    /// `skill_rollout.json` in the data root — see [`crate::config::paths`].
+    /// `skill_rollout.json` in the data root — see [`obc_paths`].
     pub fn default_path() -> PathBuf {
-        crate::config::paths::in_data_dir("skill_rollout.json")
+        obc_paths::in_data_dir("skill_rollout.json")
     }
 
     fn persist(&self, state: &HashMap<String, RolloutRecord>) {

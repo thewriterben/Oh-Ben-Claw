@@ -23,7 +23,7 @@
 //! ```
 
 use crate::agent::{Agent, AgentResponse};
-use crate::config::ProviderConfig;
+use crate::providers::ProviderConfig;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

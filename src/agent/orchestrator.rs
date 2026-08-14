@@ -20,10 +20,11 @@
 
 use crate::agent::delegation_tools::delegation_tools;
 use crate::agent::pool::{AgentPool, SubAgentSpec};
+use crate::agent::AgentConfig;
 use crate::agent::{Agent, AgentHandle, AgentResponse};
-use crate::config::{AgentConfig, ProviderConfig};
 use crate::memory::MemoryStore;
 use crate::providers;
+use crate::providers::ProviderConfig;
 use crate::tools::default_tools_with_reach;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -340,8 +341,9 @@ pub struct OrchestratorStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AgentConfig, ProviderConfig};
+    use crate::agent::AgentConfig;
     use crate::memory::MemoryStore;
+    use crate::providers::ProviderConfig;
     use std::sync::Arc;
 
     fn make_orchestrator() -> OrchestratorAgent {
@@ -376,7 +378,7 @@ mod tests {
     #[test]
     fn orchestrator_inner_agent_enforces_policy_and_approval() {
         use crate::approval::{ApprovalManager, ForeverGrants};
-        use crate::config::{AutonomyConfig, AutonomyLevel};
+        use crate::approval::{AutonomyConfig, AutonomyLevel};
 
         let grants = std::env::temp_dir().join(format!(
             "obc-orch-parity-grants-{}.json",

@@ -48,7 +48,6 @@ pub use orchestrator::{OrchestratorAgent, OrchestratorConfig, RoutingStrategy};
 pub use pool::{AgentPool, SubAgentInfo, SubAgentSpec, SubAgentStatus};
 
 use crate::approval::ApprovalManager;
-use crate::config::AgentConfig;
 use crate::memory::trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};
 use crate::memory::MemoryStore;
 use crate::providers::{ChatMessage, ChatRole, Provider};
@@ -388,7 +387,7 @@ impl Agent {
         &self,
         session_id: &str,
         user_message: &str,
-        provider_config: &crate::config::ProviderConfig,
+        provider_config: &crate::providers::ProviderConfig,
     ) -> Result<AgentResponse> {
         // WS5: outer span for the whole run (finished before returning).
         let mut run_span = self.obs.as_ref().map(|obs| {
@@ -1324,7 +1323,7 @@ mod tests {
             &self,
             _messages: &[crate::providers::ChatMessage],
             _tools: &[Box<dyn Tool>],
-            _config: &crate::config::ProviderConfig,
+            _config: &crate::providers::ProviderConfig,
         ) -> Result<crate::providers::ChatCompletion> {
             anyhow::bail!("SilentProvider never answers; these tests only build context")
         }
@@ -1389,16 +1388,16 @@ mod tests {
     }
 
     fn autonomy(
-        level: crate::config::AutonomyLevel,
+        level: crate::approval::AutonomyLevel,
         auto_approve: Vec<String>,
-    ) -> crate::config::AutonomyConfig {
-        crate::config::AutonomyConfig {
+    ) -> crate::approval::AutonomyConfig {
+        crate::approval::AutonomyConfig {
             level,
             auto_approve,
             always_ask: vec![],
         }
     }
-    fn approval_mgr(cfg: &crate::config::AutonomyConfig) -> ApprovalManager {
+    fn approval_mgr(cfg: &crate::approval::AutonomyConfig) -> ApprovalManager {
         let path = std::env::temp_dir().join(format!(
             "obc_agent_grants_{}.json",
             std::time::SystemTime::now()
@@ -1416,13 +1415,16 @@ mod tests {
 
     #[test]
     fn approval_full_autonomy_permits() {
-        let mgr = approval_mgr(&autonomy(crate::config::AutonomyLevel::Full, vec![]));
+        let mgr = approval_mgr(&autonomy(crate::approval::AutonomyLevel::Full, vec![]));
         assert!(approval_authorize(Some(&mgr), "shell", "local", RiskClass::safe()).is_ok());
     }
 
     #[test]
     fn approval_supervised_refuses_ungranted_tool() {
-        let mgr = approval_mgr(&autonomy(crate::config::AutonomyLevel::Supervised, vec![]));
+        let mgr = approval_mgr(&autonomy(
+            crate::approval::AutonomyLevel::Supervised,
+            vec![],
+        ));
         let err = approval_authorize(Some(&mgr), "shell", "local", RiskClass::safe());
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("approval"));
@@ -1431,7 +1433,7 @@ mod tests {
     #[test]
     fn approval_supervised_permits_auto_approved_tool() {
         let mgr = approval_mgr(&autonomy(
-            crate::config::AutonomyLevel::Supervised,
+            crate::approval::AutonomyLevel::Supervised,
             vec!["sensor_read".to_string()],
         ));
         assert!(approval_authorize(Some(&mgr), "sensor_read", "local", RiskClass::safe()).is_ok());
@@ -1502,5 +1504,92 @@ mod tests {
             tool_calls: vec![],
         };
         assert!(!empty.used_tools());
+    }
+}
+
+// ── The agent's own configuration blocks ────────────────────────────────────
+// Moved here from the root config module on 2026-08-13, with the serde default
+// helpers only they use. The root config module re-exports all four names, so
+// every call site outside this directory is unchanged -- including `approval`,
+// which reads AutonomyConfig through there on purpose: pointing it here instead
+// would create `approval -> agent` while `agent -> approval` already exists,
+// trading one mutual pair for another.
+//
+// These were the last cycle in the core. The rule is the one every extracted
+// crate here follows and the one the last three commits applied: the module
+// owns its config block, and the root `Config` composes it.
+
+use serde::{Deserialize, Serialize};
+
+fn default_agent_name() -> String {
+    "Oh-Ben-Claw".to_string()
+}
+fn default_max_tool_iterations() -> usize {
+    10
+}
+fn default_system_prompt() -> String {
+    "You are Oh-Ben-Claw, an advanced multi-device AI assistant. \
+     You can see, hear, sense, and act in the physical world through \
+     a fleet of connected hardware devices. Be helpful, precise, and proactive."
+        .to_string()
+}
+fn default_edge_max_history() -> usize {
+    20
+}
+fn default_edge_max_tool_iterations() -> usize {
+    5
+}
+
+/// Configuration for the core agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    /// The name of the agent (used in system prompts and UI).
+    #[serde(default = "default_agent_name")]
+    pub name: String,
+    /// The system prompt for the agent.
+    #[serde(default = "default_system_prompt")]
+    pub system_prompt: String,
+    /// Maximum number of tool-use iterations per user message.
+    #[serde(default = "default_max_tool_iterations")]
+    pub max_tool_iterations: usize,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            name: default_agent_name(),
+            system_prompt: default_system_prompt(),
+            max_tool_iterations: default_max_tool_iterations(),
+        }
+    }
+}
+
+/// Configuration for the edge-native agent mode (NanoPi Neo3 and similar
+/// Linux single-board computers running Oh-Ben-Claw without a central host).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeConfig {
+    /// Whether edge-native mode is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum number of messages retained in the rolling conversation history.
+    /// Kept small to reduce RAM pressure on resource-constrained devices.
+    #[serde(default = "default_edge_max_history")]
+    pub max_history_messages: usize,
+    /// Maximum tool-use iterations per user message.
+    #[serde(default = "default_edge_max_tool_iterations")]
+    pub max_tool_iterations: usize,
+    /// Whether to start the P2P spine and join the local mesh.
+    #[serde(default)]
+    pub p2p_enabled: bool,
+}
+
+impl Default for EdgeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_history_messages: default_edge_max_history(),
+            max_tool_iterations: default_edge_max_tool_iterations(),
+            p2p_enabled: false,
+        }
     }
 }
