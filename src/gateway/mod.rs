@@ -31,7 +31,6 @@ pub mod pwa;
 pub mod routes;
 pub mod ws;
 
-use crate::config::GatewayConfig;
 use crate::memory::MemoryStore;
 use crate::observability::ObsContext;
 use crate::scheduler::Scheduler;
@@ -42,6 +41,7 @@ use axum::{
     Router,
 };
 use obc_agent::{AgentHandle, AgentPool};
+use obc_config::GatewayConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::net::TcpListener;

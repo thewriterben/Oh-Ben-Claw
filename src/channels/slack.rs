@@ -22,10 +22,10 @@
 #![allow(dead_code)]
 use crate::channels::typing::TypingTask;
 use crate::channels::utils::chunk_text;
-use crate::config::{ProviderConfig, SlackConfig};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use obc_agent::Agent;
+use obc_config::{ProviderConfig, SlackConfig};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;

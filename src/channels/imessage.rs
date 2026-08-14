@@ -25,9 +25,9 @@
 // would make the struct a worse description of the wire than the vendor's own docs.
 // Scoped to this file deliberately — the crate root carries no blanket allow.
 #![allow(dead_code)]
-use crate::config::{IMessageConfig, ProviderConfig};
 use anyhow::Result;
 use obc_agent::Agent;
+use obc_config::{IMessageConfig, ProviderConfig};
 use std::sync::Arc;
 
 // ── Channel ───────────────────────────────────────────────────────────────────
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn imessage_disabled_returns_none() {
-        let config = crate::config::IMessageConfig {
+        let config = obc_config::IMessageConfig {
             enabled: false,
             allowed_senders: vec![],
             poll_interval_secs: None,
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn imessage_allowed_senders_empty_means_all() {
-        let config = crate::config::IMessageConfig {
+        let config = obc_config::IMessageConfig {
             enabled: true,
             allowed_senders: vec![],
             poll_interval_secs: Some(5),

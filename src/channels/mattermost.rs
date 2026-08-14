@@ -23,10 +23,10 @@
 //! * The bot ignores its own messages to avoid feedback loops.
 
 use crate::channels::utils::chunk_text;
-use crate::config::{MattermostConfig, ProviderConfig};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use obc_agent::Agent;
+use obc_config::{MattermostConfig, ProviderConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -291,7 +291,7 @@ async fn post_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::MattermostConfig;
+    use obc_config::MattermostConfig;
 
     #[test]
     fn new_returns_none_without_server_url() {

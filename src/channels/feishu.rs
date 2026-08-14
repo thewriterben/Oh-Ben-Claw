@@ -43,10 +43,10 @@
 // Scoped to this file deliberately — the crate root carries no blanket allow.
 #![allow(dead_code)]
 use crate::channels::utils::chunk_text;
-use crate::config::{FeishuConfig, ProviderConfig};
 use anyhow::{Context, Result};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
 use obc_agent::Agent;
+use obc_config::{FeishuConfig, ProviderConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;

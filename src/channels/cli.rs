@@ -1,9 +1,9 @@
 //! Interactive CLI channel — a readline-style terminal interface.
 
-use crate::config::ProviderConfig;
 use anyhow::Result;
 use console::style;
 use obc_agent::Agent;
+use obc_config::ProviderConfig;
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 

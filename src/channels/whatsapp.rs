@@ -24,7 +24,6 @@
 //! interactive messages are acknowledged but not forwarded to the agent.
 
 use crate::channels::utils::chunk_text;
-use crate::config::{ProviderConfig, WhatsAppConfig};
 use anyhow::{Context, Result};
 use axum::{
     extract::{Query, State},
@@ -34,6 +33,7 @@ use axum::{
     Json, Router,
 };
 use obc_agent::Agent;
+use obc_config::{ProviderConfig, WhatsAppConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -305,7 +305,7 @@ mod tests {
         // Without env vars or config values, new() must return None.
         std::env::remove_var("WHATSAPP_ACCESS_TOKEN");
         std::env::remove_var("WHATSAPP_PHONE_NUMBER_ID");
-        let config = crate::config::WhatsAppConfig {
+        let config = obc_config::WhatsAppConfig {
             access_token: None,
             phone_number_id: None,
             verify_token: None,

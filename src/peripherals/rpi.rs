@@ -21,10 +21,10 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 use crate::{
-    config::PeripheralBoardConfig,
     peripherals::traits::Peripheral,
     tools::traits::{Tool, ToolResult},
 };
+use obc_config::PeripheralBoardConfig;
 
 // ── GPIO Helpers (sysfs fallback, compatible with all Pi models) ──────────────
 

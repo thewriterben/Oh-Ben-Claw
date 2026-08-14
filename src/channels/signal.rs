@@ -20,9 +20,9 @@
 //! allowed_numbers = ["+10987654321"]
 //! ```
 
-use crate::config::{ProviderConfig, SignalConfig};
 use anyhow::{Context, Result};
 use obc_agent::Agent;
+use obc_config::{ProviderConfig, SignalConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -275,7 +275,7 @@ impl SignalChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::SignalConfig;
+    use obc_config::SignalConfig;
 
     #[test]
     fn new_returns_none_without_config() {

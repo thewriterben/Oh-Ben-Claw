@@ -17,10 +17,10 @@
 //! - Every tool touch (verification reads included) goes through the agent's
 //!   execution chokepoint: policy → Track 0 → trust → approval.
 
-use crate::config::ProviderConfig;
 use crate::memory::world::WorldMemory;
 use anyhow::Result;
 use obc_agent::Agent;
+use obc_config::ProviderConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -150,9 +150,9 @@ impl ProgressStore {
         Self { dir: dir.into() }
     }
 
-    /// `harness/` in the data root — see [`crate::config::paths`].
+    /// `harness/` in the data root — see [`obc_config::paths`].
     pub fn default_dir() -> PathBuf {
-        crate::config::paths::in_data_dir("harness")
+        obc_config::paths::in_data_dir("harness")
     }
 
     fn path(&self, mission: &str) -> PathBuf {
