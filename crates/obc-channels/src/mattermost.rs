@@ -22,7 +22,7 @@
 //! * Only processes posts in channels the bot belongs to.
 //! * The bot ignores its own messages to avoid feedback loops.
 
-use crate::channels::utils::chunk_text;
+use crate::utils::chunk_text;
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use obc_agent::Agent;

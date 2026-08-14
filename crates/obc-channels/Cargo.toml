@@ -1,0 +1,54 @@
+[package]
+name = "obc-channels"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's chat channels: eleven adapters -- CLI, Discord, Slack, Telegram, Signal, WhatsApp, Matrix, IRC, Mattermost, Feishu and iMessage -- that carry a conversation to the same agent through one interface, with typing indicators and shared formatting."
+
+# The thirty-first crate. 3859 lines in fourteen files, eleven of them adapters.
+#
+# Nothing in the tree named it. Not one `crate::channels` reference outside
+# itself: the binary reaches it through the facade in lib.rs and that is the
+# whole of its inbound surface, which is what an adapter layer should look like
+# and rarely does. The lift rewrote ten self-references and repointed nothing.
+#
+# It was blocked by `agent` and `config` until both left earlier today, and it
+# is the first module extracted with no queue behind it -- every module still in
+# the tree already had zero blocking edges when this one moved. That makes it
+# the first extraction of this endgame chosen purely because the piece is
+# coherent, rather than because something was waiting on it.
+#
+# What it is: eleven ways into the same conversation. Each adapter owns its
+# transport and its quirks -- websockets for Discord and Matrix, long-poll for
+# Telegram, an AppleScript bridge for iMessage, a local daemon for Signal -- and
+# hands the agent the same shape regardless. `typing.rs` and `utils.rs` are the
+# parts they share, which is a fair measure of how little they need to.
+[dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", default-features = false, features = ["json", "http1", "tokio", "query"] }
+base64 = "0.22"
+console = "0.15"
+futures-util = { version = "0.3", default-features = false }
+obc-agent = { path = "../obc-agent" }
+obc-config = { path = "../obc-config" }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json", "rustls-tls", "blocking", "multipart", "stream"
+] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+tokio = { version = "1.42", default-features = false, features = [
+    "rt-multi-thread", "macros", "time", "sync", "net", "io-util", "io-std", "process"
+] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = [
+    "connect", "rustls-tls-webpki-roots"
+] }
+# Eighty-one references in no `use` line: tracing 63, reqwest 17, uuid 1. The
+# largest count of the twelve crates this month whose dependency list came from
+# `cargo check -p` rather than an import survey -- eleven adapters logging and
+# calling HTTP APIs, every one of them at a full path.
+#
+# Also one feature: `axum::extract::Query` needs axum's `query`, which the root
+# manifest never had to name because something else in the graph enabled it.
+# Nothing about the tree build was wrong; the crate alone is where it shows.
+tracing = { version = "0.1", default-features = false }
+uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }

@@ -100,8 +100,20 @@ pub use obc_approval as approval;
 /// Thirteen import sites in seven modules name `obc_audio` directly; this alias
 /// is for `src/main.rs`.
 pub use obc_audio as audio;
+/// Chat channels — an alias for the [`obc_channels`] crate, which has held the
+/// eleven adapters since 2026-08-14.
+///
+/// Nothing in this tree named it. Not one `crate::channels` reference outside
+/// itself — the binary reaches it through this alias and that is the whole of
+/// its inbound surface, which is what an adapter layer should look like and
+/// rarely does. The lift repointed nothing.
+///
+/// It is also the first extraction of this endgame with no queue behind it:
+/// every module still here already had zero blocking edges when it moved, so it
+/// was chosen because the piece is coherent rather than because anything was
+/// waiting on it.
+pub use obc_channels as channels;
 pub use obc_position::{aerial, gnss};
-pub mod channels;
 // The three body-telemetry suites live in their own crate (2026-08-01), the
 // first piece picked by `scripts/extractability.py` rather than by hand. They
 // are one crate because they are one pattern: reading -> classified world-memory

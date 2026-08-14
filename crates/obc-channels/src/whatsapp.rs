@@ -23,7 +23,7 @@
 //! Only text (`type == "text"`) messages are processed.  Media, templates, and
 //! interactive messages are acknowledged but not forwarded to the agent.
 
-use crate::channels::utils::chunk_text;
+use crate::utils::chunk_text;
 use anyhow::{Context, Result};
 use axum::{
     extract::{Query, State},
