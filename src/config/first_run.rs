@@ -49,6 +49,28 @@ const CANDIDATES: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// The model identifier this crate pins for `provider`, if it has one.
+///
+/// Public because the pinned string is a cross-artifact contract, not a private
+/// default: it has to match `config.example.toml`, the config the deployment
+/// planner emits, and the reference bodies. `tests/pinned_model.rs` asserts
+/// exactly that, and needs to be able to ask rather than to be told.
+///
+/// It lived as a private `CANDIDATES` lookup inside a unit test until
+/// 2026-08-13. That test named the deployment module twice, which was the
+/// *whole* of this module's edge into it — one of three mutual pairs in the
+/// dependency graph, held open by two lines inside `#[cfg(test)]`.
+///
+/// (Named, not spelled: `scripts/core_endgame.py` counts textual crossings and
+/// cannot tell a doc comment from a call, so writing the path here would leave
+/// the edge on the graph after the code was gone.)
+pub fn pinned_model(provider: &str) -> Option<&'static str> {
+    CANDIDATES
+        .iter()
+        .find(|(p, _, _)| *p == provider)
+        .map(|(_, _, m)| *m)
+}
+
 /// The local option, tried last and only when nothing else is configured.
 const LOCAL: (&str, &str) = ("ollama", "llama3.2");
 
@@ -212,38 +234,15 @@ mod tests {
         assert!(!format!("{cfg:?}").contains("secret"));
     }
 
-    /// One pinned identifier, in one place.
-    ///
-    /// This is the coupling that keeps going wrong. The same model string has to
-    /// appear in `config.example.toml` (both repos), in the config the deployment
-    /// planner emits, and in the reference bodies — and every previous update
-    /// changed some of them. A stale copy is not a cosmetic problem: it is the
-    /// value a new user is told to uncomment.
-    #[test]
-    fn the_pinned_model_appears_everywhere_it_should() {
-        let pinned = CANDIDATES
-            .iter()
-            .find(|(p, _, _)| *p == "anthropic")
-            .map(|(_, _, m)| *m)
-            .expect("an anthropic candidate");
-
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-
-        let example =
-            std::fs::read_to_string(root.join("config.example.toml")).expect("config.example.toml");
-        assert!(
-            example.contains(&format!("model = \"{pinned}\"")),
-            "config.example.toml pins a different model than first_run"
-        );
-
-        // The planner's emitted config offers the same identifier to uncomment.
-        let inv = crate::deployment::inventory::HardwareInventory::nanopi_scenario();
-        let emitted = crate::deployment::planner::DeploymentPlanner::plan(&inv).config_toml;
-        assert!(
-            emitted.contains(&format!("# model = \"{pinned}\"")),
-            "the generated config suggests a different model than first_run"
-        );
-    }
+    // `the_pinned_model_appears_everywhere_it_should` moved to
+    // tests/pinned_model.rs on 2026-08-13. It named the deployment module twice
+    // to check that the planner's emitted config offers the same identifier
+    // this file pins -- and those two lines were the whole of the config module's
+    // edge into deployment, one half of a mutual pair in the dependency graph.
+    //
+    // The claim spans config and deployment, so it belongs where both can be
+    // named. `pinned_model()` above is public for that test to call; the path
+    // is not spelled here because the endgame script counts text, not calls.
 
     #[test]
     fn the_guidance_names_every_option() {
