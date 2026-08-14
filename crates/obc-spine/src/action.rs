@@ -3,12 +3,12 @@
 //! This lived in the agent's reflex module until 2026-08-12, and it was the only
 //! thing keeping that module in this tree. `reflex.rs` names exactly four
 //! things outside itself — `obc_movement`, `obc_memory`, `obc_observability`
-//! and `crate::spine` — and the first three have been crates for days. All four
+//! and the spine — and the first three have been crates for days. All four
 //! spine references were in this one struct: one field, one constructor
 //! parameter, and two topic constants.
 //!
 //! Same manoeuvre and the same week: `SpineActuatorSink` left `movement` for
-//! [`crate::spine::actuator`] on 2026-08-08 for exactly this reason, and
+//! [`crate::actuator`] on 2026-08-08 for exactly this reason, and
 //! `movement` became a crate the next day with `navigation` behind it. Trait
 //! where the abstraction is, implementation where the dependency is.
 //!
@@ -26,7 +26,7 @@ use serde_json::Value;
 
 use obc_reflex::ActionSink;
 
-use crate::spine::{SpineClient, TOPIC_PREFIX};
+use crate::{SpineClient, TOPIC_PREFIX};
 
 /// Routes reflex actions over the MQTT spine: a GPIO write becomes a `gpio_write`
 /// tool call to the node (bounded there by the firmware Track 0 `SafetyGate`),
@@ -83,7 +83,7 @@ impl ActionSink for SpineActionSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spine::SpineConfig;
+    use crate::SpineConfig;
     use serde_json::json;
 
     #[tokio::test]

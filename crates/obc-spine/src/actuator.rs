@@ -2,9 +2,9 @@
 //!
 //! This lived in `crate::movement` until 2026-08-08, and it was the entire
 //! reason `movement` could not become a crate. `movement` owns the abstraction
-//! — the [`ActuatorSink`](crate::movement::ActuatorSink) trait, the Track 0
+//! — the [`ActuatorSink`](obc_movement::ActuatorSink) trait, the Track 0
 //! gate, the world-memory record — and it named exactly one concrete backend:
-//! `Arc<crate::spine::SpineClient>`, in one field and one constructor
+//! `Arc<crate::SpineClient>`, in one field and one constructor
 //! parameter, calling one method. Two lines of type, and a 741-line module
 //! pinned to a 4611-line one.
 //!
@@ -23,8 +23,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::movement::{ActuatorSink, AppliedMovement};
-use crate::spine::SpineClient;
+use crate::SpineClient;
+use obc_movement::{ActuatorSink, AppliedMovement};
 
 /// Drives a real movement node over the MQTT spine: invokes the node's typed
 /// movement tool (`servo_angle` / `motor_speed` / `stop`), which the node bounds

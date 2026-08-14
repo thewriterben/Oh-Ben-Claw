@@ -50,8 +50,8 @@ pub mod stm32;
 pub use traits::Peripheral;
 
 use crate::config::{PeripheralBoardConfig, PeripheralsConfig};
-use crate::spine::{NodeAnnouncement, NodeToolSpec, SpineClient};
 use anyhow::Result;
+use obc_spine::{NodeAnnouncement, NodeToolSpec, SpineClient};
 use obc_tool_api::Tool;
 use std::sync::Arc;
 

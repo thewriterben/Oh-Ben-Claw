@@ -16,9 +16,9 @@
 //! The decision core ([`decide`]) is pure and unit-tested; the driver ([`tick`]) reads
 //! the real store and drives the mesh command sink.
 
-use crate::memory::world::{Origin, WorldMemory};
-use crate::spine::lora_gateway::{CommandSink, NodeCommand};
-use crate::spine::MeshSupervisorConfig;
+use crate::lora_gateway::{CommandSink, NodeCommand};
+use crate::MeshSupervisorConfig;
+use obc_memory::world::{Origin, WorldMemory};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -614,7 +614,7 @@ pub async fn tick(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spine::lora_gateway::SOURCE;
+    use crate::lora_gateway::SOURCE;
     use std::sync::Mutex;
 
     fn cfg(recover: Option<&str>) -> MeshSupervisorConfig {
@@ -991,8 +991,8 @@ mod tests {
         // observes a node, the supervisor concludes health → escalation → count on top
         // of it, and then the radio goes away. The supervisor is still running and still
         // willing; it simply has nothing left to have concluded from.
-        use crate::memory::liveness::{stopped, Stopped};
-        use crate::spine::lora_gateway::SOURCE as GATEWAY_SOURCE;
+        use crate::lora_gateway::SOURCE as GATEWAY_SOURCE;
+        use obc_memory::liveness::{stopped, Stopped};
 
         let world = WorldMemory::open_in_memory().unwrap();
         world

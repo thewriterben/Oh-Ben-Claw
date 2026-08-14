@@ -1,7 +1,7 @@
 //! The tool layer's speech sink — utterances rendered to local audio files.
 //!
 //! This lived in `src/audio/suite.rs` until 2026-08-13, holding a
-//! `TextToSpeechTool`. Same move as [`crate::spine::speech`] the same day, and
+//! `TextToSpeechTool`. Same move as [`obc_spine::speech`] the same day, and
 //! the same rule: the `SpeechSink` trait stays in `audio::suite` where the
 //! abstraction is, and an implementation that needs the tool layer lives in the
 //! tool layer.

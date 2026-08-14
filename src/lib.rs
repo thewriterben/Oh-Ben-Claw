@@ -82,7 +82,7 @@ pub use obc_approval as approval;
 ///
 /// It was blocked by two struct fields, one per sink with a dependency. Both
 /// sinks now live on the far side of the trait they implement:
-/// `crate::spine::speech` and `crate::tools::builtin::audio_speech`.
+/// `obc_spine::speech` and `crate::tools::builtin::audio_speech`.
 ///
 /// Thirteen import sites in seven modules name `obc_audio` directly; this alias
 /// is for `src/main.rs`.
@@ -119,7 +119,7 @@ pub mod doctor;
 /// frontier exploration assignment. Extracted to [`obc_fleet`] on 2026-08-13.
 ///
 /// It was blocked by two `use` lines: the spine bridge at the bottom of the
-/// module, which is now `crate::spine::fleet_bridge` where the transport is.
+/// module, which is now `obc_spine::fleet_bridge` where the transport is.
 /// The coordinator never needed to know MQTT exists.
 ///
 /// Six import sites in three modules name `obc_fleet` directly; this alias is
@@ -174,7 +174,7 @@ pub use obc_mission as mission;
 /// perceive→remember→reflex→act loop, extracted to [`obc_movement`] on
 /// 2026-08-08.
 ///
-/// It was blocked for months by exactly one edge: `Arc<crate::spine::SpineClient>`
+/// It was blocked for months by exactly one edge: `Arc<obc_spine::SpineClient>`
 /// in one struct field and one constructor parameter of the single
 /// `ActuatorSink` implementation that talked to the spine. Two lines of type
 /// against a 741-line module. That sink now lives in [`spine::actuator`] and
@@ -230,7 +230,22 @@ pub use obc_safety as security;
 pub use obc_scheduler as scheduler;
 pub use obc_telemetry::sensing;
 pub mod skill_forge;
-pub mod spine;
+/// The communication spine — an alias for the [`obc_spine`] crate, which has
+/// held the MQTT backbone, the LoRa gateway and mesh, the mesh supervisor, the
+/// P2P transport and the four sinks since 2026-08-14.
+///
+/// 5100 lines, and for most of this project's history the largest thing in the
+/// tree that could not move. It reached zero blocking edges without any of its
+/// own code changing: the four things holding it were sinks and bridges that
+/// belonged on this side of the boundary anyway, and each one arrived here from
+/// the module that used to own it — `SpineActuatorSink` from `movement`,
+/// `SpineActionSink` from the agent's reflex module, the fleet bridge from the
+/// coordinator, `SpineSpeechSink` from the audio suite. Trait where the
+/// abstraction is, implementation where the dependency is, four times over.
+///
+/// What it unblocks is the point. `tools` — 8880 lines, the largest module
+/// left — was blocked by exactly one edge, and that edge was this one.
+pub use obc_spine as spine;
 pub mod tools;
 // Network tunnels left for `obc-tunnel` on 2026-08-06, same day and same shape
 // as obc-cost: its only edge outside itself was `TunnelConfig`, its own config

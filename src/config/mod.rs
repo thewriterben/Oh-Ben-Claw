@@ -60,14 +60,14 @@ pub use crate::providers::ProviderConfig;
 
 /// The spine's own configuration blocks, which live with the spine.
 ///
-/// Moved to [`crate::spine`] on 2026-08-13 and re-exported here, because the
+/// Moved to [`obc_spine`] on 2026-08-13 and re-exported here, because the
 /// root `Config` composes them. Same move as `ProviderConfig` the day before,
 /// and the same rule every extracted crate here already follows: the module
 /// owns its config block.
 ///
 /// These were the *only* thing a 4935-line module named outside itself, and
 /// two of the core's remaining cycles ran through them.
-pub use crate::spine::{MeshSupervisorConfig, SpineConfig};
+pub use obc_spine::{MeshSupervisorConfig, SpineConfig};
 
 /// The agent's own configuration blocks, which live with the agent.
 ///

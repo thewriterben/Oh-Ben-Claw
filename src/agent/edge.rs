@@ -44,9 +44,9 @@ use crate::memory::MemoryStore;
 use crate::providers;
 use crate::providers::ProviderConfig;
 use crate::security::PolicyEngine;
-use crate::spine::p2p::{P2pConfig, P2pSpine};
-use crate::spine::NodeAnnouncement;
 use anyhow::Result;
+use obc_spine::p2p::{P2pConfig, P2pSpine};
+use obc_spine::NodeAnnouncement;
 use obc_tool_api::Tool;
 use std::sync::Arc;
 
@@ -227,13 +227,11 @@ impl EdgeAgent {
                 .inner
                 .tool_specs()
                 .into_iter()
-                .map(
-                    |(name, description, parameters)| crate::spine::NodeToolSpec {
-                        name,
-                        description,
-                        parameters,
-                    },
-                )
+                .map(|(name, description, parameters)| obc_spine::NodeToolSpec {
+                    name,
+                    description,
+                    parameters,
+                })
                 .collect(),
             metadata: serde_json::json!({ "kind": "edge-agent" }),
         };

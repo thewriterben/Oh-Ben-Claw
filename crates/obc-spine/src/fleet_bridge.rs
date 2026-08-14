@@ -25,9 +25,9 @@
 //! are testable with no broker; `tests/spine_fleet_e2e.rs` drives them, and
 //! `src/main.rs`'s egress path calls exactly the same two functions.
 
-use crate::navigation::NavGoal;
-use crate::spine::{MessageHandler, SpineClient, TOPIC_PREFIX};
+use crate::{MessageHandler, SpineClient, TOPIC_PREFIX};
 use obc_fleet::{Coordinator, NodeState};
+use obc_navigation::NavGoal;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

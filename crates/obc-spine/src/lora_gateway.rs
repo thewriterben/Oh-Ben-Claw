@@ -19,8 +19,8 @@
 //! serial read loop is gated behind the `hardware` feature (tokio-serial), matching
 //! the rest of the peripheral I/O.
 
-use crate::memory::world::{Origin, WorldMemory};
 use async_trait::async_trait;
+use obc_memory::world::{Origin, WorldMemory};
 use serde_json::{json, Value};
 
 /// One received frame as reported by a gateway `SPINE ◄` console line.
@@ -408,8 +408,8 @@ pub trait CommandSink: Send + Sync {
 #[cfg(feature = "hardware")]
 mod serial {
     use super::{ingest_gateway_line, CommandSink, NodeCommand};
-    use crate::memory::world::WorldMemory;
     use anyhow::Context;
+    use obc_memory::world::WorldMemory;
     use std::io::{Read, Write};
     use std::sync::Arc;
     use std::time::Duration;
