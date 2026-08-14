@@ -35,6 +35,13 @@ description = "Open Body Control's reasoning loop: the agent that turns a reques
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
+# Added 2026-08-14 with `a2a_executor`. obc-a2a declares the `TaskExecutor`
+# trait and names nothing else; the implementation that dispatches to `Agent`
+# belongs beside `Agent`, which is here. Trait where the abstraction is,
+# implementation where the dependency is -- the same rule that emptied the
+# spine's blocking edges, applied once more and this time to delete a module
+# from the tree rather than to create a crate.
+obc-a2a = { path = "../obc-a2a" }
 obc-approval = { path = "../obc-approval" }
 obc-audio = { path = "../obc-audio" }
 obc-conscience = { path = "../obc-conscience" }

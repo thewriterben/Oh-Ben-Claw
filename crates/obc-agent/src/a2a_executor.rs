@@ -1,7 +1,7 @@
 //! The executor that makes `a2a` do something: dispatch to the real agent.
 //!
-//! [`crate::a2a`] defines the protocol, the task store and the
-//! [`TaskExecutor`](crate::a2a::TaskExecutor) trait, and names nothing else in
+//! [`obc_a2a`] defines the protocol, the task store and the
+//! [`TaskExecutor`](obc_a2a::TaskExecutor) trait, and names nothing else in
 //! this crate. That is the property that makes it separable into a crate, and
 //! it is worth keeping: so the trait is declared there and implemented *here*,
 //! next to [`Agent`], rather than the other way around.
@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::a2a::{Artifact, Message, Part, Role, Task, TaskExecutor, TaskState, TaskStatus};
-use obc_agent::Agent;
-use obc_config::ProviderConfig;
+use crate::Agent;
+use obc_a2a::{Artifact, Message, Part, Role, Task, TaskExecutor, TaskState, TaskStatus};
+use obc_providers::ProviderConfig;
 
 /// Runs an inbound A2A message through [`Agent::process`] and returns the
 /// reply as a completed task with one text artifact.

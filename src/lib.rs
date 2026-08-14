@@ -49,13 +49,16 @@
 ///
 /// `crate::a2a::…` and `oh_ben_claw::a2a::…` are unchanged.
 pub use obc_a2a as a2a;
-/// The [`a2a::TaskExecutor`] implementation that dispatches to the real agent.
-///
-/// Deliberately not inside `obc-a2a`: that crate names nothing in this one,
-/// which is the property that let it become a crate at all. Trait there,
-/// implementation here — one file's worth of inconvenience for a boundary that
-/// already existed.
-pub mod a2a_agent;
+// The `a2a::TaskExecutor` implementation that dispatches to the real agent used
+// to live here, as `a2a_agent`. It was always going to end up beside `Agent`;
+// while `agent` was a module in this tree, "beside Agent" and "in the root
+// crate" were the same place, so the distinction cost nothing and was never
+// forced. Extracting `obc-agent` on 2026-08-14 separated them, and the file
+// followed the type it dispatches to: `obc_agent::a2a_executor`.
+//
+// Still deliberately not inside `obc-a2a`. That crate names nothing outside
+// itself, which is the property that let it become a crate in the first place,
+// and putting the implementation there would spend it to save a file.
 // `aerial` and `gnss` left for `obc-position` on 2026-08-06 — one crate, because
 // they are one pattern: a real-world position report projected through a site
 // frame into the `NodeState` the fleet coordinates on. They became extractable
