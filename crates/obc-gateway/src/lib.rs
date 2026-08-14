@@ -31,9 +31,6 @@ pub mod pwa;
 pub mod routes;
 pub mod ws;
 
-use crate::memory::MemoryStore;
-use crate::observability::ObsContext;
-use crate::scheduler::Scheduler;
 use anyhow::{Context, Result};
 use axum::{
     middleware as axum_middleware,
@@ -42,6 +39,9 @@ use axum::{
 };
 use obc_agent::{AgentHandle, AgentPool};
 use obc_config::GatewayConfig;
+use obc_memory::MemoryStore;
+use obc_observability::ObsContext;
+use obc_scheduler::Scheduler;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -121,15 +121,15 @@ pub struct GatewayState {
     /// Skill-forge operations (Phase 16 P3 staged rollout) — `None` if not wired.
     pub skills: Option<SkillOps>,
     /// Cost tracker (Phase 15/9) — `None` if cost tracking is disabled.
-    pub cost: Option<Arc<crate::cost::CostTracker>>,
+    pub cost: Option<Arc<obc_cost::CostTracker>>,
     /// World memory — powers `GET /api/v1/mesh/status`. `None` if not wired.
-    pub world: Option<Arc<crate::memory::world::WorldMemory>>,
+    pub world: Option<Arc<obc_memory::world::WorldMemory>>,
     /// Approval manager — powers the remote approval endpoints (I4 Operate
     /// mode). `None` if not wired.
     pub approval: Option<Arc<obc_approval::ApprovalManager>>,
     /// Track 0 tamper-evident action audit — remote mutating requests are
     /// chained into it so remote operation is signed like any physical action.
-    pub action_audit: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
+    pub action_audit: Option<Arc<std::sync::Mutex<obc_safety::ActionAuditor>>>,
 }
 
 /// What the gateway needs to serve the skill endpoints: the forge directory,
@@ -211,13 +211,13 @@ impl GatewayState {
     }
 
     /// Attach the cost tracker so `/metrics` includes a live cost summary.
-    pub fn with_cost(mut self, cost: Arc<crate::cost::CostTracker>) -> Self {
+    pub fn with_cost(mut self, cost: Arc<obc_cost::CostTracker>) -> Self {
         self.cost = Some(cost);
         self
     }
 
     /// Attach world memory so `GET /api/v1/mesh/status` can serve live mesh health.
-    pub fn with_world(mut self, world: Arc<crate::memory::world::WorldMemory>) -> Self {
+    pub fn with_world(mut self, world: Arc<obc_memory::world::WorldMemory>) -> Self {
         self.world = Some(world);
         self
     }
@@ -233,7 +233,7 @@ impl GatewayState {
     /// same tamper-evident, MAC-chained audit trail as physical actions.
     pub fn with_action_audit(
         mut self,
-        audit: Arc<std::sync::Mutex<crate::security::ActionAuditor>>,
+        audit: Arc<std::sync::Mutex<obc_safety::ActionAuditor>>,
     ) -> Self {
         self.action_audit = Some(audit);
         self
