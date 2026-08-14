@@ -255,8 +255,20 @@ pub use obc_planner::siteplan;
 /// whose only content was a redirect. `crate::security::…` is unchanged.
 pub use obc_safety as security;
 pub use obc_scheduler as scheduler;
-pub use obc_telemetry::sensing;
-pub mod skill_forge;
+/// The self-improvement loop — an alias for the [`obc_skill_forge`] crate,
+/// which has held it since 2026-08-14.
+///
+/// The layer that writes new capability rather than executing existing
+/// capability: it reads what a run actually did from world memory, synthesises
+/// a skill, and stages the rollout instead of switching to it. An improvement
+/// is kept only when the recorded outcomes say it helped.
+///
+/// That is the same shape as `obc-learning`'s inert-until-approved rule,
+/// arrived at separately for a different layer — which is a reasonable sign it
+/// is the right shape for a system that writes its own behaviour.
+///
+/// Extracting it is what freed `agent`, which was blocked by exactly one edge.
+pub use obc_skill_forge as skill_forge;
 /// The communication spine — an alias for the [`obc_spine`] crate, which has
 /// held the MQTT backbone, the LoRa gateway and mesh, the mesh supervisor, the
 /// P2P transport and the four sinks since 2026-08-14.
@@ -273,6 +285,7 @@ pub mod skill_forge;
 /// What it unblocks is the point. `tools` — 8880 lines, the largest module
 /// left — was blocked by exactly one edge, and that edge was this one.
 pub use obc_spine as spine;
+pub use obc_telemetry::sensing;
 /// The tool layer — an alias for the [`obc_tools`] crate, which has held the
 /// registry and every built-in tool since 2026-08-14.
 ///

@@ -1,0 +1,52 @@
+[package]
+name = "obc-skill-forge"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's self-improvement loop: synthesise a skill from a trajectory, evolve it against recorded outcomes, roll it out in stages, and keep the improvement only when the evidence says it helped."
+
+# The twenty-seventh crate. 3247 lines in five files.
+#
+# It is the layer that writes new capability rather than executing existing
+# capability, which is why it sits above the tool layer and below the agent: it
+# reads what a run actually did from world memory, proposes a skill, and stages
+# the rollout instead of switching to it.
+#
+# The staging is the part worth reading. A synthesised skill does not replace
+# anything on the strength of having been generated; `rollout` moves it through
+# stages and an improvement is kept only when the recorded outcomes say it
+# helped. That is the same shape as obc-learning's inert-until-approved rule,
+# arrived at separately for a different layer, which is a good sign it is the
+# right shape for a system that writes its own behaviour.
+#
+# What it unblocks is the whole point of extracting it now: `agent`, 7885 lines
+# and the largest thing left in the tree, was blocked by exactly one edge, and
+# that edge was this one.
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+obc-memory = { path = "../obc-memory" }
+obc-observability = { path = "../obc-observability" }
+obc-paths = { path = "../obc-paths" }
+obc-providers = { path = "../obc-providers" }
+obc-tool-api = { path = "../obc-tool-api" }
+obc-tools = { path = "../obc-tools" }
+# Four call sites in the synthesis path, none in a `use` line. Declared with
+# the root's features rather than defaulted, the rule obc-spine established.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json", "rustls-tls", "blocking", "multipart", "stream"
+] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+tokio = { version = "1.42", default-features = false, features = [
+    "rt-multi-thread", "macros", "time", "sync", "fs", "process"
+] }
+# Thirty-two references across four crates that appear in no `use` line at all:
+# tracing 19, tokio 7, reqwest 4, obc-paths 2. The largest gap between what a
+# module's imports say it needs and what it actually needs that this endgame has
+# produced -- and the ninth crate this month whose dependency list came from the
+# compiler rather than from reading the source.
+tracing = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+tempfile = "3.14"

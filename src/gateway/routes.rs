@@ -448,7 +448,7 @@ pub async fn list_skills(State(state): State<Arc<GatewayState>>) -> impl IntoRes
         )
             .into_response();
     };
-    let forge = crate::skill_forge::SkillForge::new(ops.skill_dir.clone());
+    let forge = obc_skill_forge::SkillForge::new(ops.skill_dir.clone());
     let manifests = match forge.list_manifests() {
         Ok(m) => m,
         Err(e) => {
@@ -498,11 +498,11 @@ async fn change_skill_stage(
         )
             .into_response();
     };
-    let forge = crate::skill_forge::SkillForge::new(ops.skill_dir.clone());
+    let forge = obc_skill_forge::SkillForge::new(ops.skill_dir.clone());
     let outcome = if promote {
-        crate::skill_forge::rollout::promote(&forge, &ops.tracker, name, ops.required_clean)
+        obc_skill_forge::rollout::promote(&forge, &ops.tracker, name, ops.required_clean)
     } else {
-        crate::skill_forge::rollout::demote(&forge, &ops.tracker, name)
+        obc_skill_forge::rollout::demote(&forge, &ops.tracker, name)
     };
     match outcome {
         Ok(stage) => {

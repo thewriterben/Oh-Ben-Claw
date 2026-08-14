@@ -32,7 +32,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use oh_ben_claw::skill_forge::SkillForge;
+//! use obc_skill_forge::SkillForge;
 //!
 //! let forge = SkillForge::new("/etc/oh-ben-claw/skills");
 //! let tools = forge.load_all().unwrap();

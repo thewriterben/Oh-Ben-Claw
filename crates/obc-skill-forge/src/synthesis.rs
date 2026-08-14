@@ -1,6 +1,6 @@
 //! Skill synthesis from experience (Phase 16).
 //!
-//! Turns a successful [`Episode`](crate::memory::trajectory::Episode) into a
+//! Turns a successful [`Episode`](obc_memory::trajectory::Episode) into a
 //! reusable [`SkillManifest`] so the agent can replay a proven recipe instead of
 //! reasoning from scratch. Synthesized skills are **quarantined** (`enabled =
 //! false`) until they pass a [`VerificationCheck`] — reflection without a real
@@ -13,7 +13,7 @@
 //! top later; the verification gate and Track 0 interlock here apply regardless.
 
 use super::{SkillKind, SkillManifest, SkillStep};
-use crate::memory::trajectory::{Episode, Outcome};
+use obc_memory::trajectory::{Episode, Outcome};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -286,7 +286,7 @@ pub fn approve(mut manifest: SkillManifest) -> SkillManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::trajectory::EpisodeStep;
+    use obc_memory::trajectory::EpisodeStep;
     use serde_json::json;
 
     fn success_episode(objective: &str, tool: &str, ok: bool) -> Episode {

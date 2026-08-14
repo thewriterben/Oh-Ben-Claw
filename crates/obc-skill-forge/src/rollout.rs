@@ -218,7 +218,7 @@ pub fn tracker_in(dir: &Path) -> RolloutTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skill_forge::{SkillKind, SkillManifest};
+    use crate::{SkillKind, SkillManifest};
     use serde_json::json;
 
     fn tmp_dir(tag: &str) -> PathBuf {

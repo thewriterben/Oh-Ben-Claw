@@ -14,7 +14,7 @@
 //!   dropped when empty/unchanged.
 
 use super::{SkillForge, SkillManifest};
-use crate::memory::trajectory::TrajectoryStore;
+use obc_memory::trajectory::TrajectoryStore;
 use obc_providers::ProviderConfig;
 use obc_providers::{ChatMessage, ChatRole, Provider};
 use serde::{Deserialize, Serialize};
@@ -271,9 +271,9 @@ pub fn revert_description(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::trajectory::{Episode, EpisodeStep, Outcome};
-    use crate::skill_forge::SkillKind;
+    use crate::SkillKind;
     use async_trait::async_trait;
+    use obc_memory::trajectory::{Episode, EpisodeStep, Outcome};
     use obc_providers::ChatCompletion;
     use obc_tool_api::{RolloutStage, Tool};
     use serde_json::json;

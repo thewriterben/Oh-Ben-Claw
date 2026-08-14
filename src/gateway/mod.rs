@@ -137,7 +137,7 @@ pub struct GatewayState {
 #[derive(Clone)]
 pub struct SkillOps {
     pub skill_dir: std::path::PathBuf,
-    pub tracker: Arc<crate::skill_forge::rollout::RolloutTracker>,
+    pub tracker: Arc<obc_skill_forge::rollout::RolloutTracker>,
     pub required_clean: u32,
 }
 

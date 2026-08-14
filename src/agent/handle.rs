@@ -215,7 +215,7 @@ impl AgentHandle {
 
     /// Hot-resync the agent's skill tools from the forge (Phase 16). Returns
     /// `(added, removed, shadowed)`.
-    pub fn sync_skills(&self, forge: &crate::skill_forge::SkillForge) -> (usize, usize, usize) {
+    pub fn sync_skills(&self, forge: &obc_skill_forge::SkillForge) -> (usize, usize, usize) {
         self.agent.sync_skills(forge)
     }
 

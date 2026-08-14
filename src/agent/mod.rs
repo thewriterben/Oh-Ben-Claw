@@ -53,11 +53,11 @@ use crate::security::audit::{ActionAuditor, Decision};
 use crate::security::limits::SafetyGate;
 use crate::security::trust::{self, TrustGate, TrustScorer};
 use crate::security::PolicyEngine;
-use crate::skill_forge::rollout::RolloutTracker;
-use crate::skill_forge::{SkillForge, SkillTool};
 use anyhow::Result;
 use obc_approval::ApprovalManager;
 use obc_providers::{ChatMessage, ChatRole, Provider};
+use obc_skill_forge::rollout::RolloutTracker;
+use obc_skill_forge::{SkillForge, SkillTool};
 use obc_tool_api::{RiskClass, RolloutStage, Tool};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -918,7 +918,7 @@ impl Agent {
             }
             let mut outputs = Vec::with_capacity(steps.len());
             for (i, (step_tool, template)) in steps.iter().enumerate() {
-                let step_args = crate::skill_forge::substitute_args(template, &args).to_string();
+                let step_args = obc_skill_forge::substitute_args(template, &args).to_string();
                 let result =
                     Box::pin(self.execute_tool_inner(step_tool, &step_args, true, taint)).await;
                 match result {
@@ -1081,7 +1081,7 @@ impl Agent {
             tracker.record_failure(skill, RolloutStage::Supervised);
             if let Some(dir) = &self.forge_dir {
                 let forge = SkillForge::new(dir.clone());
-                match crate::skill_forge::rollout::demote(&forge, tracker, skill) {
+                match obc_skill_forge::rollout::demote(&forge, tracker, skill) {
                     Ok(stage) => {
                         tracing::warn!(
                             skill = %skill,
@@ -1205,7 +1205,7 @@ fn describe_simulation(tool: &Arc<dyn Tool>, args: &Value) -> String {
             .iter()
             .enumerate()
             .map(|(i, (t, tmpl))| {
-                let concrete = crate::skill_forge::substitute_args(tmpl, args);
+                let concrete = obc_skill_forge::substitute_args(tmpl, args);
                 format!("step {} → {}({})", i + 1, t, concrete)
             })
             .collect();
