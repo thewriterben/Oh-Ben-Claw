@@ -33,6 +33,7 @@ members = [
     "crates/obc-config",
     "crates/obc-peripherals",
     "crates/obc-channels",
+    "crates/obc-vision",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
@@ -115,6 +116,7 @@ obc-agent = { path = "crates/obc-agent" }
 obc-config = { path = "crates/obc-config" }
 obc-peripherals = { path = "crates/obc-peripherals" }
 obc-channels = { path = "crates/obc-channels" }
+obc-vision = { path = "crates/obc-vision" }
 toml = "1.0"
 shellexpand = "3.1"
 

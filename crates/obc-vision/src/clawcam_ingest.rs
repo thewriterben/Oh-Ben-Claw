@@ -18,13 +18,13 @@
 //!   review_state, ran_at)                                  "vision.subject.deer", …)
 //! ```
 
-use crate::decision_log::DecisionLog;
-use crate::memory::world::WorldMemory;
+use obc_conscience::decision_log::DecisionLog;
 use obc_conscience::{
     decide_frame, Conscience, ConsentLedger, ConsentPolicy, DecisionInput, FrameConsent,
     PerceptionDecision, PerceptionRefusal, SubjectPresence,
 };
 use obc_mcp::client::McpClient;
+use obc_memory::world::WorldMemory;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -339,7 +339,7 @@ pub struct ConsentContext<'a> {
 /// Bundled so the poll signature stays small as these layers accrete.
 pub struct PerceptionGuard<'a> {
     pub conscience: &'a Conscience,
-    pub auditor: Option<&'a std::sync::Mutex<crate::security::ActionAuditor>>,
+    pub auditor: Option<&'a std::sync::Mutex<obc_safety::ActionAuditor>>,
     pub decision_log: Option<&'a DecisionLog>,
     pub consent: Option<ConsentContext<'a>>,
 }
@@ -349,7 +349,7 @@ impl<'a> PerceptionGuard<'a> {
     /// no multi-party consent. Reproduces the pre-existing gated poll.
     pub fn new(
         conscience: &'a Conscience,
-        auditor: Option<&'a std::sync::Mutex<crate::security::ActionAuditor>>,
+        auditor: Option<&'a std::sync::Mutex<obc_safety::ActionAuditor>>,
     ) -> Self {
         Self {
             conscience,
@@ -536,7 +536,7 @@ pub async fn poll_clawcam_into_world_gated(
     ingested_at_ms: u64,
     source: &str,
     conscience: &Conscience,
-    auditor: Option<&std::sync::Mutex<crate::security::ActionAuditor>>,
+    auditor: Option<&std::sync::Mutex<obc_safety::ActionAuditor>>,
 ) -> anyhow::Result<Vec<String>> {
     let guard = PerceptionGuard::new(conscience, auditor);
     poll_clawcam_guarded(client, world, tool, args, ingested_at_ms, source, &guard).await
@@ -550,9 +550,9 @@ pub async fn poll_clawcam_into_world_gated(
 // managed power source, a glassbreak is an audio-suite alarm, and a camera going
 // offline is a comms event — each then visible to reflexes, safing, and foresight.
 
-use crate::comms::LinkReading;
-use crate::power::{BatteryReading, ChargeState};
 use obc_audio::suite::HeardEvent;
+use obc_telemetry::comms::LinkReading;
+use obc_telemetry::power::{BatteryReading, ChargeState};
 
 /// A ClawCam node-health row (from `get_node_health`). Tolerant: every field but
 /// the id is optional, so partial payloads still parse.
@@ -802,7 +802,7 @@ pub fn recount_subjects(
 #[cfg(test)]
 mod recount_tests {
     use super::*;
-    use crate::memory::world::WorldMemory;
+    use obc_memory::world::WorldMemory;
 
     #[test]
     fn recount_replaces_an_inflated_counter_with_the_distinct_event_count() {
@@ -868,7 +868,7 @@ mod recount_tests {
 #[cfg(test)]
 mod dedup_tests {
     use super::*;
-    use crate::memory::world::WorldMemory;
+    use obc_memory::world::WorldMemory;
 
     fn det(event_id: &str, species: &str, ran_at: &str) -> ClawCamDetection {
         serde_json::from_value(json!({
