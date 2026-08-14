@@ -138,25 +138,10 @@ mod tests {
         assert_eq!(cfg.api_key.unwrap().expose(), "sk-inline");
     }
 
-    #[test]
-    fn inline_keys_are_found_including_in_fallbacks() {
-        // Fallbacks are the ones that get forgotten: edited once, never looked at again.
-        use crate::config::{inline_secret_providers, Config, ProviderConfig};
-        let mut cfg = Config::default();
-        cfg.provider.name = "ollama".into();
-        cfg.provider.api_key = None;
-        cfg.provider.fallbacks = vec![ProviderConfig {
-            name: "anthropic".into(),
-            api_key: Some(SecretString::new("sk-ant-forgotten")),
-            ..ProviderConfig::default()
-        }];
-        let found = inline_secret_providers(&cfg);
-        assert_eq!(found, vec!["provider.fallbacks[0] (anthropic)".to_string()]);
-
-        // And an empty string is not a credential.
-        cfg.provider.fallbacks[0].api_key = Some(SecretString::new(""));
-        assert!(inline_secret_providers(&cfg).is_empty());
-    }
+    // `inline_keys_are_found_including_in_fallbacks` is
+    // tests/inline_secret_scan.rs in the root crate. It builds a realistic
+    // provider chain to prove a forgotten fallback key is still found, which
+    // needs the root Config -- not something this crate has, or should.
 
     #[test]
     fn the_hint_identifies_without_disclosing() {

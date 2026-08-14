@@ -1,6 +1,6 @@
 //! Generic OpenAI-compatible provider adapter.
 
-use crate::config::ProviderConfig;
+use crate::providers::ProviderConfig;
 use crate::providers::{ChatCompletion, ChatMessage, ChatRole, Provider, ResponseFormat, ToolCall};
 use crate::tools::Tool;
 use anyhow::Result;
