@@ -1,6 +1,6 @@
 //! Shell execution tool — run shell commands and return their output.
 
-use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::process::Command;

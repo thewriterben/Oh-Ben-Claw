@@ -1,16 +1,16 @@
 //! Audio suite tools — perceive (`hear`) and act (`speak`) for the agent.
 //!
-//! These wrap the first-class Audio suite ([`crate::audio::suite`]). `hear` is
+//! These wrap the first-class Audio suite ([`obc_audio::suite`]). `hear` is
 //! non-actuating (observe a heard event, query the stream) and classed
 //! [`RiskClass::safe`]. `speak` emits sound — a real-world effect — so it is
 //! classed physical with a **low** blast radius: recorded into world memory but
 //! not approval-gated (speech is reversible and contained; Suite §7).
 
-use crate::memory::world::Origin;
-use crate::memory::world::WorldMemory;
-use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use obc_audio::suite::{AudioController, HeardEvent};
+use obc_memory::world::Origin;
+use obc_memory::world::WorldMemory;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

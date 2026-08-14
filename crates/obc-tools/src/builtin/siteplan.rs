@@ -4,12 +4,12 @@
 //! budget and returns an optimized, mesh-connected, coverage-maximizing placement — each
 //! node's geodetic + local ENU position, the coverage fraction, and a paste-ready
 //! `[[site.node]]` TOML block for deployment. Pure computation: no world change, so it's
-//! safe (no approval). Backed by [`crate::siteplan::plan_site`].
+//! safe (no approval). Backed by [`obc_planner::siteplan::plan_site`].
 
-use crate::geo::{GeoPoint, Site};
-use crate::siteplan::{plan_site, PlacementSpec};
-use crate::tools::traits::{RiskClass, Tool, ToolResult};
+use crate::traits::{RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_planner::geo::{GeoPoint, Site};
+use obc_planner::siteplan::{plan_site, PlacementSpec};
 use serde_json::{json, Value};
 
 /// Stateless planner tool.

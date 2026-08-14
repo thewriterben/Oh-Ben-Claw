@@ -1,6 +1,6 @@
 //! File read/write tool — read and write files on the local filesystem.
 
-use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 

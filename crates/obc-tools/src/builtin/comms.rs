@@ -10,10 +10,10 @@
 //! - `status` — aggregate `net.mode`, plus a specific `link` fact when given.
 //! - `history`— history of `link.{link}` (with `link`) or `net.mode` (without).
 
-use crate::comms::{CommsController, LinkReading};
-use crate::memory::world::WorldMemory;
-use crate::tools::traits::{RiskClass, Tool, ToolResult};
+use crate::traits::{RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_memory::world::WorldMemory;
+use obc_telemetry::comms::{CommsController, LinkReading};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -133,7 +133,7 @@ impl Tool for CommsTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::comms::LinkThresholds;
+    use obc_telemetry::comms::LinkThresholds;
 
     fn tool() -> (CommsTool, Arc<WorldMemory>) {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());

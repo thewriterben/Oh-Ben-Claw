@@ -34,7 +34,7 @@ pub trait CredentialResolver: Send + Sync {
 /// The production resolver: the encrypted secrets vault, falling back to the
 /// environment variable of the same name (`get_or_env`). A locked vault simply
 /// yields the environment value, so env-only deployments work with no unlock.
-impl CredentialResolver for crate::security::SecretsVault {
+impl CredentialResolver for obc_safety::SecretsVault {
     fn resolve(&self, name: &str) -> Option<String> {
         // `get_or_env` only errors on a decryption failure (wrong master
         // password); treat that as "unresolved" so a broken vault fails closed

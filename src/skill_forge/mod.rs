@@ -39,8 +39,8 @@
 //! println!("Loaded {} skills", tools.len());
 //! ```
 
-use crate::tools::{Tool, ToolResult};
 use async_trait::async_trait;
+use obc_tools::{Tool, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};

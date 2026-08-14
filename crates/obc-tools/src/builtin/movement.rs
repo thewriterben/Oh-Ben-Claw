@@ -7,9 +7,9 @@
 //! `SafetyGate` inside the controller and recorded into world memory as the
 //! actuator's current state *before* it actuates.
 
-use crate::movement::{MovementCommand, MovementController};
-use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_movement::{MovementCommand, MovementController};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -103,9 +103,9 @@ impl Tool for MovementTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::world::WorldMemory;
-    use crate::movement::LoggingActuatorSink;
-    use crate::security::limits::{SafetyGate, SafetyLimit};
+    use obc_memory::world::WorldMemory;
+    use obc_movement::LoggingActuatorSink;
+    use obc_safety::limits::{SafetyGate, SafetyLimit};
 
     fn tool() -> (MovementTool, Arc<WorldMemory>) {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());

@@ -26,9 +26,9 @@ use crate::agent::{Agent, AgentHandle};
 use crate::memory::MemoryStore;
 use crate::providers;
 use crate::providers::ProviderConfig;
-use crate::tools::{default_tools_with_reach, Tool};
 use anyhow::{bail, Result};
 use obc_conscience::ReachGate;
+use obc_tools::{default_tools_with_reach, Tool};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -142,7 +142,7 @@ pub struct AgentPool {
     auditor: Option<Arc<Mutex<crate::security::ActionAuditor>>>,
     /// Conscience credential resolver (item (b)), so a spawned sub-agent injects
     /// a reach-named credential at its egress boundary too.
-    resolver: Option<Arc<dyn crate::tools::credentials::CredentialResolver>>,
+    resolver: Option<Arc<dyn obc_tools::credentials::CredentialResolver>>,
 }
 
 impl AgentPool {
@@ -166,7 +166,7 @@ impl AgentPool {
         mut self,
         reach: Option<ReachGate>,
         auditor: Option<Arc<Mutex<crate::security::ActionAuditor>>>,
-        resolver: Option<Arc<dyn crate::tools::credentials::CredentialResolver>>,
+        resolver: Option<Arc<dyn obc_tools::credentials::CredentialResolver>>,
     ) -> Self {
         self.reach = reach;
         self.auditor = auditor;

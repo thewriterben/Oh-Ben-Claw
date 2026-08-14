@@ -19,9 +19,9 @@
 //! Facts land at `incident.<subject>`, which is deliberately outside `mesh.*` and any
 //! other perception namespace — an agent's conclusion is never mistaken for a reading.
 
-use crate::memory::world::{Origin, WorldMemory};
-use crate::tools::traits::{Tool, ToolResult};
+use crate::traits::{Tool, ToolResult};
 use async_trait::async_trait;
+use obc_memory::world::{Origin, WorldMemory};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -36,7 +36,14 @@ pub const INCIDENT_PREFIX: &str = "incident";
 /// Recognised incident statuses. A closed set so the record stays queryable — an agent
 /// inventing `"critical"`, `"presumed_lost"`, and `"degraded_maybe"` across three wakes
 /// is how a log becomes unreadable.
-pub(crate) const STATUSES: [&str; 5] = [
+///
+/// `pub` rather than `pub(crate)` since 2026-08-14, and the extraction is what
+/// asked the question. The agent's safing path asserts one of these values in a
+/// test; inside one crate that reached a private constant without anyone
+/// deciding it should. Across a crate boundary the decision has to be made, and
+/// the answer is yes: a closed set only stays closed if the callers that must
+/// agree with it can read it, rather than each spelling `"investigating"` out.
+pub const STATUSES: [&str; 5] = [
     "investigating",
     "confirmed",
     "resolved",

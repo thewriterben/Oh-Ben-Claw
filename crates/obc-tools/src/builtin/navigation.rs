@@ -6,10 +6,10 @@
 //! controller). **`nav_status`** only observes or *stops*, so it is `safe` —
 //! halting and querying must never require approval.
 
-use crate::memory::world::WorldMemory;
-use crate::navigation::{NavController, NavGoal, PlanOutcome};
-use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_memory::world::WorldMemory;
+use obc_navigation::{NavController, NavGoal, PlanOutcome};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -300,8 +300,8 @@ impl Tool for NavStatusTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::movement::{LoggingActuatorSink, MovementController};
-    use crate::security::limits::{SafetyGate, SafetyLimit};
+    use obc_movement::{LoggingActuatorSink, MovementController};
+    use obc_safety::limits::{SafetyGate, SafetyLimit};
 
     fn controller(world: &Arc<WorldMemory>) -> Arc<NavController> {
         let mut steer = SafetyLimit::new("rover", "servo_angle");
@@ -382,7 +382,7 @@ mod tests {
     }
 
     fn controller_with_grid(world: &Arc<WorldMemory>) -> Arc<NavController> {
-        use crate::navigation::planning::OccupancyGrid;
+        use obc_navigation::planning::OccupancyGrid;
         use std::sync::Mutex;
         // unwrap the Arc-built controller by rebuilding with a grid attached
         let mut steer = SafetyLimit::new("rover", "servo_angle");

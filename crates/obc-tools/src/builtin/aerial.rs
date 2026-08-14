@@ -7,12 +7,12 @@
 //! aerial Track-0 [`flight_safe`] verdict (refuse on low battery or outside the geofence).
 //!
 //! Pure computation: no world change, so it's safe (no approval). Backed by
-//! [`crate::aerial`].
+//! [`obc_position::aerial`].
 
-use crate::aerial::{flight_safe, AerialTelemetry};
-use crate::geo::{GeoFrame, GeoPoint, Site};
-use crate::tools::traits::{RiskClass, Tool, ToolResult};
+use crate::traits::{RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_planner::geo::{GeoFrame, GeoPoint, Site};
+use obc_position::aerial::{flight_safe, AerialTelemetry};
 use serde_json::{json, Value};
 
 /// Stateless aerial adapter tool.

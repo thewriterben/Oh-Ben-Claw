@@ -5,7 +5,7 @@
 //! - Local whisper.cpp via subprocess
 //! - Audio recording from peripheral microphones via the MQTT Spine
 
-use crate::tools::traits::{Tool, ToolResult};
+use crate::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};

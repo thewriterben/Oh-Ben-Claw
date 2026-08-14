@@ -10,11 +10,11 @@
 //! - `status` — latest battery reading + derived mode.
 //! - `history`— full bitemporal history of `power.battery`.
 
-use crate::memory::world::Origin;
-use crate::memory::world::WorldMemory;
-use crate::power::{BatteryReading, PowerController};
-use crate::tools::traits::{RiskClass, Tool, ToolResult};
+use crate::traits::{RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_memory::world::Origin;
+use obc_memory::world::WorldMemory;
+use obc_telemetry::power::{BatteryReading, PowerController};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -135,7 +135,7 @@ impl Tool for PowerTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::power::PowerThresholds;
+    use obc_telemetry::power::PowerThresholds;
 
     fn tool() -> (PowerTool, Arc<WorldMemory>) {
         let world = Arc::new(WorldMemory::open_in_memory().unwrap());

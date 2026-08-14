@@ -24,7 +24,7 @@
 //! | `browser_new_tab` | Open a new browser tab |
 //! | `browser_close_tab` | Close the active tab |
 
-use crate::tools::{Tool, ToolResult};
+use crate::{Tool, ToolResult};
 use async_trait::async_trait;
 use obc_conscience::{ReachDecision, ReachGate};
 use serde::{Deserialize, Serialize};
@@ -361,7 +361,7 @@ pub struct BrowserNavigateTool {
     reach: Option<ReachGate>,
     /// Optional Track 0 auditor: a refused navigation writes a `conscience.reach`
     /// denial to the tamper-evident log, same as the HTTP tool and perception.
-    auditor: Option<Arc<Mutex<crate::security::ActionAuditor>>>,
+    auditor: Option<Arc<Mutex<obc_safety::ActionAuditor>>>,
 }
 
 impl BrowserNavigateTool {
@@ -381,7 +381,7 @@ impl BrowserNavigateTool {
     }
 
     /// Attach a Track 0 auditor so refused navigations become tamper-evident records.
-    pub fn with_auditor(mut self, auditor: Arc<Mutex<crate::security::ActionAuditor>>) -> Self {
+    pub fn with_auditor(mut self, auditor: Arc<Mutex<obc_safety::ActionAuditor>>) -> Self {
         self.auditor = Some(auditor);
         self
     }
@@ -409,9 +409,9 @@ impl Tool for BrowserNavigateTool {
         "browser_navigate"
     }
 
-    fn output_trust(&self) -> crate::tools::traits::OutputTrust {
+    fn output_trust(&self) -> crate::traits::OutputTrust {
         // Returns the page title — attacker-controllable content (Track 0).
-        crate::tools::traits::OutputTrust::External
+        crate::traits::OutputTrust::External
     }
 
     fn description(&self) -> &str {
@@ -509,9 +509,9 @@ impl Tool for BrowserSnapshotTool {
         "browser_snapshot"
     }
 
-    fn output_trust(&self) -> crate::tools::traits::OutputTrust {
+    fn output_trust(&self) -> crate::traits::OutputTrust {
         // Returns rendered page content — attacker-controllable (Track 0).
-        crate::tools::traits::OutputTrust::External
+        crate::traits::OutputTrust::External
     }
 
     fn description(&self) -> &str {
@@ -961,7 +961,7 @@ impl Tool for BrowserCloseTabTool {
 /// Build all browser tools sharing the same `BrowserSession`.
 ///
 /// ```
-/// use oh_ben_claw::tools::builtin::browser::all_browser_tools;
+/// use obc_tools::builtin::browser::all_browser_tools;
 ///
 /// let tools = all_browser_tools(None);
 /// assert_eq!(tools.len(), 7);
@@ -978,7 +978,7 @@ pub fn all_browser_tools(cdp_url: Option<&str>) -> Vec<Box<dyn Tool>> {
 pub fn all_browser_tools_with_reach(
     cdp_url: Option<&str>,
     reach: Option<ReachGate>,
-    auditor: Option<Arc<Mutex<crate::security::ActionAuditor>>>,
+    auditor: Option<Arc<Mutex<obc_safety::ActionAuditor>>>,
 ) -> Vec<Box<dyn Tool>> {
     let session = Arc::new(if let Some(url) = cdp_url {
         BrowserSession::with_cdp_url(url)
