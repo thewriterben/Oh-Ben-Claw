@@ -12,11 +12,11 @@ Five opportunities from this analysis have shipped into OBC. Marked **✅ Delive
 
 | Opp | Title | Status | Where |
 |---|---|---|---|
-| **A** | Hardware-data harvest | ✅ Delivered | `src/peripherals/registry.rs` — `mesh`/`ibutton`/`psram` tokens, RAK4631 Meshtastic node, board enrichment (most Tier-1A boards were already seeded) |
-| **B** | Continuous trust scoring | ✅ Delivered | `src/security/trust.rs` + `src/approval/mod.rs` `decide()` + `Agent` dispatch enforcement (`[safety] dynamic_trust`) |
-| **C** | No-op-fallback observability | ✅ Delivered | `src/observability/mod.rs` — `ReconcilingExporter` + `MetricSink` (buffer offline, reconcile on reconnect) |
-| **E** | HIL self-test + MockNode | ✅ Delivered | `src/peripherals/selftest.rs` — `NodeSelfTest` contract + `SimulatedNode`; wired in `tests/offgrid_fleet_loop.rs` |
-| **H** | LoRa-mesh spine transport | ✅ Delivered (core) | `src/spine/lora_mesh.rs` — compact fleet codec + `MeshRadio` trait, bridges to fleet coordinator |
+| **A** | Hardware-data harvest | ✅ Delivered | `crates/obc-planner/src/peripherals/registry.rs` — `mesh`/`ibutton`/`psram` tokens, RAK4631 Meshtastic node, board enrichment (most Tier-1A boards were already seeded) |
+| **B** | Continuous trust scoring | ✅ Delivered | `crates/obc-safety/src/trust.rs` + `crates/obc-approval/src/lib.rs` `decide()` + `Agent` dispatch enforcement (`[safety] dynamic_trust`) |
+| **C** | No-op-fallback observability | ✅ Delivered | `crates/obc-observability/src/lib.rs` — `ReconcilingExporter` + `MetricSink` (buffer offline, reconcile on reconnect) |
+| **E** | HIL self-test + MockNode | ✅ Delivered | `crates/obc-peripherals/src/selftest.rs` — `NodeSelfTest` contract + `SimulatedNode`; wired in `tests/offgrid_fleet_loop.rs` |
+| **H** | LoRa-mesh spine transport | ✅ Delivered (core) | `crates/obc-spine/src/lora_mesh.rs` — compact fleet codec + `MeshRadio` trait, bridges to fleet coordinator |
 
 **Deferred / follow-up (intentionally not shipped):**
 - **A** — medium-confidence boards with uncertain PIDs (nRF5340-DK, TTGO LoRa V1/V2, ESP-EYE, extra STM32F4/H7) left to the weekly hardware scout, which can confirm real VID/PIDs before they ship (no fake data in the SSOT).
@@ -24,9 +24,35 @@ Five opportunities from this analysis have shipped into OBC. Marked **✅ Delive
 - **C** — the live `main` export loop + a real HTTP `MetricSink` (core + trait are in place).
 - **H** — the `[spine] kind = "lora_mesh"` config branch + a real Meshtastic-over-serial `MeshRadio` + a mesh RX loop into the `Coordinator`.
 
-Also delivered since first banking: **D** (`src/providers/model_registry.rs` — local-first model selection with health re-check), **F** (`src/security/audit_sign.rs` + `audit.rs` — Ed25519 signed audit), **G** (`src/deployment/saga.rs` — saga rollback), **I** (`src/peripherals/onboarding.rs` — vendor allowlist), **J** (`src/deployment/firmware_scaffold.rs` — firmware scaffolding).
+Also delivered since first banking: **D** (`crates/obc-providers/src/model_registry.rs` — local-first model selection with health re-check), **F** (`crates/obc-safety/src/audit_sign.rs` + `audit.rs` — Ed25519 signed audit), **G** (`src/deployment/saga.rs` — saga rollback, **mechanism only**: see below), **I** (`crates/obc-peripherals/src/onboarding.rs` — vendor allowlist), **J** (`crates/obc-planner/src/deployment/firmware_scaffold.rs` — firmware scaffolding).
 
-**All ten opportunities (A–J) are now delivered.** The distinctive value of each was consumed on its real merits; nothing remains blocked. Some cores have build-time-only or config-gated wiring with runtime follow-ups noted inline (edge model hot-swap, lora_mesh radio, spatial nav).
+**G is narrower than "delivered" reads, and was corrected on 2026-08-14.** The
+saga itself is real — `SagaAction`, `Saga`, `SagaOutcome`, forward actions
+paired with compensations, unwinding in reverse on failure, four tests covering
+commit, unwind, a compensation that itself fails, and a first-step failure that
+compensates nothing. What does not exist is anything that calls it. Nothing in
+this repository applies a `DeploymentScheme` across nodes: `DeploymentSwarm`
+plans and refines, `main.rs` re-derives a scheme from `[deployment]`, and there
+is no rollout for a compensating action to compensate.
+
+So the rollback mechanism is delivered and the rollback is not. The distinction
+matters because this document's whole purpose is to record what was taken from a
+sibling project and actually used, and "we have a saga" and "our deployments roll
+back" are different claims. It was found by
+`scripts/file_reachability.py` flagging `saga.rs` as referenced nowhere — and
+the survey then reported it as *unclaimed*, because it reads only README.md and
+ROADMAP.md and this sentence lives here. Both halves of that are now fixed.
+
+<!-- unwired: src/deployment/saga.rs -->
+
+The marker above is read by that survey. It says this document knows the file is
+unwired, so the paragraph you are reading is not counted as a claim that it
+ships — otherwise being honest about the gap would make the tool shout louder
+every run, and the fix for a false alarm is usually to stop listening.
+
+**All ten opportunities (A–J) are now delivered**, with the qualifications above:
+G is a mechanism with no caller, and C and H are cores with their runtime wiring
+still listed as deferred. The distinctive value of each was consumed on its real merits; nothing remains blocked. Some cores have build-time-only or config-gated wiring with runtime follow-ups noted inline (edge model hot-swap, lora_mesh radio, spatial nav).
 
 ---
 
@@ -64,7 +90,7 @@ Each mapped to an OBC module and v2.0 phase.
 
 ### Tier 1 — adopt now (real, high-value, low-risk)
 
-**A. Harvest Accelerapp's hardware data into OBC's registry.** *(→ `src/peripherals/registry.rs`, Hardware Ecosystem track)* — ✅ **Delivered.** Most Tier-1A boards (Flipper Zero, M5Stack, ESP32-CAM/S3-CAM, CYD, T-Beam, Heltec) had already been seeded since this analysis; the harvest added the `mesh`/`ibutton`/`psram` tokens, enriched those boards, and added the missing **RAK4631** (Meshtastic nRF52840). PID-uncertain boards deferred to the scout.
+**A. Harvest Accelerapp's hardware data into OBC's registry.** *(→ `crates/obc-planner/src/peripherals/registry.rs`, Hardware Ecosystem track)* — ✅ **Delivered.** Most Tier-1A boards (Flipper Zero, M5Stack, ESP32-CAM/S3-CAM, CYD, T-Beam, Heltec) had already been seeded since this analysis; the harvest added the `mesh`/`ibutton`/`psram` tokens, enriched those boards, and added the missing **RAK4631** (Meshtastic nRF52840). PID-uncertain boards deferred to the scout.
 The single most directly actionable win. Accelerapp contains concrete board/chip/capability data — and some real VID/PIDs — that OBC's registry lacks. Drop-in or near-drop-in additions:
 
 | Hardware | Chip | VID:PID | Capabilities to add | Source confidence |
@@ -83,7 +109,7 @@ The single most directly actionable win. Accelerapp contains concrete board/chip
 
 New **capability tokens** this implies (feed into the Hardware Ecosystem track): `nfc`, `rfid`, `subghz`, `infrared`, `lora`/`lorawan`/`mesh`, `gps`, `imu`, `psram`, `microsd` — several already proposed in `V2-HARDWARE-ECOSYSTEM.md`. The M5Stack/CYD entries also exercise the new `Connector` field (Grove, M-Bus). **Action:** seed these into the registry now (using the `Connector` work just landed), and add Accelerapp's board list to the weekly scout's known-vendor coverage so it keeps them current.
 
-**B. Continuous trust scoring for the physical-action safety layer.** *(→ `src/approval/`, `src/security/`, Track 0)* — ✅ **Delivered.** `src/security/trust.rs` (rolling-mean + 3σ anomaly, failure decay, recovery → `TrustLevel`); `ApprovalManager::decide()` lets trust tighten (never relax) approval; the `Agent` dispatch refuses physical actions from an untrusted node and feeds the score from every round-trip (`[safety] dynamic_trust`). Borrowed the *logic*, not the code. Follow-up: the gateway interactive `RequireApproval` seam.
+**B. Continuous trust scoring for the physical-action safety layer.** *(→ `src/approval/`, `src/security/`, Track 0)* — ✅ **Delivered.** `crates/obc-safety/src/trust.rs` (rolling-mean + 3σ anomaly, failure decay, recovery → `TrustLevel`); `ApprovalManager::decide()` lets trust tighten (never relax) approval; the `Agent` dispatch refuses physical actions from an untrusted node and feeds the score from every round-trip (`[safety] dynamic_trust`). Borrowed the *logic*, not the code. Follow-up: the gateway interactive `RequireApproval` seam.
 The standout *idea* in Accelerapp. `security/device_authentication.py` maintains a per-device **trust score** that decays on anomalous behavior (rolling-mean + 3σ z-score on response times, failure-rate thresholds) and maps to a `TrustLevel`. OBC has scoped approvals + HMAC node pairing but **static** trust. Adding a **dynamic trust level that modulates approval requirements** — a node behaving anomalously gets demoted, forcing re-approval on physical actions it could previously auto-run — is a genuinely novel hardening of Track 0 and the staged-rollout model. Borrow the *logic*, not the code.
 
 **C. No-op-fallback observability for edge/air-gapped nodes.** *(→ `src/observability/`, Phases 18/20)* — ✅ **Delivered.** `ReconcilingExporter` + `MetricSink` trait: when the collector is unreachable it buffers snapshots locally (bounded, with drop accounting) and never errors; on reconnect it flushes the backlog. Follow-up: the live `main` export loop + a real HTTP sink.
@@ -91,21 +117,21 @@ Accelerapp's `observability/` (OTel spans + Prometheus exporter) is its one genu
 
 ### Tier 2 — adapt (good design, OBC should build the real version)
 
-**D. LLM provider fallback chain → OBC per-node model selection.** *(→ `src/providers/`, `src/agent/edge.rs`, Phase 20)*
+**D. LLM provider fallback chain → OBC per-node model selection.** *(→ `src/providers/`, `crates/obc-agent/src/edge.rs`, Phase 20)*
 `llm/local_llm_service.py` is a clean local-first → cloud-fallback abstraction with health checks, plus a JSON model registry at `~/.accelerapp/models`. OBC already has `failover.rs`/`retry.rs`, but the **local-first, health-checked, per-node model registry** is exactly the Phase 20 "edge escalation policy + edge model management" shape. Adopt the design (fix Accelerapp's bug where availability is cached forever and never re-checked).
 
-**E. HIL self-test contract + a simulated node for CI.** *(→ `tests/`, `src/peripherals/`, Phases 17/Track 0)* — ✅ **Delivered.** `src/peripherals/selftest.rs`: `NodeSelfTest` bring-up contract (`gpio_loopback`/`sensor_read`/`link_up`) + `SimulatedNode` (scriptable, announces on the spine). Wired end-to-end in `tests/offgrid_fleet_loop.rs` (bring-up gate → LoRa heartbeat → fleet auction).
+**E. HIL self-test contract + a simulated node for CI.** *(→ `tests/`, `src/peripherals/`, Phases 17/Track 0)* — ✅ **Delivered.** `crates/obc-peripherals/src/selftest.rs`: `NodeSelfTest` bring-up contract (`gpio_loopback`/`sensor_read`/`link_up`) + `SimulatedNode` (scriptable, announces on the spine). Wired end-to-end in `tests/offgrid_fleet_loop.rs` (bring-up gate → LoRa heartbeat → fleet auction).
 Accelerapp's `hil/hardware.py` defines a `DeviceAdapter.test_*` self-test contract (LED blink, button read, analog read) and a `SimulatedHardware`. This validates the **`MockNode`** idea already proposed in `V2-IMPLEMENTATION.md`: a host-side simulated node speaking the spine protocol for CI, plus a **standard board-bringup smoke test** run on node onboarding and on Phase 17 resume. Build the real serial/MQTT-backed version Accelerapp left as a stub.
 
-**F. Hash-chained audit → real signed audit.** *(→ `src/security/audit.rs`, Track 0)* — ✅ **Delivered.** Both halves shipped. Symmetric integrity: `src/security/audit.rs` persists an append-only, hash-chained, **HMAC-SHA256-MAC'd** log with a `verify()` that catches any insert/delete/reorder/edit. Asymmetric non-repudiation: `src/security/audit_sign.rs` (`ed25519-dalek` v2 — a real, audited crate, *not* the stub) provides an `AuditSigner` + `verify_hex`; `ActionRecord` now carries an optional Ed25519 detached `sig`, `ActionAuditor::with_signer` signs each record's canonical bytes, and `verify_signatures(path, public_hex)` verifies with only the **public key** — third parties can check the audit without the HMAC secret. Additive (the HMAC chain is never weakened), backward-compatible (`serde(default)` `sig`). The dep was added with operator approval; faking it with symmetric crypto was explicitly avoided.
+**F. Hash-chained audit → real signed audit.** *(→ `crates/obc-safety/src/audit.rs`, Track 0)* — ✅ **Delivered.** Both halves shipped. Symmetric integrity: `crates/obc-safety/src/audit.rs` persists an append-only, hash-chained, **HMAC-SHA256-MAC'd** log with a `verify()` that catches any insert/delete/reorder/edit. Asymmetric non-repudiation: `crates/obc-safety/src/audit_sign.rs` (`ed25519-dalek` v2 — a real, audited crate, *not* the stub) provides an `AuditSigner` + `verify_hex`; `ActionRecord` now carries an optional Ed25519 detached `sig`, `ActionAuditor::with_signer` signs each record's canonical bytes, and `verify_signatures(path, public_hex)` verifies with only the **public key** — third parties can check the audit without the HMAC secret. Additive (the HMAC chain is never weakened), backward-compatible (`serde(default)` `sig`). The dep was added with operator approval; faking it with symmetric crypto was explicitly avoided.
 `digital_twin/blockchain_log.py` is a SHA-256 hash-chained append-only log with a working `verify_chain()`. It's the skeleton of Track 0's signed audit — but OBC should do what Accelerapp didn't: **persist it and actually sign each record** (Ed25519, per the Track 0 design), not merely hash-chain in RAM.
 
-**G. Saga / EventBus for multi-node deployment rollback.** *(→ `src/deployment/`, `src/agent/orchestrator.rs`)*
+**G. Saga / EventBus for multi-node deployment rollback.** *(→ `src/deployment/`, `crates/obc-agent/src/orchestrator.rs`)*
 `core/events/` has an EventBus + Saga orchestrator. A saga pattern (compensating actions on failure) is a sound way for OBC's deployment planner to roll back a partially-applied multi-node deployment. Worth referencing if OBC doesn't already have it.
 
 ### Tier 3 — strategic / inspirational
 
-**H. Meshtastic / LoRa-mesh as a spine transport.** *(→ `src/spine/`, Hardware Ecosystem track)* — ✅ **Delivered (core).** `src/spine/lora_mesh.rs`: a compact `MeshFrame` codec (heartbeat/assign, ~60 B, payload-size-guarded — deliberately *not* tool-RPC, which won't fit a LoRa frame), a pluggable `MeshRadio` trait, and `MeshFrame::to_node_state` bridging to the fleet coordinator so the auction logic runs unchanged off-grid. Follow-up: the `[spine] kind = "lora_mesh"` config branch, a real Meshtastic-over-serial radio, and a mesh RX loop into the `Coordinator`.
+**H. Meshtastic / LoRa-mesh as a spine transport.** *(→ `src/spine/`, Hardware Ecosystem track)* — ✅ **Delivered (core).** `crates/obc-spine/src/lora_mesh.rs`: a compact `MeshFrame` codec (heartbeat/assign, ~60 B, payload-size-guarded — deliberately *not* tool-RPC, which won't fit a LoRa frame), a pluggable `MeshRadio` trait, and `MeshFrame::to_node_state` bridging to the fleet coordinator so the auction logic runs unchanged off-grid. Follow-up: the `[spine] kind = "lora_mesh"` config branch, a real Meshtastic-over-serial radio, and a mesh RX loop into the `Coordinator`.
 Accelerapp's Meshtastic modeling (`platforms/meshtastic.py`, `meshtastic/`) is a proven template for a **`transport: lora_mesh`** variant in OBC's spine: a fleet that coordinates over long-range LoRa mesh with **no WiFi and no broker**. That is a strong embodied differentiator (off-grid, disaster-response, agricultural, remote-sensing fleets) directly in OBC's "double down on hardware" lane. Model region/frequency/radio-chip as capability fields (per the DeviceInfo schema: `node_id, region, firmware_version`).
 
 **I. YAML-externalized device config + auto-discovery vendor allowlist.** *(→ `src/config/`, `src/peripherals/`, Track 0)*

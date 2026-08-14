@@ -8,7 +8,10 @@
 //! self-contained.
 //!
 //! What stays here is what could not go: [`swarm`] drives LLM sub-agents to
-//! refine a scheme, and [`saga`] runs a multi-step rollout on an async runtime.
+//! refine a scheme, and [`saga`] is a multi-step rollout mechanism for an async
+//! runtime — compensating actions, unwound in reverse on failure. Nothing calls
+//! it yet: no code here applies a scheme across nodes, so there is no rollout
+//! for it to compensate. It is tested and available, not wired.
 //! Both need providers and a reactor; neither is needed to plan.
 //!
 //! Everything the crate exports is re-exported below, so `crate::deployment::X`

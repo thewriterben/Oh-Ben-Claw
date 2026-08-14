@@ -244,7 +244,61 @@ for f in files:
 # This is the question that matters. An unwired internal helper is untidy; an
 # unwired feature that README or ROADMAP presents as shipped is a promise the
 # software does not keep, and that is what both known cases were.
-DOCS = {name: strip_audit(read(ROOT / name)) for name in ("README.md", "ROADMAP.md")}
+#
+# Which documents count, and why this is a list rather than `docs/*.md`.
+#
+# It was README.md and ROADMAP.md until 2026-08-14, and that is how a real
+# overclaim hid. `src/deployment/saga.rs` was flagged here as referenced
+# nowhere, and reported as claimed by nothing -- while
+# `docs/ACCELERAPP-CROSS-POLLINATION.md` listed it under "Also delivered". Two
+# documents is not the same set as "the documents that say what ships", and the
+# difference is invisible in the output: an unclaimed file and an unchecked
+# claim print identically.
+#
+# So the set is the documents that present the software as *shipped*. It is
+# named rather than globbed because most of docs/ is the opposite kind: ENDGAME
+# is a running record, the BENCH and WALKTHROUGH pages are procedures, the
+# PHASE and V2 pages are plans. A plan describing something unbuilt is doing its
+# job; counting it as an overclaim would train someone to ignore this column.
+DOC_NAMES = (
+    "README.md",
+    "ROADMAP.md",
+    "docs/ACCELERAPP-CROSS-POLLINATION.md",   # "delivered" ledger vs a sibling project
+    "docs/SUBSYSTEM-SUITES-STATUS.md",        # per-subsystem shipped/not table
+    "docs/SAFETY-CASE.md",                    # asserts what enforcement exists
+    "docs/ECOSYSTEM-INTEGRATION.md",          # asserts what integrates today
+    "docs/EMBODIED-ARCHITECTURE.md",          # asserts what the running system does
+)
+DOCS = {name: strip_audit(read(ROOT / name)) for name in DOC_NAMES}
+
+# A file a document deliberately discloses as unwired is not an overclaim.
+#
+# This is `strip_audit`'s problem one level up. That function exists because
+# embedding the generated tables into ROADMAP.md made every unwired file "named
+# in the docs", and a measurement that counts the report about itself converges
+# on a lie. The same thing happens to a *correction*: the paragraph written to
+# say "this is a mechanism with no caller" names the file, so the next run reads
+# it as a claim that the file ships. Being honest about a gap would make the
+# tool shout louder.
+#
+# So a document can say so, once, in a form nobody writes by accident:
+#
+#     <!-- unwired: src/deployment/saga.rs -->
+#
+# The file is still listed, still counted as unwired, and still worth reading.
+# It is not counted as an overclaim, and the document that disclosed it is
+# named instead. Silence is still not an option -- this is the opposite of
+# silence, and it costs an author one deliberate line.
+DISCLOSED = {
+    m.group(1).strip()
+    for text in DOCS.values()
+    for m in re.finditer(r"<!--\s*unwired:\s*(\S+?)\s*-->", text)
+}
+DISCLOSED_BY = {
+    m.group(1).strip(): name
+    for name, text in DOCS.items()
+    for m in re.finditer(r"<!--\s*unwired:\s*(\S+?)\s*-->", text)
+}
 # A missing input must not read as a clean result. Both README.md and ROADMAP.md
 # were absent the first time this ran — it was pointed at a partial checkout — and
 # it reported "0 of 17 are presented as shipped", which is the most reassuring
@@ -326,15 +380,20 @@ print("── No public item referenced anywhere outside the file ──")
 if dead:
     print(f"{'file':<40}{'loc':>6}{'pub':>5}  documented as shipped in")
     for r in sorted(dead, key=lambda r: (not r["docs"], -r["loc"])):
-        mark = ", ".join(r["docs"]) if r["docs"] else "—"
-        flag = "  <-- OVERCLAIM" if r["docs"] else ""
+        if r["file"] in DISCLOSED:
+            mark = f"disclosed unwired in {DISCLOSED_BY[r['file']]}"
+            flag = ""
+        else:
+            mark = ", ".join(r["docs"]) if r["docs"] else "—"
+            flag = "  <-- OVERCLAIM" if r["docs"] else ""
         print(f"{r['file']:<40}{r['loc']:>6}{r['pub']:>5}  {mark}{flag}")
-    claimed = [r for r in dead if r["docs"]]
+    claimed = [r for r in dead if r["docs"] and r["file"] not in DISCLOSED]
     print(f"\n{len(dead)} unwired file(s), {sum(r['loc'] for r in dead):,} LOC.")
     if _missing:
         print("doc cross-reference UNAVAILABLE — see the warning above. Not a clean bill.")
     else:
-        print(f"of those, {len(claimed)} are presented as shipped in README/ROADMAP "
+        print(f"of those, {len(claimed)} are presented as shipped in "
+              f"{len(DOCS)} shipped-claim document(s) "
               f"({sum(r['loc'] for r in claimed):,} LOC) — fix the code or fix the claim.")
 else:
     print("none")
