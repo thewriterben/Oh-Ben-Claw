@@ -24,10 +24,9 @@
 use crate::agent::AgentConfig;
 use crate::agent::{Agent, AgentHandle};
 use crate::memory::MemoryStore;
-use crate::providers;
-use crate::providers::ProviderConfig;
 use anyhow::{bail, Result};
 use obc_conscience::ReachGate;
+use obc_providers::ProviderConfig;
 use obc_tools::{default_tools_with_reach, Tool};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -196,7 +195,7 @@ impl AgentPool {
             .provider
             .clone()
             .unwrap_or_else(|| self.default_provider.clone());
-        let provider = providers::from_config(&provider_config)?;
+        let provider = obc_providers::from_config(&provider_config)?;
 
         // Build the tool registry. Sub-agents get the SAME conscience reach gate
         // (and auditor) as the orchestrator, so delegation is not an egress

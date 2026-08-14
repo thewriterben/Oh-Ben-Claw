@@ -1,7 +1,7 @@
 //! Anthropic provider adapter.
 
-use crate::providers::ProviderConfig;
-use crate::providers::{ChatCompletion, ChatMessage, ChatRole, Provider, ResponseFormat, ToolCall};
+use crate::ProviderConfig;
+use crate::{ChatCompletion, ChatMessage, ChatRole, Provider, ResponseFormat, ToolCall};
 use anyhow::Result;
 use async_trait::async_trait;
 use obc_tools::Tool;

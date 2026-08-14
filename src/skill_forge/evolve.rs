@@ -15,8 +15,8 @@
 
 use super::{SkillForge, SkillManifest};
 use crate::memory::trajectory::TrajectoryStore;
-use crate::providers::ProviderConfig;
-use crate::providers::{ChatMessage, ChatRole, Provider};
+use obc_providers::ProviderConfig;
+use obc_providers::{ChatMessage, ChatRole, Provider};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -272,9 +272,9 @@ pub fn revert_description(
 mod tests {
     use super::*;
     use crate::memory::trajectory::{Episode, EpisodeStep, Outcome};
-    use crate::providers::ChatCompletion;
     use crate::skill_forge::SkillKind;
     use async_trait::async_trait;
+    use obc_providers::ChatCompletion;
     use obc_tool_api::{RolloutStage, Tool};
     use serde_json::json;
     use std::sync::Mutex;

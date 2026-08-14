@@ -20,9 +20,9 @@
 //! met. Even a calibrated judge must never gate actuation safety — the Track 0
 //! deterministic layers own that.
 
-use crate::providers::ProviderConfig;
-use crate::providers::{ChatMessage, ChatRole, Provider};
 use anyhow::Result;
+use obc_providers::ProviderConfig;
+use obc_providers::{ChatMessage, ChatRole, Provider};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -69,7 +69,7 @@ impl LlmJudge {
             base_url: std::env::var("OBC_JUDGE_BASE_URL").ok(),
             ..ProviderConfig::default()
         };
-        match crate::providers::from_config(&config) {
+        match obc_providers::from_config(&config) {
             Ok(provider) => Some(Self { provider, config }),
             Err(e) => {
                 tracing::warn!(error = %e, "judge configured but provider failed to build");
@@ -267,8 +267,8 @@ pub fn cohens_kappa(pairs: &[(bool, bool)]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::ChatCompletion;
     use async_trait::async_trait;
+    use obc_providers::ChatCompletion;
     use obc_tool_api::Tool;
 
     struct FixedJudgeProvider(&'static str);

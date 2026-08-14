@@ -51,7 +51,7 @@ pub enum ResponseFormat {
 
 // `ChatMessage` and `ChatRole` moved into the `obc-memory` crate on 2026-07-30.
 // They are the shape a conversation is stored in, and the substrate that stores
-// them should own them; re-exported here because `crate::providers::ChatMessage`
+// them should own them; re-exported here because `crate::ChatMessage`
 // is what every existing caller says.
 pub use obc_memory::{ChatMessage, ChatRole};
 

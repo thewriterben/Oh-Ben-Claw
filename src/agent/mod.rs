@@ -49,7 +49,6 @@ pub use pool::{AgentPool, SubAgentInfo, SubAgentSpec, SubAgentStatus};
 
 use crate::memory::trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};
 use crate::memory::MemoryStore;
-use crate::providers::{ChatMessage, ChatRole, Provider};
 use crate::security::audit::{ActionAuditor, Decision};
 use crate::security::limits::SafetyGate;
 use crate::security::trust::{self, TrustGate, TrustScorer};
@@ -58,6 +57,7 @@ use crate::skill_forge::rollout::RolloutTracker;
 use crate::skill_forge::{SkillForge, SkillTool};
 use anyhow::Result;
 use obc_approval::ApprovalManager;
+use obc_providers::{ChatMessage, ChatRole, Provider};
 use obc_tool_api::{RiskClass, RolloutStage, Tool};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -387,7 +387,7 @@ impl Agent {
         &self,
         session_id: &str,
         user_message: &str,
-        provider_config: &crate::providers::ProviderConfig,
+        provider_config: &obc_providers::ProviderConfig,
     ) -> Result<AgentResponse> {
         // WS5: outer span for the whole run (finished before returning).
         let mut run_span = self.obs.as_ref().map(|obs| {
@@ -1315,16 +1315,16 @@ mod tests {
     struct SilentProvider;
 
     #[async_trait::async_trait]
-    impl crate::providers::Provider for SilentProvider {
+    impl obc_providers::Provider for SilentProvider {
         fn name(&self) -> &str {
             "silent"
         }
         async fn chat_completion(
             &self,
-            _messages: &[crate::providers::ChatMessage],
+            _messages: &[obc_providers::ChatMessage],
             _tools: &[Box<dyn Tool>],
-            _config: &crate::providers::ProviderConfig,
-        ) -> Result<crate::providers::ChatCompletion> {
+            _config: &obc_providers::ProviderConfig,
+        ) -> Result<obc_providers::ChatCompletion> {
             anyhow::bail!("SilentProvider never answers; these tests only build context")
         }
     }

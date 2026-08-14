@@ -1,0 +1,58 @@
+[package]
+name = "obc-providers"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's model providers: Anthropic, OpenAI, OpenRouter, Ollama and any OpenAI-compatible endpoint behind one trait, with an ordered fallback chain, bounded retries, streaming, and a registry of pinned model names."
+
+# The twenty-fifth crate, and the first module in this tree to reach zero edges
+# of *any* kind -- not zero blocking edges, zero edges. The only in-tree path
+# anywhere in its ten files was `crate::providers::`, eighteen times, pointing
+# at itself. Everything else it names had already left: obc-tools, obc-memory,
+# obc-tool-api, obc-safety.
+#
+# Worth writing down that the enumeration above was wrong when this comment was
+# first drafted. It said obc-tools, obc-tool-api and obc-safety, because those
+# are the three that appear in `use` lines. `obc_memory` is named once, in a
+# `pub use` re-export of ChatMessage and ChatRole, and an import survey of a
+# module reads straight past that. `cargo check -p` did not.
+#
+# It got here yesterday. `providers` was blocked by exactly one edge into
+# `tools`, and tools by exactly one edge into `spine`. Three extractions in two
+# days, each unblocking the next, and this one is the end of that chain rather
+# than a piece of work in its own right.
+#
+# What it is: the trait every model backend implements, four concrete backends
+# and a generic OpenAI-compatible one, an ordered failover chain so a dead
+# endpoint moves to the next rather than failing the turn, bounded retries with
+# backoff, server-sent-event streaming, and a registry that pins model names so
+# "the latest Claude" is a decision recorded in one place rather than a string
+# scattered through the agent.
+#
+# This is the crate behind the README's "bring your own model". Being able to
+# point at it, alone, compiled and tested, is the difference between that being
+# a claim and being a thing.
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+obc-memory = { path = "../obc-memory" }
+obc-safety = { path = "../obc-safety" }
+obc-tool-api = { path = "../obc-tool-api" }
+obc-tools = { path = "../obc-tools" }
+# Repeated from the root manifest, not defaulted: reqwest's defaults include
+# `default-tls`, which would pull native-tls in beside the rustls stack the root
+# selected -- for every crate in the workspace, since Cargo unifies features
+# across the graph. obc-spine got this wrong with rumqttc on 2026-08-14 and only
+# `cargo audit` noticed.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json", "rustls-tls", "blocking", "multipart", "stream"
+] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+tokio = { version = "1.42", default-features = false, features = [
+    "rt-multi-thread", "macros", "time", "sync"
+] }
+# Two tracing call sites and one uuid, all at full paths with no `use` line.
+# Eighth crate this month whose dependency list came from the compiler.
+tracing = { version = "0.1", default-features = false }
+uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }
