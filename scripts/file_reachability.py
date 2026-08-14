@@ -67,6 +67,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 
+# The section rules below are drawn with box characters, and a Windows console
+# defaults to cp1252, which cannot encode them. Printing one raised
+# UnicodeEncodeError and killed the run *after* the survey had done its work
+# and printed its counts -- a crash that looks like a broken tool and is
+# actually a broken terminal. Reconfiguring is enough; it is a no-op where
+# stdout is already UTF-8, which is everywhere this runs unattended.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # Names too generic for name-based matching to say anything. Matching these
 # produces confident nonsense in both directions.
 TOO_GENERIC = {
@@ -247,14 +257,48 @@ if _missing:
     print("!! the overclaim column below is meaningless — run from a full checkout",
           file=sys.stderr)
 DOC_ALIASES = {
-    "src/memory/heartbeat.rs": ("HEARTBEAT",),
-    "src/security/pairing.rs": ("pairing",),
+    # Every key here must be a file this survey actually scans, and on
+    # 2026-08-14 not one of them was. The guard below is new; the staleness is
+    # not, and neither is the shape of it.
+    #
+    # This table says "when README says HEARTBEAT it means this file". The scan
+    # walks `src/`. Extraction moved or deleted all seven: heartbeat, journal
+    # and pairing are in obc-memory and obc-safety now, and fusion, bt and
+    # runtime were the modules gate 3 cut. So every alias silently stopped
+    # matching, and the overclaim column went quiet for the best possible
+    # reason and the worst possible presentation -- exactly what the DOCS guard
+    # thirty lines above exists to prevent, in the half of the inputs it does
+    # not cover.
+    #
+    # The entries are kept rather than deleted because the doc terms are still
+    # the right terms; what changed is where the code lives. They are dated
+    # instead, and the guard names them until the scan covers crates/ or
+    # someone decides it should not.
+    #
+    # Moved to crates on the dates shown; unmatched by this scan since:
+    "src/memory/heartbeat.rs": ("HEARTBEAT",),          # -> obc-memory
+    "src/memory/journal.rs": ("journal",),              # -> obc-memory
+    "src/security/pairing.rs": ("pairing",),            # -> obc-safety
+    "src/audio/mod.rs": ("audio pipeline", "Audio pipeline", "audio_pipeline"),  # -> obc-audio
+    # Deleted by gate 3, kept as a record of what the docs used to claim:
     "src/peripherals/fusion.rs": ("Sensor fusion", "sensor fusion"),
     "src/mission/bt.rs": ("behavior tree", "Behavior Tree", "BT engine"),
-    "src/memory/journal.rs": ("journal",),
     "src/runtime/mod.rs": ("Sandbox", "sandbox"),
-    "src/audio/mod.rs": ("audio pipeline", "Audio pipeline", "audio_pipeline"),
 }
+
+# The other half of the guard above DOCS. A missing input must not read as a
+# clean result, and an alias table that matches nothing is a missing input
+# wearing a full table's clothes.
+_stale_aliases = [k for k in DOC_ALIASES if not (ROOT / k).exists()]
+if _stale_aliases:
+    print(f"!! {len(_stale_aliases)} of {len(DOC_ALIASES)} doc aliases name files "
+          f"that no longer exist under {SRC.name}/:", file=sys.stderr)
+    for k in _stale_aliases:
+        print(f"!!   {k}", file=sys.stderr)
+    print("!! their doc terms are not being checked against anything. This survey "
+          "scans src/ only,\n"
+          "!! and src/ is now three modules — the rest of the codebase is in "
+          "crates/ and out of scope.", file=sys.stderr)
 
 
 def doc_claims(rel: str) -> list[str]:
