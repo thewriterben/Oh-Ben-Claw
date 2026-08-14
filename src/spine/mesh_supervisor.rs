@@ -16,9 +16,9 @@
 //! The decision core ([`decide`]) is pure and unit-tested; the driver ([`tick`]) reads
 //! the real store and drives the mesh command sink.
 
-use crate::config::MeshSupervisorConfig;
 use crate::memory::world::{Origin, WorldMemory};
 use crate::spine::lora_gateway::{CommandSink, NodeCommand};
+use crate::spine::MeshSupervisorConfig;
 use serde_json::json;
 use std::sync::Arc;
 
