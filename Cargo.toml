@@ -31,6 +31,7 @@ members = [
     "crates/obc-skill-forge",
     "crates/obc-agent",
     "crates/obc-config",
+    "crates/obc-peripherals",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
@@ -111,6 +112,7 @@ obc-mcp = { path = "crates/obc-mcp" }
 obc-skill-forge = { path = "crates/obc-skill-forge" }
 obc-agent = { path = "crates/obc-agent" }
 obc-config = { path = "crates/obc-config" }
+obc-peripherals = { path = "crates/obc-peripherals" }
 toml = "1.0"
 shellexpand = "3.1"
 
@@ -211,11 +213,11 @@ default = ["hardware", "mqtt-spine", "world-anchor"]
 # Now forwards to the crate that owns `geo::anchor`, rather than gating a module
 # in this crate. Same name, same default, so no command line changed.
 world-anchor = ["obc-planner/world-anchor"]
-hardware = ["nusb", "tokio-serial", "serialport", "obc-spine/hardware"]
+hardware = ["nusb", "tokio-serial", "serialport", "obc-spine/hardware", "obc-peripherals/hardware"]
 mqtt-spine = []
-peripheral-rpi = ["rppal"]
-peripheral-nanopi = []
-peripheral-stm32 = []
+peripheral-rpi = ["rppal", "obc-peripherals/peripheral-rpi"]
+peripheral-nanopi = ["obc-peripherals/peripheral-nanopi"]
+peripheral-stm32 = ["obc-peripherals/peripheral-stm32"]
 gui = []
 # Dense retrieval leg for episode memory: local ONNX embeddings (fastembed).
 # Off by default so ordinary builds/CI stay light; enable at build time with

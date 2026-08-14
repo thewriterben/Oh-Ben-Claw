@@ -20,11 +20,9 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-use crate::{
-    peripherals::traits::Peripheral,
-    tools::traits::{Tool, ToolResult},
-};
+use crate::traits::Peripheral;
 use obc_config::PeripheralBoardConfig;
+use obc_tools::traits::{Tool, ToolResult};
 
 // ── GPIO Helpers (sysfs fallback, compatible with all Pi models) ──────────────
 

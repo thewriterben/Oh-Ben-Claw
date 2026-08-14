@@ -10,7 +10,7 @@
 //! sudo usermod -aG gpio $USER
 //! ```
 
-use crate::peripherals::traits::Peripheral;
+use crate::traits::Peripheral;
 use async_trait::async_trait;
 use obc_config::PeripheralBoardConfig;
 use obc_tool_api::{Tool, ToolResult};

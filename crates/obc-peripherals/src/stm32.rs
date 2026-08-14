@@ -30,11 +30,9 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::time::Duration;
 
-use crate::{
-    peripherals::traits::Peripheral,
-    tools::traits::{Tool, ToolResult},
-};
+use crate::traits::Peripheral;
 use obc_config::PeripheralBoardConfig;
+use obc_tools::traits::{Tool, ToolResult};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 

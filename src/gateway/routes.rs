@@ -1132,7 +1132,7 @@ pub async fn get_agent(
 /// `registry/registry.json` export — consumers (deployment generator,
 /// Accelerapp) can refresh their bundled copy from a running fleet.
 pub async fn get_registry() -> impl IntoResponse {
-    match crate::peripherals::registry::registry_json() {
+    match obc_peripherals::registry::registry_json() {
         Ok(body) => (
             StatusCode::OK,
             [(axum::http::header::CONTENT_TYPE, "application/json")],

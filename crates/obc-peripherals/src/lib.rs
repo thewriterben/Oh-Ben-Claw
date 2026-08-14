@@ -29,7 +29,7 @@ pub mod bus_tools;
 pub mod onboarding;
 /// The board and accessory registry — re-exported from the [`obc_planner`]
 /// crate. It moved because it is the planner's input and has no I/O; the
-/// transports and bus tools around it stay here. `crate::peripherals::registry`
+/// transports and bus tools around it stay here. `crate::registry`
 /// is unchanged.
 pub use obc_planner::peripherals::registry;
 pub mod selftest;
@@ -68,6 +68,16 @@ pub async fn create_peripheral_tools(
         return Ok(Vec::new());
     }
 
+    // Every push below is behind a `cfg` — Linux for the bus tools, and one
+    // board feature each for the drivers. On a host where none of them apply
+    // the `mut` is genuinely unused, which is a true statement about a real
+    // build rather than something to restructure away.
+    //
+    // It only became visible on extraction: the root crate turns `hardware` on
+    // by default, so `arduino` was always compiled in and always pushed. Built
+    // alone with this crate's own defaults, nothing does. Third time a crate
+    // built by itself has said something the workspace build could not.
+    #[allow(unused_mut)]
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
 
     // Always include the shared Linux bus tools (I2C, SPI, PWM) on Linux hosts
