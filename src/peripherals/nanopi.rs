@@ -10,9 +10,9 @@
 //! sudo usermod -aG gpio $USER
 //! ```
 
-use crate::config::PeripheralBoardConfig;
 use crate::peripherals::traits::Peripheral;
 use async_trait::async_trait;
+use obc_config::PeripheralBoardConfig;
 use obc_tool_api::{Tool, ToolResult};
 use serde_json::{json, Value};
 use std::path::PathBuf;

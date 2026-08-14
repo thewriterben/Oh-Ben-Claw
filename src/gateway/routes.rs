@@ -1337,7 +1337,7 @@ pub async fn push_scheme(Json(body): Json<PushSchemeRequest>) -> impl IntoRespon
         })
         .take(48)
         .collect();
-    let dir = crate::config::paths::in_data_dir("incoming");
+    let dir = obc_config::paths::in_data_dir("incoming");
     if let Err(e) = std::fs::create_dir_all(&dir) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -108,8 +108,22 @@ pub mod channels;
 // fact -> derived mode a reflex watches. Re-exported under the old names, so
 // `crate::comms::…`, `crate::power::…` and `crate::sensing::…` are unchanged at
 // every call site.
-pub use obc_telemetry::comms;
-pub mod config;
+/// Configuration — an alias for the [`obc_config`] crate, which has held the
+/// root `Config`, TOML loading and validation, and the first-run flow since
+/// 2026-08-14.
+///
+/// The last hub, and for most of this project's history the thing every cycle
+/// ran through — sixteen of them at the worst count. The cause was never the
+/// loading code: this module owned the config *block* of every module that had
+/// one, so `ProviderConfig` lived here while two of its own field types lived
+/// in providers, and the same for the spine, the agent, tunnels, cost and
+/// deployment.
+///
+/// The rule that dissolved all of it: the module owns its own config block, and
+/// the root `Config` composes it. Nine `pub use` lines in that crate are what
+/// remains — each re-exporting a type that now lives beside the code that reads
+/// it, under the name it always had.
+pub use obc_config as config;
 /// The persistent sink for conscience decisions, moved into [`obc_conscience`]
 /// where the record format, the replay reader and the config fingerprint it
 /// stamps already live. It was the only piece of that story outside the crate,
@@ -120,11 +134,12 @@ pub mod config;
 /// buys a crate that can produce the evidence its own doc comment demands.
 /// `oh_ben_claw::decision_log::…` and `crate::decision_log::…` are unchanged.
 pub use obc_conscience::decision_log;
+pub use obc_telemetry::comms;
 // Token accounting and the spending budget left for `obc-cost` on 2026-08-06.
 // Its only edge outside itself was `CostConfig`, its own config block sitting in
 // the root config module — so the config struct went with it, the way
 // `DeploymentConfig` sits in obc-planner and `ConscienceConfig` in
-// obc-conscience. `crate::cost::…` and `crate::config::CostConfig` are both
+// obc-conscience. `crate::cost::…` and `obc_config::CostConfig` are both
 // unchanged.
 pub use obc_cost as cost;
 pub mod deployment;
@@ -316,7 +331,7 @@ pub use obc_tools as tools;
 // Network tunnels left for `obc-tunnel` on 2026-08-06, same day and same shape
 // as obc-cost: its only edge outside itself was `TunnelConfig`, its own config
 // block in the root config module, so the struct went with the providers that
-// read it. `crate::tunnel::…` and `crate::config::TunnelConfig` are unchanged.
+// read it. `crate::tunnel::…` and `obc_config::TunnelConfig` are unchanged.
 pub use obc_tunnel as tunnel;
 pub mod vision;
-pub use config::Config;
+pub use obc_config::Config;

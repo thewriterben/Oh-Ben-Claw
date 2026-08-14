@@ -18,9 +18,9 @@
 #![allow(dead_code)]
 use crate::channels::typing::TypingTask;
 use crate::channels::utils::chunk_text;
-use crate::config::{ProviderConfig, TelegramConfig};
 use anyhow::{Context, Result};
 use obc_agent::Agent;
+use obc_config::{ProviderConfig, TelegramConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

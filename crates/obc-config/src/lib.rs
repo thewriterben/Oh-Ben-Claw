@@ -11,7 +11,7 @@ use std::path::PathBuf;
 pub mod first_run;
 // `paths` moved to the `obc-paths` crate on 2026-07-30 so the memory substrate can
 // depend on it without depending on the agent's config module. Re-exported here
-// because `crate::config::paths::…` is the path nine modules already use.
+// because `crate::paths::…` is the path nine modules already use.
 pub use obc_paths as paths;
 pub use obc_safety::secret::SecretString;
 
@@ -72,7 +72,7 @@ pub use obc_spine::{MeshSupervisorConfig, SpineConfig};
 /// The agent's own configuration blocks, which live with the agent.
 ///
 /// Moved to [`obc_agent`] on 2026-08-13 and re-exported here. The root
-/// `Config` composes them, and `crate::approval` reads `AutonomyConfig` and
+/// `Config` composes them, and `obc_approval` reads `AutonomyConfig` and
 /// `AutonomyLevel` through this path deliberately: routing that module at the
 /// agent instead would trade one mutual pair in the dependency graph for
 /// another, since `agent` already names `approval`.
@@ -367,7 +367,7 @@ pub struct FeishuConfig {
 }
 
 // Tunnel configuration moved to `obc-tunnel` on 2026-08-06, with the providers
-// that read it. Re-exported, so `crate::config::TunnelConfig` is unchanged.
+// that read it. Re-exported, so `crate::TunnelConfig` is unchanged.
 pub use obc_tunnel::config::TunnelConfig;
 
 // ── Gateway Configuration ─────────────────────────────────────────────────────
@@ -435,7 +435,7 @@ impl Default for GatewayConfig {
 // Cost configuration moved to `obc-cost` on 2026-08-06, with the tracker that
 // reads it. Same arrangement as `DeploymentConfig` (obc-planner) and
 // `ConscienceConfig` (obc-conscience): the crate owns its own config block and
-// this file composes them. Re-exported, so `crate::config::CostConfig` is
+// this file composes them. Re-exported, so `crate::CostConfig` is
 // unchanged at every call site.
 pub use obc_cost::config::CostConfig;
 
@@ -678,7 +678,7 @@ pub struct PerceptionConfig {
     /// origins = ["asserted"]   # optional; omit for any origin under the prefix
     /// ```
     #[serde(default)]
-    pub expiry: Vec<crate::memory::expiry::ExpiryPolicy>,
+    pub expiry: Vec<obc_memory::expiry::ExpiryPolicy>,
     /// What the agent is shown about its own world model — `[perception.context]`.
     ///
     /// Until this existed, `build_context` was the system prompt plus the last 50
@@ -1509,7 +1509,7 @@ pub struct Config {
     #[serde(default)]
     pub channels: ChannelsConfig,
     #[serde(default)]
-    pub security: crate::security::SecurityConfig,
+    pub security: obc_safety::SecurityConfig,
     #[serde(default)]
     pub tunnel: TunnelConfig,
     #[serde(default)]
@@ -1543,7 +1543,7 @@ pub struct Config {
     pub a2a: A2AConfig,
     /// Track 0 physical-action safety: deterministic limits + tamper-evident audit.
     #[serde(default)]
-    pub safety: crate::security::SafetyConfig,
+    pub safety: obc_safety::SafetyConfig,
     /// Conscience: deterministic gates on what the agent may PERCEIVE (consent
     /// registry, default-deny humans) and REACH (egress allowlist). Track 0
     /// extended to the front of the pipeline. Off unless `[conscience]` is set.
@@ -1880,7 +1880,7 @@ impl Config {
             anyhow::bail!("security.require_pairing is true but no pairing_secret is set");
         }
         if let Some(ref secret) = self.security.pairing_secret {
-            if let Err(e) = crate::security::pairing::NodePairingManager::validate_secret(secret) {
+            if let Err(e) = obc_safety::pairing::NodePairingManager::validate_secret(secret) {
                 warnings.push(format!("security.pairing_secret: {}", e));
             }
         }

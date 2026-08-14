@@ -22,13 +22,13 @@
 //! For environments where no LLM is available, `DeploymentSwarm::plan_static`
 //! returns the rule-based plan directly.
 
-use crate::config::ProviderConfig;
 use crate::deployment::inventory::HardwareInventory;
 use crate::deployment::planner::DeploymentPlanner;
 use crate::deployment::scheme::DeploymentScheme;
 use crate::memory::MemoryStore;
 use anyhow::Result;
 use obc_agent::pool::{AgentPool, SubAgentSpec};
+use obc_config::ProviderConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

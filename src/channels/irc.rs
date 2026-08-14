@@ -22,9 +22,9 @@
 //! channels   = ["#ai-bots"]
 //! ```
 
-use crate::config::{IrcConfig, ProviderConfig};
 use anyhow::{Context, Result};
 use obc_agent::Agent;
+use obc_config::{IrcConfig, ProviderConfig};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_new_returns_none_without_host() {
-        use crate::config::IrcConfig;
+        use obc_config::IrcConfig;
         let cfg = IrcConfig::default();
         // Without an agent we can't call new(), but we can verify the logic.
         assert!(cfg.host.is_none());

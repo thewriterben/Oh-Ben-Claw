@@ -31,10 +31,10 @@ use serde_json::{json, Value};
 use std::time::Duration;
 
 use crate::{
-    config::PeripheralBoardConfig,
     peripherals::traits::Peripheral,
     tools::traits::{Tool, ToolResult},
 };
+use obc_config::PeripheralBoardConfig;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 

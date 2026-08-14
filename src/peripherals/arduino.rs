@@ -33,10 +33,10 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::{
-    config::PeripheralBoardConfig,
     peripherals::traits::Peripheral,
     tools::traits::{Tool, ToolResult},
 };
+use obc_config::PeripheralBoardConfig;
 
 // ── Serial Connection ─────────────────────────────────────────────────────────
 

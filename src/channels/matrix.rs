@@ -25,9 +25,9 @@
 // Scoped to this file deliberately — the crate root carries no blanket allow.
 #![allow(dead_code)]
 use crate::channels::utils::chunk_text;
-use crate::config::{MatrixConfig, ProviderConfig};
 use anyhow::{Context, Result};
 use obc_agent::Agent;
+use obc_config::{MatrixConfig, ProviderConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -370,7 +370,7 @@ mod tests {
     fn matrix_config_missing_tokens_returns_none() {
         std::env::remove_var("MATRIX_HOMESERVER");
         std::env::remove_var("MATRIX_ACCESS_TOKEN");
-        let config = crate::config::MatrixConfig {
+        let config = obc_config::MatrixConfig {
             homeserver: None,
             access_token: None,
         };

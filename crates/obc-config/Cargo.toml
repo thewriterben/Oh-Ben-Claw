@@ -1,0 +1,68 @@
+[package]
+name = "obc-config"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's configuration: the root Config that composes every module's own config block, TOML loading and validation, and the first-run flow that writes a working file rather than a template."
+
+# The twenty-ninth crate, and the last hub. 2870 lines in two files.
+#
+# It is worth being precise about what this crate does *not* do, because for
+# most of this project's history it looked like the opposite. `config` was in
+# every cycle the survey found -- sixteen of them at the worst count -- and the
+# reason was that it owned the config block of every module that had one.
+# ProviderConfig lived here while two of its own field types lived in providers;
+# SpineConfig here while the spine used it; AgentConfig, AutonomyLevel,
+# TunnelConfig, CostConfig, DeploymentConfig, the same.
+#
+# The rule that dissolved all of it: the module owns its own config block, and
+# the root Config composes it. Nine `pub use` lines in lib.rs are what remains
+# of that -- every one of them re-exporting a type that now lives with the code
+# that reads it, kept under the old name so no call site had to change:
+#
+#   obc_paths, obc_safety::secret, obc_providers, obc_spine, obc_agent,
+#   obc_approval, obc_tunnel, obc_cost, obc_planner
+#
+# So this crate is a composition point and a file parser, which is all it should
+# ever have been. What it owns outright is the loading, the validation, and
+# `first_run` -- the flow that writes a working configuration rather than a
+# commented template, including the pinned model name per provider.
+#
+# It reached zero blocking edges when `agent` left, hours before this commit.
+# Eight of the nine modules still in the tree name it, and five of them are
+# blocked by nothing else.
+[dependencies]
+anyhow = "1.0"
+directories = "5.0"
+obc-agent = { path = "../obc-agent" }
+obc-approval = { path = "../obc-approval" }
+obc-conscience = { path = "../obc-conscience" }
+obc-cost = { path = "../obc-cost" }
+obc-foresight = { path = "../obc-foresight" }
+obc-mcp = { path = "../obc-mcp" }
+obc-memory = { path = "../obc-memory" }
+obc-mission = { path = "../obc-mission" }
+obc-paths = { path = "../obc-paths" }
+obc-planner = { path = "../obc-planner" }
+obc-providers = { path = "../obc-providers" }
+obc-reflex = { path = "../obc-reflex" }
+obc-safety = { path = "../obc-safety" }
+obc-spine = { path = "../obc-spine" }
+obc-tunnel = { path = "../obc-tunnel" }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+toml = "1.0"
+# Twenty-two references in no `use` line: tracing 12, serde_json 4, and six
+# references across five obc-* crates written at full paths -- conscience,
+# foresight, mcp, mission, and reflex twice. Eleventh crate this month to need
+# `cargo check -p` rather than an import survey.
+#
+# Those six are the more interesting half. Every one is a module's own config
+# block being composed into the root `Config`, which is the rule that dissolved
+# this module's cycles -- and the composing side of that rule turns out to be
+# written almost entirely at full paths, so a survey of what `config` depends on
+# reads far shorter than it is.
+tracing = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+tempfile = "3.14"
