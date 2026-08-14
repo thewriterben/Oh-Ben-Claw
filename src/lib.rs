@@ -245,7 +245,18 @@ pub use obc_planner;
 // `obc_telemetry` is the agent watching its body; this is the agent watching
 // itself. The two were named apart on purpose and are easy to confuse.
 pub use obc_observability as observability;
-pub mod peripherals;
+/// The peripheral layer — an alias for the [`obc_peripherals`] crate, which has
+/// held the registry, the `Peripheral` trait and the board drivers since
+/// 2026-08-14.
+///
+/// It carries this project's single source of truth for hardware. The
+/// `emit-registry` binary serialises those tables to the JSON that the
+/// deployment generator and Accelerapp consume rather than keeping their own
+/// copies, and it reaches them through this alias, unchanged.
+///
+/// Extracting it freed the last two blocked modules: `doctor` and `gateway`
+/// were each held by exactly one edge, and it was this one.
+pub use obc_peripherals as peripherals;
 /// The model backends — an alias for the [`obc_providers`] crate, which has
 /// held them since 2026-08-14.
 ///

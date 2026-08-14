@@ -341,8 +341,8 @@ fn ollama_reachability(provider: &obc_config::ProviderConfig) -> DiagResult {
 /// trusted vendor. A board the registry doesn't recognize has no capability data and
 /// an unverified vendor — flagged so an unknown/typo'd board isn't silently trusted.
 fn check_hardware_onboarding(config: &Config, results: &mut Vec<DiagResult>) {
-    use crate::peripherals::onboarding::{OnboardDecision, VendorAllowlist};
-    use crate::peripherals::registry::known_boards;
+    use obc_peripherals::onboarding::{OnboardDecision, VendorAllowlist};
+    use obc_peripherals::registry::known_boards;
 
     if !config.peripherals.enabled || config.peripherals.boards.is_empty() {
         return;
