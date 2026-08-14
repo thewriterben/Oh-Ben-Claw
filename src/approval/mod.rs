@@ -19,7 +19,6 @@
 //! **Funnel analytics**: every ask/approve/deny is counted per tool in the
 //! [`ApprovalFunnel`], so policy can be tuned (which tools ask too often?).
 
-use crate::config::{AutonomyConfig, AutonomyLevel};
 use crate::security::trust::{self, TrustGate, TrustScorer};
 use obc_tool_api::RiskClass;
 use parking_lot::Mutex;
@@ -186,7 +185,7 @@ pub struct ForeverGrants {
 }
 
 impl ForeverGrants {
-    /// `approval_grants.json` in the data root — see [`crate::config::paths`].
+    /// `approval_grants.json` in the data root — see [`obc_paths`].
     ///
     /// This used to read `$HOME`/`%USERPROFILE%` directly and append `.oh-ben-claw`,
     /// which put standing permission-to-act grants somewhere no other subsystem
@@ -194,7 +193,7 @@ impl ForeverGrants {
     /// shared one grant file; a grant given to the kitchen agent applied to the
     /// workshop one.
     pub fn default_path() -> PathBuf {
-        crate::config::paths::in_data_dir("approval_grants.json")
+        obc_paths::in_data_dir("approval_grants.json")
     }
 
     /// Load grants from `path` (missing file ⇒ empty store).
@@ -766,7 +765,6 @@ impl ApprovalManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::AutonomyLevel;
     use serde_json::json;
 
     fn config_full() -> AutonomyConfig {
@@ -1295,5 +1293,56 @@ mod tests {
         assert_eq!(c.approved_call, 1);
         assert_eq!(c.approved_session, 1);
         assert_eq!(c.approved_forever, 1);
+    }
+}
+
+// ── Autonomy: this module's own configuration block ─────────────────────────
+// Moved here from the root config module on 2026-08-13, via a stop in `agent`
+// that lasted about an hour and was wrong.
+//
+// The rule being applied all day is "the module owns its config block", and the
+// first reading put these in `agent` because the agent reads them. But autonomy
+// *level* is the approval policy -- how much a human has to confirm -- and this
+// is the module that turns it into an `ApprovalManager`. The graph said so
+// before I did: with them in `agent`, `approval -> config -> agent -> approval`
+// stayed a cycle, and moving them one module further made it disappear.
+//
+// `crate::config` re-exports both names, and `agent` reads them from here --
+// which is free, because `agent -> approval` already existed.
+
+/// Autonomy level for tool execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AutonomyLevel {
+    /// Full autonomy: all tools execute without approval.
+    #[default]
+    Full,
+    /// Supervised: most tools require approval unless auto_approve'd.
+    Supervised,
+    /// Manual: all tools require explicit approval.
+    Manual,
+}
+
+/// Configuration for the human-in-the-loop approval system.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutonomyConfig {
+    /// The autonomy level.
+    #[serde(default)]
+    pub level: AutonomyLevel,
+    /// Tools that never need approval regardless of level.
+    #[serde(default)]
+    pub auto_approve: Vec<String>,
+    /// Tools that always need approval regardless of level or session allowlist.
+    #[serde(default)]
+    pub always_ask: Vec<String>,
+}
+
+impl Default for AutonomyConfig {
+    fn default() -> Self {
+        Self {
+            level: AutonomyLevel::Full,
+            auto_approve: vec![],
+            always_ask: vec![],
+        }
     }
 }

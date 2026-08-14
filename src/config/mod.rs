@@ -69,46 +69,22 @@ pub use crate::providers::ProviderConfig;
 /// two of the core's remaining cycles ran through them.
 pub use crate::spine::{MeshSupervisorConfig, SpineConfig};
 
+/// The agent's own configuration blocks, which live with the agent.
+///
+/// Moved to [`crate::agent`] on 2026-08-13 and re-exported here. The root
+/// `Config` composes them, and `crate::approval` reads `AutonomyConfig` and
+/// `AutonomyLevel` through this path deliberately: routing that module at the
+/// agent instead would trade one mutual pair in the dependency graph for
+/// another, since `agent` already names `approval`.
+///
+/// Third and last application of the rule this month -- the module owns its
+/// config block, the root `Config` composes it. `ProviderConfig` went to
+/// `providers`, `SpineConfig` and `MeshSupervisorConfig` went to `spine`, and
+/// these four close the final cycle in the core.
+pub use crate::agent::{AgentConfig, EdgeConfig};
+pub use crate::approval::{AutonomyConfig, AutonomyLevel};
+
 // ── Agent Configuration ──────────────────────────────────────────────────────
-
-/// Configuration for the core agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentConfig {
-    /// The name of the agent (used in system prompts and UI).
-    #[serde(default = "default_agent_name")]
-    pub name: String,
-    /// The system prompt for the agent.
-    #[serde(default = "default_system_prompt")]
-    pub system_prompt: String,
-    /// Maximum number of tool-use iterations per user message.
-    #[serde(default = "default_max_tool_iterations")]
-    pub max_tool_iterations: usize,
-}
-
-fn default_agent_name() -> String {
-    "Oh-Ben-Claw".to_string()
-}
-
-fn default_system_prompt() -> String {
-    "You are Oh-Ben-Claw, an advanced multi-device AI assistant. \
-     You can see, hear, sense, and act in the physical world through \
-     a fleet of connected hardware devices. Be helpful, precise, and proactive."
-        .to_string()
-}
-
-fn default_max_tool_iterations() -> usize {
-    10
-}
-
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            name: default_agent_name(),
-            system_prompt: default_system_prompt(),
-            max_tool_iterations: default_max_tool_iterations(),
-        }
-    }
-}
 
 // ── Peripheral Configuration ─────────────────────────────────────────────────
 
@@ -454,82 +430,7 @@ impl Default for GatewayConfig {
 
 // ── Edge-Native Configuration ─────────────────────────────────────────────────
 
-/// Configuration for the edge-native agent mode (NanoPi Neo3 and similar
-/// Linux single-board computers running Oh-Ben-Claw without a central host).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EdgeConfig {
-    /// Whether edge-native mode is enabled.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Maximum number of messages retained in the rolling conversation history.
-    /// Kept small to reduce RAM pressure on resource-constrained devices.
-    #[serde(default = "default_edge_max_history")]
-    pub max_history_messages: usize,
-    /// Maximum tool-use iterations per user message.
-    #[serde(default = "default_edge_max_tool_iterations")]
-    pub max_tool_iterations: usize,
-    /// Whether to start the P2P spine and join the local mesh.
-    #[serde(default)]
-    pub p2p_enabled: bool,
-}
-
-fn default_edge_max_history() -> usize {
-    20
-}
-
-fn default_edge_max_tool_iterations() -> usize {
-    5
-}
-
-impl Default for EdgeConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            max_history_messages: default_edge_max_history(),
-            max_tool_iterations: default_edge_max_tool_iterations(),
-            p2p_enabled: false,
-        }
-    }
-}
-
 // ── Autonomy Configuration ────────────────────────────────────────────────────
-
-/// Autonomy level for tool execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum AutonomyLevel {
-    /// Full autonomy: all tools execute without approval.
-    #[default]
-    Full,
-    /// Supervised: most tools require approval unless auto_approve'd.
-    Supervised,
-    /// Manual: all tools require explicit approval.
-    Manual,
-}
-
-/// Configuration for the human-in-the-loop approval system.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AutonomyConfig {
-    /// The autonomy level.
-    #[serde(default)]
-    pub level: AutonomyLevel,
-    /// Tools that never need approval regardless of level.
-    #[serde(default)]
-    pub auto_approve: Vec<String>,
-    /// Tools that always need approval regardless of level or session allowlist.
-    #[serde(default)]
-    pub always_ask: Vec<String>,
-}
-
-impl Default for AutonomyConfig {
-    fn default() -> Self {
-        Self {
-            level: AutonomyLevel::Full,
-            auto_approve: vec![],
-            always_ask: vec![],
-        }
-    }
-}
 
 // Cost configuration moved to `obc-cost` on 2026-08-06, with the tracker that
 // reads it. Same arrangement as `DeploymentConfig` (obc-planner) and

@@ -14,8 +14,8 @@
 //!   dropped when empty/unchanged.
 
 use super::{SkillForge, SkillManifest};
-use crate::config::ProviderConfig;
 use crate::memory::trajectory::TrajectoryStore;
+use crate::providers::ProviderConfig;
 use crate::providers::{ChatMessage, ChatRole, Provider};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -53,9 +53,9 @@ pub struct DescriptionEvolver {
     max_per_pass: usize,
 }
 
-/// `skill_evolution.jsonl` in the data root — see [`crate::config::paths`].
+/// `skill_evolution.jsonl` in the data root — see [`obc_paths`].
 pub fn default_log_path() -> PathBuf {
-    crate::config::paths::in_data_dir("skill_evolution.jsonl")
+    obc_paths::in_data_dir("skill_evolution.jsonl")
 }
 
 fn now_ms() -> u64 {

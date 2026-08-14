@@ -21,10 +21,11 @@
 //!     └─ list_agents()                   ──► [researcher, coder, ...]
 //! ```
 
+use crate::agent::AgentConfig;
 use crate::agent::{Agent, AgentHandle};
-use crate::config::{AgentConfig, ProviderConfig};
 use crate::memory::MemoryStore;
 use crate::providers;
+use crate::providers::ProviderConfig;
 use crate::tools::{default_tools_with_reach, Tool};
 use anyhow::{bail, Result};
 use obc_conscience::ReachGate;
