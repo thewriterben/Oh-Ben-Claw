@@ -323,6 +323,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Cheap, and it fails for the same reason `cargo audit` did on
+      # 2026-08-14 without needing the advisory database. crates/obc-spine
+      # declared a bare `rumqttc = "0.24"` against a root that had turned its
+      # defaults off under a comment naming four RUSTSEC advisories in
+      # rustls-webpki. Cargo unifies features across the graph, so one manifest
+      # asking for the defaults re-enabled `use-rustls` for everything and put
+      # the whole vulnerable certificate stack back. Build, clippy, fmt and
+      # 1556 tests were green; nothing about the build was wrong.
+      #
+      # It runs before the audit because it names the manifest line, where
+      # `cargo audit` names a transitive crate four levels down.
+      - name: manifests agree with the root on load-bearing features
+        run: python3 scripts/check_feature_unification.py
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run security audit

@@ -56,7 +56,25 @@ obc-navigation = { path = "../obc-navigation" }
 obc-reflex = { path = "../obc-reflex" }
 obc-safety = { path = "../obc-safety" }
 obc-tool-api = { path = "../obc-tool-api" }
-rumqttc = "0.24"
+# No TLS feature, and this line is the reason the security audit went red on the
+# first push of this crate.
+#
+# The root manifest has carried `default-features = false` here for a while,
+# with a comment naming exactly why: `use-rustls` pulls rustls-webpki 0.102.8,
+# which has four RUSTSEC advisories in certificate and CRL handling and no
+# upgrade path -- rumqttc 0.25.1 still pins it. MQTT-over-TLS has never been
+# wired, so it was a vulnerable certificate-validation stack compiled in for a
+# feature that does not exist.
+#
+# This crate was written with a bare `rumqttc = "0.24"`. Cargo unifies features
+# across the graph, so one manifest asking for defaults re-enabled `use-rustls`
+# for everything and put all four advisories back -- while `cargo check`,
+# `clippy`, `fmt` and 1556 tests stayed green, because nothing about the build
+# was wrong. Only `cargo audit` could see it.
+#
+# A feature disabled in one manifest is not disabled. It is disabled in every
+# manifest that names the dependency, or it is not disabled at all.
+rumqttc = { version = "0.24", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.42", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
