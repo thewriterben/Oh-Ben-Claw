@@ -127,9 +127,10 @@ module waiting for its dependents to leave.
 4. Only then ask which of `agent`, `tools`, `spine` is extractable, because only
    then is the question well-formed.
 
-*Steps 1–3 are done. Each has a section below saying what it actually cost,
-including where this list was wrong — and it was wrong about step 2's effect and
-right about step 3's shape. Step 4 is now the open question.*
+*All four are done. Each has a section below saying what it actually cost,
+including where this list was wrong — and it was wrong about step 2's effect,
+right about step 3's shape, and silent about the fact that its own instrument
+was miscounting throughout. Step 4 is answered at the end of the page.*
 
 ### Step 1, done — and half of it was wrong
 
@@ -423,20 +424,22 @@ What is left is two cycles, and neither is a relocation:
 ## What may never move, and why that is an answer
 
 `agent` is the reasoning loop: provider calls, tool dispatch, memory, policy,
-observability, cost, approval. It is the thing this project *is*, and steps 1–3
-would leave it a genuinely self-contained module rather than an entangled one —
-7726 lines after step 3, down from 9244, and shrinking each time something that
-was never the reasoning loop leaves it. Whether it should then be public is a
-decision about the project, not about its dependency graph, and this document
+observability, cost, approval. It is the thing this project *is*, and steps 1–4
+have left it a genuinely self-contained module rather than an entangled one —
+7893 lines, five ordinary dependencies, no cycles. (It grew slightly at the end:
+`AgentConfig` and `EdgeConfig` moved *into* it, which is the rule working rather
+than a regression. A module owning its own config block is larger and less
+entangled at the same time.) Whether it should then be public is a decision
+about the project, not about its dependency graph, and this document
 deliberately does not make it.
 
 What this document does claim is narrower and checkable: **there is no technical
 reason the core cannot be separated, and the work is a handful of small edges
 turned around, not a rewrite.** Both crates that sentence originally budgeted
 for — `obc-tool-api` and `obc-reflex` — exist, and the number that moved was
-crossings, not lines rewritten: 117 to 69, and 25 cycles to 4, across four
-commits, one 39-line move and four `use` lines. If that turns out to be wrong,
-it will be wrong
+crossings, not lines rewritten: 117 to 75, and 25 cycles to 0. That claim is now
+settled rather than pending. If it turns out to be wrong, it
+will be wrong
 in a way `core_endgame.py` can show, which is the only kind of plan worth
 writing here.
 
@@ -444,7 +447,7 @@ writing here.
 
 `core_endgame.py` is grep-derived, like its two siblings, and inherits their
 limits: it resolves `crate::x::y` and not `super::` — `extractability.py`
-reports 139 unresolved `super::` paths and this script shares that blind spot
+reports 137 unresolved `super::` paths and this script shares that blind spot
 without counting them; it counts textual crossings, not compile edges; and a
 symbol named once in a doc comment counts the same as one called in a hot loop.
 
@@ -460,6 +463,12 @@ build proving the crate stands alone, and nothing here replaces that step.
 The first draft of this paragraph said 162, from memory of an earlier run. It is
 139. A document about the cost of trusting unmeasured numbers is a poor place to
 put one, and the correction is left visible rather than quietly applied.
+
+It then said 139 for a month while the real figure drifted to 137, which is the
+same failure one layer down and was caught by re-running the script instead of
+re-reading the sentence. The number above is 137 because that is what
+`extractability.py` printed on 2026-08-13; if you are reading this later, run it
+rather than believing it.
 
 ## The instrument was wrong, and every number above is low
 
@@ -584,3 +593,111 @@ Only the second one is hard to fool.
 `core_endgame.py` now anchors every pattern on `obc_`, which fixes this
 instance. The structural test is the better answer and this script does not use
 it yet; that is a known gap, written down rather than left as an intention.
+
+## Step 4, answered
+
+The list at the top of this page ended with:
+
+> 4. Only then ask which of `agent`, `tools`, `spine` is extractable, because
+>    only then is the question well-formed.
+
+It is well-formed now, and the answer is measured rather than argued.
+
+    === CYCLES (no extraction order exists through these) ===
+      none
+
+Zero, on the corrected script — the one that stopped treating `config` as an
+already-extracted crate. The number is trustworthy for the first time on this
+page, which is worth saying plainly given that the last time it read zero it was
+sixteen.
+
+| | 2026-08-12 | now |
+|---|---:|---:|
+| cycles | 25 | **0** |
+| crossings | 117 | 75 |
+| `spine` blocking edges | 3 | **0** |
+| `approval` blocking edges | — | **0** |
+| `config` loc | 3371 | 2870 |
+
+**`spine` is extractable.** 5100 lines, zero blocking edges, naming nothing but
+`obc-memory`, `obc-movement` and `obc-navigation`. So is `approval`, at 1348.
+Neither needs design work; both are a `git mv` and a manifest.
+
+`tools` sits at one blocking edge — `spine` — so it follows the moment that
+leaves. `agent` is at five, and that is the answer this document promised not to
+pre-empt: `agent` is now a genuinely self-contained reasoning loop with five
+ordinary dependencies and no cycles, and whether it should be public is a
+decision about the project rather than about its dependency graph. The graph no
+longer has an opinion, which was the entire point.
+
+### What the last seven cycles turned out to be
+
+One rule, applied everywhere except in four places.
+
+Every extracted crate here already owns its own configuration block — `DeploymentConfig`
+in obc-planner, `ConscienceConfig` in obc-conscience, `CostConfig` in obc-cost —
+and the root `Config` composes it. Four config blocks had never been moved:
+
+| block | was in | belongs in | cycles it held |
+|---|---|---|---:|
+| `ProviderConfig` | `config` | `providers` | 3 |
+| `SpineConfig`, `MeshSupervisorConfig` | `config` | `spine` | 4 |
+| `AgentConfig`, `EdgeConfig` | `config` | `agent` | — |
+| `AutonomyLevel`, `AutonomyConfig` | `config` | `approval` | 2 |
+
+`ProviderConfig` is the one that shows the shape best: it was defined in
+`config`, two of its own field types (`RetryConfig`, `ResponseFormat`) lived in
+`providers`, and all ten provider files imported the struct back from `config`.
+One struct, split across two modules, pointing both ways. Not an architectural
+problem — a filing error, three cycles wide.
+
+Moving it needed one thing first. `ProviderConfig` holds an
+`Option<SecretString>`, and `SecretString` lived in `config::secret`, so moving
+the struct alone would have recreated the edge. It went to `obc-safety`, which
+already owns the vault: a redact-in-`Debug` wrapper is secret hygiene, not
+configuration.
+
+### Two corrections worth more than the result
+
+**`config::paths` was a facade and nobody had noticed.** It is
+`pub use obc_paths as paths`. `skill_forge` and `approval` reading
+`crate::config::paths::in_data_dir` were naming `config` purely to reach a crate
+that left in July. Four references, two modules, and the fix was to spell the
+crate. That is step 1's lesson — *a re-export keeps a build green while leaving
+the dependency graph identical* — found five weeks later in a place this
+document had never looked, because it had only ever been applied to re-exports
+someone created deliberately.
+
+**The graph corrected the placement of autonomy.** `AutonomyLevel` and
+`AutonomyConfig` went to `agent` first, because the agent reads them. The cycle
+count stopped at two instead of zero: `approval -> config -> agent -> approval`
+survived. Autonomy *level* is the approval policy — how much a human has to
+confirm — and `approval` is the module that turns it into an `ApprovalManager`.
+One module further, and the cycles went to zero.
+
+The rule was right and the noun was wrong, and the measurement is what caught
+it within minutes. This page has spent eight sections arguing that a measurement
+beats a judgement, mostly by describing cases where a measurement proved
+something. This is the more useful version of the claim, and it belongs at the
+end: **measure so that being wrong is cheap.** Nothing about the reasoning that
+put autonomy in `agent` was careless. It was just wrong, and the instrument said
+so before it cost anything.
+
+### What this page got wrong, in order
+
+Kept together because the corrections are the content, and a document that only
+records its successes is the thing this repository keeps finding in other
+people's work:
+
+1. Step 1 extracted a file and broke no edge — a re-export is not a cut.
+2. Step 2 predicted it would break `tools -> agent` and `spine -> agent`. It
+   broke neither.
+3. Step 3 found those two edges were four `use` lines, three inside
+   `#[cfg(test)]`. Nine cycles were held open by test imports.
+4. The instrument itself was wrong for five weeks, and reported zero cycles when
+   there were sixteen — because one optional regex group matched
+   `pub use config::Config;`.
+5. Autonomy went into the wrong module, and the fixed instrument caught it.
+
+Five errors, four of them in the analysis rather than the code. The extractions
+themselves went almost entirely to plan; it was the map that kept being wrong.
