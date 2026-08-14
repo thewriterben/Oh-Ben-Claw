@@ -1,7 +1,7 @@
 //! The agent as a replay executor.
 //!
 //! `skill_forge` improves a skill by *replaying* its steps and watching what
-//! happens. It declares [`ReplayExecutor`](crate::skill_forge::improve::ReplayExecutor)
+//! happens. It declares [`ReplayExecutor`](obc_skill_forge::improve::ReplayExecutor)
 //! for that — the abstraction is its own, and it must be, because the forge is
 //! what calls it.
 //!
@@ -22,9 +22,9 @@
 //! than the forge running tools itself, and moving the impl does not touch it.
 
 use super::Agent;
-use crate::skill_forge::improve::ReplayExecutor;
-use crate::skill_forge::SkillForge;
 use obc_memory::trajectory::Outcome;
+use obc_skill_forge::improve::ReplayExecutor;
+use obc_skill_forge::SkillForge;
 use obc_tool_api::RiskClass;
 use serde_json::Value;
 

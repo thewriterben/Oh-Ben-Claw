@@ -64,7 +64,7 @@ pub struct InnerAgentDeps {
     /// Cost tracking: `(tracker, input_price_per_million, output_price_per_million)`.
     pub cost: Option<(Arc<crate::cost::CostTracker>, f64, f64)>,
     /// Phase 16 P3 staged-rollout run record.
-    pub rollout: Option<Arc<crate::skill_forge::rollout::RolloutTracker>>,
+    pub rollout: Option<Arc<obc_skill_forge::rollout::RolloutTracker>>,
     /// Skill-forge directory (enables supervised-skill auto-demotion).
     pub forge_dir: Option<std::path::PathBuf>,
     /// Phase 16 P1 experience retrieval top-k (None = disabled).
@@ -278,8 +278,8 @@ impl OrchestratorAgent {
         inner = inner.with_taint_mode(deps.taint_mode);
         // Phase 16: enabled forge skills (authored + learned) are first-class
         // tools on the orchestrator's inner agent too.
-        inner.sync_skills(&crate::skill_forge::SkillForge::new(
-            crate::skill_forge::SkillForge::default_dir(),
+        inner.sync_skills(&obc_skill_forge::SkillForge::new(
+            obc_skill_forge::SkillForge::default_dir(),
         ));
         let agent = Arc::new(inner);
         let handle = AgentHandle::new(Arc::clone(&agent), provider_config.clone());

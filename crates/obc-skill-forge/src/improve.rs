@@ -18,7 +18,7 @@ use super::synthesis::{
     VerificationCheck,
 };
 use super::{SkillForge, SkillManifest};
-use crate::memory::trajectory::{Episode, Outcome, TrajectoryStore};
+use obc_memory::trajectory::{Episode, Outcome, TrajectoryStore};
 use obc_tool_api::{BlastRadius, RiskClass};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -72,7 +72,17 @@ fn pattern_matches(pattern: &str, name: &str) -> bool {
 }
 
 /// Run a shell command on the host and return its exit code (platform-aware).
-pub(crate) async fn run_host_command(cmd: &str) -> i32 {
+///
+/// `pub` rather than `pub(crate)` since 2026-08-14, and the extraction is what
+/// asked the question — the harness drives this to check that a skill's claimed
+/// exit code is the one the host actually produces. Second constant or function
+/// this endgame has promoted for that reason, after `incident::STATUSES`.
+///
+/// Worth being explicit about what widening this exposes: it runs a shell
+/// command. It is not new reach — the improvement loop has always had it, which
+/// is the point of `rollout` staging what this produces rather than trusting it
+/// — but a `pub` on this signature deserves to be read twice rather than once.
+pub async fn run_host_command(cmd: &str) -> i32 {
     #[cfg(windows)]
     let mut process = {
         let mut p = tokio::process::Command::new("cmd");
@@ -123,7 +133,7 @@ pub struct SkillImprover {
     /// Cap on auto-installed learned skills.
     max_learned: usize,
     /// Optional metrics: `self_improve_*` counters per pass.
-    obs: Option<Arc<crate::observability::ObsContext>>,
+    obs: Option<Arc<obc_observability::ObsContext>>,
     /// Configured verification requirements (`[[self_improvement.verification]]`).
     rules: Vec<VerificationRule>,
 }
@@ -148,7 +158,7 @@ impl SkillImprover {
 
     /// Attach an observability context: each pass increments
     /// `self_improve_{scanned,candidates,installed,quarantined,rejected}_total`.
-    pub fn with_obs(mut self, obs: Arc<crate::observability::ObsContext>) -> Self {
+    pub fn with_obs(mut self, obs: Arc<obc_observability::ObsContext>) -> Self {
         self.obs = Some(obs);
         self
     }
@@ -427,7 +437,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::trajectory::{Episode, EpisodeStep};
+    use obc_memory::trajectory::{Episode, EpisodeStep};
     use serde_json::json;
 
     struct MockExec(Outcome);
@@ -646,9 +656,7 @@ mod tests {
             .find(|m| m.name == "learned_morning_report")
             .unwrap();
         assert!(m.enabled);
-        assert!(
-            matches!(&m.kind, crate::skill_forge::SkillKind::Sequence { steps } if steps.len() == 2)
-        );
+        assert!(matches!(&m.kind, crate::SkillKind::Sequence { steps } if steps.len() == 2));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

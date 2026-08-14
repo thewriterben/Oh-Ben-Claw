@@ -339,7 +339,7 @@ impl Harness {
                 _ => false,
             },
             HarnessCheck::Command { cmd, expect_exit } => {
-                crate::skill_forge::improve::run_host_command(cmd).await == *expect_exit
+                obc_skill_forge::improve::run_host_command(cmd).await == *expect_exit
             }
             HarnessCheck::WorldFact { entity, contains } => match &self.world {
                 Some(world) => world

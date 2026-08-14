@@ -28,6 +28,7 @@ members = [
     "crates/obc-tools",
     "crates/obc-providers",
     "crates/obc-mcp",
+    "crates/obc-skill-forge",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
@@ -105,6 +106,7 @@ obc-spine = { path = "crates/obc-spine" }
 obc-tools = { path = "crates/obc-tools" }
 obc-providers = { path = "crates/obc-providers" }
 obc-mcp = { path = "crates/obc-mcp" }
+obc-skill-forge = { path = "crates/obc-skill-forge" }
 toml = "1.0"
 shellexpand = "3.1"
 
