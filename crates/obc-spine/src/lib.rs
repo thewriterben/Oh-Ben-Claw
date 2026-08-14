@@ -23,7 +23,7 @@
 pub mod action;
 pub mod actuator;
 /// The fleet coordinator's MQTT bridge — heartbeat ingress and assignment
-/// egress. Moved here from `crate::fleet` on 2026-08-13; it was that module's
+/// egress. Moved here from `obc_fleet` on 2026-08-13; it was that module's
 /// only edge into this tree, and `lora_mesh` already bridged the other
 /// transport into the same coordinator from this side.
 pub mod fleet_bridge;

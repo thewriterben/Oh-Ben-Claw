@@ -2,7 +2,7 @@
 //!
 //! Exposes the off-grid **return path** to the agent (System 2): `mesh_command`
 //! addresses a node command over the LoRa mesh. It is the inverse of the inbound
-//! gateway bridge ([`crate::spine::lora_gateway`], which ingests node messages into
+//! gateway bridge ([`obc_spine::lora_gateway`], which ingests node messages into
 //! world memory) — together they make the mesh a two-way link.
 //!
 //! The command is delivered toward the mesh, but **execution is gated on the node**:
@@ -12,10 +12,10 @@
 //! declares a physical risk class so the host approval layer treats it accordingly.
 
 use crate::memory::world::WorldMemory;
-use crate::spine::lora_gateway::{CommandSink, NodeCommand, MESH_LINE_BUDGET};
-use crate::spine::mesh_supervisor;
 use crate::tools::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
+use obc_spine::lora_gateway::{CommandSink, NodeCommand, MESH_LINE_BUDGET};
+use obc_spine::mesh_supervisor;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -186,7 +186,7 @@ mod tests {
                 json!({ "last_type": "reflex", "rssi_dbm": -80 }),
                 1_000,
                 1_000,
-                crate::spine::lora_gateway::SOURCE,
+                obc_spine::lora_gateway::SOURCE,
                 Origin::Observed, // a node is a node because a radio was heard
             )
             .unwrap();

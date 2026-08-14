@@ -35,7 +35,7 @@
 //! connections in a VPN (Tailscale, WireGuard) or enable the TLS tunnel
 //! (`src/tunnel/`).
 
-use crate::spine::{NodeAnnouncement, ToolCallRequest, ToolCallResult};
+use crate::{NodeAnnouncement, ToolCallRequest, ToolCallResult};
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 use obc_tool_api::{Tool, ToolResult};
@@ -584,7 +584,7 @@ async fn handle_tcp_connection(
 /// A `Tool` implementation that delegates execution to a remote P2P peer.
 struct P2pNodeTool {
     node_id: String,
-    spec: crate::spine::NodeToolSpec,
+    spec: crate::NodeToolSpec,
     spine: Arc<P2pSpine>,
 }
 
@@ -641,7 +641,7 @@ mod tests {
 
     #[test]
     fn p2p_announce_serializes_correctly() {
-        use crate::spine::{NodeAnnouncement, NodeToolSpec};
+        use crate::{NodeAnnouncement, NodeToolSpec};
 
         let announce = P2pAnnounce {
             announcement: NodeAnnouncement {

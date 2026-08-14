@@ -14,7 +14,7 @@
 //! Best-effort like the other two: a publish failure is logged, not propagated,
 //! so a transient outage never breaks the caller — or a reflex that spoke.
 
-use crate::spine::{SpineClient, TOPIC_PREFIX};
+use crate::{SpineClient, TOPIC_PREFIX};
 use async_trait::async_trait;
 use obc_audio::suite::{SpeechSink, Utterance};
 use serde_json::json;
@@ -48,7 +48,7 @@ impl SpeechSink for SpineSpeechSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spine::SpineConfig;
+    use crate::SpineConfig;
 
     #[tokio::test]
     async fn spine_speech_sink_is_best_effort_when_disconnected() {

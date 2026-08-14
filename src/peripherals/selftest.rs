@@ -11,8 +11,8 @@
 //! Adapted from a sibling project's `DeviceAdapter.test_*` contract +
 //! `SimulatedHardware`; the implementation here is original and self-contained.
 
-use crate::spine::NodeAnnouncement;
 use async_trait::async_trait;
+use obc_spine::NodeAnnouncement;
 use serde_json::Value;
 use std::collections::HashSet;
 

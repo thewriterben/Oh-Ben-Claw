@@ -9,7 +9,7 @@
 //! So this is deliberately **not** full tool-RPC (a JSON tool call won't fit a LoRa
 //! frame). It carries exactly what a fleet needs to coordinate off-grid: compact
 //! **heartbeats** (a node's pose/battery/mode) and **assignments** (go here). Those
-//! map straight onto the [`crate::fleet`] coordinator — a LoRa heartbeat becomes a
+//! map straight onto the [`obc_fleet`] coordinator — a LoRa heartbeat becomes a
 //! `fleet::NodeState`, so the auction/exploration logic we already have runs over
 //! the mesh unchanged.
 //!
@@ -123,7 +123,7 @@ impl MeshFrame {
         self.encode().len()
     }
 
-    /// Bridge a heartbeat into a [`fleet::NodeState`](crate::fleet::NodeState) so
+    /// Bridge a heartbeat into a [`fleet::NodeState`](obc_fleet::NodeState) so
     /// the fleet coordinator (allocation, auction, exploration) runs over the mesh
     /// unchanged. `None` for non-heartbeat frames.
     pub fn to_node_state(&self, now_ms: u64) -> Option<NodeState> {

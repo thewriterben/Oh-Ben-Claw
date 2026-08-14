@@ -15,8 +15,8 @@ pub mod pool;
 /// sink — extracted to [`obc_reflex`] on 2026-08-12.
 ///
 /// It named four things outside itself and three had been crates for days. The
-/// fourth was `crate::spine`, entirely inside `SpineActionSink`, which moved to
-/// [`crate::spine::action`] the same day and implements this crate's trait from
+/// fourth was `obc_spine`, entirely inside `SpineActionSink`, which moved to
+/// [`obc_spine::action`] the same day and implements this crate's trait from
 /// there.
 ///
 /// This alias is *not* the compatibility shim it looks like. Thirteen import
