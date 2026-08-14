@@ -180,7 +180,17 @@ pub use obc_fleet as fleet;
 /// which is the binary, and `tests/`, which exercises the public surface on
 /// purpose.
 pub use obc_foresight as foresight;
-pub mod gateway;
+/// The HTTP surface — an alias for the [`obc_gateway`] crate, which has held
+/// the REST routes, the WebSocket, the middleware and the PWA since 2026-08-14.
+///
+/// The one door into this system that is open on a network, which is why
+/// `middleware.rs` and its token check are the first thing to read in it.
+///
+/// The three PWA assets moved with the code in the same commit, because
+/// `pwa.rs` serves them with `include_str!` and that resolves relative to the
+/// source file: splitting them would have left a gateway that compiles and no
+/// longer serves its own front end.
+pub use obc_gateway as gateway;
 /// Local-tangent-plane geometry and site models — re-exported from the
 /// [`obc_planner`] crate, where it sits next to the site optimizer that consumes
 /// it. `oh_ben_claw::geo::X` is unchanged.

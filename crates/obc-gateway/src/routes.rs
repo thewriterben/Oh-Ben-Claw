@@ -2,13 +2,13 @@
 //! `Scheduler`, and `ObsContext`.
 
 use super::{GatewayEvent, GatewayState};
-use crate::scheduler::ScheduledTask;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
+use obc_scheduler::ScheduledTask;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;

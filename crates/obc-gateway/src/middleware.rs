@@ -101,7 +101,7 @@ pub async fn require_operate(
                 &format!("gateway:{} {}", method.as_str(), path),
                 &args,
                 obc_tool_api::RiskClass::default(),
-                crate::security::audit::Decision::Allowed,
+                obc_safety::audit::Decision::Allowed,
             );
         }
     }
