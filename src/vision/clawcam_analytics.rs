@@ -25,8 +25,8 @@
 //! unchanged; booleans that reflexes must match ride as strings (the
 //! `Condition::State` contract).
 
-use crate::mcp::client::McpClient;
 use crate::memory::world::WorldMemory;
+use obc_mcp::client::McpClient;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;
