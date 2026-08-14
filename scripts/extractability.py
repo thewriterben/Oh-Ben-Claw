@@ -83,10 +83,16 @@ def module_files(name: str) -> list[Path]:
 def is_shim(name: str) -> bool:
     """A single file whose only content is `pub use obc_*::…`.
 
-    `src/security.rs` is three lines re-exporting obc-safety. It is declared
-    `pub mod`, so it looks like a module in this tree; a reference to
-    `crate::security` reaches an already-extracted crate and blocks nothing.
-    Counting it as blocking would say obc-safety never left.
+    `src/security.rs` was three lines re-exporting obc-safety. It was declared
+    `pub mod`, so it looked like a module in this tree; a reference to
+    `crate::security` reached an already-extracted crate and blocked nothing.
+    Counting it as blocking would have said obc-safety never left.
+
+    Past tense since 2026-08-14: that file is gone, replaced by a `pub use` in
+    lib.rs, and no shim of this shape is left in `src/`. The function stays
+    because the shape recurs — it is how every extraction here begins — and a
+    rule that only exists while it is firing is a rule nobody can trust the
+    next time.
     """
     files = module_files(name)
     if len(files) != 1 or (SRC / name).is_dir():
