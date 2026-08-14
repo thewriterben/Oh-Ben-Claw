@@ -19,12 +19,12 @@
 //! ```
 
 use crate::decision_log::DecisionLog;
-use crate::mcp::client::McpClient;
 use crate::memory::world::WorldMemory;
 use obc_conscience::{
     decide_frame, Conscience, ConsentLedger, ConsentPolicy, DecisionInput, FrameConsent,
     PerceptionDecision, PerceptionRefusal, SubjectPresence,
 };
+use obc_mcp::client::McpClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;

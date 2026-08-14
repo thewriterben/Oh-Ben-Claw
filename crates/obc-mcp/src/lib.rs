@@ -242,7 +242,7 @@ pub struct McpRemoteTool {
     /// Optional conscience reach gate. `None` = ungated (until config wires one).
     pub reach: Option<obc_conscience::ReachGate>,
     /// Optional Track 0 auditor so a reach refusal becomes a tamper-evident record.
-    pub auditor: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
+    pub auditor: Option<Arc<std::sync::Mutex<obc_safety::ActionAuditor>>>,
 }
 
 impl McpRemoteTool {
@@ -428,7 +428,7 @@ impl McpRegistry {
     pub fn build_tools_with_reach(
         &self,
         reach: Option<obc_conscience::ReachGate>,
-        auditor: Option<Arc<std::sync::Mutex<crate::security::ActionAuditor>>>,
+        auditor: Option<Arc<std::sync::Mutex<obc_safety::ActionAuditor>>>,
     ) -> Vec<Box<dyn Tool>> {
         self.tools
             .iter()

@@ -761,7 +761,7 @@ pub struct ClawCamPollConfig {
     #[serde(default)]
     pub enabled: bool,
     /// How to reach the ClawCam MCP bridge (stdio command or http url).
-    pub server: crate::mcp::McpServerConfig,
+    pub server: obc_mcp::McpServerConfig,
     /// Detection tool to poll.
     #[serde(default = "default_clawcam_tool")]
     pub tool: String,

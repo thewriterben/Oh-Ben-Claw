@@ -11,8 +11,8 @@
 //! approval model (the scopes/plan-mode vocabulary shared with OBC) — OBC cannot
 //! actuate a camera the gateway hasn't authorized.
 
-use crate::mcp::client::McpClient;
 use async_trait::async_trait;
+use obc_mcp::client::McpClient;
 use obc_reflex::ActionSink;
 use serde_json::{json, Value};
 use std::sync::Arc;

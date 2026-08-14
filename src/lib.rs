@@ -156,7 +156,19 @@ pub mod harness;
 /// activated. It is inert until approved, and `tests/learning_approval_gate.rs`
 /// asserts that from the outside against a real `ForesightEngine`.
 pub use obc_learning as learning;
-pub mod mcp;
+/// Model Context Protocol, both directions — an alias for the [`obc_mcp`]
+/// crate, which has held them since 2026-08-14.
+///
+/// The client dials out, stdio or HTTP, and presents whatever it finds as tools
+/// the agent can call; that is how this project gets capabilities nobody wrote
+/// into it. The server points the other way, exposing this agent's own tools so
+/// something else can drive a robot *through* the Track 0 gate rather than
+/// around it.
+///
+/// One edge from extractable since the survey first had that column, and the
+/// edge was into `tools`. Two `crate::security` paths and four references were
+/// the entire lift.
+pub use obc_mcp as mcp;
 // The memory substrate lives in its own crate (2026-07-30). Re-exported under the
 // old name so all twenty-three consumers keep compiling against `crate::memory::…`
 // — a crate split that renamed every call site would be two changes at once, and
