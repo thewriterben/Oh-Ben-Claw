@@ -4,11 +4,11 @@
 //! real geometry. Cameras are fixed sensors at known world positions; when a
 //! camera sees something a mobile robot should avoid (an animal, a person), the
 //! brain stamps a hazard disc around that camera's location into the occupancy grid
-//! via [`crate::navigation::NavController::mark_obstacle`]. The planner's costmap
+//! via [`obc_navigation::NavController::mark_obstacle`]. The planner's costmap
 //! inflation then keeps the robot clear — perception from a *static* node shaping a
 //! *mobile* node's path, both on the one world map.
 
-use crate::navigation::NavController;
+use obc_navigation::NavController;
 use std::collections::HashMap;
 
 /// Known world positions `(x, y)` of fixed camera nodes.

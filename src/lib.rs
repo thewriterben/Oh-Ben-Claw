@@ -355,6 +355,21 @@ pub use obc_tools as tools;
 // as obc-cost: its only edge outside itself was `TunnelConfig`, its own config
 // block in the root config module, so the struct went with the providers that
 // read it. `crate::tunnel::…` and `obc_config::TunnelConfig` are unchanged.
-pub use obc_tunnel as tunnel;
-pub mod vision;
 pub use obc_config::Config;
+pub use obc_tunnel as tunnel;
+/// The camera pipeline — an alias for the [`obc_vision`] crate, which has held
+/// ClawCam ingest, rules, spatial projection, analytics and gated actuation
+/// since 2026-08-14.
+///
+/// A camera that writes into world memory rather than into a folder: detections
+/// arrive with provenance, get projected through the site frame into the
+/// coordinates the navigation stack shares, and are evaluated against rules
+/// that can fire an actuation.
+///
+/// Its dependency on `obc-conscience` is the point rather than an accident.
+/// A camera is this project's clearest case of perception that must sometimes
+/// be *refused*: what the agent may observe is gated before the frame reaches
+/// world memory, and the refusal is written where a reader can replay it.
+///
+/// Nothing in this tree named it, so the lift repointed nothing.
+pub use obc_vision as vision;
