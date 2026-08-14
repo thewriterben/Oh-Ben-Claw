@@ -16,8 +16,8 @@
 //! attempt a full voice-gateway or slash-command integration — plain text
 //! messages only.
 
-use crate::channels::typing::TypingTask;
-use crate::channels::utils::chunk_text;
+use crate::typing::TypingTask;
+use crate::utils::chunk_text;
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use obc_agent::Agent;
