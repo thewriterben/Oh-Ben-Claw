@@ -58,6 +58,17 @@ pub fn inline_secret_providers(config: &Config) -> Vec<String> {
 /// it.
 pub use crate::providers::ProviderConfig;
 
+/// The spine's own configuration blocks, which live with the spine.
+///
+/// Moved to [`crate::spine`] on 2026-08-13 and re-exported here, because the
+/// root `Config` composes them. Same move as `ProviderConfig` the day before,
+/// and the same rule every extracted crate here already follows: the module
+/// owns its config block.
+///
+/// These were the *only* thing a 4935-line module named outside itself, and
+/// two of the core's remaining cycles ran through them.
+pub use crate::spine::{MeshSupervisorConfig, SpineConfig};
+
 // ── Agent Configuration ──────────────────────────────────────────────────────
 
 /// Configuration for the core agent.
@@ -138,100 +149,6 @@ pub struct PeripheralsConfig {
 }
 
 // ── Spine Configuration ───────────────────────────────────────────────────────
-
-/// Configuration for the MQTT communication spine.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpineConfig {
-    /// The spine kind: `"mqtt"` (default) or `"p2p"` (broker-free local mesh).
-    #[serde(default = "default_bus_kind")]
-    pub kind: String,
-    /// The MQTT broker hostname.
-    #[serde(default = "default_bus_host")]
-    pub host: String,
-    /// The MQTT broker port.
-    #[serde(default = "default_bus_port")]
-    pub port: u16,
-    /// Whether to use TLS for the MQTT connection.
-    #[serde(default)]
-    pub tls: bool,
-    /// Path to a custom CA certificate file for TLS verification.
-    #[serde(default)]
-    pub ca_cert_path: Option<String>,
-    /// Path to a client certificate file for mTLS authentication.
-    #[serde(default)]
-    pub client_cert_path: Option<String>,
-    /// Path to a client private key file for mTLS authentication.
-    #[serde(default)]
-    pub client_key_path: Option<String>,
-    /// Optional MQTT username.
-    #[serde(default)]
-    pub username: Option<String>,
-    /// Optional MQTT password.
-    #[serde(default)]
-    pub password: Option<String>,
-    /// Timeout in seconds for tool call responses from peripheral nodes.
-    #[serde(default = "default_tool_timeout_secs")]
-    pub tool_timeout_secs: u64,
-    // ── P2P-specific fields (used when `kind = "p2p"`) ─────────────────────
-    /// Unique identifier for this node in the P2P mesh.
-    /// Defaults to a random UUID prefix if not set.
-    #[serde(default)]
-    pub p2p_node_id: Option<String>,
-    /// Local address to bind the P2P TCP server to (default: `"0.0.0.0"`).
-    #[serde(default)]
-    pub p2p_bind_host: Option<String>,
-    /// TCP port on which this node accepts P2P tool-call connections (default: 44445).
-    #[serde(default)]
-    pub p2p_tcp_port: Option<u16>,
-    /// UDP port used for P2P peer discovery broadcasts (default: 44444).
-    #[serde(default)]
-    pub p2p_discovery_port: Option<u16>,
-    /// Seconds after which a silent peer is removed from the P2P registry (default: 60).
-    #[serde(default)]
-    pub p2p_peer_timeout_secs: Option<u64>,
-    /// How often (in seconds) to broadcast a P2P presence announcement (default: 10).
-    #[serde(default)]
-    pub p2p_announce_interval_secs: Option<u64>,
-}
-
-fn default_bus_kind() -> String {
-    "mqtt".to_string()
-}
-
-fn default_bus_host() -> String {
-    "localhost".to_string()
-}
-
-fn default_bus_port() -> u16 {
-    1883
-}
-
-fn default_tool_timeout_secs() -> u64 {
-    30
-}
-
-impl Default for SpineConfig {
-    fn default() -> Self {
-        Self {
-            kind: default_bus_kind(),
-            host: default_bus_host(),
-            port: default_bus_port(),
-            tls: false,
-            ca_cert_path: None,
-            client_cert_path: None,
-            client_key_path: None,
-            username: None,
-            password: None,
-            tool_timeout_secs: default_tool_timeout_secs(),
-            p2p_node_id: None,
-            p2p_bind_host: None,
-            p2p_tcp_port: None,
-            p2p_discovery_port: None,
-            p2p_peer_timeout_secs: None,
-            p2p_announce_interval_secs: None,
-        }
-    }
-}
 
 // ── Channel Configuration ────────────────────────────────────────────────────
 
@@ -1600,72 +1517,6 @@ pub struct LoraGatewayConfig {
     /// Baud rate of the Heltec console (ESP-IDF default 115200).
     #[serde(default = "default_lora_baud")]
     pub baud: u32,
-}
-
-/// Mesh supervisor (Phase B "fold mesh into brain"): a host control loop that turns the
-/// mesh facts in world memory into a derived per-node health view and optional
-/// autonomous recovery commands. Requires `[perception].world_memory`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MeshSupervisorConfig {
-    /// Enable the supervisor loop.
-    #[serde(default)]
-    pub enabled: bool,
-    /// A node with no mesh message newer than this (ms) is considered offline.
-    #[serde(default = "default_mesh_stale_ms")]
-    pub stale_ms: u64,
-    /// Supervisor tick cadence (ms).
-    #[serde(default = "default_mesh_tick_ms")]
-    pub tick_ms: u64,
-    /// Command to auto-issue to a node that has gone offline (e.g. `"capabilities"` to
-    /// ping it). `None` = observe-only (record health, never send).
-    #[serde(default)]
-    pub recover: Option<String>,
-    /// Minimum interval (ms) between recovery commands to the same node.
-    #[serde(default = "default_mesh_recovery_interval_ms")]
-    pub min_recovery_interval_ms: u64,
-    /// A node continuously offline for at least this long (ms) is escalated (presumed
-    /// lost): fast recovery pings stop and a `mesh.<node>.escalation` fact is raised
-    /// (cleared automatically if the node returns). `0` disables escalation.
-    #[serde(default)]
-    pub escalate_after_ms: u64,
-    /// After escalation, an escalated node is not abandoned: it still gets a *slow*
-    /// "are you back?" probe at this interval (ms), so a node whose passive beacons are
-    /// lost to RF but which still answers a direct command recovers on its own (the
-    /// reply refreshes `last_seen` and the next tick clears the escalation). Should be
-    /// well above `min_recovery_interval_ms` so a genuinely dead node isn't hammered.
-    /// `0` disables the escalated probe (revert to "give up entirely" on escalation).
-    #[serde(default = "default_mesh_escalated_probe_interval_ms")]
-    pub escalated_probe_interval_ms: u64,
-}
-
-impl Default for MeshSupervisorConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            stale_ms: default_mesh_stale_ms(),
-            tick_ms: default_mesh_tick_ms(),
-            recover: None,
-            min_recovery_interval_ms: default_mesh_recovery_interval_ms(),
-            escalate_after_ms: 0,
-            escalated_probe_interval_ms: default_mesh_escalated_probe_interval_ms(),
-        }
-    }
-}
-
-fn default_mesh_stale_ms() -> u64 {
-    60_000
-}
-
-fn default_mesh_tick_ms() -> u64 {
-    5_000
-}
-
-fn default_mesh_recovery_interval_ms() -> u64 {
-    30_000
-}
-
-fn default_mesh_escalated_probe_interval_ms() -> u64 {
-    300_000 // 5 min — slow enough not to hammer a dead node, fast enough to self-heal
 }
 
 /// Escalation notifications (`[notifications]`): wire reflex escalations (mesh node

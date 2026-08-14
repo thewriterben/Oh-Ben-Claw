@@ -48,7 +48,7 @@ impl SpeechSink for SpineSpeechSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::SpineConfig;
+    use crate::spine::SpineConfig;
 
     #[tokio::test]
     async fn spine_speech_sink_is_best_effort_when_disconnected() {

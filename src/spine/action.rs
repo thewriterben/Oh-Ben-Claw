@@ -83,7 +83,7 @@ impl ActionSink for SpineActionSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::SpineConfig;
+    use crate::spine::SpineConfig;
     use serde_json::json;
 
     #[tokio::test]
