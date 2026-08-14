@@ -3,7 +3,7 @@
 //! Provides token-by-token streaming from LLM providers via Server-Sent Events
 //! and async channels. Compatible with OpenAI, Anthropic, Ollama, and OpenRouter.
 
-use crate::providers::{Message, ToolCall};
+use crate::{Message, ToolCall};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 

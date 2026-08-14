@@ -13,9 +13,9 @@
 //! | `stop_agent` | Stop a sub-agent and remove it from the active pool |
 
 use crate::agent::pool::{AgentPool, SubAgentSpec};
-use crate::providers::ProviderConfig;
 use anyhow::Result;
 use async_trait::async_trait;
+use obc_providers::ProviderConfig;
 use obc_tools::{Tool, ToolResult};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -406,7 +406,7 @@ mod tests {
     use super::*;
     use crate::agent::pool::AgentPool;
     use crate::memory::MemoryStore;
-    use crate::providers::ProviderConfig;
+    use obc_providers::ProviderConfig;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::Mutex;

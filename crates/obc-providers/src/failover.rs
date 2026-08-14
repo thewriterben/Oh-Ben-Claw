@@ -21,8 +21,8 @@
 //! model = "llama3.2"
 //! ```
 
-use crate::providers::ProviderConfig;
-use crate::providers::{from_config, ChatCompletion, ChatMessage, Provider};
+use crate::ProviderConfig;
+use crate::{from_config, ChatCompletion, ChatMessage, Provider};
 use anyhow::Result;
 use async_trait::async_trait;
 use obc_tool_api::Tool;
@@ -100,7 +100,7 @@ impl Provider for FailoverProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::ProviderConfig;
+    use crate::ProviderConfig;
 
     #[test]
     fn failover_build_primary_only() {

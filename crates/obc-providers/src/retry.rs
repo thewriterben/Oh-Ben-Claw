@@ -6,8 +6,8 @@
 //! hard application errors (bad API key, invalid request, etc.) surface
 //! immediately without retrying.
 
-use crate::providers::ProviderConfig;
-use crate::providers::{ChatCompletion, ChatMessage, Provider};
+use crate::ProviderConfig;
+use crate::{ChatCompletion, ChatMessage, Provider};
 use anyhow::Result;
 use async_trait::async_trait;
 use obc_tool_api::Tool;

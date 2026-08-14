@@ -23,9 +23,8 @@ use crate::agent::pool::{AgentPool, SubAgentSpec};
 use crate::agent::AgentConfig;
 use crate::agent::{Agent, AgentHandle, AgentResponse};
 use crate::memory::MemoryStore;
-use crate::providers;
-use crate::providers::ProviderConfig;
 use anyhow::Result;
+use obc_providers::ProviderConfig;
 use obc_tools::default_tools_with_reach;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -239,7 +238,7 @@ impl OrchestratorAgent {
             .push_str(&orchestrator_config.system_prompt_extension);
 
         // Build the provider
-        let provider = providers::from_config(&provider_config)?;
+        let provider = obc_providers::from_config(&provider_config)?;
 
         // Attach every provided subsystem before sealing the inner agent.
         let mut inner = Agent::new(config, provider, Arc::clone(&memory), tools);
@@ -343,7 +342,7 @@ mod tests {
     use super::*;
     use crate::agent::AgentConfig;
     use crate::memory::MemoryStore;
-    use crate::providers::ProviderConfig;
+    use obc_providers::ProviderConfig;
     use std::sync::Arc;
 
     fn make_orchestrator() -> OrchestratorAgent {

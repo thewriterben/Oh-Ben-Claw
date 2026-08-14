@@ -9,7 +9,7 @@
 //! model becomes eligible again after `recheck_after_ms`, so a node that briefly
 //! lost its local model recovers to it automatically instead of staying on cloud.
 
-use crate::providers::ProviderConfig;
+use crate::ProviderConfig;
 use std::collections::HashMap;
 use std::sync::Mutex;
 

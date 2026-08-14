@@ -17,8 +17,8 @@
 //!
 //! Both patterns use the existing `Provider` trait and work with any LLM.
 
-use crate::providers::{ChatMessage, ChatRole, Provider};
 use anyhow::Result;
+use obc_providers::{ChatMessage, ChatRole, Provider};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -403,8 +403,8 @@ pub async fn synthesize_results(
 ///
 /// The system prompt is injected as the first message in the conversation,
 /// so we only need a default config here.
-fn reflexion_provider_config(system_prompt: Option<&str>) -> crate::providers::ProviderConfig {
-    let config = crate::providers::ProviderConfig::default();
+fn reflexion_provider_config(system_prompt: Option<&str>) -> obc_providers::ProviderConfig {
+    let config = obc_providers::ProviderConfig::default();
     // System prompt is passed via messages, not config
     let _ = system_prompt; // used by caller to build messages
     config

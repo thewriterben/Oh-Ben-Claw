@@ -1,7 +1,7 @@
-//! OpenAI provider adapter.
+//! OpenRouter provider adapter.
 
-use crate::providers::ProviderConfig;
-use crate::providers::{ChatCompletion, ChatMessage, ChatRole, Provider, ResponseFormat, ToolCall};
+use crate::ProviderConfig;
+use crate::{ChatCompletion, ChatMessage, ChatRole, Provider, ResponseFormat, ToolCall};
 use anyhow::Result;
 use async_trait::async_trait;
 use obc_tools::Tool;
@@ -9,13 +9,13 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The OpenAI provider.
+/// The OpenRouter provider.
 #[derive(Debug, Clone)]
-pub struct OpenAiProvider {
+pub struct OpenRouterProvider {
     client: Client,
 }
 
-impl OpenAiProvider {
+impl OpenRouterProvider {
     pub fn new(_config: ProviderConfig) -> Self {
         Self {
             client: Client::new(),
@@ -24,9 +24,9 @@ impl OpenAiProvider {
 }
 
 #[async_trait]
-impl Provider for OpenAiProvider {
+impl Provider for OpenRouterProvider {
     fn name(&self) -> &str {
-        "openai"
+        "openrouter"
     }
 
     async fn chat_completion(
@@ -39,34 +39,56 @@ impl Provider for OpenAiProvider {
             .api_key
             .as_ref()
             .map(|k| k.expose().to_string())
-            .or_else(|| std::env::var("OPENAI_API_KEY").ok())
-            .ok_or_else(|| anyhow::anyhow!("OPENAI_API_KEY not set"))?;
+            .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
+            .ok_or_else(|| anyhow::anyhow!("OPENROUTER_API_KEY not set"))?;
 
         let url = config
             .base_url
             .clone()
-            .unwrap_or_else(|| "https://api.openai.com/v1/chat/completions".to_string());
+            .unwrap_or_else(|| "https://openrouter.ai/api/v1/chat/completions".to_string());
 
-        let oai_messages: Vec<OpenAiMessage> = messages.iter().map(|m| m.into()).collect();
-        let oai_tools: Option<Vec<OpenAiTool>> = if tools.is_empty() {
+        let or_messages: Vec<OrMessage> = messages
+            .iter()
+            .map(|m| OrMessage {
+                role: match m.role {
+                    ChatRole::System => "system".into(),
+                    ChatRole::User => "user".into(),
+                    ChatRole::Assistant => "assistant".into(),
+                },
+                content: m.content.clone(),
+            })
+            .collect();
+
+        let or_tools: Option<Vec<OrTool>> = if tools.is_empty() {
             None
         } else {
-            Some(tools.iter().map(|t| t.as_ref().into()).collect())
+            Some(
+                tools
+                    .iter()
+                    .map(|t| OrTool {
+                        r#type: "function".into(),
+                        function: OrFunction {
+                            name: t.name().to_string(),
+                            description: t.description().to_string(),
+                            parameters: t.parameters_schema(),
+                        },
+                    })
+                    .collect(),
+            )
         };
 
         let request = serde_json::json!({
             "model": config.model,
-            "messages": oai_messages,
-            "tools": oai_tools,
+            "messages": or_messages,
+            "tools": or_tools,
             "tool_choice": if tools.is_empty() { Value::Null } else { Value::String("auto".into()) },
             "temperature": config.temperature,
         });
 
-        // Merge optional response_format into the request body.
         let mut request = request;
         if let Some(ref fmt) = config.response_format {
             match fmt {
-                ResponseFormat::Text => {} // omit — default behaviour
+                ResponseFormat::Text => {}
                 ResponseFormat::JsonObject => {
                     request["response_format"] = serde_json::json!({"type": "json_object"});
                 }
@@ -87,10 +109,7 @@ impl Provider for OpenAiProvider {
             }
         }
 
-        // Read status + body BEFORE decoding: an API error (401 bad key, 429
-        // quota, …) returns an error JSON that force-parsing as a success shape
-        // turns into an opaque "error decoding response body" — which cost a
-        // live bench session two diagnostic laps (2026-07-17). Surface it.
+        // Surface API errors instead of force-parsing them (see openai.rs).
         let http_response = self
             .client
             .post(&url)
@@ -101,11 +120,11 @@ impl Provider for OpenAiProvider {
         let status = http_response.status();
         let body = http_response.text().await?;
         if !status.is_success() {
-            anyhow::bail!("OpenAI API error ({status}): {body}");
+            anyhow::bail!("OpenRouter API error ({status}): {body}");
         }
-        let response: OpenAiResponse = serde_json::from_str(&body).map_err(|e| {
+        let response: OrResponse = serde_json::from_str(&body).map_err(|e| {
             anyhow::anyhow!(
-                "unexpected OpenAI response shape ({e}): {}",
+                "unexpected OpenRouter response shape ({e}): {}",
                 body.chars().take(300).collect::<String>()
             )
         })?;
@@ -114,7 +133,7 @@ impl Provider for OpenAiProvider {
             .choices
             .into_iter()
             .next()
-            .ok_or_else(|| anyhow::anyhow!("No choices in OpenAI response"))?;
+            .ok_or_else(|| anyhow::anyhow!("No choices in OpenRouter response"))?;
 
         Ok(ChatCompletion {
             message: choice.message.content.unwrap_or_default(),
@@ -131,83 +150,57 @@ impl Provider for OpenAiProvider {
     }
 }
 
-// ── OpenAI API Data Structures ───────────────────────────────────────────────
+// ── OpenRouter API Data Structures (OpenAI-compatible) ───────────────────────
 
 #[derive(Debug, Serialize)]
-struct OpenAiMessage {
+struct OrMessage {
     role: String,
     content: String,
 }
 
-impl From<&ChatMessage> for OpenAiMessage {
-    fn from(msg: &ChatMessage) -> Self {
-        Self {
-            role: match msg.role {
-                ChatRole::System => "system".into(),
-                ChatRole::User => "user".into(),
-                ChatRole::Assistant => "assistant".into(),
-            },
-            content: msg.content.clone(),
-        }
-    }
-}
-
 #[derive(Debug, Serialize)]
-struct OpenAiTool {
+struct OrTool {
     r#type: String,
-    function: OpenAiFunction,
+    function: OrFunction,
 }
 
 #[derive(Debug, Serialize)]
-struct OpenAiFunction {
+struct OrFunction {
     name: String,
     description: String,
     parameters: Value,
 }
 
-impl From<&dyn Tool> for OpenAiTool {
-    fn from(tool: &dyn Tool) -> Self {
-        Self {
-            r#type: "function".into(),
-            function: OpenAiFunction {
-                name: tool.name().to_string(),
-                description: tool.description().to_string(),
-                parameters: tool.parameters_schema(),
-            },
-        }
-    }
+#[derive(Debug, Deserialize)]
+struct OrResponse {
+    choices: Vec<OrChoice>,
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenAiResponse {
-    choices: Vec<OpenAiChoice>,
+struct OrChoice {
+    message: OrResponseMessage,
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenAiChoice {
-    message: OpenAiResponseMessage,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiResponseMessage {
+struct OrResponseMessage {
     content: Option<String>,
-    tool_calls: Option<Vec<OpenAiToolCall>>,
+    tool_calls: Option<Vec<OrToolCall>>,
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenAiToolCall {
+struct OrToolCall {
     id: String,
-    function: OpenAiToolCallFunction,
+    function: OrToolCallFunction,
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenAiToolCallFunction {
+struct OrToolCallFunction {
     name: String,
     arguments: String,
 }
 
-impl From<OpenAiToolCall> for ToolCall {
-    fn from(call: OpenAiToolCall) -> Self {
+impl From<OrToolCall> for ToolCall {
+    fn from(call: OrToolCall) -> Self {
         Self {
             id: call.id,
             name: call.function.name,

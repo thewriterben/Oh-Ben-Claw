@@ -205,8 +205,23 @@ pub use obc_planner;
 // itself. The two were named apart on purpose and are easy to confuse.
 pub use obc_observability as observability;
 pub mod peripherals;
+/// The model backends — an alias for the [`obc_providers`] crate, which has
+/// held them since 2026-08-14.
+///
+/// The first module in this tree to reach zero edges of *any* kind: not zero
+/// blocking edges, zero edges. Its ten files named nothing outside themselves
+/// but crates that had already left.
+///
+/// It arrived there rather than being taken there. `providers` was blocked by
+/// one edge into `tools`, and `tools` by one edge into `spine`. Three
+/// extractions in two days, each unblocking the next; this is the end of that
+/// chain rather than a piece of work of its own.
+///
+/// It is also the crate behind this project's "bring your own model" claim.
+/// Being able to point at it — alone, compiled, tested — is the difference
+/// between that being a sentence and being a thing.
+pub use obc_providers as providers;
 pub use obc_telemetry::power;
-pub mod providers;
 // Cron, interval and one-shot tasks live in their own crate (2026-08-02) — the
 // last module the extractability survey listed with zero blocking edges.
 // Re-exported under the old name so `crate::scheduler::…` is unchanged in

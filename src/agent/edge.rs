@@ -41,10 +41,9 @@ const P2P_DISCOVERY_DELAY_MS: u64 = 500;
 use crate::agent::{Agent, AgentResponse};
 use crate::agent::{AgentConfig, EdgeConfig};
 use crate::memory::MemoryStore;
-use crate::providers;
-use crate::providers::ProviderConfig;
 use crate::security::PolicyEngine;
 use anyhow::Result;
+use obc_providers::ProviderConfig;
 use obc_spine::p2p::{P2pConfig, P2pSpine};
 use obc_spine::NodeAnnouncement;
 use obc_tool_api::Tool;
@@ -98,7 +97,7 @@ impl EdgeAgent {
         tools: Vec<Box<dyn Tool>>,
         node_id: impl Into<String>,
     ) -> Result<Self> {
-        let provider = providers::from_config(&provider_config)?;
+        let provider = obc_providers::from_config(&provider_config)?;
         // The point of an edge agent is bounded RAM, and this is where that is
         // actually applied. Before, `edge_config` was stored and never read: the
         // module header documented `max_history_messages`, the deployment planner
@@ -323,7 +322,7 @@ impl EdgeAgentBuilder {
     /// on-device instead of reaching for the cloud. Leaves the config unchanged if
     /// no candidate is selectable.
     pub fn prefer_local(mut self) -> Self {
-        use crate::providers::model_registry::{
+        use obc_providers::model_registry::{
             flatten_candidates, registry_from_providers, select_provider,
         };
         let candidates = flatten_candidates(&self.provider_config);

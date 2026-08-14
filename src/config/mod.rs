@@ -45,7 +45,7 @@ pub fn inline_secret_providers(config: &Config) -> Vec<String> {
 
 /// The LLM provider's own configuration block, which lives with the providers.
 ///
-/// Moved to [`crate::providers`] on 2026-08-13 and re-exported here, because the
+/// Moved to [`obc_providers`] on 2026-08-13 and re-exported here, because the
 /// root `Config` composes it and the call sites outside `providers/` name it
 /// through this path.
 ///
@@ -56,7 +56,7 @@ pub fn inline_secret_providers(config: &Config) -> Vec<String> {
 /// it from here, so a single struct split across two modules was a mutual pair
 /// in the dependency graph, and most of the core's remaining cycles ran through
 /// it.
-pub use crate::providers::ProviderConfig;
+pub use obc_providers::ProviderConfig;
 
 /// The spine's own configuration blocks, which live with the spine.
 ///

@@ -4,7 +4,7 @@
 //! complete [`ToolCall`] values, and for building a finished response from a
 //! mixture of text content and tool call chunks.
 
-use crate::providers::ToolCall;
+use obc_providers::ToolCall;
 
 // ── StreamingToolCall ────────────────────────────────────────────────────────
 
