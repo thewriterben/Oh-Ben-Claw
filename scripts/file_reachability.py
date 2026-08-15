@@ -76,11 +76,15 @@ SRC = ROOT / "src"
 # defaults to cp1252, which cannot encode them. Printing one raised
 # UnicodeEncodeError and killed the run *after* the survey had done its work
 # and printed its counts -- a crash that looks like a broken tool and is
-# actually a broken terminal. Reconfiguring is enough; it is a no-op where
-# stdout is already UTF-8, which is everywhere this runs unattended.
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+# actually a broken terminal.
+#
+# The fix moved to scripts/console.py on 2026-08-14, after a third script hit
+# it. Two copies were a duplication; three would have been this repository's
+# own finding about instruments that record a lesson without enforcing it.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from console import use_utf8_stdout  # noqa: E402
+
+use_utf8_stdout()
 
 # Names too generic for name-based matching to say anything. Matching these
 # produces confident nonsense in both directions.

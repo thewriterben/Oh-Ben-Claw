@@ -78,14 +78,15 @@ CRATES = ROOT / "crates"
 # the section rules below are box characters, a Windows console defaults to
 # cp1252, and printing one raises UnicodeEncodeError *after* the survey has
 # already done all its work. It reads as a broken tool and is a broken
-# terminal. A no-op where stdout is already UTF-8.
+# terminal.
 #
-# Worth naming that this is the second script to hit it: the encoding guard is
-# a property of printing a rule, not a property of that one survey, and it
-# should be copied into the next one before it crashes rather than after.
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+# This comment used to say the guard "should be copied into the next one before
+# it crashes rather than after". `curation_survey.py` crashed on it the next
+# day. Advice is not a mechanism, so it is scripts/console.py now.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from console import use_utf8_stdout  # noqa: E402
+
+use_utf8_stdout()
 
 
 def workspace_files() -> list[Path]:
