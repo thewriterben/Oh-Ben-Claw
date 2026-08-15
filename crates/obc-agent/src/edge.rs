@@ -278,6 +278,9 @@ pub struct EdgeAgentBuilder {
     memory: Option<Arc<MemoryStore>>,
     tools: Vec<Box<dyn Tool>>,
     policy: Option<PolicyEngine>,
+    /// See [`EdgeAgentBuilder::pairing`]. `None` leaves `EdgeAgent`'s default,
+    /// which is pairing disabled.
+    pairing: Option<(obc_safety::NodePairingManager, bool)>,
 }
 
 impl EdgeAgentBuilder {
@@ -307,6 +310,7 @@ impl EdgeAgentBuilder {
             memory: None,
             tools: Vec::new(),
             policy: None,
+            pairing: None,
         }
     }
 
@@ -351,6 +355,34 @@ impl EdgeAgentBuilder {
         self
     }
 
+    /// Enforce `[security] pairing_secret` / `require_pairing` on peers this
+    /// node discovers over P2P.
+    ///
+    /// `EdgeAgent::with_pairing` has existed since the P2P spine did, and this
+    /// builder had no way to reach it: `policy` was carried through to `build`
+    /// and pairing was not, so every agent built the documented way — which is
+    /// every agent, `build_and_start` being how a node joins the mesh — got
+    /// `NodePairingManager::new(None)` and pairing off, whatever the config
+    /// said.
+    ///
+    /// Half of `SecurityContext` plumbed and half dropped, in the place the
+    /// method's own doc comment argues it matters most: P2P discovery is a UDP
+    /// broadcast with no broker and no handshake, so on an edge device the set
+    /// of tools it will call is decided by whoever else is on the network.
+    ///
+    /// Still opt-in rather than read from config here, because this crate takes
+    /// an `EdgeConfig` and not the root `Config` — the caller holds the
+    /// security context and passes its manager, exactly as `src/main.rs` does
+    /// for the MQTT spine.
+    pub fn pairing(
+        mut self,
+        pairing: obc_safety::NodePairingManager,
+        require_pairing: bool,
+    ) -> Self {
+        self.pairing = Some((pairing, require_pairing));
+        self
+    }
+
     /// Board identifier announced to peers on the mesh. Defaults to `"edge"`.
     pub fn board(mut self, board: impl Into<String>) -> Self {
         self.board = board.into();
@@ -377,6 +409,10 @@ impl EdgeAgentBuilder {
 
         if let Some(policy) = self.policy {
             agent = agent.with_policy(policy);
+        }
+
+        if let Some((pairing, require_pairing)) = self.pairing {
+            agent = agent.with_pairing(pairing, require_pairing);
         }
 
         Ok(agent)

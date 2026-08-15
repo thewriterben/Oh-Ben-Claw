@@ -477,6 +477,27 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     ));
     let mut node_count = 0usize;
 
+    // Build the security context before anything that needs to enforce with it.
+    //
+    // It used to be built ~60 lines below, after the spine was already
+    // connected, which is why the spine got a `NodePairingManager` of its own
+    // constructed inline from the same config. Two managers, and
+    // `NodePairingManager` keeps its node table in an `Arc<Mutex<HashMap>>`
+    // that is shared across clones but not across separate constructions — so
+    // the context's copy stayed empty forever while the spine's filled up.
+    //
+    // Nothing had noticed because nothing read `SecurityContext.pairing` at
+    // all. That is what made it findable: `scripts/inert_components.py` flags a
+    // field written by a constructor and never read, and this one is the
+    // module's founding example. What it would have cost is the obvious next
+    // line somebody writes -- `security_ctx.pairing.is_trusted(node)` -- which
+    // with a secret configured would have answered `false` for every node in
+    // the fleet, including nodes that had just paired successfully.
+    let security_ctx = security::SecurityContext::new(&config.security).unwrap_or_else(|e| {
+        tracing::warn!("Failed to init security context: {}; using defaults", e);
+        security::SecurityContext::new(&Default::default()).unwrap()
+    });
+
     // Connect to MQTT spine and discover peripheral tools
     let spine_client = if !no_spine && config.spine.kind == "mqtt" {
         match spine::SpineClient::new(config.spine.clone(), "obc-brain")
@@ -484,8 +505,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             // path. Before 2026-08-01 it was validated at boot and gated
             // nothing: any node that could publish on the topic got its tools
             // registered, paired or not.
+            //
+            // The manager comes from the security context rather than being
+            // built here, so the table the spine writes is the table the rest
+            // of the process can read.
             .with_pairing(
-                obc_safety::NodePairingManager::new(config.security.pairing_secret.clone()),
+                security_ctx.pairing.clone(),
                 config.security.require_pairing,
             )
             .with_frame_auth(obc_safety::frame_auth::FrameAuth::new(
@@ -540,12 +565,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
 
-    // Build security context
-    let security_ctx = security::SecurityContext::new(&config.security).unwrap_or_else(|e| {
-        tracing::warn!("Failed to init security context: {}; using defaults", e);
-        security::SecurityContext::new(&Default::default()).unwrap()
-    });
-
+    // Security context was built above, before the spine that enforces with it.
     if security_ctx.policy.policy_count() > 0 {
         info!(
             policies = security_ctx.policy.policy_count(),

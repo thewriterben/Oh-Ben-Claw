@@ -93,6 +93,37 @@ pub async fn start_agent(
     let security = SecurityContext::new(&config.security)
         .unwrap_or_else(|_| SecurityContext::new(&Default::default()).unwrap());
 
+    // Half of this context is enforced here and half has nothing to enforce.
+    //
+    // `security.policy` reaches the agent below. `security.pairing` cannot: the
+    // GUI joins no spine and discovers no peers, so there is no announcement to
+    // admit or quarantine. `[security] require_pairing = true` is still
+    // validated at load — the config layer refuses it without a
+    // `pairing_secret` — which is precisely what makes it read as in force.
+    //
+    // Same shape as `[spine] tls = true`, which was accepted, warned about, and
+    // encrypted nothing. That one now refuses to start, because it told an
+    // operator their broker link was encrypted when it was cleartext. This is
+    // milder: nothing here claims a peer was checked, because nothing here has
+    // peers. So it warns rather than refuses — but it does not stay quiet,
+    // because someone who set that key made a security decision and is entitled
+    // to learn where it does and does not apply.
+    //
+    // NOT COMPILED. This package is excluded from the root workspace and its
+    // own build fails on a missing `icons/` directory, so nothing has type-
+    // checked these four lines — see the note in this package's Cargo.toml.
+    // Recorded here rather than left out, because the fact it states is true
+    // whether or not the file builds, and the next person to make the GUI
+    // compile should find this waiting rather than rediscover it.
+    if config.security.require_pairing {
+        tracing::warn!(
+            "[security] require_pairing is set, and the GUI enforces nothing with it: \
+             this process joins no spine and discovers no peers, so there are no \
+             announcements to admit or quarantine. It takes effect in the agent \
+             binary, which owns the spine."
+        );
+    }
+
     // Build built-in tools
     let tools: Vec<Box<dyn oh_ben_claw::tools::traits::Tool>> = vec![
         Box::new(ShellTool::new()),
