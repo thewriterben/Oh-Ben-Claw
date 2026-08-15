@@ -230,6 +230,21 @@ impl NodePairingManager {
     }
 
     /// Check whether a node is trusted (Paired or pairing disabled).
+    ///
+    /// No callers outside these tests, and that is recorded rather than fixed:
+    /// the admission path in `obc-spine` matches on what `pair_node` returns at
+    /// announcement time, which is the moment the decision is actually needed.
+    /// This answers the later question — *is this node still trusted* — which
+    /// nothing asks yet.
+    ///
+    /// It is left in because it is now safe to call, which it was not. Until
+    /// 2026-08-14 the manager reachable from `SecurityContext` was a second,
+    /// separate construction from the one the spine wrote to; the node table
+    /// lives behind an `Arc<Mutex<_>>` shared across *clones* but not across
+    /// constructions, so that copy stayed empty. With a secret configured this
+    /// method would have returned `false` for every node in the fleet,
+    /// including one that had just paired successfully — a plausible-looking
+    /// call with a confidently wrong answer, waiting for its first caller.
     pub fn is_trusted(&self, node_id: &str) -> bool {
         if !self.is_enabled() {
             return true;
@@ -382,5 +397,47 @@ mod tests {
         assert_eq!(statuses.len(), 2);
         assert_eq!(statuses["node-a"], PairingStatus::Paired);
         assert_eq!(statuses["node-b"], PairingStatus::Paired);
+    }
+
+    // ── The two halves of the 2026-08-14 duplicate-manager bug ───────────────
+    //
+    // These pin the property the fix in `src/main.rs` depends on, and the
+    // property that made the bug invisible. Both are about `Clone`, which is
+    // the whole difference: handing the spine a *clone* of the security
+    // context's manager gives one table; building it a second manager from the
+    // same config gives two, and the second one is the only one anybody writes.
+
+    #[test]
+    fn a_clone_shares_the_node_table() {
+        let mgr = NodePairingManager::new(Some(SECRET.to_string()));
+        let handed_to_the_spine = mgr.clone();
+
+        let token = PairingToken::generate(SECRET, "node-1").unwrap();
+        let metadata = serde_json::json!({ "pairing_token": token });
+        handed_to_the_spine.pair_node("node-1", Some(&metadata));
+
+        // The clone did the pairing; the original must be able to see it.
+        // This is what `security_ctx.pairing.is_trusted(node)` relies on.
+        assert!(mgr.is_trusted("node-1"));
+        assert_eq!(mgr.status("node-1"), PairingStatus::Paired);
+    }
+
+    #[test]
+    fn a_second_construction_does_not_share_the_node_table() {
+        let on_the_context = NodePairingManager::new(Some(SECRET.to_string()));
+        let built_again_for_the_spine = NodePairingManager::new(Some(SECRET.to_string()));
+
+        let token = PairingToken::generate(SECRET, "node-1").unwrap();
+        let metadata = serde_json::json!({ "pairing_token": token });
+        built_again_for_the_spine.pair_node("node-1", Some(&metadata));
+
+        assert!(built_again_for_the_spine.is_trusted("node-1"));
+
+        // Same secret, same config, same node, freshly paired — and the manager
+        // the rest of the process can reach says no. Asserted rather than
+        // merely described, so that anyone who "fixes" this by constructing a
+        // second manager again has to delete a test that says why not.
+        assert!(!on_the_context.is_trusted("node-1"));
+        assert_eq!(on_the_context.status("node-1"), PairingStatus::Unpaired);
     }
 }
