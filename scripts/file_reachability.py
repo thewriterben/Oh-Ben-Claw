@@ -18,10 +18,15 @@ The failure mode it does NOT catch
 ----------------------------------
 `security/pairing.rs` is the reason this script was started, and it does not
 appear in its output — correctly. `NodePairingManager` *is* referenced: it is a
-field on `SecurityManager` and it is constructed at startup. What never happens is
+field on `SecurityContext` and it is constructed at startup. What never happens is
 anyone *asking* it anything. `pair_node` has zero callers, `is_trusted` has zero,
-the `SecurityManager.pairing` field is never read, and `security.require_pairing`
+the `SecurityContext.pairing` field is never read, and `security.require_pairing`
 is consulted only by config validation — set it and it gates nothing.
+
+(Both this file and the type moved: `crates/obc-safety/src/lib.rs`. The name
+`SecurityManager` written here for weeks belongs to nothing in the tree and
+never did — a plausible-sounding owner is worse than none, because it survives
+a reader checking whether the claim is still true.)
 
 That is a third category, distinct from a dead file: **built, wired, never
 invoked.** Reachability cannot see it, because the type genuinely is reachable.
