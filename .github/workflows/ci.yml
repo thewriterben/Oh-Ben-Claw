@@ -336,6 +336,21 @@ jobs:
       # `cargo audit` names a transitive crate four levels down.
       - name: manifests agree with the root on load-bearing features
         run: python3 scripts/check_feature_unification.py
+
+      # A tool name in a safety list must be a tool this agent has.
+      #
+      # `examples/config-cutting-edge.toml` shipped a `deny` policy on
+      # `tool_pattern = "file_write"`. Patterns are matched against `Tool::name()`
+      # and the file tool is called `file`, so the rule matched nothing while
+      # reading, to anyone who copied it, as though writes to /etc/ were blocked.
+      # The same file listed `file_write` in `autonomy.always_ask`.
+      #
+      # The Accelerapp alignment had already found exactly this — invented names
+      # like `file_read`, `http_get` and `memory_note` against real tools called
+      # `file`, `http` and `memory`. That was corrected in the code and not in
+      # the configs, because nothing compared the two. This is the comparison.
+      - name: every tool named in a shipped config exists
+        run: python3 scripts/check_tool_names.py
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run security audit
