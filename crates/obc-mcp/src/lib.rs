@@ -288,6 +288,34 @@ impl Tool for McpRemoteTool {
         obc_tool_api::OutputTrust::External
     }
 
+    /// Physical, because the server on the other end decides what this tool is.
+    ///
+    /// `name`, `description` and `schema` are all copied from a `tools/list`
+    /// reply. A server can announce `gpio_write`, `move_actuator` or anything
+    /// else, and this struct proxies it. Until 2026-08-18 this impl declared
+    /// `output_trust` and stopped — so the *taint* of what came back was
+    /// tracked, while the *risk* of what went out took the trait default,
+    /// `RiskClass::safe()`.
+    ///
+    /// `track0_authorize` opens with `if !risk.physical { return Ok(()); }`, so
+    /// that default skipped the `SafetyGate` limit check and the tamper-evident
+    /// audit record for every MCP-proxied call. The README's claim that MCP
+    /// exists so another agent can drive a robot *through* the Track 0 gate
+    /// rather than around it was, for the client half, exactly backwards.
+    ///
+    /// Reversible with a low blast radius, matching `MqttNodeTool`: enough to
+    /// route the call through the gate and into the audit chain, not enough to
+    /// demand a prompt for every call. A `SafetyGate` with no limit configured
+    /// for `(node, tool)` allows and defers to the approval layer, and a
+    /// never-seen node is `Trusted`, so this tightens the record without
+    /// refusing traffic that used to pass.
+    ///
+    /// The honest fix is a risk declaration in the MCP announcement itself. MCP
+    /// has no such field, so absence has to land somewhere, and it lands here.
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
+    }
+
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         // Conscience reach gate (Track 0 for egress): refuse a server that is not
         // allowlisted BEFORE any argument is forwarded. Logged, not silent.

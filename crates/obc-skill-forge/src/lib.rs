@@ -308,6 +308,33 @@ impl Tool for SkillTool {
         self.manifest.stage
     }
 
+    /// Not physical, and not replayable — stated rather than inherited.
+    ///
+    /// A skill's name comes from its manifest, so no name-based check can
+    /// classify one; `scripts/check_physical_tools.py` requires a declaration
+    /// here for exactly that reason. This is what the declaration says and why.
+    ///
+    /// Only two of the four [`SkillKind`]s ever reach the Track 0 gate carrying
+    /// this value. `Delegate` resolves to the target tool and `Sequence` runs
+    /// each step back through the agent's chokepoint, so both are authorized
+    /// against the *step's* risk class and never against this one — which is the
+    /// design, and the reason a skill delegating to `gpio_write` is gated like
+    /// `gpio_write`.
+    ///
+    /// What is left is `Shell` and `Http`, neither of which drives an actuator.
+    /// So `physical: false`, matching the builtin `shell` tool this borrows its
+    /// reasoning from: side-effecting and not safely re-runnable, so the
+    /// self-improvement loop must quarantine a learned skill rather than verify
+    /// it by replay. The non-`None` blast radius and `reversible: false` are
+    /// what carry that signal; they change no gate.
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass {
+            reversible: false,
+            blast: obc_tool_api::BlastRadius::Low,
+            physical: false,
+        }
+    }
+
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         if !self.manifest.enabled {
             return Ok(ToolResult::err(format!(
