@@ -123,6 +123,10 @@ impl Tool for NanoPiGpioReadTool {
         "gpio_read"
     }
 
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::safe()
+    }
+
     fn description(&self) -> &str {
         "Read the value (0 or 1) of a GPIO pin on NanoPi Neo3 via Linux sysfs. \
          Uses sysfs GPIO numbers (e.g. 0 = GPIO0_A0, 8 = GPIO0_B0, 64 = GPIO2_A0). \
@@ -166,6 +170,10 @@ struct NanoPiGpioWriteTool;
 impl Tool for NanoPiGpioWriteTool {
     fn name(&self) -> &str {
         "gpio_write"
+    }
+
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
     }
 
     fn description(&self) -> &str {

@@ -153,6 +153,10 @@ impl Tool for RpiGpioReadTool {
         "rpi_gpio_read"
     }
 
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::safe()
+    }
+
     fn description(&self) -> &str {
         "Read the value (0 or 1) of a GPIO pin on Raspberry Pi via Linux sysfs. \
          Uses BCM GPIO numbering (e.g., GPIO17 = pin 11 on the 40-pin header). \
@@ -193,6 +197,10 @@ struct RpiGpioWriteTool;
 impl Tool for RpiGpioWriteTool {
     fn name(&self) -> &str {
         "rpi_gpio_write"
+    }
+
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
     }
 
     fn description(&self) -> &str {
@@ -243,6 +251,10 @@ struct RpiGpioPwmTool;
 impl Tool for RpiGpioPwmTool {
     fn name(&self) -> &str {
         "rpi_pwm_write"
+    }
+
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
     }
 
     fn description(&self) -> &str {
@@ -333,6 +345,10 @@ struct RpiCameraCaptureTool {
 impl Tool for RpiCameraCaptureTool {
     fn name(&self) -> &str {
         "rpi_camera_capture"
+    }
+
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
     }
 
     fn description(&self) -> &str {
@@ -437,6 +453,10 @@ struct RpiSystemInfoTool;
 impl Tool for RpiSystemInfoTool {
     fn name(&self) -> &str {
         "rpi_system_info"
+    }
+
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::safe()
     }
 
     fn description(&self) -> &str {

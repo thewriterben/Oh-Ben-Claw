@@ -32,6 +32,10 @@ impl Tool for I2cScanTool {
         "i2c_scan"
     }
 
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::safe()
+    }
+
     fn description(&self) -> &str {
         "Scan an I2C bus for connected devices and return their 7-bit addresses. \
          Uses the Linux i2cdetect utility. Common I2C devices: \
@@ -157,6 +161,10 @@ impl Tool for I2cReadTool {
         "i2c_read"
     }
 
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::safe()
+    }
+
     fn description(&self) -> &str {
         "Read one or more bytes from an I2C device register using i2cget. \
          Useful for reading sensor data, configuration registers, and status bytes."
@@ -243,6 +251,10 @@ impl Tool for I2cWriteTool {
         "i2c_write"
     }
 
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
+    }
+
     fn description(&self) -> &str {
         "Write a byte to an I2C device register using i2cset. \
          Useful for configuring sensors, setting output values, and controlling \
@@ -326,6 +338,10 @@ pub struct SpiTransferTool;
 impl Tool for SpiTransferTool {
     fn name(&self) -> &str {
         "spi_transfer"
+    }
+
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
     }
 
     fn description(&self) -> &str {
@@ -467,6 +483,10 @@ pub struct PwmControlTool;
 impl Tool for PwmControlTool {
     fn name(&self) -> &str {
         "pwm_control"
+    }
+
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
     }
 
     fn description(&self) -> &str {

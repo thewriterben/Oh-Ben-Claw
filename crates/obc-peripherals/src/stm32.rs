@@ -185,6 +185,10 @@ impl Tool for Stm32FlashTool {
         "stm32_flash"
     }
 
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(false, obc_tool_api::BlastRadius::High)
+    }
+
     fn description(&self) -> &str {
         "Flash a compiled binary (.elf or .bin) to the STM32 Nucleo board via \
          the ST-Link debug probe using probe-rs. The board resets and starts \
@@ -266,6 +270,10 @@ impl Tool for Stm32RttReadTool {
         "stm32_rtt_read"
     }
 
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::safe()
+    }
+
     fn description(&self) -> &str {
         "Read output from the STM32 firmware via RTT (SEGGER Real-Time Transfer) \
          channel 0. RTT provides high-speed, non-intrusive debug output from the \
@@ -337,6 +345,10 @@ impl Tool for Stm32RttWriteTool {
         "stm32_rtt_write"
     }
 
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
+    }
+
     fn description(&self) -> &str {
         "Send a command to the STM32 firmware via RTT down-channel 0. \
          The firmware must implement an RTT command handler. \
@@ -403,6 +415,10 @@ struct Stm32ResetTool {
 impl Tool for Stm32ResetTool {
     fn name(&self) -> &str {
         "stm32_reset"
+    }
+
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
     }
 
     fn description(&self) -> &str {
@@ -474,6 +490,10 @@ impl Tool for Stm32ListProbesTool {
         "stm32_list_probes"
     }
 
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::safe()
+    }
+
     fn description(&self) -> &str {
         "List all connected debug probes (ST-Link, J-Link, CMSIS-DAP) detected \
          by probe-rs. Use this to find the probe index when multiple boards \
@@ -519,6 +539,10 @@ struct Stm32MemReadTool {
 impl Tool for Stm32MemReadTool {
     fn name(&self) -> &str {
         "stm32_mem_read"
+    }
+
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::safe()
     }
 
     fn description(&self) -> &str {

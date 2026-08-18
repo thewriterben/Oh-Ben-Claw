@@ -602,6 +602,17 @@ impl Tool for P2pNodeTool {
         self.spec.parameters.clone()
     }
 
+    /// Same reasoning as `MqttNodeTool::risk_class`, and more so.
+    ///
+    /// A P2P peer is discovered over a UDP broadcast with no broker and no
+    /// handshake — the set of tools this agent can be handed is decided by
+    /// whoever else is on the network. Taking the non-physical default here
+    /// meant a peer-announced `gpio_write` bypassed the Track 0 gate and the
+    /// audit chain entirely.
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
+    }
+
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let result = self
             .spine
