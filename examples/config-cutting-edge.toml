@@ -202,7 +202,12 @@ node_id   = "rpi-edge-node"
 
 [security]
 require_pairing = true
-# pairing_secret = "generate-with-openssl-rand-hex-32"
+# Not optional while `require_pairing = true` — the config layer has refused
+# that combination for some time, so this example did not load at all. Nothing
+# noticed, because no test had ever parsed it.
+#
+# Replace this placeholder. `openssl rand -hex 32`.
+pairing_secret  = "replace-me-openssl-rand-hex-32-0123456789abcdef"
 vault_enabled   = true
 # vault_path    = "~/.oh-ben-claw/vault.db"
 
@@ -233,7 +238,13 @@ enabled   = true
 host      = "0.0.0.0"
 port      = 8443
 serve_pwa = true
-# api_token = "generate-with-openssl-rand-hex-32"
+# Required, not optional, at this host. `0.0.0.0` publishes the API to every
+# interface, and the API can run `shell`. Since 2026-08-18 the config layer
+# refuses to load an enabled gateway on a routable host with no token, so this
+# example did not merely suggest an open door — it would no longer start.
+#
+# Replace this placeholder. `openssl rand -hex 32`.
+api_token = "replace-me-openssl-rand-hex-32"
 
 [tunnel]
 enabled    = true

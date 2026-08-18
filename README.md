@@ -255,9 +255,12 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 >   retrieve across two requests, and a marker executor proving the transport
 >   uses the executor it was given rather than the old hard-coded path.
 >
-> **Still not true of it:** the endpoint has **no authentication** — anyone who
-> can reach the port can drive this agent's tools, so bind it to localhost or
-> put it behind something. `A2AClient` is still constructed **nowhere**: this
+> **Still not true of it:** the endpoint has **no authentication** — every
+> caller that reaches it can drive this agent's tools. It binds `127.0.0.1`
+> and the address is not configurable, so "reaches it" means a process on this
+> machine, or whatever you deliberately put in front of it. Anything you proxy
+> it through is doing the authenticating; the endpoint itself is not.
+> `A2AClient` is still constructed **nowhere**: this
 > agent can be called, and cannot call out. Streaming (`SendStreamingMessage`,
 > `SubscribeToTask`) still returns `UNSUPPORTED_OPERATION`, which is a
 > conformant answer and not an implementation.

@@ -162,6 +162,11 @@ enabled = false
 
 # Bind to 0.0.0.0 to allow connections from other devices on your network.
 # Use 127.0.0.1 (default) for local-only access.
+#
+# If you do bind to 0.0.0.0, `api_token` below stops being optional: the config
+# layer refuses to load an enabled gateway on a routable host without one. The
+# API can run `shell`, so "reachable from any device on your network" and "no
+# authentication" are not two settings that should be combinable by accident.
 host = "127.0.0.1"
 port = 8080
 
