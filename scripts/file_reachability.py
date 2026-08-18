@@ -71,6 +71,32 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
+CRATES = ROOT / "crates"
+
+
+def workspace_files() -> list[Path]:
+    """Every Rust source in the workspace, binary and crates alike.
+
+    Third survey to need this, after `inert_components.py` and
+    `curation_survey.py`, and the last of the family. It scanned `src/` alone
+    until 2026-08-14: ten files against a hundred and ninety-two, so it was
+    reporting on 5% of the tree and saying "4 files with public API" as though
+    that were the codebase.
+
+    The case that made it concrete came from the other direction. `StoredMessage`
+    sits in obc-memory with exactly the fields a user interface needs, declared
+    once and referenced nowhere in the workspace — an unreferenced public item,
+    which is precisely the second list this script prints. It went unfound for as
+    long as the crate it lives in was out of scope, and turned up instead by
+    someone trying to compile the GUI.
+
+    Widening moves the subjects and the evidence together, for the same reason
+    as its siblings: a public item used from another crate is used.
+    """
+    out = sorted(SRC.rglob("*.rs"))
+    if CRATES.is_dir():
+        out += sorted(CRATES.glob("*/src/**/*.rs"))
+    return out
 
 # The section rules below are drawn with box characters, and a Windows console
 # defaults to cp1252, which cannot encode them. Printing one raised
@@ -201,8 +227,8 @@ def is_test_file(p: Path) -> bool:
     return (ROOT / "tests") in p.parents or p.name.endswith("_test.rs")
 
 
-files = sorted(SRC.rglob("*.rs"))
-scan_roots = [SRC] + [ROOT / d for d in ("tests", "examples", "benches", "gui", "planner-wasm")]
+files = workspace_files()
+scan_roots = [SRC, CRATES] + [ROOT / d for d in ("tests", "examples", "benches", "gui", "planner-wasm")]
 corpus: list[tuple[Path, str]] = []
 for r in scan_roots:
     if r.is_dir():
@@ -320,30 +346,30 @@ if _missing:
     print("!! the overclaim column below is meaningless — run from a full checkout",
           file=sys.stderr)
 DOC_ALIASES = {
-    # Every key here must be a file this survey actually scans, and on
-    # 2026-08-14 not one of them was. The guard below is new; the staleness is
-    # not, and neither is the shape of it.
+    # This table says "when README says HEARTBEAT it means this file".
     #
-    # This table says "when README says HEARTBEAT it means this file". The scan
-    # walks `src/`. Extraction moved or deleted all seven: heartbeat, journal
-    # and pairing are in obc-memory and obc-safety now, and fusion, bt and
-    # runtime were the modules gate 3 cut. So every alias silently stopped
-    # matching, and the overclaim column went quiet for the best possible
-    # reason and the worst possible presentation -- exactly what the DOCS guard
-    # thirty lines above exists to prevent, in the half of the inputs it does
-    # not cover.
+    # On 2026-08-14 not one of the seven keys resolved. The scan walked `src/`
+    # and extraction had moved or deleted every one of them, so every alias
+    # silently stopped matching and the overclaim column went quiet for the best
+    # possible reason and the worst possible presentation. The guard below was
+    # added that day and shouted about it; the scan now covers `crates/`, so the
+    # four that merely moved are repointed at where they went.
     #
-    # The entries are kept rather than deleted because the doc terms are still
-    # the right terms; what changed is where the code lives. They are dated
-    # instead, and the guard names them until the scan covers crates/ or
-    # someone decides it should not.
-    #
-    # Moved to crates on the dates shown; unmatched by this scan since:
-    "src/memory/heartbeat.rs": ("HEARTBEAT",),          # -> obc-memory
-    "src/memory/journal.rs": ("journal",),              # -> obc-memory
-    "src/security/pairing.rs": ("pairing",),            # -> obc-safety
-    "src/audio/mod.rs": ("audio pipeline", "Audio pipeline", "audio_pipeline"),  # -> obc-audio
-    # Deleted by gate 3, kept as a record of what the docs used to claim:
+    # Repointed 2026-08-14, having been unmatched since each crate was extracted:
+    "crates/obc-memory/src/heartbeat.rs": ("HEARTBEAT",),
+    "crates/obc-memory/src/journal.rs": ("journal",),
+    "crates/obc-safety/src/pairing.rs": ("pairing",),
+    "crates/obc-audio/src/lib.rs": ("audio pipeline", "Audio pipeline", "audio_pipeline"),
+}
+
+# Deleted by gate 3, kept as a record of what the docs used to claim.
+#
+# Separate from the table above because the guard's question is different for
+# these. A live alias that does not resolve is a broken input; a retired one
+# that does not resolve is the point. Keeping both in one dict meant the guard
+# could only be right about one of them, which is how it ended up reporting
+# "7 of 7" — three of those seven were working as intended.
+RETIRED_ALIASES = {
     "src/peripherals/fusion.rs": ("Sensor fusion", "sensor fusion"),
     "src/mission/bt.rs": ("behavior tree", "Behavior Tree", "BT engine"),
     "src/runtime/mod.rs": ("Sandbox", "sandbox"),
@@ -355,13 +381,22 @@ DOC_ALIASES = {
 _stale_aliases = [k for k in DOC_ALIASES if not (ROOT / k).exists()]
 if _stale_aliases:
     print(f"!! {len(_stale_aliases)} of {len(DOC_ALIASES)} doc aliases name files "
-          f"that no longer exist under {SRC.name}/:", file=sys.stderr)
+          f"that do not exist:", file=sys.stderr)
     for k in _stale_aliases:
         print(f"!!   {k}", file=sys.stderr)
-    print("!! their doc terms are not being checked against anything. This survey "
-          "scans src/ only,\n"
-          "!! and src/ is now three modules — the rest of the codebase is in "
-          "crates/ and out of scope.", file=sys.stderr)
+    print("!! their doc terms are not being checked against anything. If the file "
+          "moved, repoint the\n"
+          "!! key; if it was deleted on purpose, move the entry to "
+          "RETIRED_ALIASES.", file=sys.stderr)
+
+# The inverse guard: a retired alias whose file came back is a live one filed
+# under the wrong heading, and would be silently excluded from the scan.
+_revived = [k for k in RETIRED_ALIASES if (ROOT / k).exists()]
+if _revived:
+    print(f"!! {len(_revived)} retired doc alias(es) name files that exist again: "
+          f"{', '.join(_revived)}", file=sys.stderr)
+    print("!! move them back to DOC_ALIASES so their doc terms are checked.",
+          file=sys.stderr)
 
 
 def doc_claims(rel: str) -> list[str]:
