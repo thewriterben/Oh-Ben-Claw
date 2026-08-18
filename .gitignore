@@ -18,6 +18,9 @@ _audit/
 # Node.js
 node_modules/
 gui/node_modules/
+# tauri-build writes generated schemas and capability manifests here on every
+# build. Untracked until 2026-08-14 only because nothing had ever built the GUI.
+gui/src-tauri/gen/
 npm-debug.log*
 
 # Rust / ESP-IDF build output (any crate, any depth)

@@ -62,6 +62,29 @@ use std::sync::Mutex;
 
 // ── Data Types ───────────────────────────────────────────────────────────────
 
+/// Parse a timestamp as SQLite wrote it.
+///
+/// The schema defaults every `created_at`/`updated_at` to `datetime('now')`,
+/// which produces `"2026-08-14 12:00:00"` — no `T`, no offset. `DateTime<Utc>`'s
+/// `FromStr` requires an offset, so that string does not parse, and both call
+/// sites fell back to `Utc::now()` on the error.
+///
+/// The effect was that every timestamp this crate returned was the time you
+/// asked, not the time the row was written, for every session ever created.
+/// Silent, because a fallback that yields a plausible value looks like data.
+/// Found on 2026-08-14 while giving the GUI a real message timestamp to show.
+///
+/// RFC 3339 is still accepted first, so rows written by anything that formats
+/// properly keep working.
+fn parse_sqlite_datetime(raw: &str) -> Option<DateTime<Utc>> {
+    if let Ok(dt) = raw.parse::<DateTime<Utc>>() {
+        return Some(dt);
+    }
+    chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S")
+        .ok()
+        .map(|naive| naive.and_utc())
+}
+
 /// A single stored message in a conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredMessage {
@@ -206,14 +229,10 @@ impl MemoryStore {
                 Ok(Session {
                     id: row.get(0)?,
                     title: row.get(1)?,
-                    created_at: row
-                        .get::<_, String>(2)?
-                        .parse()
-                        .unwrap_or_else(|_| Utc::now()),
-                    updated_at: row
-                        .get::<_, String>(3)?
-                        .parse()
-                        .unwrap_or_else(|_| Utc::now()),
+                    created_at: parse_sqlite_datetime(&row.get::<_, String>(2)?)
+                        .unwrap_or_else(Utc::now),
+                    updated_at: parse_sqlite_datetime(&row.get::<_, String>(3)?)
+                        .unwrap_or_else(Utc::now),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -295,6 +314,40 @@ impl MemoryStore {
                 content,
             })
             .collect())
+    }
+
+    /// Load the last N messages for a session, with their row ids and times.
+    ///
+    /// `load_recent_messages` returns `ChatMessage`, which is `{role, content}`
+    /// — everything a provider needs and nothing a user interface does. The
+    /// `messages` table has stored `id` and `created_at` since the first
+    /// migration; there was simply no way to read them, and `StoredMessage` has
+    /// sat in this file describing that row with no method returning it and no
+    /// reference anywhere in the workspace.
+    ///
+    /// The caller that wanted it was the GUI, which was fabricating a fresh
+    /// UUID per message on every load and had no timestamp at all to render.
+    pub fn load_recent_stored(&self, session_id: &str, limit: usize) -> Result<Vec<StoredMessage>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, role, content, created_at FROM (
+                SELECT id, session_id, role, content, created_at FROM messages
+                WHERE session_id = ?1 ORDER BY id DESC LIMIT ?2
+             ) ORDER BY id ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![session_id, limit as i64], |row| {
+                Ok(StoredMessage {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    created_at: parse_sqlite_datetime(&row.get::<_, String>(4)?)
+                        .unwrap_or_else(Utc::now),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 
     /// Delete a session and all its messages.
@@ -401,5 +454,85 @@ mod tests {
             .append_message(&session_id, ChatRole::User, "Hello!")
             .unwrap();
         assert_eq!(store.message_count(&session_id).unwrap(), 1);
+    }
+
+    // ── Timestamps, and the fallback that hid them ───────────────────────────
+
+    #[test]
+    fn sqlite_datetime_format_parses() {
+        // The exact shape `datetime('now')` writes. Before 2026-08-14 this went
+        // through `str::parse::<DateTime<Utc>>()`, which rejects it for having
+        // no offset, and every caller silently substituted `Utc::now()`.
+        let dt = parse_sqlite_datetime("2026-08-14 12:34:56").expect("sqlite format must parse");
+        assert_eq!(dt.to_rfc3339(), "2026-08-14T12:34:56+00:00");
+    }
+
+    #[test]
+    fn rfc3339_still_parses() {
+        let dt = parse_sqlite_datetime("2026-08-14T12:34:56Z").expect("rfc3339 must still parse");
+        assert_eq!(dt.to_rfc3339(), "2026-08-14T12:34:56+00:00");
+    }
+
+    #[test]
+    fn a_session_timestamp_is_not_simply_now() {
+        // The regression this guards is not "the value is wrong" but "the value
+        // is always the current time", which reads as correct in every log and
+        // every UI. Written into the row directly, because `datetime('now')`
+        // and `Utc::now()` are indistinguishable at test speed.
+        let store = make_store();
+        let session_id = store.create_session("Test").unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE sessions SET created_at = '2020-01-02 03:04:05' WHERE id = ?1",
+                params![session_id],
+            )
+            .unwrap();
+        }
+        let session = store
+            .list_sessions()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == session_id)
+            .expect("session must be listed");
+        assert_eq!(session.created_at.to_rfc3339(), "2020-01-02T03:04:05+00:00");
+    }
+
+    #[test]
+    fn load_recent_stored_carries_ids_and_times() {
+        let store = make_store();
+        let session_id = store.create_session("Test").unwrap();
+        let first = store
+            .append_message(&session_id, ChatRole::User, "one")
+            .unwrap();
+        let second = store
+            .append_message(&session_id, ChatRole::Assistant, "two")
+            .unwrap();
+
+        let rows = store.load_recent_stored(&session_id, 10).unwrap();
+        assert_eq!(rows.len(), 2);
+        // Chronological, and carrying the real row ids rather than ids invented
+        // by the caller — which is the entire reason this method exists.
+        assert_eq!(rows[0].id, first);
+        assert_eq!(rows[1].id, second);
+        assert_eq!(rows[0].role, "user");
+        assert_eq!(rows[1].role, "assistant");
+        assert_eq!(rows[0].content, "one");
+        assert_eq!(rows[0].session_id, session_id);
+    }
+
+    #[test]
+    fn load_recent_stored_respects_the_limit_from_the_end() {
+        let store = make_store();
+        let session_id = store.create_session("Test").unwrap();
+        for n in 0..5 {
+            store
+                .append_message(&session_id, ChatRole::User, &format!("m{n}"))
+                .unwrap();
+        }
+        let rows = store.load_recent_stored(&session_id, 2).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].content, "m3");
+        assert_eq!(rows[1].content, "m4");
     }
 }

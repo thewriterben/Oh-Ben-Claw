@@ -5,7 +5,7 @@ use oh_ben_claw::{
     agent::Agent,
     memory::MemoryStore,
     security::SecurityContext,
-    config::{Config, ProviderConfig, SecurityConfig},
+    config::ProviderConfig,
 };
 
 /// Serializable agent status sent to the frontend.

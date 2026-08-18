@@ -1,14 +1,16 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
-use anyhow::Context;
 
+// `SecurityConfig` moved to obc-safety and `SecretString` to obc-config during
+// the crate extraction; the root crate re-exports both, so these are the same
+// types under their current homes rather than substitutes.
 use oh_ben_claw::{
     agent::Agent,
-    config::{AgentConfig, Config, ProviderConfig, SecurityConfig},
+    config::{AgentConfig, Config, ProviderConfig, SecretString},
     memory::MemoryStore,
     providers,
-    security::SecurityContext,
+    security::{SecurityConfig, SecurityContext},
     tools::builtin::{
         file::FileTool,
         http::HttpTool,
@@ -60,7 +62,9 @@ pub async fn start_agent(
         provider: ProviderConfig {
             name: provider.clone(),
             model: model.clone(),
-            api_key: settings.api_key.clone(),
+            // `api_key` became a `SecretString` so it cannot be logged or
+            // `Debug`-printed by accident. The wrap is the whole change.
+            api_key: settings.api_key.clone().map(SecretString::new),
             base_url: settings.ollama_url.clone(),
             ..Default::default()
         },
@@ -80,12 +84,15 @@ pub async fn start_agent(
     let provider_config = config.provider.clone();
 
     // Build provider
-    let llm_provider = providers::build_provider(&config.provider)
+    let llm_provider = providers::from_config(&config.provider)
         .map_err(|e| format!("Failed to build provider: {e}"))?;
 
     // Build memory store
+    //
+    // `open` takes no path argument any more — obc-memory owns
+    // `default_db_path()`, so callers cannot each invent their own location.
     let memory = Arc::new(
-        MemoryStore::open(None)
+        MemoryStore::open()
             .map_err(|e| format!("Failed to open memory store: {e}"))?,
     );
 
@@ -261,15 +268,24 @@ pub async fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionDto>
     let mem_guard = state.memory.lock().await;
     if let Some(memory) = mem_guard.as_ref() {
         let sessions = memory.list_sessions().map_err(|e| e.to_string())?;
-        Ok(sessions
-            .into_iter()
-            .map(|s| SessionDto {
+        // `Session` no longer carries a message count — it is a separate query
+        // now, so listing sessions does not pay for counting rows in each one.
+        // Asked per session here because the DTO promises the number; if that
+        // ever gets slow, the honest fix is to drop it from the DTO rather than
+        // to report a stale one.
+        let mut out = Vec::with_capacity(sessions.len());
+        for s in sessions {
+            let message_count = memory.message_count(&s.id).map_err(|e| e.to_string())?;
+            out.push(SessionDto {
                 id: s.id,
                 title: s.title,
-                message_count: s.message_count,
-                created_at: s.created_at,
-            })
-            .collect())
+                message_count,
+                // `created_at` is a `DateTime<Utc>` now; the DTO is epoch
+                // milliseconds, matching `now_ms()` used in the fallback below.
+                created_at: s.created_at.timestamp_millis() as u64,
+            });
+        }
+        Ok(out)
     } else {
         Ok(vec![SessionDto {
             id: "default".into(),
@@ -287,11 +303,13 @@ pub async fn create_session(
 ) -> Result<String, String> {
     let mem_guard = state.memory.lock().await;
     if let Some(memory) = mem_guard.as_ref() {
-        let id = uuid();
+        // `create_session` mints the id and returns it, rather than taking one.
+        // Returning the store's id instead of a locally generated one is the
+        // point: the previous shape could hand the frontend an id the database
+        // had never heard of if the insert took a different path.
         memory
-            .create_session(&id, title.as_deref().unwrap_or("New Session"))
-            .map_err(|e| e.to_string())?;
-        Ok(id)
+            .create_session(title.as_deref().unwrap_or("New Session"))
+            .map_err(|e| e.to_string())
     } else {
         Ok(uuid())
     }
@@ -304,18 +322,23 @@ pub async fn load_session_history(
 ) -> Result<Vec<ChatMessageDto>, String> {
     let mem_guard = state.memory.lock().await;
     if let Some(memory) = mem_guard.as_ref() {
+        // `load_recent_stored` rather than `load_recent_messages`: the latter
+        // returns `{role, content}`, which is what a provider needs and leaves a
+        // user interface inventing both an id and a time. This carries the row's
+        // own id and `created_at`, so a reloaded conversation keeps stable
+        // message ids and shows when things were actually said.
         let messages = memory
-            .load_history(&session_id, 100)
+            .load_recent_stored(&session_id, 100)
             .map_err(|e| e.to_string())?;
         Ok(messages
             .into_iter()
             .map(|m| ChatMessageDto {
-                id: uuid(),
+                id: m.id.to_string(),
                 role: m.role,
                 content: m.content,
                 tool_name: None,
                 tool_args: None,
-                timestamp: m.timestamp,
+                timestamp: m.created_at.timestamp_millis().max(0) as u64,
             })
             .collect())
     } else {
@@ -396,8 +419,23 @@ pub async fn remove_node(
 pub async fn scan_usb_devices(
     state: State<'_, AppState>,
 ) -> Result<Vec<PeripheralNodeDto>, String> {
-    use oh_ben_claw::peripherals::registry::BoardRegistry;
-    let registry = BoardRegistry::default();
+    // No capability lookup, and there never could have been one here.
+    //
+    // This used `BoardRegistry::default()` and asked it for the capabilities of
+    // a board literally named `"unknown-usb-serial"`. No such type exists in
+    // the tree — the registry is free functions over a static table
+    // (`lookup_board(vid, pid)`, `known_boards()`), and it is keyed on USB
+    // VID/PID. This scan reads no VID/PID: it checks whether a device node
+    // exists at a path and nothing more.
+    //
+    // So the honest result of "a serial device is present at /dev/ttyUSB0" is a
+    // device with an unknown board and no known capabilities. Reporting an
+    // empty tool list says that. Reporting a looked-up one would have said the
+    // opposite with the same confidence, which is why the fix is not to find a
+    // replacement call.
+    //
+    // Reading the descriptor and calling `registry::lookup_board` is the real
+    // feature; it needs a USB enumeration crate this package does not have.
     let mut found = Vec::new();
 
     // Scan /dev/ttyUSB* and /dev/ttyACM* on Linux
@@ -406,14 +444,7 @@ pub async fn scan_usb_devices(
             let path = format!("{prefix}{i}");
             if std::path::Path::new(&path).exists() {
                 let board_name = "unknown-usb-serial";
-                let tools = registry
-                    .capabilities_for(board_name)
-                    .iter()
-                    .map(|c| PeripheralToolDto {
-                        name: c.to_string(),
-                        description: format!("{c} capability"),
-                    })
-                    .collect();
+                let tools: Vec<PeripheralToolDto> = Vec::new();
 
                 found.push(PeripheralNodeDto {
                     id: uuid(),
