@@ -202,18 +202,49 @@ MimiClaw periodically checks a Markdown task file and triggers the agent when
 uncompleted items are found.  Oh-Ben-Claw adopts the same pattern on top of the
 existing `Scheduler`.
 
-- [x] **`HeartbeatStore`** — reads `~/.oh-ben-claw/HEARTBEAT.md`, detects uncompleted tasks (skips headers, empty lines, and `- [x]` completed checkboxes), and generates a prompt for the agent (`src/memory/heartbeat.rs`)
-- [x] `append_task()` convenience method appends a new `- [ ] …` line to the file
-- [x] `build_prompt()` returns the heartbeat prompt when actionable tasks exist
+- [~] **`HeartbeatStore`** — reads `~/.oh-ben-claw/HEARTBEAT.md`, detects uncompleted tasks (skips headers, empty lines, and `- [x]` completed checkboxes), and generates a prompt for the agent (`src/memory/heartbeat.rs`)
+- [~] `append_task()` convenience method appends a new `- [ ] …` line to the file
+- [~] `build_prompt()` returns the heartbeat prompt when actionable tasks exist
+
+> **Built and tested, and nothing constructs it** (2026-08-14). `HeartbeatStore`
+> lives in `crates/obc-memory/src/heartbeat.rs` with its own unit tests, and every
+> reference to the type in this workspace is inside that file or the `pub use`
+> that re-exports it. Nothing reads `HEARTBEAT.md`, so no prompt is ever built and
+> no task is ever triggered. The "Proactive Task System" heading above describes a
+> capability this software does not have.
+>
+> Marked `[~]` rather than unticked because the code is real and passes its tests;
+> what is missing is a caller. Wiring it means deciding where in the agent loop a
+> heartbeat prompt gets injected, which is a design question and not a line of
+> plumbing — see the same distinction drawn for `saga.rs`.
+>
+> Found by `scripts/file_reachability.py` on the first run after it was widened
+> past `src/`. It could not see this file for as long as the file lived in a
+> crate, which is most of the time it has existed.
+
+<!-- unwired: crates/obc-memory/src/heartbeat.rs -->
 
 ### Daily Journal (inspired by MimiClaw's memory_append_today)
 
 MimiClaw writes per-day Markdown notes as `YYYY-MM-DD.md` files to complement
 its SQLite conversation history.  Oh-Ben-Claw adopts the same pattern.
 
-- [x] **`DailyJournal`** — appends timestamped notes to `~/.oh-ben-claw/journal/YYYY-MM-DD.md`; creates file with date header on first write (`src/memory/journal.rs`)
-- [x] `read_recent(days)` reads the last N days of notes, sections separated by `---`
-- [x] `list_dates()` returns all journal dates in descending order
+- [~] **`DailyJournal`** — appends timestamped notes to `~/.oh-ben-claw/journal/YYYY-MM-DD.md`; creates file with date header on first write (`src/memory/journal.rs`)
+- [~] `read_recent(days)` reads the last N days of notes, sections separated by `---`
+- [~] `list_dates()` returns all journal dates in descending order
+
+> **Built and tested, and nothing constructs it** (2026-08-14). Same shape as
+> `HeartbeatStore` above, found in the same run and for the same reason.
+> `DailyJournal` lives in `crates/obc-memory/src/journal.rs`; every reference to
+> it is inside that file or the `pub use` re-exporting it. No note is ever
+> appended, so no journal file is ever written, so `read_recent` and `list_dates`
+> would read an empty directory if anything called them.
+>
+> This one has a smaller design question than the heartbeat: journalling needs a
+> decision about *what* is worth writing down, not about where in the loop to put
+> it. Left unwired rather than guessed at.
+
+<!-- unwired: crates/obc-memory/src/journal.rs -->
 
 ### HTTP Proxy Support (inspired by MimiClaw's proxy system)
 
@@ -572,8 +603,14 @@ Gap analysis + step plan: `docs/PHASE16-PLAN.md`.
 Durable, resumable, self-verifying operation across hours/days and across crashes,
 reboots, and context limits — the Anthropic initializer+worker harness pattern,
 adapted so the externalized "progress file" is the **physical world state**. Builds
-on `scheduler`, `heartbeat`, `agent`, `memory`, and `runtime`. Depends on Track 0.
+on `scheduler`, `agent`, and `memory`. Depends on Track 0.
 Design: `docs/PHASE17-PLAN.md`. Implementation: `src/harness/`.
+
+> **Corrected 2026-08-14.** This line read "Builds on `scheduler`, `heartbeat`,
+> `agent`, `memory`, and `runtime`". `runtime` was cut by gate 3 and no longer
+> exists, and `heartbeat` is built but constructed by nothing (see the Proactive
+> Task System section above), so the harness cannot be building on either. Both
+> were listed as foundations of a phase marked complete.
 
 - [x] **Durable execution** — checkpoint agent/task state to persistent storage; resume cleanly after crash/reboot without re-running completed physical actions (model "non-persistable regions" around side-effecting tool calls) — *atomic tmp+rename checkpoints at every transition; objectives marked `InFlight` **before** the agent acts; resume never blindly re-runs — verification evidence decides; check-less in-flight objectives fail closed*
 - [x] **Initializer + worker split** — initializer establishes environment and an externalized world-state/objective record; worker advances one objective at a time — *`Harness::initialize` (load-or-create + env snapshot + in-flight quarantine) / `run_once` (one transition per pass, verification backlog first)*
