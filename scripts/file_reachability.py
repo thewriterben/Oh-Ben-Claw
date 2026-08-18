@@ -79,7 +79,7 @@ def workspace_files() -> list[Path]:
 
     Third survey to need this, after `inert_components.py` and
     `curation_survey.py`, and the last of the family. It scanned `src/` alone
-    until 2026-08-14: ten files against a hundred and ninety-two, so it was
+    until 2026-08-18: ten files against a hundred and ninety-two, so it was
     reporting on 5% of the tree and saying "4 files with public API" as though
     that were the codebase.
 
@@ -104,7 +104,7 @@ def workspace_files() -> list[Path]:
 # and printed its counts -- a crash that looks like a broken tool and is
 # actually a broken terminal.
 #
-# The fix moved to scripts/console.py on 2026-08-14, after a third script hit
+# The fix moved to scripts/console.py on 2026-08-15, after a third script hit
 # it. Two copies were a duplication; three would have been this repository's
 # own finding about instruments that record a lesson without enforcing it.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -426,7 +426,7 @@ DOC_ALIASES = {
     # added that day and shouted about it; the scan now covers `crates/`, so the
     # four that merely moved are repointed at where they went.
     #
-    # Repointed 2026-08-14, having been unmatched since each crate was extracted:
+    # Repointed 2026-08-18, having been unmatched since each crate was extracted:
     "crates/obc-memory/src/heartbeat.rs": ("HEARTBEAT",),
     "crates/obc-memory/src/journal.rs": ("journal",),
     "crates/obc-safety/src/pairing.rs": ("pairing",),
