@@ -664,6 +664,30 @@ impl Tool for MqttNodeTool {
         obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
     }
 
+    /// External, because this output was produced on the other side of a broker.
+    ///
+    /// `Tool::output_trust` carries the same "MUST override" doc comment as
+    /// `risk_class` and had the same amount of enforcement behind it: none. This
+    /// impl left it at `Trusted`, so a node's reply — whatever a device on the
+    /// MQTT bus chose to send back — entered the conversation with the standing
+    /// of something this host measured itself.
+    ///
+    /// It is not that. `docs/SPINE-AUTH.md` exists because a frame on this bus
+    /// can be forged or replayed, and `NodePairingManager::is_trusted` exists
+    /// because a node can be unknown. Content that arrives over a wire is
+    /// relayed content, and taint tracking is the layer that says so.
+    ///
+    /// The consequence is real and worth stating: successful output now enters
+    /// the run's `TaintPool`, so a later *privileged* call (physical,
+    /// irreversible, or with a non-`None` blast radius) whose arguments echo it
+    /// is checked. Under the default `taint_mode = "warn"` that logs and counts;
+    /// under `"enforce"` it refuses unless the operator granted the tool. A
+    /// sensor reading relayed through here is not the same thing as a driver
+    /// reading the sensor, and the difference is what this declares.
+    fn output_trust(&self) -> obc_tool_api::OutputTrust {
+        obc_tool_api::OutputTrust::External
+    }
+
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let result = self
             .spine
