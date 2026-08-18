@@ -438,9 +438,23 @@ and enhanced reliability.
 
 - [x] **Agent-to-Agent (A2A) protocol** — implementation of Google's open protocol for inter-agent communication (`src/a2a/mod.rs`)
 - [x] Core types: `AgentCard`, `A2ASkill`, `TaskRequest`, `TaskResponse`, `TaskStatus`, `Artifact`
-- [x] **`A2AClient`** — async HTTP client with `discover()`, `send_task()`, `get_task_status()` methods
+- [~] **`A2AClient`** — async HTTP client with `discover()`, `send_task()`, `get_task_status()` methods
 - [x] **`A2AServer`** — handles discovery and task requests for exposing Oh-Ben-Claw as an A2A endpoint
 - [x] **`A2AConfig`** added to root `Config` with `enabled`, `agent_name`, `agent_description`, `agent_url`, `skills` fields
+
+> **The client half is built and constructed nowhere** (2026-08-14). README.md
+> has said so for some time — "`A2AClient` is still constructed **nowhere**:
+> this agent can be called, and cannot call out" — and this line went on ticking
+> it as delivered. Two documents disagreeing about the same type, with nothing
+> comparing them.
+>
+> The server half is real and reachable; A2A interop is one-directional, and the
+> section heading should be read that way.
+>
+> Found by `scripts/file_reachability.py` once its doc cross-reference went from
+> whole files down to individual items. `A2AClient` sits in
+> `crates/obc-a2a/src/lib.rs` beside twenty-one live names, so the file was never
+> flagged and the claim was never checked.
 
 ### Enhanced Configuration Validation
 
