@@ -72,7 +72,7 @@ use std::sync::Mutex;
 /// The effect was that every timestamp this crate returned was the time you
 /// asked, not the time the row was written, for every session ever created.
 /// Silent, because a fallback that yields a plausible value looks like data.
-/// Found on 2026-08-14 while giving the GUI a real message timestamp to show.
+/// Found on 2026-08-18 while giving the GUI a real message timestamp to show.
 ///
 /// RFC 3339 is still accepted first, so rows written by anything that formats
 /// properly keep working.
@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn sqlite_datetime_format_parses() {
-        // The exact shape `datetime('now')` writes. Before 2026-08-14 this went
+        // The exact shape `datetime('now')` writes. Before 2026-08-18 this went
         // through `str::parse::<DateTime<Utc>>()`, which rejects it for having
         // no offset, and every caller silently substituted `Utc::now()`.
         let dt = parse_sqlite_datetime("2026-08-14 12:34:56").expect("sqlite format must parse");

@@ -27,7 +27,7 @@ rust-version = "1.77.2"
 # and no gate would have said so — `cargo test --workspace` passes 1558 tests
 # without touching a line of it.
 #
-# Found on 2026-08-14 by trying to verify a four-line edit to `commands.rs` and
+# Found on 2026-08-18 by trying to verify a four-line edit to `commands.rs` and
 # discovering there was no way to. This table is kept because moving the
 # failure from "cannot resolve the manifest" to "missing an asset" is the
 # difference between a wall and a task; supplying the icons is that task, and
