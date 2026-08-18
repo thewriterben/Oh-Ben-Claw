@@ -11,17 +11,12 @@ use oh_ben_claw::{
     memory::MemoryStore,
     providers,
     security::{SecurityConfig, SecurityContext},
-    tools::builtin::{
-        file::FileTool,
-        http::HttpTool,
-        memory::MemoryTool,
-        shell::ShellTool,
-    },
+    tools::builtin::{file::FileTool, http::HttpTool, memory::MemoryTool, shell::ShellTool},
 };
 
 use crate::state::{
-    AgentHandle, AgentStatusDto, AppSettingsDto, AppState,
-    ChatMessageDto, PeripheralNodeDto, PeripheralToolDto, SessionDto, ToolCallEntryDto,
+    AgentHandle, AgentStatusDto, AppSettingsDto, AppState, ChatMessageDto, PeripheralNodeDto,
+    PeripheralToolDto, SessionDto, ToolCallEntryDto,
 };
 
 fn now_ms() -> u64 {
@@ -38,7 +33,8 @@ fn uuid() -> String {
     let mut h = DefaultHasher::new();
     now_ms().hash(&mut h);
     std::thread::current().id().hash(&mut h);
-    format!("{:016x}-{:04x}-4{:03x}-{:04x}-{:012x}",
+    format!(
+        "{:016x}-{:04x}-4{:03x}-{:04x}-{:012x}",
         h.finish(),
         (h.finish() >> 16) & 0xffff,
         (h.finish() >> 8) & 0xfff,
@@ -91,10 +87,8 @@ pub async fn start_agent(
     //
     // `open` takes no path argument any more — obc-memory owns
     // `default_db_path()`, so callers cannot each invent their own location.
-    let memory = Arc::new(
-        MemoryStore::open()
-            .map_err(|e| format!("Failed to open memory store: {e}"))?,
-    );
+    let memory =
+        Arc::new(MemoryStore::open().map_err(|e| format!("Failed to open memory store: {e}"))?);
 
     // Build security context
     let security = SecurityContext::new(&config.security)
@@ -142,8 +136,13 @@ pub async fn start_agent(
     // Build agent
     let session_id = uuid();
     let agent = Arc::new(
-        Agent::new(config.agent.clone(), llm_provider, Arc::clone(&memory), tools)
-            .with_policy(security.policy.clone()),
+        Agent::new(
+            config.agent.clone(),
+            llm_provider,
+            Arc::clone(&memory),
+            tools,
+        )
+        .with_policy(security.policy.clone()),
     );
 
     let mut agent_guard = state.agent.lock().await;
@@ -244,7 +243,9 @@ pub async fn send_message(
 }
 
 #[tauri::command]
-pub async fn get_agent_status(state: State<'_, AppState>) -> Result<Option<AgentStatusDto>, String> {
+pub async fn get_agent_status(
+    state: State<'_, AppState>,
+) -> Result<Option<AgentStatusDto>, String> {
     let agent_guard = state.agent.lock().await;
     if let Some(handle) = agent_guard.as_ref() {
         Ok(Some(AgentStatusDto {
@@ -347,25 +348,23 @@ pub async fn load_session_history(
 }
 
 #[tauri::command]
-pub async fn clear_session(
-    session_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn clear_session(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let mem_guard = state.memory.lock().await;
     if let Some(memory) = mem_guard.as_ref() {
-        memory.clear_session(&session_id).map_err(|e| e.to_string())?;
+        memory
+            .clear_session(&session_id)
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn delete_session(
-    session_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn delete_session(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let mem_guard = state.memory.lock().await;
     if let Some(memory) = mem_guard.as_ref() {
-        memory.delete_session(&session_id).map_err(|e| e.to_string())?;
+        memory
+            .delete_session(&session_id)
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -408,7 +407,10 @@ pub async fn remove_node(
     let mut nodes = state.nodes.lock().await;
     // Emit a removal event (status = "removed") for any matching node.
     if let Some(node) = nodes.iter().find(|n| n.id == node_id).cloned() {
-        let removed = PeripheralNodeDto { status: "removed".into(), ..node };
+        let removed = PeripheralNodeDto {
+            status: "removed".into(),
+            ..node
+        };
         let _ = app_handle.emit("node-status-change", &removed);
     }
     nodes.retain(|n| n.id != node_id);
@@ -499,10 +501,7 @@ pub async fn get_vault_status(state: State<'_, AppState>) -> Result<String, Stri
 }
 
 #[tauri::command]
-pub async fn unlock_vault(
-    password: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn unlock_vault(password: String, state: State<'_, AppState>) -> Result<(), String> {
     // In a full implementation this would use the Vault from security::vault
     // For now we accept any non-empty password and mark as unlocked
     if password.is_empty() {
@@ -544,10 +543,7 @@ pub async fn set_vault_secret(
 }
 
 #[tauri::command]
-pub async fn delete_vault_secret(
-    name: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn delete_vault_secret(name: String, state: State<'_, AppState>) -> Result<(), String> {
     let unlocked = *state.vault_unlocked.lock().await;
     if !unlocked {
         return Err("Vault is locked".into());
