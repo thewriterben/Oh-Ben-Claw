@@ -110,7 +110,7 @@ routing  = "manual"
 name   = "vision-agent"
 role   = """Vision specialist. Captures images from the XIAO ESP32S3-Sense camera, \
           analyses visual context, detects objects and scenes, and returns findings."""
-tools  = ["camera_capture", "sensor_read", "memory_note"]
+tools  = ["camera_capture", "sensor_read", "memory"]
 
 # Audio agent — drives the Sipeed mic array for speech-to-text
 [[orchestrator.agents]]
@@ -133,7 +133,7 @@ name   = "sensing-agent"
 role   = """Environmental sensing specialist. Reads temperature and humidity from \
           the DHT22 sensor on the NanoPi Neo3 GPIO header. Logs readings and \
           triggers alerts when configured thresholds are exceeded."""
-tools  = ["sensor_read", "gpio_read", "i2c_read", "memory_note"]
+tools  = ["sensor_read", "gpio_read", "i2c_read", "memory"]
 
 # ── Deployment Scheme Generator ───────────────────────────────────────────────
 # Records the hardware inventory this deployment was planned from. Normally
