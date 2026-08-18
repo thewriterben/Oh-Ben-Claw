@@ -351,6 +351,21 @@ jobs:
       # the configs, because nothing compared the two. This is the comparison.
       - name: every tool named in a shipped config exists
         run: python3 scripts/check_tool_names.py
+
+      # A tool that actuates must declare it, because the Track 0 gate believes
+      # it. `track0_authorize` opens with `if !risk.physical { return Ok(()); }`
+      # — before the SafetyGate limit check on (node_id, tool, pin, value) and
+      # before the tamper-evident audit record.
+      #
+      # `Tool::risk_class` defaults to non-physical and its doc says actuating
+      # tools "MUST override this". On 2026-08-18 nothing enforced that MUST:
+      # every tool in obc-peripherals took the default, as did MqttNodeTool and
+      # P2pNodeTool, which is how every peripheral node's tools reach the agent.
+      # The gate and the audit chain were skipped for the whole class of call
+      # they exist for, and every other gate stayed green because nothing else
+      # reads risk_class.
+      - name: tools that actuate declare themselves physical
+        run: python3 scripts/check_physical_tools.py
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run security audit

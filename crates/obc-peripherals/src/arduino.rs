@@ -187,6 +187,10 @@ impl Tool for ArduinoGpioReadTool {
         "arduino_gpio_read"
     }
 
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::safe()
+    }
+
     fn description(&self) -> &str {
         "Read the digital value (HIGH=1 or LOW=0) of a GPIO pin on an Arduino \
          board connected via USB serial. Uses Arduino pin numbering (D0–D13 \
@@ -249,6 +253,10 @@ struct ArduinoGpioWriteTool {
 impl Tool for ArduinoGpioWriteTool {
     fn name(&self) -> &str {
         "arduino_gpio_write"
+    }
+
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
     }
 
     fn description(&self) -> &str {
@@ -322,6 +330,10 @@ impl Tool for ArduinoAnalogReadTool {
         "arduino_analog_read"
     }
 
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::safe()
+    }
+
     fn description(&self) -> &str {
         "Read the analog value (0–1023) from an analog input pin on an Arduino. \
          The value is proportional to the voltage on the pin (0V = 0, 5V = 1023 \
@@ -386,6 +398,10 @@ struct ArduinoAnalogWriteTool {
 impl Tool for ArduinoAnalogWriteTool {
     fn name(&self) -> &str {
         "arduino_analog_write"
+    }
+
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
     }
 
     fn description(&self) -> &str {
@@ -462,6 +478,10 @@ struct ArduinoPingTool {
 impl Tool for ArduinoPingTool {
     fn name(&self) -> &str {
         "arduino_ping"
+    }
+
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass::safe()
     }
 
     fn description(&self) -> &str {
