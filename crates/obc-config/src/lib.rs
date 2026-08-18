@@ -406,6 +406,24 @@ fn default_gateway_host() -> String {
     "127.0.0.1".to_string()
 }
 
+/// Whether a configured host string keeps a listener on this machine.
+///
+/// Parsed as an address rather than string-matched, so `127.0.0.53`, `::1` and
+/// `127.1` are all recognised and `0.0.0.0` is not. A name that is not an IP
+/// literal is treated as routable: it may well resolve to loopback, and the
+/// consequence of guessing wrong in that direction is an unauthenticated
+/// endpoint on a network, so the guess goes the other way and the operator sets
+/// a token or an IP.
+pub fn is_loopback_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    bare.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
 fn default_gateway_port() -> u16 {
     8080
 }
@@ -1866,10 +1884,36 @@ impl Config {
         }
 
         // Validate gateway
+        //
+        // An unprotected gateway on 127.0.0.1 and an unprotected gateway on
+        // 0.0.0.0 are not the same event, and until 2026-08-18 they produced the
+        // same line. The first is how everyone develops. The second publishes an
+        // endpoint that can run `shell` to whoever can route to the host, and it
+        // scrolled past in a warnings list next to "provider model requirement
+        // check".
+        //
+        // So the routable case fails the load. There is a token mechanism, it is
+        // one line of config, and the alternative to setting it is an open door
+        // — the same reasoning that made `[spine] tls = true` refuse to start
+        // rather than warn, because someone who bound to a routable address made
+        // a deployment decision and is entitled to learn it did not include
+        // authentication.
         if self.gateway.enabled && self.gateway.api_token.is_none() {
-            warnings.push(
-                "gateway is enabled without an api_token — the API is unprotected".to_string(),
-            );
+            if is_loopback_host(&self.gateway.host) {
+                warnings.push(format!(
+                    "gateway is enabled on {} without an api_token — unprotected, \
+                     but reachable only from this machine",
+                    self.gateway.host
+                ));
+            } else {
+                anyhow::bail!(
+                    "gateway.enabled is true on host {} with no gateway.api_token — \
+                     that publishes this agent's tools, including `shell`, to anything \
+                     that can reach the port. Set gateway.api_token, or bind \
+                     gateway.host to 127.0.0.1 and put a reverse proxy in front.",
+                    self.gateway.host
+                );
+            }
         }
         if self.gateway.port == 0 {
             anyhow::bail!("gateway.port must be > 0");
@@ -2205,6 +2249,56 @@ mod tests {
         config.gateway.enabled = true;
         let warnings = config.validate().unwrap();
         assert!(warnings.iter().any(|w| w.contains("unprotected")));
+        // The default host is loopback, which is why this is a warning and not
+        // a refusal. If that default ever changes, this test should start
+        // failing rather than quietly become a test of the other branch.
+        assert!(is_loopback_host(&config.gateway.host));
+    }
+
+    #[test]
+    fn validate_rejects_routable_gateway_without_token() {
+        for host in ["0.0.0.0", "192.168.1.10", "::", "example.internal"] {
+            let mut config = Config::default();
+            config.gateway.enabled = true;
+            config.gateway.host = host.to_string();
+            let err = config
+                .validate()
+                .expect_err(&format!("{host} with no token must not load"));
+            assert!(
+                err.to_string().contains("gateway.api_token"),
+                "{host}: error should name the fix, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_accepts_routable_gateway_with_a_token() {
+        let mut config = Config::default();
+        config.gateway.enabled = true;
+        config.gateway.host = "0.0.0.0".to_string();
+        config.gateway.api_token = Some("a-token".to_string());
+        // The refusal is about the *combination*. A token is the documented fix,
+        // so it has to actually work.
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn loopback_hosts_are_recognised_by_parsing_not_by_spelling() {
+        for host in [
+            "127.0.0.1",
+            "127.0.0.53",
+            "::1",
+            "[::1]",
+            "localhost",
+            "LOCALHOST",
+        ] {
+            assert!(is_loopback_host(host), "{host} should be loopback");
+        }
+        // `0.0.0.0` means "every interface", which is the opposite of loopback
+        // however much it looks like a local address.
+        for host in ["0.0.0.0", "::", "10.0.0.5", "gateway.local", ""] {
+            assert!(!is_loopback_host(host), "{host} should not be loopback");
+        }
     }
 
     #[test]
