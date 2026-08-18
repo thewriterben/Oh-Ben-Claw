@@ -235,6 +235,70 @@ for r in scan_roots:
         for f in r.rglob("*.rs"):
             corpus.append((f, strip_imports(read(f))))
 
+DECL_RE = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?"
+    r"(?:struct|enum|trait|fn|const|static|type|union|mod)\s+"
+)
+IMPL_RE = re.compile(r"^\s*impl\b")
+NOISE_RE = re.compile(r"^\s*(?://|#\[|#!\[)")
+
+
+def own_file_uses(text: str, name: str) -> int:
+    """Occurrences of `name` in its own file that are neither its declaration
+    nor a comment nor an attribute.
+
+    The discriminator this whole section turns on. `BrowserNavigateTool` is
+    referenced nowhere outside `browser.rs` and the file reports it unused --
+    but `all_browser_tools_with_reach`, three hundred lines down in the same
+    file, constructs it, and *that* function is called from
+    `obc-tools/src/lib.rs`. The type is reached, through a factory, and
+    reporting it as unused reads as "the browser suite is dead".
+
+    `A2AClient` looks identical to a scan that stops at the file boundary and is
+    not: its only two mentions are `pub struct A2AClient` and `impl A2AClient`,
+    so nothing constructs it anywhere, including at home.
+
+    Skipping declarations is what separates those. A struct with an impl block
+    scores two mentions and zero uses; one `Name::new()` in a factory scores
+    one use. Comments and attributes are dropped for the same reason -- a doc
+    example that names the type is not a caller.
+
+    `impl Trait for Type` is counted as a use of *Trait* and not of *Type*, and
+    getting that backwards produced this function's first false positive.
+    `NodeSelfTest` is a trait with one implementor in its own file and a doc
+    that correctly says it is wired in `tests/offgrid_fleet_loop.rs`; skipping
+    the whole `impl` line reported it as constructed nowhere and claimed as
+    shipped. Implementing a trait is using it. Being on the right-hand side of
+    `for` is part of your own definition.
+
+    Known limitation, not fixed: the corpus has `use` lines stripped, so a trait
+    that is imported to bring its methods into scope and never named again in
+    the body is invisible from outside. That is why the check below only reports
+    an item when the docs also name it -- a bare list of these would be mostly
+    traits used exactly that way.
+    """
+    pat = re.compile(rf"\b{re.escape(name)}\b")
+    n = 0
+    for line in text.splitlines():
+        if NOISE_RE.match(line):
+            continue
+        head = line.split("{", 1)[0]
+        if IMPL_RE.match(line):
+            trait_part, _, type_part = head.partition(" for ")
+            if type_part and pat.search(trait_part):
+                n += 1          # `impl Name for X` — a use of the trait
+                continue
+            if pat.search(head):
+                continue        # inherent `impl Name` — part of its definition
+        elif DECL_RE.match(line) and pat.search(head) and re.search(
+            rf"(?:struct|enum|trait|fn|const|static|type|union|mod)"
+            rf"(?:<[^>]*>)?\s+{re.escape(name)}\b", head
+        ):
+            continue            # the declaration itself
+        n += len(pat.findall(line))
+    return n
+
+
 show_all = "--all" in sys.argv
 rows, impl_only = [], []
 
@@ -264,6 +328,11 @@ for f in files:
                 else:
                     prod += n
 
+    # Of the items nothing outside references, which are constructed at home?
+    unref = sorted(set(usable) - set(hits))
+    internal = sorted(n for n in unref if own_file_uses(text, n) > 0)
+    nowhere = sorted(n for n in unref if n not in set(internal))
+
     loc = len(text.splitlines())
     rows.append({
         "file": f.relative_to(ROOT).as_posix(),
@@ -272,7 +341,9 @@ for f in files:
         "used": len(hits),
         "prod": prod,
         "test": test,
-        "unref": sorted(set(usable) - set(hits)),
+        "unref": unref,
+        "internal": internal,
+        "nowhere": nowhere,
     })
 
 # ── Is a flagged file also *claimed* in the docs? ────────────────────────────
@@ -413,10 +484,42 @@ def doc_claims(rel: str) -> list[str]:
     return found
 
 
+def item_claims(name: str) -> list[str]:
+    """Where the docs name this public item as a thing that exists.
+
+    The file-level check above only asks about files where *nothing* is
+    referenced. `A2AClient` is constructed nowhere in the workspace and
+    ROADMAP.md ticks it `- [x]`, but it lives in `obc-a2a/src/lib.rs` alongside
+    twenty live items, so the file is not flagged and the claim was never
+    checked. README.md already says, in a blockquote, that it is "constructed
+    **nowhere**" — two documents disagreeing, with nothing comparing them.
+
+    Backticked or bolded only. A bare word would match prose that happens to use
+    the name, and this is the column people act on.
+    """
+    needles = (f"`{name}`", f"**{name}**")
+    return [doc for doc, text in DOCS.items()
+            if any(n in text for n in needles)]
+
+
 dead = [r for r in rows if r["used"] == 0]
 for r in dead:
     r["docs"] = doc_claims(r["file"])
 test_only = [r for r in rows if r["used"] and r["prod"] == 0 and r["test"]]
+
+# Item-level overclaims: constructed nowhere at all, and named in a document
+# that says what ships. Only for files that are otherwise alive — a wholly
+# unwired file is already reported above, and reporting it twice would double
+# the loudest number in the output.
+item_over = []
+for r in rows:
+    if r["used"] == 0:
+        continue
+    for name in r["nowhere"]:
+        claims = item_claims(name)
+        if claims:
+            item_over.append((name, r["file"], claims))
+item_over.sort(key=lambda t: t[0])
 
 print(f"{len(rows)} files with public API, {len(files)} files scanned.\n")
 
@@ -451,13 +554,39 @@ if test_only:
 else:
     print("  none")
 
+print("\n── Public items constructed nowhere, and claimed as shipped ──")
+if _missing:
+    print("  doc cross-reference UNAVAILABLE — see the warning above.")
+elif item_over:
+    print(f"{'item':<28}{'declared in':<46}claimed in")
+    for name, file, claims in item_over:
+        print(f"{name:<28}{file:<46}{', '.join(claims)}")
+    print(f"\n{len(item_over)} item(s). Each is a public name that nothing in the "
+          "workspace\nconstructs — not even its own file — inside a file that is "
+          "otherwise live, so\nthe file-level list above cannot see it. A document "
+          "that says what ships names\nit anyway.")
+else:
+    print("  none")
+
 partial = [r for r in rows if r["used"] and r["unref"]]
+nowhere_total = sum(len(r["nowhere"]) for r in partial)
+internal_total = sum(len(r["internal"]) for r in partial)
 print(f"\n── Files with some unreferenced public items ── ({len(partial)} files)")
-for r in sorted(partial, key=lambda r: -len(r["unref"]))[: (len(partial) if show_all else 12)]:
-    print(f"  {r['file']:<44}{len(r['unref']):>3} of {r['pub']:>3} unused: "
-          f"{', '.join(r['unref'][:5])}{' …' if len(r['unref']) > 5 else ''}")
+print(f"   {nowhere_total} constructed nowhere; {internal_total} reached only from "
+      f"inside their own file")
+print("   (the second kind is usually a factory — `all_browser_tools` builds the "
+      "seven browser\n    tools three hundred lines below where they are declared, "
+      "and is itself called from\n    obc-tools/src/lib.rs. Counting those as "
+      "unused reads as 'the suite is dead'.)")
+for r in sorted(partial, key=lambda r: -len(r["nowhere"]))[: (len(partial) if show_all else 12)]:
+    if not r["nowhere"] and not show_all:
+        continue
+    shown = r["nowhere"] or r["internal"]
+    kind = "nowhere" if r["nowhere"] else "in-file only"
+    print(f"  {r['file']:<44}{len(shown):>3} of {r['pub']:>3} {kind}: "
+          f"{', '.join(shown[:5])}{' …' if len(shown) > 5 else ''}")
 if not show_all and len(partial) > 12:
-    print(f"  … {len(partial) - 12} more (--all)")
+    print(f"  … {len(partial) - 12} more files (--all)")
 
 if impl_only:
     print(f"\n── No countable public API (impl-only / generic names) ── ({len(impl_only)} files)")
