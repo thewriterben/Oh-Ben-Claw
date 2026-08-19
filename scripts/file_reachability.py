@@ -630,6 +630,47 @@ if dead:
 else:
     print("none")
 
+# ── Disclosed here, ticked as shipped there ─────────────────────────────────
+# A `<!-- unwired: -->` marker suppresses the overclaim flag for a file, and
+# should: the marker exists so that being honest about a gap does not make this
+# tool shout louder. But it says one thing -- "this component is parked" -- and
+# it was silently doing a second: excusing *every other document* from ever
+# ticking the same component as shipped.
+#
+# Found on 2026-08-19, one commit after ARCHITECTURE.md joined the claim set.
+# ROADMAP.md discloses `crates/obc-memory/src/heartbeat.rs` as unwired with a
+# stated condition to wire it. ARCHITECTURE.md row 206 reads
+# `| Proactive tasks | x | ok HEARTBEAT.md |`. Both are in this repository, both
+# are in the claim set, and the marker in one of them made the tick in the other
+# unreportable.
+#
+# So the marker's scope is the document that carries it. Another document is
+# free to disagree, and when it does, that is a contradiction a reader can walk
+# straight into -- and worse than a plain overclaim, because the repository
+# demonstrably knows better somewhere else.
+contradictions = []
+for r in dead:
+    if r["file"] not in DISCLOSED:
+        continue
+    elsewhere = [d for d in r["docs"] if d != DISCLOSED_BY[r["file"]]]
+    if elsewhere:
+        contradictions.append((r["file"], DISCLOSED_BY[r["file"]], elsewhere))
+contradictions.sort()
+
+print("\n── Disclosed as unwired in one document, presented as shipped in another ──")
+if _missing:
+    print("  doc cross-reference UNAVAILABLE — see the warning above.")
+elif contradictions:
+    print(f"{'file':<44}{'disclosed in':<18}also claimed in")
+    for file, by, elsewhere in contradictions:
+        print(f"{file:<44}{by:<18}{', '.join(elsewhere)}")
+    print(f"\n{len(contradictions)} contradiction(s). The disclosure is doing its "
+          f"job; the other\ndocument has not been told. Fix the tick, not the "
+          f"marker — a second marker\nwould only teach both pages to disagree "
+          f"quietly.")
+else:
+    print("  none")
+
 print("\n── Referenced only from tests ──")
 if test_only:
     for r in sorted(test_only, key=lambda r: -r["loc"]):
