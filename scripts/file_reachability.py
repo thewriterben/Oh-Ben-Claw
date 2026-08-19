@@ -299,6 +299,57 @@ def own_file_uses(text: str, name: str) -> int:
     return n
 
 
+def strip_prose(body: str) -> str:
+    """Blank the comment tail of each line, so a word in prose is not a reference.
+
+    The scan counted `\\bname\\b` anywhere in a file. Three of `reflexion.rs`'s
+    ten public items read as used on that basis and none of the matches were
+    references: `summary` matched 81 times across the workspace, `is_complete`
+    7, `PlanStep` 8. So the file reported "7 of 10 items used", stayed out of
+    the unwired list, and a 487-line module with no caller sat behind comments
+    that happened to contain the right words. The same weighting reported
+    `feedback.rs` as reached from a Mattermost adapter, on the strength of
+
+        //! * The bot ignores its own messages to avoid feedback loops.
+
+    Line-local, and deliberately not a lexer. The first attempt stripped block
+    comments and string literals across the whole file with regexes, and the
+    unwired count went from 4 to 42: `mattermost.rs`, `irc.rs`, `signal.rs`,
+    `particle.rs` and `pose_fusion.rs` all reported as referenced by nothing,
+    every one of them demonstrably live. Rust has `r#"..."#` and `'"'`, so a
+    naive string matcher desynchronises and blanks whatever follows until the
+    next quote — the damage is unbounded and silent. A measurement that suddenly
+    finds ten times more is exactly as suspect as one that finds none.
+
+    So: nothing crosses a line boundary, and a line containing a `"` before its
+    `//` is left entirely alone. That keeps a URL inside a string from hiding
+    real code to its right. The cost is that a comment on a line that also holds
+    a string still counts, so a few false positives survive. That is the right
+    direction to err: this column is the one people act on, and hiding a real
+    reference would turn a live file into a reported defect.
+    """
+    out = []
+    for line in body.split("\n"):
+        i = line.find("//")
+        if i != -1 and '"' not in line[:i]:
+            line = line[:i] + " " * (len(line) - i)
+        out.append(line)
+    return "\n".join(out)
+
+
+# A module-level item is never reached through a dot. `x.summary()` is a method
+# on some other type, `x.is_complete()` likewise -- both real code, neither a
+# reference to the free function of that name. Struct and enum names cannot
+# follow a dot at all. So a use is an occurrence not preceded by `.` or by
+# another identifier character.
+def use_pattern(name: str) -> re.Pattern:
+    return re.compile(rf"(?<![.\w]){re.escape(name)}\b")
+
+
+# Applied here rather than at corpus construction because `strip_prose` is
+# defined below it; the bodies are read once and rewritten once.
+corpus = [(f, strip_prose(body)) for f, body in corpus]
+
 show_all = "--all" in sys.argv
 rows, impl_only = [], []
 
@@ -316,7 +367,7 @@ for f in files:
     prod = test = 0
     hits: dict[str, int] = {}
     for name in usable:
-        pat = re.compile(rf"\b{re.escape(name)}\b")
+        pat = use_pattern(name)
         for g, body in corpus:
             if g == f:
                 continue
@@ -329,8 +380,13 @@ for f in files:
                     prod += n
 
     # Of the items nothing outside references, which are constructed at home?
+    # Prose stripped here too: `own_file_uses` already skipped whole `//` lines,
+    # but a trailing comment on a code line, a `/* */` block or a string could
+    # still make a declaration look self-used and land it in `internal` rather
+    # than `nowhere` — the softer of the two buckets.
+    home = strip_prose(text)
     unref = sorted(set(usable) - set(hits))
-    internal = sorted(n for n in unref if own_file_uses(text, n) > 0)
+    internal = sorted(n for n in unref if own_file_uses(home, n) > 0)
     nowhere = sorted(n for n in unref if n not in set(internal))
 
     loc = len(text.splitlines())
