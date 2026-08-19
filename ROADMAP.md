@@ -1091,7 +1091,9 @@ from having been forgotten.
   loop. Gated by `tests/clawcam_spatial_wiring.rs` against a real controller and
   a real grid; its four existing unit tests never touched either, so all four
   could pass while the module could not affect navigation, which is what it was.
-- [ ] **`movement/feedback.rs` (269 LOC, 6 tests) — deliberately unwired.**
+<!-- unwired: crates/obc-movement/src/feedback.rs -->
+- [ ] **`crates/obc-movement/src/feedback.rs` (269 LOC, 6 tests) — deliberately
+  unwired.**
   Closed-loop proportional control: read the actuator's actual position from
   world memory, correct toward the target each tick, every step through the
   Track 0 gate. Wiring it means turning on *repeated, unattended actuation*, which
@@ -1100,6 +1102,15 @@ from having been forgotten.
   `sensor.{joint}_angle` from a node, not a synthetic fact — plus a rate limit and
   a divergence cut-out. Until then the component is complete and parked, which is
   the honest state.
+
+  This bullet said `movement/feedback.rs` until 2026-08-19, a path that stopped
+  existing when the crate was extracted. `file_reachability.py` matches
+  disclosures by the `<!-- unwired: -->` marker above rather than by prose, and
+  the marker was never added — so the survey reported the file as unwired *and
+  undisclosed* while this paragraph, three screens away, disclosed it correctly.
+  The same stale-path failure as the README tree, one layer further in: there,
+  prose pointed at directories that had moved; here, a correct disclosure was
+  invisible to the instrument that reads disclosures.
 - [ ] **`deployment/saga.rs` (257 LOC, 4 tests) — deliberately unwired.** Forward
   actions paired with compensating ones, unwinding in reverse on the first
   failure, so a half-applied fleet rolls back. It has no pipeline because
