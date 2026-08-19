@@ -1,0 +1,47 @@
+[package]
+name = "obc-mcp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's Model Context Protocol support: a client that speaks stdio and HTTP to external MCP servers and surfaces their tools to the agent, and a server that exposes this agent's own tools to anything else that speaks MCP."
+
+# The twenty-sixth crate. 2030 lines in three files, and the smallest lift in
+# this endgame by a distance: two `crate::security` paths rewritten to
+# obc_safety, four references repointed across four files, nothing else.
+#
+# It has been one edge from extractable since the survey started keeping the
+# column, and the edge was into `tools`. That left yesterday.
+#
+# Both directions of the protocol are here. The client dials out -- stdio for a
+# local server, HTTP for a remote one -- and presents whatever it finds as tools
+# the agent can call, which is how this project gets capabilities nobody wrote
+# into it. The server points the other way: it exposes this agent's own tools
+# over MCP, so another agent can drive a robot through the same Track 0 gate a
+# local caller goes through, rather than around it.
+#
+# That second half is why the crate depends on obc-conscience. Reach is gated on
+# the way out and observation is gated on the way in, and an MCP server is an
+# ingress that could otherwise skip both.
+#
+# What it unblocks: `vision`, 2442 lines, whose only blocking edge was this one.
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+axum = { version = "0.8", default-features = false, features = ["json", "http1", "tokio"] }
+obc-conscience = { path = "../obc-conscience" }
+obc-safety = { path = "../obc-safety" }
+obc-tool-api = { path = "../obc-tool-api" }
+obc-tools = { path = "../obc-tools" }
+# Two call sites, both full-path, no `use` line -- the HTTP transport half of
+# the client. Repeated from the root manifest rather than defaulted, for the
+# reason obc-spine established with rumqttc: reqwest's defaults include
+# `default-tls`, and Cargo unifies features across the workspace.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json", "rustls-tls", "blocking", "multipart", "stream"
+] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+tokio = { version = "1.42", default-features = false, features = [
+    "rt-multi-thread", "macros", "time", "sync", "process", "io-util"
+] }
+tracing = { version = "0.1", default-features = false }

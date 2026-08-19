@@ -32,7 +32,14 @@ pub struct ToolPolicy {
     /// Human-readable name for this policy rule.
     pub name: String,
 
-    /// Glob pattern matched against the tool name (e.g. `"shell"`, `"file_*"`, `"*"`).
+    /// Glob pattern matched against the tool name (e.g. `"shell"`, `"browser_*"`, `"*"`).
+    ///
+    /// Matched against `Tool::name()`, so it must be a name a tool actually has.
+    /// This doc example used to read `"file_*"`, which matches nothing: the file
+    /// tool is called `file`, and a glob requiring the underscore excludes it.
+    /// A shipped example config carried a `deny` rule built on that
+    /// misunderstanding and denied nothing —
+    /// `scripts/check_tool_names.py` exists because of it.
     pub tool_pattern: String,
 
     /// Optional substring matched against the serialized JSON arguments.

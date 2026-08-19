@@ -1,0 +1,41 @@
+refactor(reflex): move the spine sink out, so reflex.rs names nothing local
+
+Step 2a of docs/ENDGAME.md, and the same manoeuvre as movement four days ago:
+`SpineActionSink` leaves `agent::reflex` for `src/spine/action.rs` and
+implements the trait from the other side. 52 lines, plus its one test, which was
+a spine test living in a reflex file.
+
+`reflex.rs` names four things outside itself. Three -- obc_movement, obc_memory,
+obc_observability -- have been crates for days. The fourth was `crate::spine`,
+entirely inside this sink: one field, one constructor parameter, two topic
+constants. After the move, the non-test code in reflex.rs resolves to nothing
+still in this tree.
+
+── What this did and did not buy ────────────────────────────────────────────
+
+    agent    42 -> 37 crossings
+    spine     9 -> 11 crossings
+
+The second number went the wrong way and that is expected: `spine/action.rs`
+imports `crate::agent::reflex::ActionSink`, so the dependency has been moved,
+not removed. It disappears in 2b, when the trait becomes `obc_reflex::ActionSink`
+and the import points at a crate.
+
+Cycles are unchanged at 16, and `agent -> spine` survives -- but for a different
+reason than before. `agent/edge.rs` names `spine::p2p::{P2pConfig, P2pSpine}`,
+`NodeAnnouncement` and `NodeToolSpec`: the P2P edge agent genuinely uses the
+spine's transport, which is not a misplaced type and will not yield to this
+technique. Recorded here rather than discovered later.
+
+So this is a setup commit. It is separate from the extraction on purpose: 67
+lines deleted and 52 moved is a diff someone can check, and if the shape is
+wrong it is cheap to say so now. obc-position, obc-movement and obc-navigation
+were all done this way -- turn, then extract, one day apart.
+
+One thing left in the way of 2b: a single test still reaches for
+`crate::tools::builtin::sensing::SenseTool`. It is the only in-tree name left in
+the file, it is in a test rather than the code, and it will have to stay behind
+when the rest becomes a crate.
+
+Verified: 1556 tests (unchanged), clippy -D warnings, fmt --check,
+core_endgame.py re-run for every number above.

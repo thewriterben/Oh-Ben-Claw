@@ -43,3 +43,9 @@ obc-paths = { path = "../obc-paths" }
 
 [dev-dependencies]
 tempfile = "3"
+# `secret.rs` arrived 2026-08-13 with a test that deserialises a key from TOML,
+# because the whole point of SecretString is surviving the file people paste
+# into an issue. `cargo check -p obc-safety` was green without this and
+# `cargo test -p obc-safety --all-targets` was not -- third crate this month to
+# split that way, and the reason the CI job runs both.
+toml = "1.0"

@@ -202,7 +202,12 @@ node_id   = "rpi-edge-node"
 
 [security]
 require_pairing = true
-# pairing_secret = "generate-with-openssl-rand-hex-32"
+# Not optional while `require_pairing = true` — the config layer has refused
+# that combination for some time, so this example did not load at all. Nothing
+# noticed, because no test had ever parsed it.
+#
+# Replace this placeholder. `openssl rand -hex 32`.
+pairing_secret  = "replace-me-openssl-rand-hex-32-0123456789abcdef"
 vault_enabled   = true
 # vault_path    = "~/.oh-ben-claw/vault.db"
 
@@ -214,17 +219,28 @@ reason       = "Log every shell command for post-hoc review"
 
 [[security.policies]]
 name         = "deny-etc"
-tool_pattern = "file_write"
+# `tool_pattern` is glob-matched against a tool's `name()`, and the file tool is
+# called `file` — read/write/append/delete are values of its `action` argument,
+# not separate tools. This read `file_write` and therefore matched nothing: the
+# rule was a comment with a TOML header.
+#
+# `arg_contains` still narrows it to calls mentioning /etc/, which now covers
+# reads of /etc/ as well as writes. Stricter than the name suggested, and the
+# alternative was a deny rule that denied nothing.
+tool_pattern = "file"
 arg_contains = "/etc/"
 action       = "deny"
-reason       = "Block writes to system directories"
+reason       = "Block access to system directories"
 
 # ── Autonomy ──────────────────────────────────────────────────────────────────
 
 [autonomy]
 level        = "supervised"
 auto_approve = ["sensor_read", "camera_capture", "browser_navigate"]
-always_ask   = ["gpio_write", "file_write", "shell"]
+# `file`, not `file_write`. Same reason as the policy above, and the same
+# consequence: a name nothing has never prompted for anything. This asks before
+# any file operation, reads included, because the tool does not separate them.
+always_ask   = ["gpio_write", "file", "shell"]
 
 # ── Gateway & Tunnel ──────────────────────────────────────────────────────────
 
@@ -233,7 +249,13 @@ enabled   = true
 host      = "0.0.0.0"
 port      = 8443
 serve_pwa = true
-# api_token = "generate-with-openssl-rand-hex-32"
+# Required, not optional, at this host. `0.0.0.0` publishes the API to every
+# interface, and the API can run `shell`. Since 2026-08-18 the config layer
+# refuses to load an enabled gateway on a routable host with no token, so this
+# example did not merely suggest an open door — it would no longer start.
+#
+# Replace this placeholder. `openssl rand -hex 32`.
+api_token = "replace-me-openssl-rand-hex-32"
 
 [tunnel]
 enabled    = true

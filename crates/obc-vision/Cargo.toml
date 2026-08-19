@@ -1,0 +1,51 @@
+[package]
+name = "obc-vision"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's camera pipeline: ClawCam detection ingest into world memory, rule evaluation over what was seen, spatial projection into the site frame, analytics over the record, and gated actuation from a detection."
+
+# The thirty-second crate. 2442 lines in six files.
+#
+# Nothing in the tree named it -- zero `crate::vision` references outside the
+# module, same as obc-channels. The lift rewrote twelve paths and repointed
+# nothing.
+#
+# It was one edge from extractable for most of the endgame, and the edge was
+# into `mcp`, which left earlier today. `mcp` in turn was one edge from
+# extractable and blocked by `tools`. Two hops, both cleared this morning.
+#
+# What it is: a camera that writes into world memory rather than into a folder.
+# Detections arrive from ClawCam, are ingested as facts with provenance, get
+# projected through the site frame into coordinates the navigation stack shares,
+# and are evaluated against rules that can fire an actuation. Analytics reads
+# the record afterwards rather than the stream.
+#
+# The dependency worth reading is obc-conscience, and it is not decoration.
+# `clawcam_ingest` names the decision log directly, because a camera is the
+# clearest case this project has of perception that must be *refused*
+# sometimes: what the agent may observe is gated before the frame reaches world
+# memory, and the refusal is recorded where a reader can replay it. That is the
+# claim `docs/CONSCIENCE.md` makes, and this crate is the pipeline it is about.
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+obc-audio = { path = "../obc-audio" }
+obc-conscience = { path = "../obc-conscience" }
+obc-foresight = { path = "../obc-foresight" }
+obc-mcp = { path = "../obc-mcp" }
+obc-memory = { path = "../obc-memory" }
+obc-navigation = { path = "../obc-navigation" }
+obc-reflex = { path = "../obc-reflex" }
+obc-safety = { path = "../obc-safety" }
+obc-telemetry = { path = "../obc-telemetry" }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+tokio = { version = "1.42", default-features = false, features = [
+    "rt-multi-thread", "macros", "time", "sync"
+] }
+# Five references in no `use` line: tracing 4, chrono 1. Thirteenth crate this
+# month whose dependency list came from `cargo check -p` rather than an import
+# survey -- the smallest count of the thirteen, and still not zero.
+tracing = { version = "0.1", default-features = false }

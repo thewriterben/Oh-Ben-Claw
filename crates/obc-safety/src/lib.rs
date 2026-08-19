@@ -36,6 +36,7 @@ pub mod policy;
 pub mod redteam;
 pub mod replay;
 pub mod risk;
+pub mod secret;
 pub mod spine_tag;
 pub mod taint;
 pub mod trust;
@@ -50,6 +51,7 @@ pub use pairing::{NodePairingManager, PairingStatus};
 #[allow(unused_imports)]
 pub use policy::{PolicyEngine, ToolPolicy, ToolPolicyAction};
 #[allow(unused_imports)]
+pub use secret::SecretString;
 pub use vault::SecretsVault;
 
 use anyhow::Result;

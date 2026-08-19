@@ -1,0 +1,35 @@
+[package]
+name = "obc-tool-api"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "The contract every Open Body Control tool implements: the Tool trait, ToolResult, and the Track 0 vocabulary (risk class, blast radius, rollout stage, output trust) that the approval layer and safety gate evaluate it against."
+
+# Step one of docs/ENDGAME.md, and the smallest crate here at 175 lines.
+#
+# `src/tools/` is 9052 lines and sits in seven of the cycles that make the core
+# unextractable. 30 of the core's 117 measured crossings are not tool machinery
+# at all — they are this file: `agent` names `tools::traits` 23 times,
+# `gateway` 5, `spine` 2. A trait crate was wearing a 9052-line module, and
+# everything that wanted the contract had to take the implementation with it.
+#
+# This is the third time that exact shape has appeared. `RiskClass` lived here
+# until 2026-07-30 and was obc-safety's only outward edge — the four Track 0
+# types it re-exports below are the fix for that, seen from the other side.
+# `TaskExecutor` was declared in obc-a2a and implemented next to the agent for
+# the same reason on 2026-08-08. A contract living inside the largest
+# implementation of itself is the most common cause of a cycle in this tree,
+# and it is worth looking for before anything more elaborate is attempted.
+#
+# What this breaks: `agent -> tools`, `gateway -> tools` and `spine -> tools`
+# stop being edges to a module still in the tree. Whether that dissolves the
+# long cycles through them is a re-measurement, not a prediction —
+# `scripts/core_endgame.py`, after this lands.
+#
+# The file moved verbatim. It named nothing crate-local; the only two `crate::`
+# strings in it were in a comment explaining a previous extraction.
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+obc-safety = { path = "../obc-safety" }
+serde_json = "1.0"

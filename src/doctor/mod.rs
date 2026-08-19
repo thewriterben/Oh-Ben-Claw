@@ -3,7 +3,7 @@
 //! The `doctor` command performs a series of checks on the configuration and
 //! environment, then prints a human-readable health report.
 
-use crate::config::Config;
+use obc_config::Config;
 use serde::Serialize;
 use std::net::ToSocketAddrs;
 
@@ -141,9 +141,9 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
     // when two agents share a machine, and until now doctor could not answer it —
     // it reported only whether the *platform* config directory happened to exist,
     // which it warned about even when a config had been loaded from elsewhere.
-    let root = crate::config::paths::data_dir();
+    let root = obc_config::paths::data_dir();
     let source =
-        if std::env::var(crate::config::paths::DATA_DIR_VAR).is_ok_and(|v| !v.trim().is_empty()) {
+        if std::env::var(obc_config::paths::DATA_DIR_VAR).is_ok_and(|v| !v.trim().is_empty()) {
             "OBC_DATA_DIR"
         } else if config.paths.data_dir.is_some() {
             "[paths].data_dir"
@@ -164,7 +164,7 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
         ));
     }
 
-    match crate::config::Config::default_config_path() {
+    match obc_config::Config::default_config_path() {
         Ok(path) => {
             let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
             if dir.exists() {
@@ -275,7 +275,7 @@ pub fn diagnose(config: &Config) -> Vec<DiagResult> {
 /// does *not* claim the model named in the config is pulled — that is a
 /// stronger claim needing a real request, and an unchecked version of it is
 /// how this function came to exist.
-fn ollama_reachability(provider: &crate::config::ProviderConfig) -> DiagResult {
+fn ollama_reachability(provider: &obc_config::ProviderConfig) -> DiagResult {
     const TIMEOUT: std::time::Duration = std::time::Duration::from_millis(400);
 
     let raw = provider
@@ -341,8 +341,8 @@ fn ollama_reachability(provider: &crate::config::ProviderConfig) -> DiagResult {
 /// trusted vendor. A board the registry doesn't recognize has no capability data and
 /// an unverified vendor — flagged so an unknown/typo'd board isn't silently trusted.
 fn check_hardware_onboarding(config: &Config, results: &mut Vec<DiagResult>) {
-    use crate::peripherals::onboarding::{OnboardDecision, VendorAllowlist};
-    use crate::peripherals::registry::known_boards;
+    use obc_peripherals::onboarding::{OnboardDecision, VendorAllowlist};
+    use obc_peripherals::registry::known_boards;
 
     if !config.peripherals.enabled || config.peripherals.boards.is_empty() {
         return;
@@ -543,7 +543,7 @@ pub fn run(config: &Config) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use obc_config::Config;
 
     /// `doctor` exists to tell an operator the truth about their setup, and
     /// until 2026-08-02 it told the newcomer path a small lie: with Ollama —
@@ -736,7 +736,7 @@ mod tests {
 
     #[test]
     fn hardware_onboarding_flags_unknown_boards() {
-        use crate::config::PeripheralBoardConfig;
+        use obc_config::PeripheralBoardConfig;
         let board = |name: &str| PeripheralBoardConfig {
             board: name.to_string(),
             transport: "serial".to_string(),

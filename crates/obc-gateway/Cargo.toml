@@ -1,0 +1,66 @@
+[package]
+name = "obc-gateway"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's HTTP gateway: the REST and WebSocket surface over a running agent -- chat, telemetry, metrics, scheduler and mesh status -- plus the installable PWA served from the binary itself."
+
+# The thirty-third crate. 2313 lines in five files, plus three assets.
+#
+# Nothing in the tree named `crate::gateway`, so the lift repointed nothing.
+# Eleven paths were rewritten inside, every one to a crate that had already
+# left: memory 3, security 3, scheduler 2, cost 2, observability 1.
+#
+# The assets moved with it, and that is the part worth checking rather than
+# assuming. `pwa.rs` serves index.html, manifest.json and sw.js with
+# `include_str!`, which resolves relative to the source file -- so the three
+# files had to move in the same commit as the code, or the gateway would have
+# stopped serving its own front end while still compiling in a workspace that
+# happened to have them somewhere else. The lift asserts they exist before it
+# moves anything.
+#
+# What it is: the surface that makes a running agent reachable by something
+# other than a terminal. REST for chat and control, a WebSocket for streaming,
+# `/api/v1/metrics` over the counters obc-observability keeps, mesh status from
+# the spine's supervisor, and scheduler state. `middleware.rs` is where the
+# token check lives, which is why obc-safety is a dependency and not an
+# afterthought: this is the one door into the system that is open on a network.
+#
+# It depends on obc-agent and obc-config, which is what an HTTP surface over a
+# running agent should look like and is also why it sits above the line drawn
+# in OBC-Prime -- a gateway is not evidence for a claim, it is the product
+# wearing a port number.
+[dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", default-features = false, features = [
+    "json", "http1", "tokio", "ws", "query"
+] }
+futures-util = { version = "0.3", default-features = false }
+obc-agent = { path = "../obc-agent" }
+obc-approval = { path = "../obc-approval" }
+obc-config = { path = "../obc-config" }
+obc-cost = { path = "../obc-cost" }
+obc-memory = { path = "../obc-memory" }
+obc-observability = { path = "../obc-observability" }
+obc-peripherals = { path = "../obc-peripherals" }
+obc-safety = { path = "../obc-safety" }
+obc-scheduler = { path = "../obc-scheduler" }
+obc-skill-forge = { path = "../obc-skill-forge" }
+obc-spine = { path = "../obc-spine" }
+obc-tool-api = { path = "../obc-tool-api" }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+tokio = { version = "1.42", default-features = false, features = [
+    "rt-multi-thread", "macros", "time", "sync", "net"
+] }
+tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
+# Eleven references in no `use` line: obc-skill-forge 5, uuid 3, toml 2,
+# obc-peripherals 1. Fourteenth crate this month to need `cargo check -p`
+# rather than an import survey -- and the first where two of the four are local
+# crates rather than externals, which is the same thing obc-config showed: the
+# routes reach skill-forge and the peripheral registry entirely at full paths,
+# so a survey of what the gateway depends on reads shorter than it is.
+toml = "1.0"
+tower-http = { version = "0.6", default-features = false, features = ["cors", "trace"] }
+tracing = { version = "0.1", default-features = false }
+uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }

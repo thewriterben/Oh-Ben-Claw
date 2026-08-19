@@ -19,9 +19,18 @@
 //! providers, the spine or the agent loop.
 //!
 //! This is the agent watching its **body**. The agent watching **itself** —
-//! spans, approval counters, cost — is `observability` in the core crate, and
-//! the two are unrelated despite the word.
+//! spans, approval counters, cost — is `obc-observability`, and the two are
+//! unrelated despite the word.
+//!
+//! [`node`] is the fourth thing here and not a suite: [`node::NodeState`], the
+//! heartbeat every other layer reads. It moved here from `fleet` on 2026-08-06
+//! because it is telemetry a coordinator consumes, not coordination — and
+//! because being defined inside `fleet` was the single edge keeping `aerial`
+//! and `gnss` from being extractable at all.
 
 pub mod comms;
+pub mod node;
 pub mod power;
 pub mod sensing;
+
+pub use node::NodeState;

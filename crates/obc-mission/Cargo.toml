@@ -1,0 +1,51 @@
+[package]
+name = "obc-mission"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's declarative missions: an ordered sequence of steps with guards, advanced against world memory and a navigation controller, so a multi-step job survives a restart and can say where it got to."
+
+# The twenty-first crate, and the first one whose extraction *reduces a
+# blocking-edge count in the config module* -- which is the whole remaining
+# problem in the core, so it is worth being precise about how.
+#
+# `config` names five modules, each because the root `Config` composes that
+# module's own config type. That is the established arrangement here, not a
+# defect: obc-planner owns `DeploymentConfig`, obc-conscience owns
+# `ConscienceConfig`, obc-cost owns `CostConfig`. The edge is only *blocking*
+# while the module it points at is still in the tree. `Vec<Mission>` is a field
+# on the root config; the moment `mission` is a crate, that edge is free.
+#
+# So the fix for config is not to move config code. It is to keep extracting
+# what config points at. Four left after this one: agent, providers, deployment,
+# mcp -- and two of those four are mutual pairs, which is where the sixteen
+# cycles in docs/ENDGAME.md live.
+#
+# What it is: steps run in order, each guarded by a condition read from world
+# memory, with status tracked so a runner that stops mid-mission can be asked
+# what it completed. It reached zero blocking edges when obc-audio left on
+# 2026-08-13 -- it had been holding an `AudioController` so a mission can speak.
+#
+# `anyhow` and `tracing` are both here because `cargo check -p` asked. Neither
+# appears in a `use` line: two `anyhow::Result<...>` inline in return types, two
+# `tracing::` macro calls at their full paths. Fourth crate this month to need a
+# dependency no import survey could have found.
+[dependencies]
+anyhow = "1.0"
+obc-audio = { path = "../obc-audio" }
+obc-memory = { path = "../obc-memory" }
+obc-navigation = { path = "../obc-navigation" }
+obc-reflex = { path = "../obc-reflex" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = { version = "0.1", default-features = false }
+
+# And the test target needed one more. `cargo check -p` was green with the four
+# dependencies above; `cargo test -p --all-targets` was not, because four
+# `#[tokio::test]` attributes are invisible to a check that never builds the
+# test target. That is the same gap the CI job upstream exists for, arriving
+# from the opposite direction to obc-a2a's -- there a dev-dependency hid a real
+# one, here a real build hid a missing dev one. Both halves of that job earn
+# their runtime.
+[dev-dependencies]
+tokio = { version = "1.42", default-features = false, features = ["rt", "rt-multi-thread", "macros"] }

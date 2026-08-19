@@ -1,0 +1,71 @@
+[package]
+name = "obc-tools"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's tool layer: the registry that turns a set of capabilities into what a model may call, and the built-in tools themselves -- movement, navigation, vision, audio, mesh, shell, files, HTTP, browser, memory, missions and the rest -- each declaring its own risk class to the Track 0 gate."
+
+# The twenty-fourth crate, 8880 lines and 29 files -- the largest module left in
+# the tree, and for the whole endgame the one everything else was queued behind.
+#
+# It was blocked by exactly one edge. `spine` left on 2026-08-14 and this
+# reached zero the same hour; `mcp` and `providers`, each blocked by one edge
+# into here, come free behind it. That is the third time a single edge held back
+# a five-figure line count, after obc-movement (one `Arc<SpineClient>` field) and
+# obc-navigation (3714 lines waiting on a crate six times smaller).
+#
+# Every outward reference in these 29 files points at a crate that had already
+# left: memory 19, security 13, geo 12, movement 3, sensing 3, and single
+# figures for siteplan, navigation, power, aerial, comms, gnss and audio. Not
+# one pointed at a module still in the tree. A module this size being this loose
+# is the argument for measuring extractability rather than estimating it -- by
+# line count this looked like the hardest thing left for months.
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+base64 = "0.22"
+obc-audio = { path = "../obc-audio" }
+obc-conscience = { path = "../obc-conscience" }
+obc-fleet = { path = "../obc-fleet" }
+obc-foresight = { path = "../obc-foresight" }
+obc-learning = { path = "../obc-learning" }
+obc-memory = { path = "../obc-memory" }
+obc-mission = { path = "../obc-mission" }
+obc-movement = { path = "../obc-movement" }
+obc-navigation = { path = "../obc-navigation" }
+# `world-anchor` is not optional here, because the code is not optional about
+# it: `site_anchor` and `gnss` import `obc_planner::geo::anchor` at the top of
+# the file with no `cfg`. In the tree that compiled because the root crate
+# turns the feature on by default and tools inherited it -- a dependency
+# satisfied by a sibling's configuration rather than by its own manifest, which
+# is the kind of thing extraction is for finding.
+obc-planner = { path = "../obc-planner", features = ["world-anchor"] }
+obc-position = { path = "../obc-position" }
+obc-reflex = { path = "../obc-reflex" }
+obc-safety = { path = "../obc-safety" }
+obc-spine = { path = "../obc-spine" }
+obc-telemetry = { path = "../obc-telemetry" }
+obc-tool-api = { path = "../obc-tool-api" }
+parking_lot = "0.12"
+# Repeated from the root manifest rather than defaulted, and this is the line
+# obc-spine got wrong a day ago. reqwest's defaults include `default-tls`, so a
+# bare declaration here would pull native-tls in beside the rustls stack the
+# root selected -- for every crate in the workspace, because Cargo unifies
+# features across the graph. The build would be green either way.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json", "rustls-tls", "blocking", "multipart", "stream"
+] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+shellexpand = "3.1"
+tokio = { version = "1.42", default-features = false, features = [
+    "rt-multi-thread", "macros", "time", "net", "io-util",
+    "sync", "process", "io-std", "fs"
+] }
+# Fourteen call sites, all at full paths, no `use` line. Seventh crate this
+# month whose real dependency list came from the compiler rather than a survey.
+tracing = { version = "0.1", default-features = false }
+uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }
+
+[dev-dependencies]
+tempfile = "3.14"

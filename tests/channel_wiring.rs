@@ -42,9 +42,16 @@ fn read(rel: &str) -> String {
     })
 }
 
-/// Channel types re-exported from `src/channels/mod.rs`.
+/// Channel types re-exported from the channels crate's `lib.rs`.
+///
+/// The path moved on 2026-08-14 when `src/channels/` became `crates/obc-channels`.
+/// The test failed on the move, which is the correct behaviour and worth saying
+/// plainly: a check that reads source by path is a check that can be silently
+/// orphaned by a refactor, and the only thing standing between that and a green
+/// suite is that this one reads a file it cannot find rather than a file that
+/// exists and no longer means what it meant.
 fn exported_channels() -> BTreeSet<String> {
-    read("src/channels/mod.rs")
+    read("crates/obc-channels/src/lib.rs")
         .lines()
         .filter_map(|l| l.trim().strip_prefix("pub use "))
         .filter_map(|l| l.split("::").nth(1))
