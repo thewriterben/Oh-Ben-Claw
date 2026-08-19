@@ -28,6 +28,21 @@ The two rules
    four documents worth opening first, deliberately -- and rule 1 still holds
    them to existing.
 
+3. Every path inside an `<!-- unwired: PATH -->` marker must exist.
+
+   Different prose, same failure, and a worse one. `file_reachability.py` treats
+   that marker as the one way a document may disclose a component as parked
+   without the survey reading the disclosure itself as a claim that the
+   component ships. So the marker is not decoration -- it is the input to a
+   measurement.
+
+   On 2026-08-19 `crates/obc-movement/src/feedback.rs` was reported as unwired
+   *and undisclosed* while ROADMAP.md carried a full paragraph disclosing it,
+   because the paragraph said `movement/feedback.rs` and no marker had been
+   added at all. A stale path in a description misleads a reader. A stale path
+   in a marker misleads the instrument, and the instrument is what gets
+   believed.
+
 What this cannot check
 ----------------------
 That a comment beside a path is true. `movement/ # Track 0-bounded actuation +
@@ -35,6 +50,10 @@ closed-loop feedback` pointed at a real directory and described a module
 ROADMAP.md lists as deliberately unwired; both statements were in the same
 repository, and only a reader who held them side by side would notice. Paths are
 checkable and prose is not, which is the reason to keep the prose short.
+
+Nor that a marker exists where one is warranted -- that is
+`file_reachability.py`'s job, and it reports a file with no disclosure in its
+own output. This checks the markers that are here, not the ones that are not.
 """
 
 from __future__ import annotations
@@ -61,6 +80,32 @@ ENTRY_RE = re.compile(r"([A-Za-z0-9_.@-]+(?:\.[A-Za-z0-9]+)?/?)")
 # Directories whose full contents rule 2 checks, mapped to names inside them that
 # are not crates and so are not expected in the tree.
 COMPLETE: dict[str, set[str]] = {"crates": set()}
+
+# The disclosure marker `file_reachability.py` reads. Kept identical to the
+# pattern there on purpose: a marker this script accepts and that one ignores
+# would be worse than no check.
+MARKER_RE = re.compile(r"<!--\s*unwired:\s*(\S+?)\s*-->")
+
+# Where markers are looked for. Everything tracked, not a curated list: a
+# disclosure is worth exactly as much wherever it is written, and a marker in a
+# document nobody thought to enumerate is the one that rots unnoticed.
+MARKER_GLOB = "**/*.md"
+MARKER_SKIP = ("target/", "node_modules/", "gui/dist/", ".git/")
+
+
+def marker_paths() -> list[tuple[str, int, str]]:
+    """(document, line number, path) for every `<!-- unwired: -->` in the tree."""
+    out = []
+    for md in sorted(ROOT.glob(MARKER_GLOB)):
+        rel = md.relative_to(ROOT).as_posix()
+        if any(rel.startswith(s) or f"/{s}" in f"/{rel}" for s in MARKER_SKIP):
+            continue
+        for n, line in enumerate(
+            md.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+        ):
+            for m in MARKER_RE.finditer(line):
+                out.append((rel, n, m.group(1)))
+    return out
 
 
 def find_block(lines: list[str]) -> tuple[int, int] | None:
@@ -164,12 +209,17 @@ def main() -> int:
         if gap:
             incomplete.append((parent, gap))
 
-    print(f"{len(paths)} path(s) drawn in README.md's tree (block at line "
-          f"{top + 1})")
+    markers = marker_paths()
+    stale_markers = [
+        (doc, n, p) for doc, n, p in markers if not (ROOT / p).exists()
+    ]
 
-    if not missing and not incomplete:
-        print("ok: every path the tree draws exists, and `crates/` is listed in "
-              "full")
+    print(f"{len(paths)} path(s) drawn in README.md's tree (block at line "
+          f"{top + 1}), {len(markers)} unwired marker(s)")
+
+    if not missing and not incomplete and not stale_markers:
+        print("ok: every path the tree draws exists, `crates/` is listed in "
+              "full, and every\n    unwired marker names a file that is here")
         return 0
 
     if missing:
@@ -181,10 +231,19 @@ def main() -> int:
         print(f"\n── `{parent}/` is listed partially, which reads as completely ──")
         print(f"  {len(gap)} not drawn: {', '.join(gap)}")
 
-    print(f"\n{len(missing) + len(incomplete)} problem(s). A tree that names a "
-          f"directory the repository\ndoes not have is not out of date in a way "
-          f"a reader can see — every line of it\nlooks exactly as correct as the "
-          f"lines that are.")
+    if stale_markers:
+        print("\n── An `unwired:` marker naming a file that is not here ──")
+        for doc, n, p in stale_markers:
+            print(f"  {doc}:{n}  {p}")
+        print(f"{'':<2}file_reachability.py matches disclosures by this path. A "
+              f"marker that\n{'':<2}resolves to nothing discloses nothing, and "
+              f"the survey will report the\n{'':<2}component as undisclosed "
+              f"while the document beside it explains itself.")
+
+    print(f"\n{len(missing) + len(incomplete) + len(stale_markers)} problem(s). "
+          f"A tree that names a directory the repository\ndoes not have is not "
+          f"out of date in a way a reader can see — every line of it\nlooks "
+          f"exactly as correct as the lines that are.")
     return 1
 
 

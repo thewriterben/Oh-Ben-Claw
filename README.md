@@ -737,10 +737,12 @@ invalidated it and nothing said so. A hand-corrected tree is a tree that is
 correct on the day someone looks at it.
 
 `scripts/check_tree.py` now resolves every path this tree draws and fails on any
-that is absent, and requires `crates/` to be listed in full rather than
-partially — a short list there reads as a complete one. It runs in CI. The
-comments beside the paths are still prose and still unchecked, which is the
-argument for keeping them to one line.
+that is absent, requires `crates/` to be listed in full rather than partially —
+a short list there reads as a complete one — and holds every
+`<!-- unwired: -->` disclosure marker to naming a file that exists, because a
+marker that resolves to nothing discloses nothing to the survey that reads it.
+It runs in CI. The comments beside the paths are still prose and still
+unchecked, which is the argument for keeping them to one line.
 
 ```
 Oh-Ben-Claw/
