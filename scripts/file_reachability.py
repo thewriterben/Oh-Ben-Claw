@@ -344,6 +344,9 @@ for f in files:
         "unref": unref,
         "internal": internal,
         "nowhere": nowhere,
+        # Every public name this file declares, kept so the ITEM_ALIASES guard
+        # can tell "renamed or deleted" from "still here and simply in use".
+        "pub_names": sorted(usable),
     })
 
 # ── Is a flagged file also *claimed* in the docs? ────────────────────────────
@@ -374,6 +377,16 @@ DOC_NAMES = (
     "docs/SAFETY-CASE.md",                    # asserts what enforcement exists
     "docs/ECOSYSTEM-INTEGRATION.md",          # asserts what integrates today
     "docs/EMBODIED-ARCHITECTURE.md",          # asserts what the running system does
+    # Added 2026-08-19. 22 rows of `| Feature | ✗ | ✅ |` comparing this project
+    # to ZeroClaw — one of the densest shipped-claim surfaces in the repository,
+    # and one nothing had ever checked. A tick in a comparison table is a claim
+    # in its strongest form: it is read as settled, it is read fast, and it is
+    # the format a reader trusts *because* it does not argue.
+    #
+    # It is not a plan, which is the test the rest of docs/ fails: ENDGAME is a
+    # running record, BENCH and WALKTHROUGH are procedures, PHASE and V2 are
+    # plans. This one asserts, in the present tense, what the system has.
+    "docs/architecture/ARCHITECTURE.md",
 )
 DOCS = {name: strip_audit(read(ROOT / name)) for name in DOC_NAMES}
 
@@ -502,6 +515,37 @@ def doc_claims(rel: str) -> list[str]:
     return found
 
 
+ITEM_ALIASES = {
+    # "When a document claims this feature in prose, it is claiming these items."
+    #
+    # DOC_ALIASES does this for files. This is the same idea one level down, and
+    # it exists because adding `docs/architecture/ARCHITECTURE.md` to DOC_NAMES
+    # on 2026-08-19 changed the output by exactly one number -- the count of
+    # documents checked -- and caught nothing.
+    #
+    # The reason is worth writing down, because it is this script's own
+    # recurring finding aimed at itself. `item_claims` matches `` `name` `` or
+    # `**name**`, deliberately, so that prose using a common word cannot trip
+    # the column people act on. ARCHITECTURE.md's 22 shipped claims are a
+    # comparison table written entirely in prose -- `| Reflexion /
+    # Plan-and-Execute | x | ok |` names no symbol. So a document was added to
+    # the claim set that could not match anything in it: a claim-check wearing a
+    # claim-check's clothes, which is the failure DOC_ALIASES' own guard was
+    # written for, one level up.
+    #
+    # Keys are public item names as the scan sees them. Values are exact strings
+    # to look for in the claim documents, and they should be specific enough
+    # that no other row could produce them.
+    # `"Reflexion loop"` was here too and the guard below rejected it on the
+    # first run: that phrasing exists only in CHANGELOG.md, which is not a claim
+    # document. An alias is allowed to be specific; it is not allowed to be
+    # aspirational.
+    "reflexion_loop": ("Reflexion / Plan-and-Execute",),
+    "create_plan": ("Reflexion / Plan-and-Execute", "Plan-and-Execute"),
+    "synthesize_results": ("Reflexion / Plan-and-Execute", "Plan-and-Execute"),
+}
+
+
 def item_claims(name: str) -> list[str]:
     """Where the docs name this public item as a thing that exists.
 
@@ -515,7 +559,7 @@ def item_claims(name: str) -> list[str]:
     Backticked or bolded only. A bare word would match prose that happens to use
     the name, and this is the column people act on.
     """
-    needles = (f"`{name}`", f"**{name}**")
+    needles = (f"`{name}`", f"**{name}**") + ITEM_ALIASES.get(name, ())
     return [doc for doc, text in DOCS.items()
             if any(n in text for n in needles)]
 
@@ -538,6 +582,29 @@ for r in rows:
         if claims:
             item_over.append((name, r["file"], claims))
 item_over.sort(key=lambda t: t[0])
+
+# The guard DOC_ALIASES has, for this table. Two ways an entry can be dead
+# weight, and both look like a clean result:
+#   * the key is not a public item any longer -- renamed, or the file went
+#   * the needle is not in any claim document -- the row was reworded, or the
+#     document left DOC_NAMES
+# Either way the alias stops binding a claim to code and nothing says so, which
+# is precisely the condition this table was added to fix.
+_all_items = {name for r in rows for name in r["pub_names"]}
+_dead_alias_items = [k for k in ITEM_ALIASES if k not in _all_items]
+_dead_alias_needles = [
+    (k, n) for k, ns in ITEM_ALIASES.items() for n in ns
+    if not any(n in text for text in DOCS.values())
+]
+if _dead_alias_items or _dead_alias_needles:
+    print(f"!! {len(ITEM_ALIASES)} item alias(es) declared, and some bind nothing:",
+          file=sys.stderr)
+    for k in _dead_alias_items:
+        print(f"!!   {k}: not a public item in this scan", file=sys.stderr)
+    for k, n in _dead_alias_needles:
+        print(f"!!   {k}: {n!r} appears in no claim document", file=sys.stderr)
+    print("!! an alias that binds nothing is an unchecked claim wearing a checked "
+          "one's clothes.\n!! Repoint it, or delete it.", file=sys.stderr)
 
 print(f"{len(rows)} files with public API, {len(files)} files scanned.\n")
 
