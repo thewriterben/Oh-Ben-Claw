@@ -32,7 +32,13 @@ The core agent is the central reasoning and orchestration engine. It runs on a c
 - Interfacing with LLM providers (OpenAI, Anthropic, Gemini, Ollama, OpenRouter, …)
 - Routing incoming messages from communication channels to the agent loop
 - Resolving and dispatching tool calls to local or remote peripheral nodes
-- Writing daily journal entries and responding to proactive HEARTBEAT tasks
+
+<!-- unwired: crates/obc-memory/src/heartbeat.rs -->
+<!-- unwired: crates/obc-memory/src/journal.rs -->
+The journal and the proactive HEARTBEAT scheduler are **not** in that list. Both
+modules exist, both carry tests, and neither has a caller — ROADMAP.md discloses
+them as deliberately unwired with a stated condition for wiring each. This line
+claimed both as things the brain does until 2026-08-19.
 
 ### Layer 2: The Spine (MQTT Communication Backbone)
 
@@ -46,7 +52,7 @@ The MQTT spine is the nervous system of the Oh-Ben-Claw system. All communicatio
 | `obc/tools/{node_id}/result/{call_id}` | Node → Brain | Tool call result |
 | `obc/broadcast/command` | Brain → All | Global command to all nodes |
 
-**P2P Mesh (optional)** — the `src/spine/p2p.rs` module implements a broker-free mesh network for edge scenarios where no central MQTT broker is available. Nodes discover peers via mDNS and communicate over direct TCP connections.
+**P2P Mesh (optional)** — the `crates/obc-spine/src/p2p.rs` module implements a broker-free mesh network for edge scenarios where no central MQTT broker is available. Nodes discover peers via mDNS and communicate over direct TCP connections.
 
 ### Layer 3: The Appendages (Peripheral Nodes)
 
@@ -56,18 +62,18 @@ Peripheral nodes are the sensory and motor organs of the system. Each node runs 
 
 | Subsystem | Location | Purpose |
 |---|---|---|
-| Security | `src/security/` | Policy engine, HMAC pairing, encrypted vault |
-| Memory | `src/memory/` | SQLite, bitemporal world model, heartbeat, journal, image, vector |
-| Channels | `src/channels/` | Telegram, Discord, Slack, Feishu, IRC, Signal, Matrix, … |
-| Providers | `src/providers/` | LLM adapters, failover, retry |
-| Tools | `src/tools/` | Shell, file, HTTP, browser, OTA, vision, audio, hardware |
+| Security | `crates/obc-safety/` | Policy engine, HMAC pairing, encrypted vault |
+| Memory | `crates/obc-memory/` | SQLite, bitemporal world model, vector; `heartbeat` and `journal` are present but unwired (ROADMAP.md) |
+| Channels | `crates/obc-channels/` | Telegram, Discord, Slack, Feishu, IRC, Signal, Matrix, … |
+| Providers | `crates/obc-providers/` | LLM adapters, failover, retry |
+| Tools | `crates/obc-tools/` | Shell, file, HTTP, browser, OTA, vision, audio, hardware |
 | Deployment | `src/deployment/` | Hardware inventory, planner, swarm (Phase 13) |
-| MCP | `src/mcp/` | Model Context Protocol client + server |
-| Skill Forge | `src/skill_forge/` | Community skill registry (ClawHub) |
-| Vision | `src/vision/` | Camera → LLM vision → action pipeline |
-| Audio | `src/audio/` | Microphone → STT → agent → TTS pipeline |
-| A2A | `src/a2a/` | Agent-to-Agent protocol (Google A2A) for inter-agent interoperability |
-| Streaming | `src/agent/streaming.rs` | Streaming tool call accumulation and response building |
+| MCP | `crates/obc-mcp/` | Model Context Protocol client + server |
+| Skill Forge | `crates/obc-skill-forge/` | Community skill registry (ClawHub) |
+| Vision | `crates/obc-vision/` | Camera → LLM vision → action pipeline |
+| Audio | `crates/obc-audio/` | Microphone → STT → agent → TTS pipeline |
+| A2A | `crates/obc-a2a/` | Agent-to-Agent protocol (Google A2A) for inter-agent interoperability |
+| Streaming | `crates/obc-agent/src/streaming.rs` | Streaming tool call accumulation and response building |
 
 ---
 
@@ -154,7 +160,7 @@ Pairing secrets must be at least 16 characters. The `NodePairingManager::validat
 
 ### Tool Policy Engine
 
-The policy engine (`src/security/policy.rs`) evaluates every tool call against a list of rules:
+The policy engine (`crates/obc-safety/src/policy.rs`) evaluates every tool call against a list of rules:
 
 - Rules match tool names using glob patterns (e.g., `shell*`, `gpio_write`).
 - Rules can inspect argument values with `arg_contains` filters.
@@ -163,7 +169,7 @@ The policy engine (`src/security/policy.rs`) evaluates every tool call against a
 
 ### Secrets Vault
 
-The encrypted secrets vault (`src/security/vault.rs`) stores API keys and other credentials:
+The encrypted secrets vault (`crates/obc-safety/src/vault.rs`) stores API keys and other credentials:
 
 - Encryption: AES-256-GCM with a 96-bit nonce.
 - Key derivation: Argon2id with a random 16-byte salt.
@@ -195,7 +201,7 @@ Oh-Ben-Claw is built on top of the [ZeroClaw](https://github.com/zeroclaw-labs/z
 | Tool discovery | Static configuration | Dynamic via node announcements |
 | Multi-device | Multiple boards, direct connections | Fleet of nodes over network |
 | Browser automation | ✗ | ✅ CDP (7 tools) |
-| Image memory | ✗ | ✅ SQLite-backed |
+| Image memory | ✗ | ✗ removed — `obc-memory/src/image.rs` was deleted upstream |
 | Deployment planner | ✗ | ✅ Rule-based + LLM swarm |
 | GUI | ✗ | ✅ Tauri 2 + React 18 |
 | Node pairing | ✗ | ✅ HMAC-SHA256 |
@@ -203,7 +209,7 @@ Oh-Ben-Claw is built on top of the [ZeroClaw](https://github.com/zeroclaw-labs/z
 | Vision pipeline | ✗ | ✅ |
 | Audio pipeline | ✗ | ✅ |
 | Sensor fusion | ✗ | ✅ |
-| Proactive tasks | ✗ | ✅ HEARTBEAT.md |
+| Proactive tasks | ✗ | ⏸ module present, unwired (ROADMAP.md) |
 | ClawHub registry | ✗ | ✅ |
 | Model failover | ✗ | ✅ |
 | Retry policy | ✗ | ✅ Exponential backoff |

@@ -16,9 +16,9 @@ Six capability suites now share one spine: **perceive → remember → react →
 | Suite | Module | Perceive | World-memory hooks | Act |
 |---|---|---|---|---|
 | **Vision** | (ClawCam, external) | detections | `subject:*` | — |
-| **Movement** | `src/movement` | — | `actuator.{name}` | `move_actuator` tool + reflex `Move`; `ActuatorSink` (`LoggingActuatorSink` / `SpineActuatorSink`); Track 0 gate |
+| **Movement** | `crates/obc-movement` | — | `actuator.{name}` | `move_actuator` tool + reflex `Move`; `ActuatorSink` (`LoggingActuatorSink` / `SpineActuatorSink`); Track 0 gate |
 | **Sensing** | `crates/obc-telemetry/src/sensing.rs` | quality-classified readings | `sensor.{quantity}` (incl. `quality`) | — |
-| **Audio** | `src/audio/suite` | heard events (reliability) | `audio.{stream}`, `speech.last` | `speak` tool; `SpeechSink` (`LoggingSpeechSink` / `SpineSpeechSink`) |
+| **Audio** | `crates/obc-audio/src/suite.rs` | heard events (reliability) | `audio.{stream}`, `speech.last` | `speak` tool; `SpeechSink` (`LoggingSpeechSink` / `SpineSpeechSink`) |
 | **Power** | `crates/obc-telemetry/src/power.rs` | battery telemetry | `power.battery`, `power.mode` | — |
 | **Comms** | `crates/obc-telemetry/src/comms.rs` | per-link telemetry + aggregate | `link.{name}`, `net.mode` | — |
 
@@ -41,7 +41,7 @@ Reads and reversible memory appends are `safe()`. Physical effects declare a bla
 
 ## Reflex engine (System 1)
 
-`src/agent/reflex.rs`. A rule is *when `Condition` holds, do `Action`*, subject to debounce/rate and an escalation budget. `tick()` snapshots the referenced world-memory entities and evaluates.
+`crates/obc-reflex/src/lib.rs`. A rule is *when `Condition` holds, do `Action`*, subject to debounce/rate and an escalation budget. `tick()` snapshots the referenced world-memory entities and evaluates.
 
 **Conditions**
 - `Sensor { entity, op, value }` — numeric compare (reads a number, bool, numeric string, or the `value` field of an object fact).
@@ -55,7 +55,7 @@ Reads and reversible memory appends are `safe()`. Physical effects declare a bla
 
 ## Safing rules
 
-`src/agent/safing.rs`. Canonical, debounced rules that turn the mode hooks into reactions. Enabled with `[reflex] safing = true`; merged into the operator's configured rules in `main`.
+`crates/obc-agent/src/safing.rs`. Canonical, debounced rules that turn the mode hooks into reactions. Enabled with `[reflex] safing = true`; merged into the operator's configured rules in `main`.
 
 | Rule id | Trigger | Action |
 |---|---|---|

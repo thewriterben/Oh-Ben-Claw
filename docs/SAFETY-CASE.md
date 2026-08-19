@@ -55,13 +55,13 @@ model-independent code; none can be relaxed by anything the LLM emits.
 
 | # | Mechanism | Where | Guarantee |
 |---|---|---|---|
-| 3.1 | **Deterministic actuator gate** — `SafetyGate::check(node, tool, pin, value, now)`: pin allow-list, value range, minimum inter-actuation interval (rate limit) | `src/security/limits.rs` (host) **and** mirrored in `firmware/` on the MCU | A pin/value/rate outside policy is refused **before** hardware is touched. Default-deny. |
-| 3.2 | **Physical-risk classification** — every tool declares a `RiskClass` (`physical`, `reversible`, `BlastRadius`) | `src/tools/traits.rs` | Drives approval defaults; irreversible/high-blast actions require per-call authorization and can never be auto-granted to "forever". |
-| 3.3 | **Signed, tamper-evident audit** — every physical-action decision (allowed/denied + args + reason) is appended to an HMAC-chained log | `src/security/audit.rs`, `audit_sign.rs` | Any edit, insertion, deletion, or reorder of the audit trail is detectable (`audit::verify`). Provides the *evidence* record for this safety case. |
-| 3.4 | **Argument provenance ("taint") gate** — a privileged call whose argument values derive from untrusted external content (web/MCP/inbound text) is refused (enforce) or flagged (warn) | `src/security/taint.rs` | Blocks the injection→actuation data-flow (CaMeL doctrine; OWASP ASI01/02) independent of what the model "decided". |
-| 3.5 | **Dynamic trust** — a node whose behaviour is anomalous (latency/failure) is demoted; its physical actions are refused | `src/security/trust.rs` | Trust can only *tighten* the decision, never relax it. |
-| 3.6 | **Approval gate** — under `supervised`/`manual` autonomy every actuation needs an explicit operator grant | `src/approval/` | A permissive setting is required to auto-run; it is never *assumed*. |
-| 3.7 | **Staged rollout** — synthesized/learned physical skills climb `simulate → supervised → autonomous`; at `simulate` the chokepoint dry-runs (nothing actuates); promotion is operator-gated on a clean record; a failed supervised run auto-demotes | `src/skill_forge/rollout.rs`, `src/agent/mod.rs` | A skill the system *taught itself* cannot actuate unattended until an operator has promoted it on evidence. |
+| 3.1 | **Deterministic actuator gate** — `SafetyGate::check(node, tool, pin, value, now)`: pin allow-list, value range, minimum inter-actuation interval (rate limit) | `crates/obc-safety/src/limits.rs` (host) **and** mirrored in `firmware/` on the MCU | A pin/value/rate outside policy is refused **before** hardware is touched. Default-deny. |
+| 3.2 | **Physical-risk classification** — every tool declares a `RiskClass` (`physical`, `reversible`, `BlastRadius`) | `crates/obc-tool-api/src/lib.rs` | Drives approval defaults; irreversible/high-blast actions require per-call authorization and can never be auto-granted to "forever". |
+| 3.3 | **Signed, tamper-evident audit** — every physical-action decision (allowed/denied + args + reason) is appended to an HMAC-chained log | `crates/obc-safety/src/audit.rs`, `audit_sign.rs` | Any edit, insertion, deletion, or reorder of the audit trail is detectable (`audit::verify`). Provides the *evidence* record for this safety case. |
+| 3.4 | **Argument provenance ("taint") gate** — a privileged call whose argument values derive from untrusted external content (web/MCP/inbound text) is refused (enforce) or flagged (warn) | `crates/obc-safety/src/taint.rs` | Blocks the injection→actuation data-flow (CaMeL doctrine; OWASP ASI01/02) independent of what the model "decided". |
+| 3.5 | **Dynamic trust** — a node whose behaviour is anomalous (latency/failure) is demoted; its physical actions are refused | `crates/obc-safety/src/trust.rs` | Trust can only *tighten* the decision, never relax it. |
+| 3.6 | **Approval gate** — under `supervised`/`manual` autonomy every actuation needs an explicit operator grant | `crates/obc-approval/` | A permissive setting is required to auto-run; it is never *assumed*. |
+| 3.7 | **Staged rollout** — synthesized/learned physical skills climb `simulate → supervised → autonomous`; at `simulate` the chokepoint dry-runs (nothing actuates); promotion is operator-gated on a clean record; a failed supervised run auto-demotes | `crates/obc-skill-forge/src/rollout.rs`, `crates/obc-agent/src/lib.rs` | A skill the system *taught itself* cannot actuate unattended until an operator has promoted it on evidence. |
 
 **Ordering matters:** these run at one chokepoint (`Agent::execute_tool_inner`),
 and **delegate/sequence skills are resolved to their real underlying call
@@ -97,7 +97,7 @@ manipulated. Evidence:
 - **Injected-prompt → actuation** is blocked by 3.4 and backstopped by 3.1.
   Tested adaptively (not against a frozen string): `tests/evals.rs::taint_redteam`
   and `asi_redteam` generate a seed-sampled *family* of injection framings
-  (`src/security/redteam.rs`) and assert no variant drives an out-of-limit
+  (`crates/obc-safety/src/redteam.rs`) and assert no variant drives an out-of-limit
   actuation — implementing NIST's finding that a static corpus understates
   hijack risk (~11%→81% adaptive).
 - **Self-taught malicious skill → actuation** is blocked by 3.7 (quarantine +

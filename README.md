@@ -67,11 +67,11 @@ It is benchmarked component-by-component against the robotics state of the art (
 
 ### World Memory (the substrate)
 
-`src/memory/world` is a **bitemporal**, append-only store of facts about the world. Every observation carries both a *valid time* (when it was true) and a *transaction time* (when the brain learned it), so the agent can answer not just "what is the battery now?" but "what did we believe the battery was at 12:04, and when did we find out?". Every subsystem writes here (`sensor.*`, `power.mode`, `nav.pose`, `vision.subject.*`, …) and every control layer reads from here — it is the one source of truth the entire stack composes on. `observe` / `current` / `history` / `at` are exposed to the LLM through the `world_memory` tool.
+`crates/obc-memory/src/world.rs` is a **bitemporal**, append-only store of facts about the world. Every observation carries both a *valid time* (when it was true) and a *transaction time* (when the brain learned it), so the agent can answer not just "what is the battery now?" but "what did we believe the battery was at 12:04, and when did we find out?". Every subsystem writes here (`sensor.*`, `power.mode`, `nav.pose`, `vision.subject.*`, …) and every control layer reads from here — it is the one source of truth the entire stack composes on. `observe` / `current` / `history` / `at` are exposed to the LLM through the `world_memory` tool.
 
 ### Track 0 — the safety gate
 
-Every physical action — moving a servo, driving a motor, toggling a GPIO — passes through `SafetyGate` (`src/security/limits`) **before** it reaches hardware. A `SafetyLimit` constrains the allowed pins/channels, the value range, and the command rate; a `RiskClass` marks each tool `safe` or `physical { reversible, blast_radius }`, and high-blast physical actions require per-call human approval. The same gate logic is mirrored in the ESP32-S3 firmware, so a node protects itself even if the host link drops. Nothing actuates that the gate hasn't cleared.
+Every physical action — moving a servo, driving a motor, toggling a GPIO — passes through `SafetyGate` (`crates/obc-safety/src/limits.rs`) **before** it reaches hardware. A `SafetyLimit` constrains the allowed pins/channels, the value range, and the command rate; a `RiskClass` marks each tool `safe` or `physical { reversible, blast_radius }`, and high-blast physical actions require per-call human approval. The same gate logic is mirrored in the ESP32-S3 firmware, so a node protects itself even if the host link drops. Nothing actuates that the gate hasn't cleared.
 
 ### The four control modes
 
@@ -79,16 +79,16 @@ All four run on the world-memory substrate and dispatch through the same Track 0
 
 | Mode | Layer | Reacts to | Lives in |
 |---|---|---|---|
-| **Reactive** | Reflexes (System 1) | the present — a fact crosses a condition *now* | `src/agent/reflex`, `src/agent/safing` |
-| **Anticipatory** | Foresight (Track 1) | the *predicted* future — a trend will cross a threshold | `src/foresight` |
-| **Deliberative** | Missions | a multi-step plan with guards | `src/mission` |
-| **Coordinated** | Fleet | many robots sharing work | `src/fleet` |
+| **Reactive** | Reflexes (System 1) | the present — a fact crosses a condition *now* | `crates/obc-reflex`, `crates/obc-agent/src/safing.rs` |
+| **Anticipatory** | Foresight (Track 1) | the *predicted* future — a trend will cross a threshold | `crates/obc-foresight` |
+| **Deliberative** | Missions | a multi-step plan with guards | `crates/obc-mission` |
+| **Coordinated** | Fleet | many robots sharing work | `crates/obc-fleet` |
 
-**Reflexes** (`src/agent/reflex`) evaluate conditions (`Sensor`, `GpioEq`, categorical `State`, `And`/`Or`) against world memory every tick and fire actions (`GpioWrite`, `Publish`, `Escalate`, `Move`) with debounce and an escalation budget — System 1, no LLM in the loop. The **safing** library (`src/agent/safing`) adds canonical self-protection rules (battery critical → escalate + Track 0 stop; battery low → shed load; link offline; audio alarm; out-of-range sensor; overheat) that *recover automatically* when conditions normalize.
+**Reflexes** (`crates/obc-reflex`) evaluate conditions (`Sensor`, `GpioEq`, categorical `State`, `And`/`Or`) against world memory every tick and fire actions (`GpioWrite`, `Publish`, `Escalate`, `Move`) with debounce and an escalation budget — System 1, no LLM in the loop. The **safing** library (`crates/obc-agent/src/safing.rs`) adds canonical self-protection rules (battery critical → escalate + Track 0 stop; battery low → shed load; link offline; audio alarm; out-of-range sensor; overheat) that *recover automatically* when conditions normalize.
 
-**Foresight** (`src/foresight`) fits a trend over an entity's recent history and fires *before* the event — `battery ≤ 10% within 60s → return to base` triggers while the pack is still at 20% but draining fast. The forecaster supports exponentially-weighted (online) regression, so it tracks regime changes instead of lagging behind them.
+**Foresight** (`crates/obc-foresight`) fits a trend over an entity's recent history and fires *before* the event — `battery ≤ 10% within 60s → return to base` triggers while the pack is still at 20% but draining fast. The forecaster supports exponentially-weighted (online) regression, so it tracks regime changes instead of lagging behind them.
 
-**Missions** (`src/mission`) execute a guarded sequence of steps (`navigate_to` / `wait` / `speak` / `record` / `await_state`). Guards **preempt and halt** the body when a bad mode appears.
+**Missions** (`crates/obc-mission`) execute a guarded sequence of steps (`navigate_to` / `wait` / `speak` / `record` / `await_state`). Guards **preempt and halt** the body when a bad mode appears.
 
 > This paragraph also advertised a **behavior-tree engine** (`src/mission/bt`) with
 > "a full declarative grammar (sequence / reactive-sequence / fallback / parallel /
@@ -99,7 +99,7 @@ All four run on the world-memory substrate and dispatch through the same Track 0
 > BT grammar" named as the honest gap. The comparison document was right and this
 > sentence was not.
 
-**Self-authored reflexes** (`src/learning`) mine history for antecedents that repeatedly preceded a bad outcome and *propose* new rules with support/confidence — but a proposal only goes live through an explicit **approval gate**, after which it joins the foresight engine's shared rule buffer on the next tick.
+**Self-authored reflexes** (`crates/obc-learning`) mine history for antecedents that repeatedly preceded a bad outcome and *propose* new rules with support/confidence — but a proposal only goes live through an explicit **approval gate**, after which it joins the foresight engine's shared rule buffer on the next tick.
 
 ### Subsystem suites
 
@@ -108,14 +108,14 @@ Five capability suites share one contract (perceive → remember → act; see [`
 | Suite | Module | Perceives / Acts | Mode hook |
 |---|---|---|---|
 | **Sensing** | `crates/obc-telemetry/src/sensing.rs` | classifies samples vs range/freshness specs → `sensor.{quantity}` with quality | `quality` |
-| **Audio** | `src/audio/suite` | hears (reliability-classified events) and speaks (pluggable TTS / spine sink) | `audio.*` |
+| **Audio** | `crates/obc-audio/src/suite.rs` | hears (reliability-classified events) and speaks (pluggable TTS / spine sink) | `audio.*` |
 | **Power** | `crates/obc-telemetry/src/power.rs` | battery SoC + charge state → `power.mode` (`normal`/`low`/`critical`/`charging`) | `power.mode` |
 | **Comms** | `crates/obc-telemetry/src/comms.rs` | per-link health → aggregated `net.mode` (`online`/`degraded`/`offline`) | `net.mode` |
-| **Movement** | `src/movement` | Track 0–bounded actuation + closed-loop P-controller servo | — |
+| **Movement** | `crates/obc-movement` | Track 0–bounded actuation + closed-loop P-controller servo | — |
 
 ### Navigation, SLAM & autonomy
 
-`src/navigation` is a full localization → mapping → planning → driving column, SOTA-aligned and bounded by Track 0:
+`crates/obc-navigation` is a full localization → mapping → planning → driving column, SOTA-aligned and bounded by Track 0:
 
 - **Localization** — multi-source pose fusion (circular-mean heading) and a **particle filter** with **KLD-adaptive** sample count (≈ AMCL) carrying an honest position spread.
 - **Sensor model** — a **likelihood-field** range-finder model (Thrun §6.4) over a chamfer distance transform; scan updates reweight the belief by how well a pose explains the beams.
@@ -124,7 +124,7 @@ Five capability suites share one contract (perceive → remember → act; see [`
 - **Planning** — A* over the grid plus a **costmap inflation** layer (inscribed/inflation radii, clearance-aware cost ≈ Nav2) so paths keep a safety margin and refuse gaps narrower than the robot.
 - **Autonomy** — frontier detection + nearest-reachable selection lets a robot explore an unknown space on its own.
 
-**Fleet coordination** (`src/fleet`) sits above a swarm of these: nodes heartbeat their state over MQTT, and a `Coordinator` allocates tasks — by nearest-idle node or a **market-based sequential auction** (globally cheaper, queue-order-independent) — with spatial conflict avoidance and coordinated multi-robot exploration.
+**Fleet coordination** (`crates/obc-fleet`) sits above a swarm of these: nodes heartbeat their state over MQTT, and a `Coordinator` allocates tasks — by nearest-idle node or a **market-based sequential auction** (globally cheaper, queue-order-independent) — with spatial conflict avoidance and coordinated multi-robot exploration.
 
 ---
 
@@ -367,7 +367,7 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 
 ### Accessories
 
-Sensors and I/O over I2C / SPI / 1-Wire / GPIO — including BME280, BMP388, AHT20, MPU6050, LSM6DS3, SHT31, ADS1115, MCP4725, INA260, PCF8574, MCP23017, MAX31855, DS18B20, SSD1306, DHT22/DHT11 — plus **embodied actuation & power** accessories added for the control stack: **SG90** servo, **TB6612FNG** / **PCA9685** motor & PWM drivers, **INMP441** mic, **MAX98357A** amp, **MAX17048** fuel gauge, and **SIM7600** cellular. The full machine-readable list is the registry single-source-of-truth (`src/peripherals/registry.rs` → `registry.json`).
+Sensors and I/O over I2C / SPI / 1-Wire / GPIO — including BME280, BMP388, AHT20, MPU6050, LSM6DS3, SHT31, ADS1115, MCP4725, INA260, PCF8574, MCP23017, MAX31855, DS18B20, SSD1306, DHT22/DHT11 — plus **embodied actuation & power** accessories added for the control stack: **SG90** servo, **TB6612FNG** / **PCA9685** motor & PWM drivers, **INMP441** mic, **MAX98357A** amp, **MAX17048** fuel gauge, and **SIM7600** cellular. The full machine-readable list is the registry single-source-of-truth (`crates/obc-planner/src/peripherals/registry.rs` → `registry.json`).
 
 ---
 

@@ -21,7 +21,7 @@ Oh-Ben-Claw's embodied system is **four layers of control over one shared memory
 
 ## The shared substrate
 
-**World memory** (`src/memory/world`) is a bitemporal fact store: every observation is `(entity, value, valid_from, ingested_at, source)`, appended never overwritten. It is the *only* coupling between layers — suites write facts, reflexes and missions read them, navigation writes pose and reads goals. Key entities:
+**World memory** (`crates/obc-memory/src/world.rs`) is a bitemporal fact store: every observation is `(entity, value, valid_from, ingested_at, source)`, appended never overwritten. It is the *only* coupling between layers — suites write facts, reflexes and missions read them, navigation writes pose and reads goals. Key entities:
 
 | Entity | Writer | Reader |
 |---|---|---|
@@ -34,7 +34,7 @@ Oh-Ben-Claw's embodied system is **four layers of control over one shared memory
 | `nav.pose`, `nav.status`, `nav.slam` | navigation | mission, agent |
 | `mission.status` | mission | agent, operator |
 
-**Track 0** (`src/security/limits`) is the deterministic safety gate: `SafetyGate::check(node, tool, pin, value, now)` enforces allowed pins, value ranges, and rate limits *before* any actuation. It runs host-side **and** mirrored on the MCU. No layer can bypass it — a reflex `Move`, a navigation steer command, and a mission's drive all pass the same gate.
+**Track 0** (`crates/obc-safety/src/limits.rs`) is the deterministic safety gate: `SafetyGate::check(node, tool, pin, value, now)` enforces allowed pins, value ranges, and rate limits *before* any actuation. It runs host-side **and** mirrored on the MCU. No layer can bypass it — a reflex `Move`, a navigation steer command, and a mission's drive all pass the same gate.
 
 ## Layer 1 — Suites (perceive · remember · act)
 
@@ -42,9 +42,9 @@ Seven capability suites, each conformant with the Subsystem Suite Contract: visi
 
 ## Layer 2 — Reflexes + safing (System 1)
 
-`src/agent/reflex` evaluates rules against a world-memory snapshot each tick: numeric `Sensor`/`GpioEq` conditions and categorical `State` conditions (matching the suites' mode hooks). Actions: `GpioWrite`, `Publish`, `Escalate` (rate-capped by an escalation budget), `Move` (gate-bounded).
+`crates/obc-reflex` evaluates rules against a world-memory snapshot each tick: numeric `Sensor`/`GpioEq` conditions and categorical `State` conditions (matching the suites' mode hooks). Actions: `GpioWrite`, `Publish`, `Escalate` (rate-capped by an escalation budget), `Move` (gate-bounded).
 
-`src/agent/safing` adds the canonical, debounced safing rules — power critical/low, net offline/degraded, audio-alarm, out-of-range sensor, overheat — and their **recovery** counterparts that release safing when modes normalize. A `SafingSink` taps the `obc/safing` advisories *in process*, flipping a shared `SafingState` so the host actually backs off (e.g. the ClawCam poll sheds load on low battery and resumes on recharge). Fire counts surface on the gateway `/metrics`.
+`crates/obc-agent/src/safing.rs` adds the canonical, debounced safing rules — power critical/low, net offline/degraded, audio-alarm, out-of-range sensor, overheat — and their **recovery** counterparts that release safing when modes normalize. A `SafingSink` taps the `obc/safing` advisories *in process*, flipping a shared `SafingState` so the host actually backs off (e.g. the ClawCam poll sheds load on low battery and resumes on recharge). Fire counts surface on the gateway `/metrics`.
 
 ## Layer 3 — Navigation (the localization → mapping → planning → driving column)
 
@@ -60,7 +60,7 @@ The `navigate` tool plans around obstacles transparently; `nav_status` observes/
 
 ## Layer 4 — Deliberation (mission sequencer)
 
-`src/mission` runs one guarded mission at a time: an ordered list of steps (`navigate_to`, `wait`, `speak`, `record`, `await_state`) executed reactively, one per tick. Every tick first checks **guards** (the reflex `Condition` grammar) and a tripped guard **preempts** the mission and halts the platform. Missions compose the suites with no new machinery — `navigate_to` drives Layer 3, `speak` drives audio, `await_state` blocks on world memory. The `mission` tool (approval-gated) starts a named mission; `mission_status` (always safe) observes or aborts.
+`crates/obc-mission` runs one guarded mission at a time: an ordered list of steps (`navigate_to`, `wait`, `speak`, `record`, `await_state`) executed reactively, one per tick. Every tick first checks **guards** (the reflex `Condition` grammar) and a tripped guard **preempts** the mission and halts the platform. Missions compose the suites with no new machinery — `navigate_to` drives Layer 3, `speak` drives audio, `await_state` blocks on world memory. The `mission` tool (approval-gated) starts a named mission; `mission_status` (always safe) observes or aborts.
 
 ## Layer 0 — Firmware autonomy
 
@@ -81,19 +81,19 @@ A failure at any layer is contained by the one below it.
 Three control *modes* now sit over the suites, each on a different relationship to time:
 
 - **Reactive** (Layer 2 reflexes) — act on the present.
-- **Anticipatory** (`src/foresight`, "Track 1") — act on the *predicted* future. A `Forecaster` fits trends over the bitemporal history and rules fire before a threshold crossing (e.g. battery predicted critical). The same `ActionSink`/escalation-budget machinery as reflexes; predictions recorded to `foresight.{entity}`.
+- **Anticipatory** (`crates/obc-foresight`, "Track 1") — act on the *predicted* future. A `Forecaster` fits trends over the bitemporal history and rules fire before a threshold crossing (e.g. battery predicted critical). The same `ActionSink`/escalation-budget machinery as reflexes; predictions recorded to `foresight.{entity}`.
 - **Deliberative** (Layer 4 missions) — execute multi-step plans.
 
 And two capabilities make the system *self-improving* and *self-directed*:
 
-- **Self-authored reflexes** (`src/learning`) — mine the history for conditions that repeatedly preceded a bad outcome, propose predictive rules with support/confidence, and — **only after approval** — activate them live into the foresight engine. The system learns what to anticipate, with a human in the approval seat.
-- **Autonomous exploration** (`src/navigation/exploration`) — frontier-based self-mapping: head to the nearest reachable known/unknown boundary, scan, repeat, until the reachable space is mapped. Composes SLAM + mapping + A* + drive with no human waypoints.
+- **Self-authored reflexes** (`crates/obc-learning`) — mine the history for conditions that repeatedly preceded a bad outcome, propose predictive rules with support/confidence, and — **only after approval** — activate them live into the foresight engine. The system learns what to anticipate, with a human in the approval seat.
+- **Autonomous exploration** (`crates/obc-navigation/src/exploration.rs`) — frontier-based self-mapping: head to the nearest reachable known/unknown boundary, scan, repeat, until the reachable space is mapped. Composes SLAM + mapping + A* + drive with no human waypoints.
 
-Localization is also now *uncertainty-aware*: a particle filter (`src/navigation/particle`) carries a belief cloud and reports a position **spread**, so the stack can act on how sure it is about where it is, rather than treating pose as exact.
+Localization is also now *uncertainty-aware*: a particle filter (`crates/obc-navigation/src/particle.rs`) carries a belief cloud and reports a position **spread**, so the stack can act on how sure it is about where it is, rather than treating pose as exact.
 
 ## ClawCam — a bidirectional embodied subsystem
 
-ClawCam (the vision subsystem, reached over the MCP stdio/HTTP bridge) is wired as a full **perceive → remember → react → act** participant, not just a detection feed. One shared `clawcam_client` carries both directions (`src/vision/`):
+ClawCam (the vision subsystem, reached over the MCP stdio/HTTP bridge) is wired as a full **perceive → remember → react → act** participant, not just a detection feed. One shared `clawcam_client` carries both directions (`crates/obc-vision/`):
 
 **Read (perceive → remember):**
 - *Detections* fold into `vision.subject.{species}` facts (`clawcam_ingest`), and a rolling `vision.count.{subject}` counter is maintained so foresight can trend the **detection rate**.

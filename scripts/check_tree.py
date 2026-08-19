@@ -92,6 +92,74 @@ MARKER_RE = re.compile(r"<!--\s*unwired:\s*(\S+?)\s*-->")
 MARKER_GLOB = "**/*.md"
 MARKER_SKIP = ("target/", "node_modules/", "gui/dist/", ".git/")
 
+# ── Rule 4: backticked repo paths in the present-tense documents ────────────
+# The documents that describe the system *now*. Not a glob, and the omissions
+# are the argument: ROADMAP.md and docs/ACCELERAPP-CROSS-POLLINATION.md are
+# append-only ledgers, and an entry dated 2026-07-30 describing work done when
+# `src/spine/mod.rs` existed is not lying. Holding a record to today's tree
+# would demand falsifying it, and a gate that demands that gets turned off.
+#
+# On 2026-08-19, 215 of 375 backticked repo paths across the eight claim
+# documents did not resolve — ROADMAP.md alone accounted for 138 of them, which
+# is why the split matters more than the total.
+PRESENT_TENSE_DOCS = (
+    "README.md",
+    "docs/architecture/ARCHITECTURE.md",
+    "docs/EMBODIED-ARCHITECTURE.md",
+    "docs/SAFETY-CASE.md",
+    "docs/SUBSYSTEM-SUITES-STATUS.md",
+)
+
+# Even inside those, two shapes are records and are skipped:
+#   * a blockquote — this repository's convention for a correction, and the
+#     paragraph that says "this used to claim X" must be free to say `X`
+#   * a paragraph carrying a date — the same escape hatch check_counts.py
+#     already offers with "add a date to the line if it is a historical record"
+DATE_RE = re.compile(r"\b20\d\d-\d\d-\d\d\b")
+BACKTICK_PATH_RE = re.compile(r"`([A-Za-z0-9_][A-Za-z0-9_./-]*)`")
+
+
+def _record_lines(lines: list[str]) -> list[bool]:
+    """Which lines belong to a paragraph that describes the past."""
+    flags = [False] * len(lines)
+    start = 0
+    for i in range(len(lines) + 1):
+        if i == len(lines) or not lines[i].strip():
+            para = lines[start:i]
+            if para and (
+                all(l.lstrip().startswith(">") or not l.strip() for l in para)
+                or DATE_RE.search("\n".join(para))
+            ):
+                for j in range(start, i):
+                    flags[j] = True
+            start = i + 1
+    return flags
+
+
+def stale_doc_paths() -> list[tuple[str, int, str]]:
+    """(document, line, path) for each present-tense path that does not resolve."""
+    tops = tuple(
+        sorted(p.name for p in ROOT.iterdir() if p.is_dir() and not p.name.startswith("."))
+    )
+    out = []
+    for rel in PRESENT_TENSE_DOCS:
+        p = ROOT / rel
+        if not p.is_file():
+            continue
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        record = _record_lines(lines)
+        for i, line in enumerate(lines):
+            if record[i]:
+                continue
+            for m in BACKTICK_PATH_RE.finditer(line):
+                c = m.group(1)
+                if not c.startswith(tops) or "/" not in c:
+                    continue
+                if not (ROOT / c.rstrip("/")).exists():
+                    out.append((rel, i + 1, c))
+    return out
+
+
 
 def marker_paths() -> list[tuple[str, int, str]]:
     """(document, line number, path) for every `<!-- unwired: -->` in the tree."""
@@ -213,13 +281,15 @@ def main() -> int:
     stale_markers = [
         (doc, n, p) for doc, n, p in markers if not (ROOT / p).exists()
     ]
+    stale_docs = stale_doc_paths()
 
     print(f"{len(paths)} path(s) drawn in README.md's tree (block at line "
           f"{top + 1}), {len(markers)} unwired marker(s)")
 
-    if not missing and not incomplete and not stale_markers:
+    if not missing and not incomplete and not stale_markers and not stale_docs:
         print("ok: every path the tree draws exists, `crates/` is listed in "
-              "full, and every\n    unwired marker names a file that is here")
+              "full, every\n    unwired marker names a file that is here, and "
+              "the present-tense documents\n    point at directories that exist")
         return 0
 
     if missing:
@@ -240,10 +310,19 @@ def main() -> int:
               f"the survey will report the\n{'':<2}component as undisclosed "
               f"while the document beside it explains itself.")
 
-    print(f"\n{len(missing) + len(incomplete) + len(stale_markers)} problem(s). "
-          f"A tree that names a directory the repository\ndoes not have is not "
-          f"out of date in a way a reader can see — every line of it\nlooks "
-          f"exactly as correct as the lines that are.")
+    if stale_docs:
+        print("\n── A present-tense document pointing at a path that is not here ──")
+        for doc, n, p in stale_docs:
+            print(f"  {doc}:{n}  {p}")
+        print(f"{'':<2}These documents describe the system now. A record may name a "
+              f"path that has\n{'':<2}gone — put it in a blockquote, or date the "
+              f"paragraph, which is what the\n{'':<2}rest of this repository "
+              f"already does.")
+
+    print(f"\n{len(missing) + len(incomplete) + len(stale_markers) + len(stale_docs)} "
+          f"problem(s). A tree that names a directory the repository\ndoes not "
+          f"have is not out of date in a way a reader can see — every line of it"
+          f"\nlooks exactly as correct as the lines that are.")
     return 1
 
 

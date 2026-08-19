@@ -413,11 +413,17 @@ DISCLOSED = {
     for text in DOCS.values()
     for m in re.finditer(r"<!--\s*unwired:\s*(\S+?)\s*-->", text)
 }
-DISCLOSED_BY = {
-    m.group(1).strip(): name
-    for name, text in DOCS.items()
-    for m in re.finditer(r"<!--\s*unwired:\s*(\S+?)\s*-->", text)
-}
+DISCLOSED_BY: dict[str, set[str]] = {}
+for name, text in DOCS.items():
+    for m in re.finditer(r"<!--\s*unwired:\s*(\S+?)\s*-->", text):
+        DISCLOSED_BY.setdefault(m.group(1).strip(), set()).add(name)
+# A set, not a single document, because more than one page may legitimately
+# disclose the same component. ARCHITECTURE.md's Layer 4 table and its ZeroClaw
+# comparison both describe `heartbeat`; once corrected to say "present but
+# unwired" they agree with ROADMAP.md, and a contradiction check that only knew
+# one disclosing document would have read the second honest page as a second
+# dishonest one. Being right in two places must not cost more than being wrong
+# in one.
 # A marker that resolves to nothing discloses nothing, and this survey has no
 # way to tell that from a component nobody disclosed: both produce a "—" in the
 # column below. On 2026-08-19 `crates/obc-movement/src/feedback.rs` was reported
@@ -431,7 +437,7 @@ if _stale_markers:
     print(f"!! {len(_stale_markers)} `unwired:` marker(s) name a file that does "
           f"not exist:", file=sys.stderr)
     for p in _stale_markers:
-        print(f"!!   {p}  (in {DISCLOSED_BY[p]})", file=sys.stderr)
+        print(f"!!   {p}  (in {', '.join(sorted(DISCLOSED_BY[p]))})", file=sys.stderr)
     print("!! a marker that resolves to nothing discloses nothing — the column "
           "below would\n!! report the component as undisclosed and be wrong. "
           "Fix the path.", file=sys.stderr)
@@ -613,7 +619,7 @@ if dead:
     print(f"{'file':<40}{'loc':>6}{'pub':>5}  documented as shipped in")
     for r in sorted(dead, key=lambda r: (not r["docs"], -r["loc"])):
         if r["file"] in DISCLOSED:
-            mark = f"disclosed unwired in {DISCLOSED_BY[r['file']]}"
+            mark = f"disclosed unwired in {', '.join(sorted(DISCLOSED_BY[r['file']]))}"
             flag = ""
         else:
             mark = ", ".join(r["docs"]) if r["docs"] else "—"
@@ -652,9 +658,9 @@ contradictions = []
 for r in dead:
     if r["file"] not in DISCLOSED:
         continue
-    elsewhere = [d for d in r["docs"] if d != DISCLOSED_BY[r["file"]]]
+    elsewhere = [d for d in r["docs"] if d not in DISCLOSED_BY[r["file"]]]
     if elsewhere:
-        contradictions.append((r["file"], DISCLOSED_BY[r["file"]], elsewhere))
+        contradictions.append((r["file"], ", ".join(sorted(DISCLOSED_BY[r["file"]])), elsewhere))
 contradictions.sort()
 
 print("\n── Disclosed as unwired in one document, presented as shipped in another ──")
