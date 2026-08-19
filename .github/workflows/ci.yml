@@ -401,3 +401,47 @@ jobs:
         run: npm ci
       - name: TypeScript type-check
         run: npx tsc --noEmit
+
+  gui-rust:
+    name: GUI Rust Check
+    runs-on: ubuntu-latest
+    # The other half of the GUI, which had a CI job next to it and was not in it.
+    #
+    # `gui-check` above type-checks the TypeScript. Nothing compiled the Rust:
+    # `gui/src-tauri` is in the root manifest's `workspace.exclude`, so
+    # `cargo test --workspace` walks past it, and the package had no
+    # `[workspace]` table of its own, so `cargo check` inside it refused to
+    # start. Between those two facts the directory had never been compiled in
+    # this checkout, and 1563 passing tests said nothing about it.
+    #
+    # What that cost, found by turning it on: ten errors' worth of drift against
+    # crates that were extracted around it — `SecurityConfig` moved to
+    # obc-safety, `build_provider` became `from_config`, `MemoryStore::open`
+    # lost its argument, `create_session` changed shape, `load_history` was
+    # gone, and `BoardRegistry` had never existed at all. None of it was
+    # detectable by reading, and all of it was one command away.
+    #
+    # Tauri needs its system libraries even for `cargo check`, because the
+    # `tauri` crate links against webkit2gtk through pkg-config. That apt step
+    # is the price of the job, and it is why this is a separate job rather than
+    # a step in the one above.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf libssl-dev pkg-config
+      - name: cargo check
+        working-directory: gui/src-tauri
+        run: cargo check --all-targets
+      - name: cargo clippy
+        working-directory: gui/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo fmt
+        working-directory: gui/src-tauri
+        run: cargo fmt -- --check
