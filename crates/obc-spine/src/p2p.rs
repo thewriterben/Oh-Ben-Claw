@@ -613,6 +613,14 @@ impl Tool for P2pNodeTool {
         obc_tool_api::RiskClass::physical(true, obc_tool_api::BlastRadius::Low)
     }
 
+    /// Same reasoning as `MqttNodeTool::output_trust`, and again more so: there
+    /// is no broker and no pairing step in front of a UDP-discovered peer, so
+    /// this is the least measured content in the system. It was arriving marked
+    /// `Trusted`.
+    fn output_trust(&self) -> obc_tool_api::OutputTrust {
+        obc_tool_api::OutputTrust::External
+    }
+
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let result = self
             .spine

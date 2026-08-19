@@ -335,6 +335,23 @@ impl Tool for SkillTool {
         }
     }
 
+    /// External: a skill's output is whatever a URL or a shell command produced.
+    ///
+    /// `SkillKind::Http` fetches an arbitrary URL, which is precisely what the
+    /// builtin `http` and `browser` tools declare `External` for; `Shell` runs
+    /// an arbitrary command whose output can be anything on the machine. Those
+    /// are the two kinds whose output this method describes — `Delegate` and
+    /// `Sequence` return the target tool's own output through the agent's
+    /// chokepoint, which carries the target's declaration, not this one.
+    ///
+    /// It was `Trusted` by default, which meant content a skill fetched from the
+    /// open web could be used as an argument to a privileged call without taint
+    /// tracking seeing it — the prompt-injection path the pool exists to catch,
+    /// left open by the one tool kind an operator can add at runtime.
+    fn output_trust(&self) -> obc_tool_api::OutputTrust {
+        obc_tool_api::OutputTrust::External
+    }
+
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         if !self.manifest.enabled {
             return Ok(ToolResult::err(format!(
