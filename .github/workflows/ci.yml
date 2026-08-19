@@ -366,6 +366,20 @@ jobs:
       # reads risk_class.
       - name: tools that actuate declare themselves physical
         run: python3 scripts/check_physical_tools.py
+      # The tree on the front page must be a tree this repository has.
+      #
+      # Extraction is the operation that invalidates a path in prose, and this
+      # project's main body of work is extraction. The README tree was corrected
+      # by hand on 2026-08-02 for exactly this and had drifted again by
+      # 2026-08-19: 27 of its `src/` directories no longer existed and it drew 6
+      # crates out of 33. Nothing in between reported it, because a stale tree
+      # does not look stale — every line is plausible and a reader only finds
+      # out by opening a directory that is not there.
+      #
+      # Two rules: every drawn path resolves, and `crates/` is listed in full
+      # rather than partially, since a short list there reads as a complete one.
+      - name: the tree on the front page is a tree we have
+        run: python3 scripts/check_tree.py
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run security audit
