@@ -723,68 +723,84 @@ See [`gui/README.md`](gui/README.md) for the full build instructions and command
 
 ## Project Structure
 
-Six pieces of the agent now live in `crates/` rather than `src/`, extracted one
-at a time as each became self-contained enough to compile on its own. The tree
-below said otherwise until 2026-08-02: it still listed `src/memory/`,
+Almost all of the agent now lives in `crates/` rather than `src/`, extracted one
+at a time as each became self-contained enough to compile on its own. What is
+left in `src/` is the binary, the deployment generator, the doctor and the test
+harness.
+
+The tree below said otherwise until 2026-08-02: it listed `src/memory/`,
 `src/sensing/`, `src/power/`, `src/comms/` and `src/security/limits.rs`, none of
-which had existed since 2026-07-30, and `src/observability/`, moved by the same
-commit as this correction. Extraction is exactly the operation that invalidates
-a path in prose, and four of them had gone by without one.
+which had existed since 2026-07-30. It was corrected by hand, and it drifted
+again immediately — by 2026-08-19 it drew 27 `src/` directories that no longer
+existed and 6 crates out of 33, because every extraction after that day
+invalidated it and nothing said so. A hand-corrected tree is a tree that is
+correct on the day someone looks at it.
+
+`scripts/check_tree.py` now resolves every path this tree draws and fails on any
+that is absent, and requires `crates/` to be listed in full rather than
+partially — a short list there reads as a complete one. It runs in CI. The
+comments beside the paths are still prose and still unchecked, which is the
+argument for keeping them to one line.
 
 ```
 Oh-Ben-Claw/
-├── crates/             # Extracted, self-contained, vendored into OBC-Prime
-│   ├── obc-paths/      # Config/data directory resolution
-│   ├── obc-memory/     # Bitemporal world memory (the embodied substrate)
-│   ├── obc-planner/    # Deployment planner, site optimizer, geo, registry
-│   ├── obc-safety/     # Track 0 gate, limits, audit chain, pairing, taint
-│   ├── obc-telemetry/  # The agent watching its body: power / comms / sensing
-│   └── obc-observability/  # The agent watching itself: spans + counters
-├── src/
-│   ├── agent/          # Agent loop, dispatcher, Reflexion, Plan-and-Execute,
-│   │   ├── reflex.rs   #   dual-system reflexes (System 1)
-│   │   └── safing.rs   #   self-healing safing rule library
-│   ├── audio/          # Audio pipeline + audio suite (hear / speak)
-│   ├── movement/       # Track 0–bounded actuation + closed-loop feedback
-│   ├── navigation/     # Localization, SLAM, mapping, A*+costmap, particle filter,
-│   │                   #   sensor model, frontier exploration
-│   ├── mission/        # Mission sequencer (bt.rs is an unwired BT engine — see above)
-│   ├── foresight/      # Predictive control (Track 1) + online forecaster
-│   ├── learning/       # Self-authored reflexes (mine → approve → activate)
-│   ├── fleet/          # Multi-robot coordination (registry, auction, conflicts)
-│   ├── approval/       # Human-in-the-loop approval workflow
-│   ├── channels/       # Telegram, Discord, Feishu, IRC, Signal, Matrix, …
-│   ├── config/         # Configuration schema and loading (Config::validate)
-│   ├── cost/           # Token cost tracking and budget enforcement
-│   ├── deployment/     # Hardware-driven deployment scheme generator
-│   ├── doctor/         # System diagnostics (oh-ben-claw doctor)
-│   ├── gateway/        # REST/WebSocket API gateway (Axum)
-│   ├── mcp/            # Model Context Protocol client/server (dual-mode)
-│   ├── peripherals/    # Hardware drivers + registry SSOT
-│   ├── providers/      # LLM provider adapters + failover + retry
-│   ├── a2a/            # A2A protocol + HTTP transport — `oh-ben-claw a2a-serve`
-│   ├── a2a_agent.rs    # The A2A executor that dispatches to the agent
-│   ├── scheduler/      # Scheduled tasks and cron jobs
-│   ├── security.rs     # Re-exports obc-safety under the old module path
-│   ├── skill_forge/    # Skill discovery, synthesis, ClawHub registry
-│   ├── spine/          # MQTT spine + P2P broker-free mesh
-│   ├── tools/          # Tool registry (shell, file, browser, hardware, nav, …)
-│   ├── tunnel/         # Network tunnels (Cloudflare, ngrok, Tailscale)
-│   └── vision/         # Vision pipeline + ClawCam detection ingest
-├── firmware/
-│   ├── obc-esp32-s3/   # ESP32-S3 firmware + on-MCU reflex/safing mirror
-│   ├── heltec-lora-linktest/  # Heltec V3 (ESP32-S3 + SX1262) LoRa mesh node
-│   ├── lora-node/      # Arduino LoRa bridge sketch
-│   └── t-deck-terminal/       # T-Deck handheld terminal sketch
-├── gui/                # Tauri 2 + React 18 native desktop application
-├── docs/
-│   ├── EMBODIED-ARCHITECTURE.md     # The embodied control stack, end to end
-│   ├── SOTA-COMPARISON.md           # Component-by-component vs robotics SOTA
-│   ├── SUBSYSTEM-SUITE-CONTRACT.md  # The perceive→remember→act suite contract
-│   ├── architecture/   # Architecture design documents
-│   └── datasheets/     # Hardware datasheets and pin maps
-├── examples/           # Annotated reference configurations
-└── tests/              # Integration tests (embodied_full_stack, embodied_hil_loop, …)
+├── crates/                   # Extracted, self-contained, vendored into OBC-Prime
+│   ├── obc-a2a/              # Agent-to-Agent v1.0: wire types, JSON-RPC lifecycle, HTTP
+│   ├── obc-agent/            # The agent loop, dispatcher, and the Track 0 chokepoint
+│   ├── obc-approval/         # Autonomy levels, per-call risk check, persisted grants
+│   ├── obc-audio/            # Audio pipeline + audio suite (hear / speak)
+│   ├── obc-channels/         # Telegram, Discord, Feishu, IRC, Signal, Matrix, ...
+│   ├── obc-config/           # Configuration schema and loading (Config::validate)
+│   ├── obc-conscience/       # What the agent may observe and reach; decision log
+│   ├── obc-cost/             # Token cost tracking and budget enforcement
+│   ├── obc-fleet/            # Multi-robot coordination (registry, auction, conflicts)
+│   ├── obc-foresight/        # Predictive control (Track 1) + online forecaster
+│   ├── obc-gateway/          # REST/WebSocket API gateway (Axum)
+│   ├── obc-learning/         # Self-authored reflexes (mine -> approve -> activate)
+│   ├── obc-mcp/              # Model Context Protocol client/server (dual-mode)
+│   ├── obc-memory/           # Bitemporal world memory (the embodied substrate)
+│   ├── obc-mission/          # Mission sequencer, advancing across restarts
+│   ├── obc-movement/         # Track 0-bounded actuation (feedback.rs parked - ROADMAP)
+│   ├── obc-navigation/       # Localization, SLAM, mapping, A*+costmap, particle filter
+│   ├── obc-observability/    # The agent watching itself: spans + counters
+│   ├── obc-paths/            # Config/data directory resolution
+│   ├── obc-peripherals/      # Hardware drivers + registry SSOT
+│   ├── obc-planner/          # Deployment planner, site optimizer, geo, registry
+│   ├── obc-position/         # Geodetic telemetry and NMEA, projected into the site frame
+│   ├── obc-providers/        # LLM provider adapters + failover + retry
+│   ├── obc-reflex/           # System 1: the rule engine, mirrored on the node
+│   ├── obc-safety/           # Track 0 gate, limits, audit chain, pairing, taint
+│   ├── obc-scheduler/        # Scheduled tasks and cron jobs
+│   ├── obc-skill-forge/      # Skill discovery, synthesis, ClawHub registry
+│   ├── obc-spine/            # MQTT spine, LoRa gateway and mesh, P2P transport
+│   ├── obc-telemetry/        # The agent watching its body: power / comms / sensing
+│   ├── obc-tool-api/         # The Tool contract, with no implementation
+│   ├── obc-tools/            # Every built-in tool the model can call
+│   ├── obc-tunnel/           # Network tunnels (Cloudflare, ngrok, Tailscale)
+│   └── obc-vision/           # Vision pipeline + ClawCam detection ingest
+├── src/                      # What has not been extracted, and the binary
+│   ├── bin/                  # emit-registry, emit-firmware-templates, mcp-conformance
+│   ├── deployment/           # Hardware-driven deployment scheme generator
+│   ├── doctor/               # System diagnostics (oh-ben-claw doctor)
+│   ├── harness/              # Shared scaffolding for the integration tests
+│   ├── lib.rs                # Crate root: re-exports every obc-* crate
+│   └── main.rs               # The binary: composes the agent from config
+├── firmware/                 # The node end of the conversation
+│   ├── obc-esp32-s3/         # ESP32-S3 + on-MCU reflex/safing/Track 0 mirror
+│   ├── heltec-lora-linktest/ # Heltec V3 (ESP32-S3 + SX1262) LoRa mesh node
+│   ├── lora-node/            # Arduino LoRa bridge sketch
+│   └── t-deck-terminal/      # T-Deck handheld terminal sketch
+├── scripts/                  # The checks and surveys CI and ROADMAP.md run
+├── gui/                      # Tauri 2 + React 18 native desktop application
+├── docs/                     # Four worth opening first; there are more
+│   ├── EMBODIED-ARCHITECTURE.md # The embodied control stack, end to end
+│   ├── SAFETY-CASE.md        # What Track 0 claims, and what backs each claim
+│   ├── SUBSYSTEM-SUITE-CONTRACT.md # The perceive->remember->act contract
+│   └── playbooks/            # What to do when a node goes quiet
+├── registry/                 # Peripheral registry SSOT (registry.json)
+├── examples/                 # Annotated reference configurations
+├── planner-wasm/             # The WASM build of the planner OBC-Prime vendors
+└── tests/                    # Integration tests (embodied_full_stack, embodied_hil_loop, ...)
 ```
 
 ---
