@@ -206,7 +206,7 @@ existing `Scheduler`.
 - [~] `append_task()` convenience method appends a new `- [ ] …` line to the file
 - [~] `build_prompt()` returns the heartbeat prompt when actionable tasks exist
 
-> **Built and tested, and nothing constructs it** (2026-08-14). `HeartbeatStore`
+> **Built and tested, and nothing constructs it** (2026-08-18). `HeartbeatStore`
 > lives in `crates/obc-memory/src/heartbeat.rs` with its own unit tests, and every
 > reference to the type in this workspace is inside that file or the `pub use`
 > that re-exports it. Nothing reads `HEARTBEAT.md`, so no prompt is ever built and
@@ -233,7 +233,7 @@ its SQLite conversation history.  Oh-Ben-Claw adopts the same pattern.
 - [~] `read_recent(days)` reads the last N days of notes, sections separated by `---`
 - [~] `list_dates()` returns all journal dates in descending order
 
-> **Built and tested, and nothing constructs it** (2026-08-14). Same shape as
+> **Built and tested, and nothing constructs it** (2026-08-18). Same shape as
 > `HeartbeatStore` above, found in the same run and for the same reason.
 > `DailyJournal` lives in `crates/obc-memory/src/journal.rs`; every reference to
 > it is inside that file or the `pub use` re-exporting it. No note is ever
@@ -442,7 +442,7 @@ and enhanced reliability.
 - [x] **`A2AServer`** — handles discovery and task requests for exposing Oh-Ben-Claw as an A2A endpoint
 - [x] **`A2AConfig`** added to root `Config` with `enabled`, `agent_name`, `agent_description`, `agent_url`, `skills` fields
 
-> **The client half is built and constructed nowhere** (2026-08-14). README.md
+> **The client half is built and constructed nowhere** (2026-08-18). README.md
 > has said so for some time — "`A2AClient` is still constructed **nowhere**:
 > this agent can be called, and cannot call out" — and this line went on ticking
 > it as delivered. Two documents disagreeing about the same type, with nothing
@@ -620,7 +620,7 @@ adapted so the externalized "progress file" is the **physical world state**. Bui
 on `scheduler`, `agent`, and `memory`. Depends on Track 0.
 Design: `docs/PHASE17-PLAN.md`. Implementation: `src/harness/`.
 
-> **Corrected 2026-08-14.** This line read "Builds on `scheduler`, `heartbeat`,
+> **Corrected 2026-08-18.** This line read "Builds on `scheduler`, `heartbeat`,
 > `agent`, `memory`, and `runtime`". `runtime` was cut by gate 3 and no longer
 > exists, and `heartbeat` is built but constructed by nothing (see the Proactive
 > Task System section above), so the harness cannot be building on either. Both
