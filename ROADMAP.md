@@ -1111,6 +1111,37 @@ from having been forgotten.
   The same stale-path failure as the README tree, one layer further in: there,
   prose pointed at directories that had moved; here, a correct disclosure was
   invisible to the instrument that reads disclosures.
+<!-- unwired: crates/obc-navigation/src/particle.rs -->
+- [ ] **`crates/obc-navigation/src/particle.rs` (612 LOC) — deliberately
+  unwired.** A particle filter over SE2 poses with a beam sensor model, KLD
+  adaptive resampling and a reported position spread. `ParticleFilter`,
+  `ParticleLocalizer` and `KldParams` have **zero** code references anywhere in
+  the workspace; the only mention outside the file is a doc link in
+  `sensor_model.rs`. **Condition to wire:** a localization source honest enough
+  to feed it. The filter is only as good as its motion and measurement models,
+  and this stack currently fuses poses (`pose_fusion.rs`) rather than
+  maintaining a belief — swapping to a belief filter is a change to what
+  navigation *means*, not a call site.
+
+<!-- unwired: crates/obc-agent/src/edge.rs -->
+- [ ] **`crates/obc-agent/src/edge.rs` (531 LOC) — deliberately unwired.**
+  The edge-native agent for resource-constrained devices. `EdgeAgent` and
+  `EdgeAgentBuilder` occur exactly once outside the file, in
+  `pub use edge::{EdgeAgent, EdgeAgentBuilder};` — re-exported and constructed
+  nowhere, including by `src/main.rs`. **Condition to wire:** a decision about
+  whether edge mode is a separate binary path or a configuration of the normal
+  one. It is public API a downstream consumer could use today; what it is not is
+  something this repository runs.
+
+<!-- unwired: src/deployment/swarm.rs -->
+- [ ] **`src/deployment/swarm.rs` (357 LOC) — deliberately unwired.** The
+  LLM-powered multi-agent deployment planner, ticked `- [x]` above when it was
+  built. `DeploymentSwarm`, `SwarmConfig` and `SwarmResult` occur once each,
+  in `pub use swarm::{…}`; `AgentAnnotation` and `plan_static` occur nowhere
+  outside a doc-comment example. **Condition to wire:** the same one `saga.rs`
+  has — nothing applies a deployment scheme to nodes on purpose, and the
+  deterministic `DeploymentPlanner` is what the CLI actually calls.
+
 <!-- unwired: crates/obc-agent/src/reflexion.rs -->
 - [ ] **`crates/obc-agent/src/reflexion.rs` (487 LOC, 7 tests) — deliberately
   unwired.**

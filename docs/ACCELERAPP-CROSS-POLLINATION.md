@@ -117,7 +117,8 @@ Accelerapp's `observability/` (OTel spans + Prometheus exporter) is its one genu
 
 ### Tier 2 — adapt (good design, OBC should build the real version)
 
-**D. LLM provider fallback chain → OBC per-node model selection.** *(→ `src/providers/`, `crates/obc-agent/src/edge.rs`, Phase 20)*
+<!-- unwired: crates/obc-agent/src/edge.rs -->
+**D. LLM provider fallback chain → OBC per-node model selection.** *(→ `crates/obc-providers/`, `crates/obc-agent/src/edge.rs`, Phase 20)* — not delivered, and the destination is itself parked: `EdgeAgent` is re-exported and constructed nowhere (ROADMAP.md).
 `llm/local_llm_service.py` is a clean local-first → cloud-fallback abstraction with health checks, plus a JSON model registry at `~/.accelerapp/models`. OBC already has `failover.rs`/`retry.rs`, but the **local-first, health-checked, per-node model registry** is exactly the Phase 20 "edge escalation policy + edge model management" shape. Adopt the design (fix Accelerapp's bug where availability is cached forever and never re-checked).
 
 **E. HIL self-test contract + a simulated node for CI.** *(→ `tests/`, `src/peripherals/`, Phases 17/Track 0)* — ✅ **Delivered.** `crates/obc-peripherals/src/selftest.rs`: `NodeSelfTest` bring-up contract (`gpio_loopback`/`sensor_read`/`link_up`) + `SimulatedNode` (scriptable, announces on the spine). Wired end-to-end in `tests/offgrid_fleet_loop.rs` (bring-up gate → LoRa heartbeat → fleet auction).

@@ -89,7 +89,10 @@ And two capabilities make the system *self-improving* and *self-directed*:
 - **Self-authored reflexes** (`crates/obc-learning`) — mine the history for conditions that repeatedly preceded a bad outcome, propose predictive rules with support/confidence, and — **only after approval** — activate them live into the foresight engine. The system learns what to anticipate, with a human in the approval seat.
 - **Autonomous exploration** (`crates/obc-navigation/src/exploration.rs`) — frontier-based self-mapping: head to the nearest reachable known/unknown boundary, scan, repeat, until the reachable space is mapped. Composes SLAM + mapping + A* + drive with no human waypoints.
 
-Localization is also now *uncertainty-aware*: a particle filter (`crates/obc-navigation/src/particle.rs`) carries a belief cloud and reports a position **spread**, so the stack can act on how sure it is about where it is, rather than treating pose as exact.
+<!-- unwired: crates/obc-navigation/src/particle.rs -->
+A particle filter (`crates/obc-navigation/src/particle.rs`) carries a belief cloud and reports a position **spread**, so a stack that used it could act on how sure it is about where it is rather than treating pose as exact. Nothing constructs it — ROADMAP.md discloses it as unwired, with the condition for wiring it.
+
+> **Corrected 2026-08-19.** This read "Localization is also now *uncertainty-aware*", present tense, which was not true of anything running: `ParticleFilter`, `ParticleLocalizer` and `KldParams` have zero code references anywhere in the workspace. It was found by `file_reachability.py` only after that survey stopped counting words in comments as references — the single mention of `ParticleFilter` outside its own file is a doc link in `sensor_model.rs`.
 
 ## ClawCam — a bidirectional embodied subsystem
 
