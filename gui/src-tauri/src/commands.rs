@@ -1,25 +1,22 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
-use anyhow::Context;
 
+// `SecurityConfig` moved to obc-safety and `SecretString` to obc-config during
+// the crate extraction; the root crate re-exports both, so these are the same
+// types under their current homes rather than substitutes.
 use oh_ben_claw::{
     agent::Agent,
-    config::{AgentConfig, Config, ProviderConfig, SecurityConfig},
+    config::{AgentConfig, Config, ProviderConfig, SecretString},
     memory::MemoryStore,
     providers,
-    security::SecurityContext,
-    tools::builtin::{
-        file::FileTool,
-        http::HttpTool,
-        memory::MemoryTool,
-        shell::ShellTool,
-    },
+    security::{SecurityConfig, SecurityContext},
+    tools::builtin::{file::FileTool, http::HttpTool, memory::MemoryTool, shell::ShellTool},
 };
 
 use crate::state::{
-    AgentHandle, AgentStatusDto, AppSettingsDto, AppState,
-    ChatMessageDto, PeripheralNodeDto, PeripheralToolDto, SessionDto, ToolCallEntryDto,
+    AgentHandle, AgentStatusDto, AppSettingsDto, AppState, ChatMessageDto, PeripheralNodeDto,
+    PeripheralToolDto, SessionDto, ToolCallEntryDto,
 };
 
 fn now_ms() -> u64 {
@@ -36,7 +33,8 @@ fn uuid() -> String {
     let mut h = DefaultHasher::new();
     now_ms().hash(&mut h);
     std::thread::current().id().hash(&mut h);
-    format!("{:016x}-{:04x}-4{:03x}-{:04x}-{:012x}",
+    format!(
+        "{:016x}-{:04x}-4{:03x}-{:04x}-{:012x}",
         h.finish(),
         (h.finish() >> 16) & 0xffff,
         (h.finish() >> 8) & 0xfff,
@@ -60,7 +58,9 @@ pub async fn start_agent(
         provider: ProviderConfig {
             name: provider.clone(),
             model: model.clone(),
-            api_key: settings.api_key.clone(),
+            // `api_key` became a `SecretString` so it cannot be logged or
+            // `Debug`-printed by accident. The wrap is the whole change.
+            api_key: settings.api_key.clone().map(SecretString::new),
             base_url: settings.ollama_url.clone(),
             ..Default::default()
         },
@@ -80,18 +80,50 @@ pub async fn start_agent(
     let provider_config = config.provider.clone();
 
     // Build provider
-    let llm_provider = providers::build_provider(&config.provider)
+    let llm_provider = providers::from_config(&config.provider)
         .map_err(|e| format!("Failed to build provider: {e}"))?;
 
     // Build memory store
-    let memory = Arc::new(
-        MemoryStore::open(None)
-            .map_err(|e| format!("Failed to open memory store: {e}"))?,
-    );
+    //
+    // `open` takes no path argument any more — obc-memory owns
+    // `default_db_path()`, so callers cannot each invent their own location.
+    let memory =
+        Arc::new(MemoryStore::open().map_err(|e| format!("Failed to open memory store: {e}"))?);
 
     // Build security context
     let security = SecurityContext::new(&config.security)
         .unwrap_or_else(|_| SecurityContext::new(&Default::default()).unwrap());
+
+    // Half of this context is enforced here and half has nothing to enforce.
+    //
+    // `security.policy` reaches the agent below. `security.pairing` cannot: the
+    // GUI joins no spine and discovers no peers, so there is no announcement to
+    // admit or quarantine. `[security] require_pairing = true` is still
+    // validated at load — the config layer refuses it without a
+    // `pairing_secret` — which is precisely what makes it read as in force.
+    //
+    // Same shape as `[spine] tls = true`, which was accepted, warned about, and
+    // encrypted nothing. That one now refuses to start, because it told an
+    // operator their broker link was encrypted when it was cleartext. This is
+    // milder: nothing here claims a peer was checked, because nothing here has
+    // peers. So it warns rather than refuses — but it does not stay quiet,
+    // because someone who set that key made a security decision and is entitled
+    // to learn where it does and does not apply.
+    //
+    // NOT COMPILED. This package is excluded from the root workspace and its
+    // own build fails on a missing `icons/` directory, so nothing has type-
+    // checked these four lines — see the note in this package's Cargo.toml.
+    // Recorded here rather than left out, because the fact it states is true
+    // whether or not the file builds, and the next person to make the GUI
+    // compile should find this waiting rather than rediscover it.
+    if config.security.require_pairing {
+        tracing::warn!(
+            "[security] require_pairing is set, and the GUI enforces nothing with it: \
+             this process joins no spine and discovers no peers, so there are no \
+             announcements to admit or quarantine. It takes effect in the agent \
+             binary, which owns the spine."
+        );
+    }
 
     // Build built-in tools
     let tools: Vec<Box<dyn oh_ben_claw::tools::traits::Tool>> = vec![
@@ -104,8 +136,13 @@ pub async fn start_agent(
     // Build agent
     let session_id = uuid();
     let agent = Arc::new(
-        Agent::new(config.agent.clone(), llm_provider, Arc::clone(&memory), tools)
-            .with_policy(security.policy.clone()),
+        Agent::new(
+            config.agent.clone(),
+            llm_provider,
+            Arc::clone(&memory),
+            tools,
+        )
+        .with_policy(security.policy.clone()),
     );
 
     let mut agent_guard = state.agent.lock().await;
@@ -206,7 +243,9 @@ pub async fn send_message(
 }
 
 #[tauri::command]
-pub async fn get_agent_status(state: State<'_, AppState>) -> Result<Option<AgentStatusDto>, String> {
+pub async fn get_agent_status(
+    state: State<'_, AppState>,
+) -> Result<Option<AgentStatusDto>, String> {
     let agent_guard = state.agent.lock().await;
     if let Some(handle) = agent_guard.as_ref() {
         Ok(Some(AgentStatusDto {
@@ -230,15 +269,24 @@ pub async fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionDto>
     let mem_guard = state.memory.lock().await;
     if let Some(memory) = mem_guard.as_ref() {
         let sessions = memory.list_sessions().map_err(|e| e.to_string())?;
-        Ok(sessions
-            .into_iter()
-            .map(|s| SessionDto {
+        // `Session` no longer carries a message count — it is a separate query
+        // now, so listing sessions does not pay for counting rows in each one.
+        // Asked per session here because the DTO promises the number; if that
+        // ever gets slow, the honest fix is to drop it from the DTO rather than
+        // to report a stale one.
+        let mut out = Vec::with_capacity(sessions.len());
+        for s in sessions {
+            let message_count = memory.message_count(&s.id).map_err(|e| e.to_string())?;
+            out.push(SessionDto {
                 id: s.id,
                 title: s.title,
-                message_count: s.message_count,
-                created_at: s.created_at,
-            })
-            .collect())
+                message_count,
+                // `created_at` is a `DateTime<Utc>` now; the DTO is epoch
+                // milliseconds, matching `now_ms()` used in the fallback below.
+                created_at: s.created_at.timestamp_millis() as u64,
+            });
+        }
+        Ok(out)
     } else {
         Ok(vec![SessionDto {
             id: "default".into(),
@@ -256,11 +304,13 @@ pub async fn create_session(
 ) -> Result<String, String> {
     let mem_guard = state.memory.lock().await;
     if let Some(memory) = mem_guard.as_ref() {
-        let id = uuid();
+        // `create_session` mints the id and returns it, rather than taking one.
+        // Returning the store's id instead of a locally generated one is the
+        // point: the previous shape could hand the frontend an id the database
+        // had never heard of if the insert took a different path.
         memory
-            .create_session(&id, title.as_deref().unwrap_or("New Session"))
-            .map_err(|e| e.to_string())?;
-        Ok(id)
+            .create_session(title.as_deref().unwrap_or("New Session"))
+            .map_err(|e| e.to_string())
     } else {
         Ok(uuid())
     }
@@ -273,18 +323,23 @@ pub async fn load_session_history(
 ) -> Result<Vec<ChatMessageDto>, String> {
     let mem_guard = state.memory.lock().await;
     if let Some(memory) = mem_guard.as_ref() {
+        // `load_recent_stored` rather than `load_recent_messages`: the latter
+        // returns `{role, content}`, which is what a provider needs and leaves a
+        // user interface inventing both an id and a time. This carries the row's
+        // own id and `created_at`, so a reloaded conversation keeps stable
+        // message ids and shows when things were actually said.
         let messages = memory
-            .load_history(&session_id, 100)
+            .load_recent_stored(&session_id, 100)
             .map_err(|e| e.to_string())?;
         Ok(messages
             .into_iter()
             .map(|m| ChatMessageDto {
-                id: uuid(),
+                id: m.id.to_string(),
                 role: m.role,
                 content: m.content,
                 tool_name: None,
                 tool_args: None,
-                timestamp: m.timestamp,
+                timestamp: m.created_at.timestamp_millis().max(0) as u64,
             })
             .collect())
     } else {
@@ -293,25 +348,23 @@ pub async fn load_session_history(
 }
 
 #[tauri::command]
-pub async fn clear_session(
-    session_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn clear_session(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let mem_guard = state.memory.lock().await;
     if let Some(memory) = mem_guard.as_ref() {
-        memory.clear_session(&session_id).map_err(|e| e.to_string())?;
+        memory
+            .clear_session(&session_id)
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn delete_session(
-    session_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn delete_session(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let mem_guard = state.memory.lock().await;
     if let Some(memory) = mem_guard.as_ref() {
-        memory.delete_session(&session_id).map_err(|e| e.to_string())?;
+        memory
+            .delete_session(&session_id)
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -354,7 +407,10 @@ pub async fn remove_node(
     let mut nodes = state.nodes.lock().await;
     // Emit a removal event (status = "removed") for any matching node.
     if let Some(node) = nodes.iter().find(|n| n.id == node_id).cloned() {
-        let removed = PeripheralNodeDto { status: "removed".into(), ..node };
+        let removed = PeripheralNodeDto {
+            status: "removed".into(),
+            ..node
+        };
         let _ = app_handle.emit("node-status-change", &removed);
     }
     nodes.retain(|n| n.id != node_id);
@@ -365,8 +421,23 @@ pub async fn remove_node(
 pub async fn scan_usb_devices(
     state: State<'_, AppState>,
 ) -> Result<Vec<PeripheralNodeDto>, String> {
-    use oh_ben_claw::peripherals::registry::BoardRegistry;
-    let registry = BoardRegistry::default();
+    // No capability lookup, and there never could have been one here.
+    //
+    // This used `BoardRegistry::default()` and asked it for the capabilities of
+    // a board literally named `"unknown-usb-serial"`. No such type exists in
+    // the tree — the registry is free functions over a static table
+    // (`lookup_board(vid, pid)`, `known_boards()`), and it is keyed on USB
+    // VID/PID. This scan reads no VID/PID: it checks whether a device node
+    // exists at a path and nothing more.
+    //
+    // So the honest result of "a serial device is present at /dev/ttyUSB0" is a
+    // device with an unknown board and no known capabilities. Reporting an
+    // empty tool list says that. Reporting a looked-up one would have said the
+    // opposite with the same confidence, which is why the fix is not to find a
+    // replacement call.
+    //
+    // Reading the descriptor and calling `registry::lookup_board` is the real
+    // feature; it needs a USB enumeration crate this package does not have.
     let mut found = Vec::new();
 
     // Scan /dev/ttyUSB* and /dev/ttyACM* on Linux
@@ -375,14 +446,7 @@ pub async fn scan_usb_devices(
             let path = format!("{prefix}{i}");
             if std::path::Path::new(&path).exists() {
                 let board_name = "unknown-usb-serial";
-                let tools = registry
-                    .capabilities_for(board_name)
-                    .iter()
-                    .map(|c| PeripheralToolDto {
-                        name: c.to_string(),
-                        description: format!("{c} capability"),
-                    })
-                    .collect();
+                let tools: Vec<PeripheralToolDto> = Vec::new();
 
                 found.push(PeripheralNodeDto {
                     id: uuid(),
@@ -437,10 +501,7 @@ pub async fn get_vault_status(state: State<'_, AppState>) -> Result<String, Stri
 }
 
 #[tauri::command]
-pub async fn unlock_vault(
-    password: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn unlock_vault(password: String, state: State<'_, AppState>) -> Result<(), String> {
     // In a full implementation this would use the Vault from security::vault
     // For now we accept any non-empty password and mark as unlocked
     if password.is_empty() {
@@ -482,10 +543,7 @@ pub async fn set_vault_secret(
 }
 
 #[tauri::command]
-pub async fn delete_vault_secret(
-    name: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn delete_vault_secret(name: String, state: State<'_, AppState>) -> Result<(), String> {
     let unlocked = *state.vault_unlocked.lock().await;
     if !unlocked {
         return Err("Vault is locked".into());

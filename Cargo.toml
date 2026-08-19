@@ -9,7 +9,32 @@ members = [
     "crates/obc-telemetry",
     "crates/obc-observability",
     "crates/obc-scheduler",
+    "crates/obc-position",
+    "crates/obc-cost",
+    "crates/obc-tunnel",
     "crates/obc-conscience",
+    "crates/obc-a2a",
+    "crates/obc-movement",
+    "crates/obc-navigation",
+    "crates/obc-tool-api",
+    "crates/obc-reflex",
+    "crates/obc-foresight",
+    "crates/obc-learning",
+    "crates/obc-fleet",
+    "crates/obc-audio",
+    "crates/obc-mission",
+    "crates/obc-approval",
+    "crates/obc-spine",
+    "crates/obc-tools",
+    "crates/obc-providers",
+    "crates/obc-mcp",
+    "crates/obc-skill-forge",
+    "crates/obc-agent",
+    "crates/obc-config",
+    "crates/obc-peripherals",
+    "crates/obc-channels",
+    "crates/obc-vision",
+    "crates/obc-gateway",
 ]
 exclude = [
     # GUI is built separately via `pnpm tauri build` — not part of the CLI workspace CI
@@ -68,7 +93,32 @@ obc-safety = { path = "crates/obc-safety" }
 obc-telemetry = { path = "crates/obc-telemetry" }
 obc-observability = { path = "crates/obc-observability" }
 obc-scheduler = { path = "crates/obc-scheduler" }
+obc-position = { path = "crates/obc-position" }
+obc-cost = { path = "crates/obc-cost" }
+obc-tunnel = { path = "crates/obc-tunnel" }
 obc-conscience = { path = "crates/obc-conscience" }
+obc-a2a = { path = "crates/obc-a2a" }
+obc-movement = { path = "crates/obc-movement" }
+obc-navigation = { path = "crates/obc-navigation" }
+obc-tool-api = { path = "crates/obc-tool-api" }
+obc-reflex = { path = "crates/obc-reflex" }
+obc-foresight = { path = "crates/obc-foresight" }
+obc-learning = { path = "crates/obc-learning" }
+obc-fleet = { path = "crates/obc-fleet" }
+obc-audio = { path = "crates/obc-audio" }
+obc-mission = { path = "crates/obc-mission" }
+obc-approval = { path = "crates/obc-approval" }
+obc-spine = { path = "crates/obc-spine" }
+obc-tools = { path = "crates/obc-tools" }
+obc-providers = { path = "crates/obc-providers" }
+obc-mcp = { path = "crates/obc-mcp" }
+obc-skill-forge = { path = "crates/obc-skill-forge" }
+obc-agent = { path = "crates/obc-agent" }
+obc-config = { path = "crates/obc-config" }
+obc-peripherals = { path = "crates/obc-peripherals" }
+obc-channels = { path = "crates/obc-channels" }
+obc-vision = { path = "crates/obc-vision" }
+obc-gateway = { path = "crates/obc-gateway" }
 toml = "1.0"
 shellexpand = "3.1"
 
@@ -169,11 +219,11 @@ default = ["hardware", "mqtt-spine", "world-anchor"]
 # Now forwards to the crate that owns `geo::anchor`, rather than gating a module
 # in this crate. Same name, same default, so no command line changed.
 world-anchor = ["obc-planner/world-anchor"]
-hardware = ["nusb", "tokio-serial", "serialport"]
+hardware = ["nusb", "tokio-serial", "serialport", "obc-spine/hardware", "obc-peripherals/hardware"]
 mqtt-spine = []
-peripheral-rpi = ["rppal"]
-peripheral-nanopi = []
-peripheral-stm32 = []
+peripheral-rpi = ["rppal", "obc-peripherals/peripheral-rpi"]
+peripheral-nanopi = ["obc-peripherals/peripheral-nanopi"]
+peripheral-stm32 = ["obc-peripherals/peripheral-stm32"]
 gui = []
 # Dense retrieval leg for episode memory: local ONNX embeddings (fastembed).
 # Off by default so ordinary builds/CI stay light; enable at build time with

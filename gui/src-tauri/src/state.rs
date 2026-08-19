@@ -1,12 +1,9 @@
+use oh_ben_claw::{
+    agent::Agent, config::ProviderConfig, memory::MemoryStore, security::SecurityContext,
+};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use serde::{Deserialize, Serialize};
-use oh_ben_claw::{
-    agent::Agent,
-    memory::MemoryStore,
-    security::SecurityContext,
-    config::{Config, ProviderConfig, SecurityConfig},
-};
 
 /// Serializable agent status sent to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]

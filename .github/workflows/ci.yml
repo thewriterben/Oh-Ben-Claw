@@ -38,6 +38,182 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Format check
         run: cargo fmt --all --check
+  # ── Each crate compiled alone ─────────────────────────────────────────────
+  # `cargo test --workspace` unifies Cargo features across every member, so a
+  # crate can use a feature of a shared dependency that it never declared, as
+  # long as some sibling declares it. The workspace build stays green and the
+  # crate is quietly broken for anyone who takes it on its own.
+  #
+  # obc-tunnel did exactly this, twice. It declared tokio `rt` while calling
+  # `tokio::runtime::Runtime::new()` (needs `rt-multi-thread`) and importing
+  # `tokio::sync::Mutex` (needs `sync`), and both were supplied by the root
+  # binary's tokio features. The first was caught only when the crate was
+  # vendored into OBC-Prime and built with no binary alongside it. The second
+  # survived even that -- and not via a sibling, since no crate in either
+  # workspace declares tokio `sync`; it arrives through hyper-util, levels down
+  # someone else's dependency tree. Only `cargo test -p obc-tunnel` -- one
+  # crate, its own feature resolution, no neighbours -- found it.
+  #
+  # So this job is per-crate on purpose. A second workspace, however
+  # independent, is still a workspace: it hides the same class of defect behind
+  # a different set of neighbours, and the neighbours that matter are not the
+  # ones visible in the manifests. The crate list is read from cargo metadata
+  # rather than written down, so a newly extracted crate is covered the day it
+  # lands instead of the day someone remembers to add it here.
+  #
+  # It runs `check` *and* `test`, and the two are not redundant. Building the
+  # lib as a test target links [dev-dependencies] into it, so a dependency the
+  # library genuinely needs can be declared dev-only and never noticed. obc-a2a
+  # arrived that way on 2026-08-08 -- `A2AClient` uses reqwest, reqwest was
+  # under [dev-dependencies], and:
+  #
+  #     cargo test  -p obc-a2a --all-targets  -> 0
+  #     cargo check -p obc-a2a                -> 101   E0433 unresolved reqwest
+  #
+  # This job at the time ran only the first command. It was itself the gate
+  # that missed it, one day after being written to catch exactly this family of
+  # under-declared dependency. `check` first, so the failure names the real
+  # problem instead of a test that cannot build.
+  crates-alone:
+    name: Each crate compiled alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-alone-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build and test each crate with no siblings
+        run: |
+          set -euo pipefail
+          # `tr -d '\r'` is not decoration: on Windows python's print emits CRLF,
+          # every crate name picks up a trailing carriage return, and cargo
+          # rejects it with "invalid character". Harmless on the runner, fatal
+          # for anyone running this script by hand to check it before pushing --
+          # and a gate nobody can run locally is a gate that rots.
+          crates=$(cargo metadata --no-deps --format-version 1 | python3 -c \
+            'import json,sys; [print(p["name"]) for p in json.load(sys.stdin)["packages"] if p["name"].startswith("obc-")]' \
+            | tr -d '\r' | sort)
+          if [ -z "$crates" ]; then
+            echo "no obc-* crates found -- the discovery query is wrong, not the workspace"
+            exit 1
+          fi
+          echo "$crates" | tr '\n' ' '; echo
+          failed=""
+          for c in $crates; do
+            echo "::group::$c"
+            if cargo check -p "$c" && cargo test -p "$c" --all-targets; then
+              echo "$c ok"
+            else
+              failed="$failed $c"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "crates that do not stand alone:$failed"
+            exit 1
+          fi
+  # ── Every feature compiled at least once ──────────────────────────────────
+  # `build-and-test` builds three feature combinations: default,
+  # `hardware,mqtt-spine`, and `hardware,peripheral-nanopi`. Five features --
+  # peripheral-rpi, rppal, peripheral-stm32, gui, semantic -- appear in none of
+  # them, so the code behind them was never handed to a compiler by anything in
+  # this repository.
+  #
+  # `peripheral-stm32` and `peripheral-rpi` are what that costs. Both landed in
+  # the same commit on 2026-03-14 -- "feat(phase-5): expanded hardware
+  # ecosystem" -- and neither has compiled since. stm32 fails with two E0283s
+  # from a `.into()` whose target type is a generic parameter. rpi fails with
+  # E0597 and E0505 from one line: a `Path` borrowed from a `String` that the
+  # `spawn_blocking` closure then moves. Nobody noticed for five months, because
+  # noticing required typing a command no job ran. Both are documented in the
+  # peripherals table in mod.rs, advertising tools that could not have been
+  # built.
+  #
+  # A note on where this job runs, learned the hard way. rpi.rs is behind
+  # `all(feature = "peripheral-rpi", target_os = "linux")`, so a developer
+  # checking these features on macOS or Windows compiles an empty module and
+  # sees green. That is exactly what happened while this job was being written:
+  # twelve features passed locally, and this job failed on the first push with
+  # the error above. Running on ubuntu-latest is not incidental to the gate --
+  # for the peripheral features it *is* the gate, and a local pass is not a
+  # substitute for it.
+  #
+  # One compile per feature would have caught it on the first push. So: one
+  # compile per feature, over the feature list read from cargo metadata, so a
+  # feature added tomorrow is covered tomorrow. `--all-features` goes last,
+  # because a feature can compile alone and still conflict with another.
+  #
+  # cargo metadata reports twelve features, not the eight in `[features]`: an
+  # optional dependency implies a feature of the same name (`nusb`, `rppal`,
+  # `serialport`, `tokio-serial`). Those are redundant with `hardware` and
+  # `peripheral-rpi` and cost four extra compiles. They stay in, because they
+  # are switches a user can genuinely throw, and because filtering them would
+  # mean maintaining a list -- which is the failure this job exists to prevent.
+  #
+  # `clippy -D warnings` rather than plain `check`, because it costs roughly the
+  # same (clippy is a check plus lints) and because feature-gated code is
+  # precisely the code most likely to drift below the standard the rest of the
+  # repository is held to. All twelve features and `--all-features` pass it as
+  # of this commit, on Linux.
+  features-alone:
+    name: Every feature compiled at least once
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-features-${{ hashFiles('**/Cargo.lock') }}
+      - name: Check each declared feature on its own
+        run: |
+          set -euo pipefail
+          # `tr -d '\r'` guards the Windows case, where python prints CRLF and
+          # cargo rejects the trailing carriage return as an invalid character.
+          # Harmless on the runner; the point is that this script can be run by
+          # hand on a dev machine before pushing, and a gate nobody can run
+          # locally is a gate that rots.
+          feats=$(cargo metadata --no-deps --format-version 1 | python3 -c \
+            'import json,sys; p=[x for x in json.load(sys.stdin)["packages"] if x["name"]=="oh-ben-claw"][0]; [print(f) for f in p["features"] if f != "default"]' \
+            | tr -d '\r' | sort)
+          if [ -z "$feats" ]; then
+            echo "no features found -- the discovery query is wrong, not the manifest"
+            exit 1
+          fi
+          echo "$feats" | tr '\n' ' '; echo
+          failed=""
+          for f in $feats; do
+            echo "::group::$f"
+            if cargo clippy --features "$f" --all-targets -- -D warnings; then
+              echo "$f ok"
+            else
+              failed="$failed $f"
+            fi
+            echo "::endgroup::"
+          done
+          echo "::group::--all-features"
+          if cargo clippy --all-features --all-targets -- -D warnings; then
+            echo "all-features ok"
+          else
+            failed="$failed --all-features"
+          fi
+          echo "::endgroup::"
+          if [ -n "$failed" ]; then
+            echo "features that do not compile:$failed"
+            exit 1
+          fi
   # ── MCP against a real third-party server ─────────────────────────────────
   # Blocking, unlike the conformance job below, and deliberately so. It found
   # three bugs the moment it was first run by hand -- a legacy server classified
@@ -147,6 +323,72 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Cheap, and it fails for the same reason `cargo audit` did on
+      # 2026-08-14 without needing the advisory database. crates/obc-spine
+      # declared a bare `rumqttc = "0.24"` against a root that had turned its
+      # defaults off under a comment naming four RUSTSEC advisories in
+      # rustls-webpki. Cargo unifies features across the graph, so one manifest
+      # asking for the defaults re-enabled `use-rustls` for everything and put
+      # the whole vulnerable certificate stack back. Build, clippy, fmt and
+      # 1556 tests were green; nothing about the build was wrong.
+      #
+      # It runs before the audit because it names the manifest line, where
+      # `cargo audit` names a transitive crate four levels down.
+      - name: manifests agree with the root on load-bearing features
+        run: python3 scripts/check_feature_unification.py
+
+      # A tool name in a safety list must be a tool this agent has.
+      #
+      # `examples/config-cutting-edge.toml` shipped a `deny` policy on
+      # `tool_pattern = "file_write"`. Patterns are matched against `Tool::name()`
+      # and the file tool is called `file`, so the rule matched nothing while
+      # reading, to anyone who copied it, as though writes to /etc/ were blocked.
+      # The same file listed `file_write` in `autonomy.always_ask`.
+      #
+      # The Accelerapp alignment had already found exactly this — invented names
+      # like `file_read`, `http_get` and `memory_note` against real tools called
+      # `file`, `http` and `memory`. That was corrected in the code and not in
+      # the configs, because nothing compared the two. This is the comparison.
+      - name: every tool named in a shipped config exists
+        run: python3 scripts/check_tool_names.py
+
+      # A tool that actuates must declare it, because the Track 0 gate believes
+      # it. `track0_authorize` opens with `if !risk.physical { return Ok(()); }`
+      # — before the SafetyGate limit check on (node_id, tool, pin, value) and
+      # before the tamper-evident audit record.
+      #
+      # `Tool::risk_class` defaults to non-physical and its doc says actuating
+      # tools "MUST override this". On 2026-08-18 nothing enforced that MUST:
+      # every tool in obc-peripherals took the default, as did MqttNodeTool and
+      # P2pNodeTool, which is how every peripheral node's tools reach the agent.
+      # The gate and the audit chain were skipped for the whole class of call
+      # they exist for, and every other gate stayed green because nothing else
+      # reads risk_class.
+      - name: tools that actuate declare themselves physical
+        run: python3 scripts/check_physical_tools.py
+      # The tree on the front page must be a tree this repository has.
+      #
+      # Extraction is the operation that invalidates a path in prose, and this
+      # project's main body of work is extraction. The README tree was corrected
+      # by hand on 2026-08-02 for exactly this and had drifted again by
+      # 2026-08-19: 27 of its `src/` directories no longer existed and it drew 6
+      # crates out of 33. Nothing in between reported it, because a stale tree
+      # does not look stale — every line is plausible and a reader only finds
+      # out by opening a directory that is not there.
+      #
+      # Two rules: every drawn path resolves, and `crates/` is listed in full
+      # rather than partially, since a short list there reads as a complete one.
+      #
+      # A third, added the same day: every `<!-- unwired: -->` disclosure marker
+      # must name a file that exists. That marker is not decoration — it is how
+      # file_reachability.py tells a deliberately parked component from an
+      # undisclosed one, so a stale path in a marker corrupts a measurement
+      # rather than a description. `crates/obc-movement/src/feedback.rs` was
+      # reported unwired *and undisclosed* while ROADMAP.md disclosed it in full
+      # three screens up, because the paragraph named a pre-extraction path and
+      # no marker existed at all.
+      - name: the tree on the front page is a tree we have
+        run: python3 scripts/check_tree.py
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run security audit
@@ -168,3 +410,47 @@ jobs:
         run: npm ci
       - name: TypeScript type-check
         run: npx tsc --noEmit
+
+  gui-rust:
+    name: GUI Rust Check
+    runs-on: ubuntu-latest
+    # The other half of the GUI, which had a CI job next to it and was not in it.
+    #
+    # `gui-check` above type-checks the TypeScript. Nothing compiled the Rust:
+    # `gui/src-tauri` is in the root manifest's `workspace.exclude`, so
+    # `cargo test --workspace` walks past it, and the package had no
+    # `[workspace]` table of its own, so `cargo check` inside it refused to
+    # start. Between those two facts the directory had never been compiled in
+    # this checkout, and 1563 passing tests said nothing about it.
+    #
+    # What that cost, found by turning it on: ten errors' worth of drift against
+    # crates that were extracted around it — `SecurityConfig` moved to
+    # obc-safety, `build_provider` became `from_config`, `MemoryStore::open`
+    # lost its argument, `create_session` changed shape, `load_history` was
+    # gone, and `BoardRegistry` had never existed at all. None of it was
+    # detectable by reading, and all of it was one command away.
+    #
+    # Tauri needs its system libraries even for `cargo check`, because the
+    # `tauri` crate links against webkit2gtk through pkg-config. That apt step
+    # is the price of the job, and it is why this is a separate job rather than
+    # a step in the one above.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf libssl-dev pkg-config
+      - name: cargo check
+        working-directory: gui/src-tauri
+        run: cargo check --all-targets
+      - name: cargo clippy
+        working-directory: gui/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo fmt
+        working-directory: gui/src-tauri
+        run: cargo fmt -- --check

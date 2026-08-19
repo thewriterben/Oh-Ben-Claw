@@ -111,6 +111,23 @@ enum Commands {
         mode: String,
     },
 
+    /// Serve this agent over the A2A protocol: the well-known agent card and
+    /// the JSON-RPC endpoint other agents call.
+    A2aServe {
+        /// Port to bind.
+        #[arg(long, default_value = "4311")]
+        port: u16,
+        /// The base URL to advertise in the agent card's interface entry.
+        /// Other agents call this, so it must be reachable from where they run
+        /// — not necessarily the bind address.
+        #[arg(long)]
+        advertise: Option<String>,
+        /// Serve the protocol without a model: `SendMessage` completes and
+        /// echoes the message back. For conformance testing the wire shape.
+        #[arg(long)]
+        echo: bool,
+    },
+
     /// Measure LLM-judge calibration against a gold label set (Cohen's κ).
     /// The judge is configured via `OBC_JUDGE_PROVIDER`/`OBC_JUDGE_MODEL`
     /// (+ optional `OBC_JUDGE_API_KEY`/`OBC_JUDGE_BASE_URL`).
@@ -309,6 +326,13 @@ async fn main() -> Result<()> {
         } => {
             run_mcp_serve(&config, &transport, port, &mode).await?;
         }
+        Commands::A2aServe {
+            port,
+            advertise,
+            echo,
+        } => {
+            run_a2a_serve(&config, port, advertise.as_deref(), echo).await?;
+        }
         Commands::JudgeCalibrate { gold, threshold } => {
             run_judge_calibrate(gold.as_deref(), threshold).await?;
         }
@@ -453,6 +477,27 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     ));
     let mut node_count = 0usize;
 
+    // Build the security context before anything that needs to enforce with it.
+    //
+    // It used to be built ~60 lines below, after the spine was already
+    // connected, which is why the spine got a `NodePairingManager` of its own
+    // constructed inline from the same config. Two managers, and
+    // `NodePairingManager` keeps its node table in an `Arc<Mutex<HashMap>>`
+    // that is shared across clones but not across separate constructions — so
+    // the context's copy stayed empty forever while the spine's filled up.
+    //
+    // Nothing had noticed because nothing read `SecurityContext.pairing` at
+    // all. That is what made it findable: `scripts/inert_components.py` flags a
+    // field written by a constructor and never read, and this one is the
+    // module's founding example. What it would have cost is the obvious next
+    // line somebody writes -- `security_ctx.pairing.is_trusted(node)` -- which
+    // with a secret configured would have answered `false` for every node in
+    // the fleet, including nodes that had just paired successfully.
+    let security_ctx = security::SecurityContext::new(&config.security).unwrap_or_else(|e| {
+        tracing::warn!("Failed to init security context: {}; using defaults", e);
+        security::SecurityContext::new(&Default::default()).unwrap()
+    });
+
     // Connect to MQTT spine and discover peripheral tools
     let spine_client = if !no_spine && config.spine.kind == "mqtt" {
         match spine::SpineClient::new(config.spine.clone(), "obc-brain")
@@ -460,8 +505,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             // path. Before 2026-08-01 it was validated at boot and gated
             // nothing: any node that could publish on the topic got its tools
             // registered, paired or not.
+            //
+            // The manager comes from the security context rather than being
+            // built here, so the table the spine writes is the table the rest
+            // of the process can read.
             .with_pairing(
-                obc_safety::NodePairingManager::new(config.security.pairing_secret.clone()),
+                security_ctx.pairing.clone(),
                 config.security.require_pairing,
             )
             .with_frame_auth(obc_safety::frame_auth::FrameAuth::new(
@@ -516,12 +565,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
 
-    // Build security context
-    let security_ctx = security::SecurityContext::new(&config.security).unwrap_or_else(|e| {
-        tracing::warn!("Failed to init security context: {}; using defaults", e);
-        security::SecurityContext::new(&Default::default()).unwrap()
-    });
-
+    // Security context was built above, before the spine that enforces with it.
     if security_ctx.policy.policy_count() > 0 {
         info!(
             policies = security_ctx.policy.policy_count(),
@@ -1019,7 +1063,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 let sink: Arc<dyn oh_ben_claw::movement::ActuatorSink> = match &reflex_spine {
                     Some(spine) => {
                         info!("Movement actuation dispatches over the spine");
-                        Arc::new(oh_ben_claw::movement::SpineActuatorSink::new(Arc::clone(
+                        Arc::new(oh_ben_claw::spine::SpineActuatorSink::new(Arc::clone(
                             spine,
                         )))
                     }
@@ -1122,12 +1166,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             .clone()
                             .unwrap_or_else(|| "/tmp".to_string());
                         info!(dir = %dir, "Audio: speech rendered locally via TTS");
-                        Arc::new(oh_ben_claw::audio::suite::TtsSpeechSink::new(dir))
+                        Arc::new(oh_ben_claw::tools::builtin::audio_speech::TtsSpeechSink::new(dir))
                     } else {
                         match &reflex_spine {
                             Some(spine) => {
                                 info!("Audio: speech emitted over the spine");
-                                Arc::new(oh_ben_claw::audio::suite::SpineSpeechSink::new(
+                                Arc::new(oh_ben_claw::spine::speech::SpineSpeechSink::new(
                                     Arc::clone(spine),
                                 ))
                             }
@@ -1602,8 +1646,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         if let Some(world) = &world_mem {
             use oh_ben_claw::agent::reflex::{
                 ActionSink, EscalationBudget, LoggingActionSink, MovementActionSink,
-                ReflexController, ReflexEngine, SpineActionSink,
+                ReflexController, ReflexEngine,
             };
+            use oh_ben_claw::spine::SpineActionSink;
             let engine = ReflexEngine::new(reflex_rules.clone());
             let base_sink: Arc<dyn ActionSink> = match &reflex_spine {
                 Some(spine) => {
@@ -1653,7 +1698,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             let sink: Arc<dyn ActionSink> = if config.notifications.enabled {
                 let mut notifier = oh_ben_claw::agent::notify::Notifier::new()
                     .with_dedup_window(config.notifications.dedup_window_ms);
-                use oh_ben_claw::agent::notify::Severity;
+                use obc_reflex::Severity;
                 if config.notifications.log_to_world_memory {
                     notifier = notifier.with_channel_min(
                         Arc::new(oh_ben_claw::agent::notify::WorldMemoryChannel::new(
@@ -1671,21 +1716,23 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 if config.notifications.speak_escalations {
                     // Speak escalations aloud through a speech sink (same TTS / spine /
                     // dry-run selection as the audio suite). Best-effort, headline only.
-                    let speech: Arc<dyn oh_ben_claw::audio::suite::SpeechSink> =
-                        if config.audio_suite.render_tts {
-                            let dir = config
-                                .audio_suite
-                                .tts_out_dir
-                                .clone()
-                                .unwrap_or_else(|| "/tmp".to_string());
-                            Arc::new(oh_ben_claw::audio::suite::TtsSpeechSink::new(dir))
-                        } else if let Some(spine) = &reflex_spine {
-                            Arc::new(oh_ben_claw::audio::suite::SpineSpeechSink::new(Arc::clone(
-                                spine,
-                            )))
-                        } else {
-                            Arc::new(oh_ben_claw::audio::suite::LoggingSpeechSink)
-                        };
+                    let speech: Arc<dyn oh_ben_claw::audio::suite::SpeechSink> = if config
+                        .audio_suite
+                        .render_tts
+                    {
+                        let dir = config
+                            .audio_suite
+                            .tts_out_dir
+                            .clone()
+                            .unwrap_or_else(|| "/tmp".to_string());
+                        Arc::new(oh_ben_claw::tools::builtin::audio_speech::TtsSpeechSink::new(dir))
+                    } else if let Some(spine) = &reflex_spine {
+                        Arc::new(oh_ben_claw::spine::speech::SpineSpeechSink::new(
+                            Arc::clone(spine),
+                        ))
+                    } else {
+                        Arc::new(oh_ben_claw::audio::suite::LoggingSpeechSink)
+                    };
                     let voice = config
                         .audio_suite
                         .voice
@@ -1744,10 +1791,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                         )
                                     })
                                     // Don't fold prior digests back into the next digest.
-                                    .filter(|r| {
-                                        !r.reason
-                                            .starts_with(oh_ben_claw::agent::notify::DIGEST_PREFIX)
-                                    })
+                                    .filter(|r| !r.reason.starts_with(obc_reflex::DIGEST_PREFIX))
                                     .collect();
                             let lines =
                                 oh_ben_claw::agent::notify::build_digest(&records, interval, now);
@@ -1827,9 +1871,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 || config.learning.enabled
                 || config.perception.vision_rules.enabled
             {
-                use oh_ben_claw::agent::reflex::{
-                    ActionSink, EscalationBudget, LoggingActionSink, SpineActionSink,
-                };
+                use oh_ben_claw::agent::reflex::{ActionSink, EscalationBudget, LoggingActionSink};
+                use oh_ben_claw::spine::SpineActionSink;
                 let mut foresight_rules = config.foresight.rules.clone();
                 if config.perception.vision_rules.enabled {
                     let vc = &config.perception.vision_rules;
@@ -1990,8 +2033,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         if let Some(spine) = &reflex_spine {
             match spine
                 .subscribe_handler(
-                    oh_ben_claw::fleet::HEARTBEAT_FILTER,
-                    oh_ben_claw::fleet::spine_heartbeat_handler(Arc::clone(&coord)),
+                    oh_ben_claw::spine::fleet_bridge::HEARTBEAT_FILTER,
+                    oh_ben_claw::spine::fleet_bridge::spine_heartbeat_handler(Arc::clone(&coord)),
                 )
                 .await
             {
@@ -2063,8 +2106,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                 y,
                                 tolerance: 0.5,
                             };
-                            let _ =
-                                oh_ben_claw::fleet::publish_assignment(spine, &node, &goal).await;
+                            let _ = oh_ben_claw::spine::fleet_bridge::publish_assignment(
+                                spine, &node, &goal,
+                            )
+                            .await;
                         }
                         #[cfg(feature = "hardware")]
                         if let Some((radio, hops)) = &lora_eg {
@@ -3244,7 +3289,7 @@ async fn run_status(config: &Config) -> Result<()> {
                         .and_then(|r| r.as_str())
                         .map(|r| (f.valid_from, r.to_string()))
                 })
-                .filter(|(_, r)| !r.starts_with(oh_ben_claw::agent::notify::DIGEST_PREFIX))
+                .filter(|(_, r)| !r.starts_with(obc_reflex::DIGEST_PREFIX))
                 .collect();
             if !escalations.is_empty() {
                 let now = std::time::SystemTime::now()
@@ -3253,7 +3298,7 @@ async fn run_status(config: &Config) -> Result<()> {
                     .unwrap_or(0);
                 println!("\nRecent escalations ({}):", escalations.len());
                 for (ts, reason) in escalations.iter().rev().take(5) {
-                    let sev = oh_ben_claw::agent::notify::Severity::classify(reason);
+                    let sev = obc_reflex::Severity::classify(reason);
                     let head = reason.split_once(". ").map(|(h, _)| h).unwrap_or(reason);
                     let age_s = now.saturating_sub(*ts) / 1000;
                     println!("  [{}] {} ({}s ago)", sev.as_str(), head, age_s);
@@ -3460,6 +3505,97 @@ async fn run_mcp_serve(config: &Config, transport: &str, port: u16, mode: &str) 
         }
         other => anyhow::bail!("unknown transport '{other}' (stdio | http)"),
     }
+}
+
+/// `oh-ben-claw a2a-serve` — expose this agent to other agents.
+///
+/// Serves the two things the A2A spec requires to be reachable: the well-known
+/// agent card (discovery) and the JSON-RPC endpoint. The card advertises the
+/// agent's tools as skills, so a caller can see what it is being offered.
+///
+/// This is the entry point the module spent five months without. `--echo` keeps
+/// the old stub behaviour available on purpose: it serves the protocol with no
+/// model behind it, which is what a conformance run wants and is the honest way
+/// to describe what `SendMessage` did for everyone before today.
+async fn run_a2a_serve(
+    config: &Config,
+    port: u16,
+    advertise: Option<&str>,
+    echo: bool,
+) -> Result<()> {
+    use obc_agent::a2a_executor::AgentExecutor;
+    use oh_ben_claw::a2a::{A2AServer, EchoExecutor, TaskExecutor};
+    use oh_ben_claw::agent::Agent;
+    use oh_ben_claw::memory::MemoryStore;
+    use oh_ben_claw::tools::{default_tools, default_tools_with_reach};
+
+    let addr = format!("127.0.0.1:{port}");
+    // `[a2a]` in the config file was parsed and never read by anything —
+    // `config.a2a` had zero reads in `src/` and `tests/`, so `enabled = true`
+    // changed nothing. It is read here. `enabled` gates the command rather than
+    // being ignored, and the card fields are the config's, with `--advertise`
+    // as the override for the common case where the reachable URL differs from
+    // the bind address.
+    if !config.a2a.enabled {
+        anyhow::bail!(
+            "A2A is disabled — set `enabled = true` under [a2a] in your config to serve it"
+        );
+    }
+    let url = advertise
+        .map(str::to_string)
+        .unwrap_or_else(|| config.a2a.agent_url.clone());
+
+    // Same reasoning as mcp-serve: an A2A caller is an external party driving
+    // this agent's tools, so the conscience reach allowlist gates them when it
+    // is enabled.
+    let conscience = obc_conscience::Conscience::new(&config.conscience);
+    let tools = if conscience.enabled {
+        default_tools_with_reach(Some(conscience.reach.clone()), None, None)
+    } else {
+        default_tools()
+    };
+    // Skills advertised on the card: the config's list when it names any,
+    // otherwise the agent's actual tool names. A card that advertises a skill
+    // the agent does not have is a lie told at discovery time, so the fallback
+    // is what is really loaded rather than a hopeful default.
+    let skill_names: Vec<String> = if config.a2a.skills.is_empty() {
+        tools.iter().map(|t| t.name().to_string()).collect()
+    } else {
+        config.a2a.skills.clone()
+    };
+
+    let (executor, how): (Arc<dyn TaskExecutor>, &str) = if echo {
+        (Arc::new(EchoExecutor), "echo (no model)")
+    } else {
+        let provider = providers::from_config(&config.provider)?;
+        let memory = Arc::new(MemoryStore::open()?);
+        let agent = Arc::new(Agent::new(config.agent.clone(), provider, memory, tools));
+        (
+            Arc::new(AgentExecutor::new(agent, config.provider.clone())),
+            "agent dispatch",
+        )
+    };
+
+    let card = A2AServer::build_card(
+        &config.a2a.agent_name,
+        &config.a2a.agent_description,
+        &url,
+        env!("CARGO_PKG_VERSION"),
+        &skill_names,
+    );
+    let router = oh_ben_claw::a2a::http_router(A2AServer::new(card), executor);
+
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    info!(
+        card = %format!("http://{addr}/.well-known/agent-card.json"),
+        rpc = %format!("http://{addr}/a2a"),
+        advertised = %url,
+        execution = how,
+        skills = skill_names.len(),
+        "A2A server listening"
+    );
+    axum::serve(listener, router).await?;
+    Ok(())
 }
 
 /// `oh-ben-claw judge-calibrate` — measure whether the configured LLM judge

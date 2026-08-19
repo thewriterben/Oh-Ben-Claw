@@ -223,65 +223,52 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 > is worth more attention than any one instance — a control with tests and a config
 > key reads as present to every check except running it.
 
-**MCP Integration** exposes all tools as a Model Context Protocol server (stdio + HTTP/SSE, dual-mode for the 2026 spec) and imports tools from external MCP servers. **A2A Protocol** — the wire format of Google's Agent-to-Agent v1.0, implemented and conformance-tested. Not reachable; see below.
+**MCP Integration** exposes all tools as a Model Context Protocol server (stdio + HTTP/SSE, dual-mode for the 2026 spec) and imports tools from external MCP servers. **A2A Protocol** — Google's Agent-to-Agent v1.0, implemented, conformance-tested, and served by `oh-ben-claw a2a-serve`.
 
-> **A2A is not served.** This line claimed A2A "implements Google's
-> Agent-to-Agent v1.0 for cross-platform agent interop", and the comparison table
-> below marked it "✅ Client + server (both)". What exists is 871 lines and 18
-> unit tests in `src/a2a/`, plus wire-shape goldens in `tests/evals.rs` — the v1.0
-> `AgentCard` shape, proto-name enum serialization, the no-`kind`-discriminator
-> rule, `google.rpc.ErrorInfo` error bodies, version-header rejection. That work
-> is real and the goldens are worth having.
+> **A2A is served now (2026-08-08).** This block said "**A2A is not served**",
+> and it was right for five months. Keeping the finding rather than deleting it,
+> because what it measured is the useful part:
 >
-> What does not exist is any way to reach it:
+> - `src/main.rs` named `a2a` **zero** times; `src/gateway/` **zero** times.
+> - With `pub mod a2a` flipped to `pub(crate)` so `dead_code` could see it,
+>   rustc reported **34 items never constructed or used** — `pub` had been
+>   silencing the lint over the whole module.
+> - `[a2a]` parsed and was read by nothing: `config.a2a` had **zero** reads in
+>   `src/` and `tests/`, so `enabled = true` changed nothing. It was not in
+>   `config.example.toml` either, so it was inert *and* undiscoverable.
+> - `A2AServer::execute` was a stub that filed the message in history and
+>   returned `TASK_STATE_COMPLETED`, having done nothing.
 >
-> - `A2AServer` is constructed **only in its own tests and `tests/evals.rs`**;
->   `A2AClient` is constructed **nowhere at all**, tests included.
-> - The gateway serves no `/.well-known/agent-card.json` and no A2A endpoint —
->   every mention of that path in `src/` is inside `src/a2a/mod.rs` itself.
-> - `[a2a]` parses and is never read. `A2AConfig` — `enabled`, `agent_name`,
->   `agent_description`, `agent_url`, `skills` — is a field on the root config,
->   and `config.a2a` has **zero** reads in `src/` and `tests/`. Setting
->   `enabled = true` changes nothing. It is not in `config.example.toml` either,
->   so it is undiscoverable as well as inert — the same shape as
->   `[clawhub.install_policy]` above.
-> - `A2AServer::execute` is a documented stub: it files the inbound message in
->   history and returns `TASK_STATE_COMPLETED`, having done nothing. Its own
->   comment says "real deployments dispatch to the agent loop here."
+> What changed:
 >
-> So serving it as-is would be worse than not serving it — a conformant endpoint
-> that reports every task complete. Wiring it means deciding task dispatch, auth
-> on the endpoint, and sync-vs-streaming, which is a design, not a hookup.
+> - `oh-ben-claw a2a-serve` binds an HTTP listener serving
+>   `/.well-known/agent-card.json` and the JSON-RPC endpoint at `/a2a`.
+> - `SendMessage` dispatches to `Agent::process` through a `TaskExecutor` trait;
+>   the reply comes back as a text artifact on a completed task, and a model or
+>   tool failure returns a **failed task**, not a JSON-RPC error — the request
+>   was well formed and the protocol worked. `--echo` keeps the old stub
+>   reachable on purpose, for conformance runs with no model behind them.
+> - `[a2a]` is read: `a2a-serve` refuses to start unless `enabled = true`, and
+>   the card is built from `agent_name`, `agent_description`, `agent_url` and
+>   `skills`. The block is in `config.example.toml` now.
+> - 5 tests drive a real socket — card fetch, version-header refusal, send and
+>   retrieve across two requests, and a marker executor proving the transport
+>   uses the executor it was given rather than the old hard-coded path.
 >
-> This is the fourth control found in this shape, after node pairing, the tool
-> sandbox and ClawHub install. Two of those are now fixed. Worth noting which
-> check would have caught this one: not the tests — they pass, and they are
-> testing the right things. Only asking *who constructs this type* finds it.
+> **Still not true of it:** the endpoint has **no authentication** — every
+> caller that reaches it can drive this agent's tools. It binds `127.0.0.1`
+> and the address is not configurable, so "reaches it" means a process on this
+> machine, or whatever you deliberately put in front of it. Anything you proxy
+> it through is doing the authenticating; the endpoint itself is not.
+> `A2AClient` is still constructed **nowhere**: this
+> agent can be called, and cannot call out. Streaming (`SendStreamingMessage`,
+> `SubscribeToTask`) still returns `UNSUPPORTED_OPERATION`, which is a
+> conformant answer and not an implementation.
 >
-> **And the compiler will answer that, if you stop telling it not to
-> (2026-08-06).** The sentence above implied a human has to go looking. Change
-> one word in `src/lib.rs` — `pub mod a2a;` to `pub(crate) mod a2a;` — and
-> `cargo check --lib` passes while emitting **35** dead-code warnings naming
-> every item in the module: *`struct AgentCard` is never constructed*, *`enum
-> TaskState` is never used*, and so on down. `cargo check --all-targets` then
-> fails with exactly four errors, all `E0603: module a2a is private`, all
-> pointing at `tests/evals.rs` and nothing else. That is the whole finding,
-> proved by rustc rather than asserted: the only consumer outside the module is
-> one integration test.
->
-> `dead_code` never fires here because `pub` in a library crate means "an
-> external consumer may use this", so the compiler stops asking. There are
-> **1,272** free-standing `pub` items in `src/` — 1,272 places the question is
-> switched off, in a crate whose library surface exists mostly so `tests/` can
-> reach in. Tightening `pub` to `pub(crate)` module by module would hand this
-> back to the compiler: each module either checks clean, and `dead_code` starts
-> telling the truth about it, or fails and names its real external consumers.
->
-> Recorded because the alternative was worse. A bespoke "which public items does
-> nothing reference" script was written first and scored **0 of 28** on its own
-> candidate list — every hit was code used inside its own module and reachable
-> from `main`, which identifier counting cannot distinguish from code that is
-> not. The tool for this ships with the language.
+> This was the fourth control found in this shape, after node pairing, the tool
+> sandbox and ClawHub install. Worth noting which check found it: not the tests
+> — they passed, and they were testing the right things. Only asking *who
+> constructs this type*, and then removing the `pub` that was hiding the answer.
 
 **Operations** — `oh-ben-claw doctor` health checks (now including subsystem/safing coherence), token **cost tracking** with persistent budgets, **observability** (metrics + spans), scheduled tasks, encrypted secrets **vault**, and a tamper-evident **audit chain**.
 
@@ -736,67 +723,86 @@ See [`gui/README.md`](gui/README.md) for the full build instructions and command
 
 ## Project Structure
 
-Six pieces of the agent now live in `crates/` rather than `src/`, extracted one
-at a time as each became self-contained enough to compile on its own. The tree
-below said otherwise until 2026-08-02: it still listed `src/memory/`,
+Almost all of the agent now lives in `crates/` rather than `src/`, extracted one
+at a time as each became self-contained enough to compile on its own. What is
+left in `src/` is the binary, the deployment generator, the doctor and the test
+harness.
+
+The tree below said otherwise until 2026-08-02: it listed `src/memory/`,
 `src/sensing/`, `src/power/`, `src/comms/` and `src/security/limits.rs`, none of
-which had existed since 2026-07-30, and `src/observability/`, moved by the same
-commit as this correction. Extraction is exactly the operation that invalidates
-a path in prose, and four of them had gone by without one.
+which had existed since 2026-07-30. It was corrected by hand, and it drifted
+again immediately — by 2026-08-19 it drew 27 `src/` directories that no longer
+existed and 6 crates out of 33, because every extraction after that day
+invalidated it and nothing said so. A hand-corrected tree is a tree that is
+correct on the day someone looks at it.
+
+`scripts/check_tree.py` now resolves every path this tree draws and fails on any
+that is absent, requires `crates/` to be listed in full rather than partially —
+a short list there reads as a complete one — and holds every
+`<!-- unwired: -->` disclosure marker to naming a file that exists, because a
+marker that resolves to nothing discloses nothing to the survey that reads it.
+It runs in CI. The comments beside the paths are still prose and still
+unchecked, which is the argument for keeping them to one line.
 
 ```
 Oh-Ben-Claw/
-├── crates/             # Extracted, self-contained, vendored into OBC-Prime
-│   ├── obc-paths/      # Config/data directory resolution
-│   ├── obc-memory/     # Bitemporal world memory (the embodied substrate)
-│   ├── obc-planner/    # Deployment planner, site optimizer, geo, registry
-│   ├── obc-safety/     # Track 0 gate, limits, audit chain, pairing, taint
-│   ├── obc-telemetry/  # The agent watching its body: power / comms / sensing
-│   └── obc-observability/  # The agent watching itself: spans + counters
-├── src/
-│   ├── agent/          # Agent loop, dispatcher, Reflexion, Plan-and-Execute,
-│   │   ├── reflex.rs   #   dual-system reflexes (System 1)
-│   │   └── safing.rs   #   self-healing safing rule library
-│   ├── audio/          # Audio pipeline + audio suite (hear / speak)
-│   ├── movement/       # Track 0–bounded actuation + closed-loop feedback
-│   ├── navigation/     # Localization, SLAM, mapping, A*+costmap, particle filter,
-│   │                   #   sensor model, frontier exploration
-│   ├── mission/        # Mission sequencer (bt.rs is an unwired BT engine — see above)
-│   ├── foresight/      # Predictive control (Track 1) + online forecaster
-│   ├── learning/       # Self-authored reflexes (mine → approve → activate)
-│   ├── fleet/          # Multi-robot coordination (registry, auction, conflicts)
-│   ├── approval/       # Human-in-the-loop approval workflow
-│   ├── channels/       # Telegram, Discord, Feishu, IRC, Signal, Matrix, …
-│   ├── config/         # Configuration schema and loading (Config::validate)
-│   ├── cost/           # Token cost tracking and budget enforcement
-│   ├── deployment/     # Hardware-driven deployment scheme generator
-│   ├── doctor/         # System diagnostics (oh-ben-claw doctor)
-│   ├── gateway/        # REST/WebSocket API gateway (Axum)
-│   ├── mcp/            # Model Context Protocol client/server (dual-mode)
-│   ├── peripherals/    # Hardware drivers + registry SSOT
-│   ├── providers/      # LLM provider adapters + failover + retry
-│   ├── a2a/            # A2A wire format — implemented, not served (see above)
-│   ├── scheduler/      # Scheduled tasks and cron jobs
-│   ├── security.rs     # Re-exports obc-safety under the old module path
-│   ├── skill_forge/    # Skill discovery, synthesis, ClawHub registry
-│   ├── spine/          # MQTT spine + P2P broker-free mesh
-│   ├── tools/          # Tool registry (shell, file, browser, hardware, nav, …)
-│   ├── tunnel/         # Network tunnels (Cloudflare, ngrok, Tailscale)
-│   └── vision/         # Vision pipeline + ClawCam detection ingest
-├── firmware/
-│   ├── obc-esp32-s3/   # ESP32-S3 firmware + on-MCU reflex/safing mirror
-│   ├── heltec-lora-linktest/  # Heltec V3 (ESP32-S3 + SX1262) LoRa mesh node
-│   ├── lora-node/      # Arduino LoRa bridge sketch
-│   └── t-deck-terminal/       # T-Deck handheld terminal sketch
-├── gui/                # Tauri 2 + React 18 native desktop application
-├── docs/
-│   ├── EMBODIED-ARCHITECTURE.md     # The embodied control stack, end to end
-│   ├── SOTA-COMPARISON.md           # Component-by-component vs robotics SOTA
-│   ├── SUBSYSTEM-SUITE-CONTRACT.md  # The perceive→remember→act suite contract
-│   ├── architecture/   # Architecture design documents
-│   └── datasheets/     # Hardware datasheets and pin maps
-├── examples/           # Annotated reference configurations
-└── tests/              # Integration tests (embodied_full_stack, embodied_hil_loop, …)
+├── crates/                   # Extracted, self-contained, vendored into OBC-Prime
+│   ├── obc-a2a/              # Agent-to-Agent v1.0: wire types, JSON-RPC lifecycle, HTTP
+│   ├── obc-agent/            # The agent loop, dispatcher, and the Track 0 chokepoint
+│   ├── obc-approval/         # Autonomy levels, per-call risk check, persisted grants
+│   ├── obc-audio/            # Audio pipeline + audio suite (hear / speak)
+│   ├── obc-channels/         # Telegram, Discord, Feishu, IRC, Signal, Matrix, ...
+│   ├── obc-config/           # Configuration schema and loading (Config::validate)
+│   ├── obc-conscience/       # What the agent may observe and reach; decision log
+│   ├── obc-cost/             # Token cost tracking and budget enforcement
+│   ├── obc-fleet/            # Multi-robot coordination (registry, auction, conflicts)
+│   ├── obc-foresight/        # Predictive control (Track 1) + online forecaster
+│   ├── obc-gateway/          # REST/WebSocket API gateway (Axum)
+│   ├── obc-learning/         # Self-authored reflexes (mine -> approve -> activate)
+│   ├── obc-mcp/              # Model Context Protocol client/server (dual-mode)
+│   ├── obc-memory/           # Bitemporal world memory (the embodied substrate)
+│   ├── obc-mission/          # Mission sequencer, advancing across restarts
+│   ├── obc-movement/         # Track 0-bounded actuation (feedback.rs parked - ROADMAP)
+│   ├── obc-navigation/       # Localization, SLAM, mapping, A*+costmap, particle filter
+│   ├── obc-observability/    # The agent watching itself: spans + counters
+│   ├── obc-paths/            # Config/data directory resolution
+│   ├── obc-peripherals/      # Hardware drivers + registry SSOT
+│   ├── obc-planner/          # Deployment planner, site optimizer, geo, registry
+│   ├── obc-position/         # Geodetic telemetry and NMEA, projected into the site frame
+│   ├── obc-providers/        # LLM provider adapters + failover + retry
+│   ├── obc-reflex/           # System 1: the rule engine, mirrored on the node
+│   ├── obc-safety/           # Track 0 gate, limits, audit chain, pairing, taint
+│   ├── obc-scheduler/        # Scheduled tasks and cron jobs
+│   ├── obc-skill-forge/      # Skill discovery, synthesis, ClawHub registry
+│   ├── obc-spine/            # MQTT spine, LoRa gateway and mesh, P2P transport
+│   ├── obc-telemetry/        # The agent watching its body: power / comms / sensing
+│   ├── obc-tool-api/         # The Tool contract, with no implementation
+│   ├── obc-tools/            # Every built-in tool the model can call
+│   ├── obc-tunnel/           # Network tunnels (Cloudflare, ngrok, Tailscale)
+│   └── obc-vision/           # Vision pipeline + ClawCam detection ingest
+├── src/                      # What has not been extracted, and the binary
+│   ├── bin/                  # emit-registry, emit-firmware-templates, mcp-conformance
+│   ├── deployment/           # Hardware-driven deployment scheme generator
+│   ├── doctor/               # System diagnostics (oh-ben-claw doctor)
+│   ├── harness/              # Shared scaffolding for the integration tests
+│   ├── lib.rs                # Crate root: re-exports every obc-* crate
+│   └── main.rs               # The binary: composes the agent from config
+├── firmware/                 # The node end of the conversation
+│   ├── obc-esp32-s3/         # ESP32-S3 + on-MCU reflex/safing/Track 0 mirror
+│   ├── heltec-lora-linktest/ # Heltec V3 (ESP32-S3 + SX1262) LoRa mesh node
+│   ├── lora-node/            # Arduino LoRa bridge sketch
+│   └── t-deck-terminal/      # T-Deck handheld terminal sketch
+├── scripts/                  # The checks and surveys CI and ROADMAP.md run
+├── gui/                      # Tauri 2 + React 18 native desktop application
+├── docs/                     # Four worth opening first; there are more
+│   ├── EMBODIED-ARCHITECTURE.md # The embodied control stack, end to end
+│   ├── SAFETY-CASE.md        # What Track 0 claims, and what backs each claim
+│   ├── SUBSYSTEM-SUITE-CONTRACT.md # The perceive->remember->act contract
+│   └── playbooks/            # What to do when a node goes quiet
+├── registry/                 # Peripheral registry SSOT (registry.json)
+├── examples/                 # Annotated reference configurations
+├── planner-wasm/             # The WASM build of the planner OBC-Prime vendors
+└── tests/                    # Integration tests (embodied_full_stack, embodied_hil_loop, ...)
 ```
 
 ---
@@ -822,7 +828,7 @@ Oh-Ben-Claw is built on the [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw
 | Vision / audio / fusion | ✗ | ✅ |
 | Deployment planner | ✗ | ✅ LLM + rule-based swarm |
 | GUI | ✗ | ✅ Tauri 2 + React 18 |
-| MCP / A2A | ✗ | MCP: ✅ client + server. A2A: wire format only — implemented, conformance-tested, not served |
+| MCP / A2A | ✗ | MCP: ✅ client + server. A2A: ✅ server (`a2a-serve`, no auth on the endpoint); no client — this agent can be called, not call out |
 | Human approval | ✗ | ✅ 3 autonomy levels |
 | Tool sandboxing | ✗ | ✗ — see Operations. Host-side policy allowlist instead (`[[security.policies]]`) |
 | Edge-native mode | ✗ | ✅ (ESP32-S3, NanoPi) |

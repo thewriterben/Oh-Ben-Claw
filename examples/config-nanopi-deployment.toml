@@ -108,32 +108,32 @@ routing  = "manual"
 # Vision agent — drives the XIAO ESP32S3-Sense camera
 [[orchestrator.agents]]
 name   = "vision-agent"
-role   = "Vision specialist. Captures images from the XIAO ESP32S3-Sense camera, \
-          analyses visual context, detects objects and scenes, and returns findings."
-tools  = ["camera_capture", "sensor_read", "memory_note"]
+role   = """Vision specialist. Captures images from the XIAO ESP32S3-Sense camera, \
+          analyses visual context, detects objects and scenes, and returns findings."""
+tools  = ["camera_capture", "sensor_read", "memory"]
 
 # Audio agent — drives the Sipeed mic array for speech-to-text
 [[orchestrator.agents]]
 name   = "audio-agent"
-role   = "Audio specialist. Captures audio from the Sipeed 6+1 mic array, \
-          performs speech-to-text transcription, and forwards text to the orchestrator."
+role   = """Audio specialist. Captures audio from the Sipeed 6+1 mic array, \
+          performs speech-to-text transcription, and forwards text to the orchestrator."""
 tools  = ["audio_sample", "sensor_read"]
 
 # Speech/display agent — drives the Waveshare touch display
 [[orchestrator.agents]]
 name   = "speech-display-agent"
-role   = "Display and speech output specialist. Renders status, messages, and \
+role   = """Display and speech output specialist. Renders status, messages, and \
           responses on the 2.1-inch round touch display. Plays TTS audio through \
-          the integrated speaker. Accepts touch input for UI interactions."
+          the integrated speaker. Accepts touch input for UI interactions."""
 tools  = ["sensor_read", "gpio_write"]
 
 # Sensing agent — reads DHT22 on the NanoPi GPIO header
 [[orchestrator.agents]]
 name   = "sensing-agent"
-role   = "Environmental sensing specialist. Reads temperature and humidity from \
+role   = """Environmental sensing specialist. Reads temperature and humidity from \
           the DHT22 sensor on the NanoPi Neo3 GPIO header. Logs readings and \
-          triggers alerts when configured thresholds are exceeded."
-tools  = ["sensor_read", "gpio_read", "i2c_read", "memory_note"]
+          triggers alerts when configured thresholds are exceeded."""
+tools  = ["sensor_read", "gpio_read", "i2c_read", "memory"]
 
 # ── Deployment Scheme Generator ───────────────────────────────────────────────
 # Records the hardware inventory this deployment was planned from. Normally

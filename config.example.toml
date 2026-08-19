@@ -233,3 +233,29 @@ taint_mode = "warn"
 enabled = true
 host = "127.0.0.1"
 port = 8090
+
+# ── A2A: being reachable by other agents ─────────────────────────────────────
+# Serve this agent over Google's Agent-to-Agent v1.0 protocol, so another agent
+# can discover it and send it work:
+#
+#   oh-ben-claw a2a-serve --port 4311
+#
+# This block used to parse and be read by nothing — `enabled = true` changed
+# nothing at all, and it was not in this file either, so it was inert *and*
+# undiscoverable. It is read now: `a2a-serve` refuses to start unless enabled,
+# and the card it serves at /.well-known/agent-card.json is built from these
+# fields.
+[a2a]
+enabled = false
+
+# What the card advertises. `agent_url` is the address *other agents* call, so
+# it must be reachable from where they run — not necessarily the bind address.
+# `--advertise` overrides it for the usual reverse-proxy or tunnel case.
+agent_name = "oh-ben-claw"
+agent_description = "Oh-Ben-Claw AI assistant"
+agent_url = "http://localhost:4311/a2a"
+
+# Skills to advertise. Leave empty to advertise the agent's actual tool names,
+# which is the honest default: a card promising a skill the agent does not load
+# is a lie told at discovery time.
+skills = []

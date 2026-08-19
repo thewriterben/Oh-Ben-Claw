@@ -1,6 +1,12 @@
 # Oh-Ben-Claw Deployment Guide Generator
 
-An interactive, chat-style web application that generates step-by-step deployment guides for [Oh-Ben-Claw](https://github.com/thewriterben/Oh-Ben-Claw) and [OBC-deployment-generator](https://github.com/thewriterben/OBC-deployment-generator).
+An interactive, chat-style web application that generates step-by-step deployment guides for [Oh-Ben-Claw](https://github.com/thewriterben/Oh-Ben-Claw) and **OBC-deployment-generator**.
+
+> The second link was removed on 2026-08-13: that repository is private, so a
+> reader of this public page followed it to a 404. Its private status is not a
+> guess — the `peer` job in OBC-Prime's CI established it on 2026-07-30 by
+> failing on the checkout and going green once a token was set. Nobody joined
+> that finding to this link until someone clicked it.
 
 ## Live App
 

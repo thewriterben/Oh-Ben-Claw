@@ -1,0 +1,66 @@
+[package]
+name = "obc-peripherals"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's peripheral layer: the board and accessory registry that sibling projects consume as JSON, the Peripheral trait, per-board drivers for Arduino, Raspberry Pi, NanoPi and STM32, bus tools, self-test and onboarding."
+
+# The thirtieth crate. 3422 lines in nine files, and the one that frees the last
+# two: `doctor` and `gateway` were each blocked by exactly one edge, and it was
+# this one.
+#
+# It carries the registry that is this project's single source of truth for
+# hardware -- `src/bin/emit-registry.rs` serialises it to the JSON that the
+# deployment generator and Accelerapp consume instead of keeping their own
+# copies of the catalog. That binary reaches it through the facade in lib.rs
+# and is unchanged.
+#
+# Three of the drivers reached their dependencies through a grouped import:
+#
+#     use crate::{
+#         peripherals::traits::Peripheral,
+#         tools::traits::{Tool, ToolResult},
+#     };
+#
+# The literal `crate::tools` never appears in that, so the edge into the tool
+# layer was invisible to `core_endgame.py` and would have kept compiling through
+# the facade indefinitely. Same shape found in the same three files during the
+# config lift a few hours earlier, which is what taught the lift script to look
+# for it. They now name `obc_tools::traits` outright.
+#
+# `tokio-serial` is behind the `hardware` feature, as it is upstream in the root
+# manifest -- the serial drivers are the only thing that use it, and a crate
+# built alone would otherwise drop them silently. That is the gap obc-spine
+# found on 2026-08-14; the feature is declared here rather than inherited.
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+obc-config = { path = "../obc-config" }
+# The registry is not defined here. `lib.rs` re-exports
+# `obc_planner::peripherals::registry` under the old name, which is why the
+# board and accessory tables and the site planner that reasons about them stay
+# in one crate. Worth knowing before looking for a registry.rs that does not
+# exist: `emit-registry` serialises this, two repositories consume the JSON.
+obc-planner = { path = "../obc-planner" }
+obc-spine = { path = "../obc-spine" }
+obc-tool-api = { path = "../obc-tool-api" }
+obc-tools = { path = "../obc-tools" }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+tokio = { version = "1.42", default-features = false, features = [
+    "rt-multi-thread", "macros", "time", "sync", "io-util"
+] }
+tokio-serial = { version = "5", default-features = false, optional = true }
+tracing = { version = "0.1", default-features = false }
+
+[features]
+default = []
+hardware = ["dep:tokio-serial"]
+# The three board gates come with the drivers. In the tree they were the root
+# crate's features and these files inherited them; alone, the cfg blocks would
+# have compiled out in silence and `cargo check -p` would have called that
+# clean. Same gap obc-spine found with `hardware` on 2026-08-14, three features
+# wider.
+peripheral-rpi = []
+peripheral-nanopi = []
+peripheral-stm32 = []

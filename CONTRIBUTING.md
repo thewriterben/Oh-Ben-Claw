@@ -10,6 +10,15 @@ project**: the reference bodies you can actually run, the board registry, the
 tri-implementation planner parity harness, and the documentation a newcomer
 meets first.
 
+> This link was absent between 2026-08-13 and its publication later the same
+> day. It had pointed at a repository that was still private while calling it
+> "the public project", so the one repository that *is* public sent readers to a
+> 404 and the error read as *does not exist* rather than *not open yet*. Noted
+> rather than silently restored, because nothing checks this: the doc-link gates
+> in both repositories deliberately do not fetch absolute URLs, and a link to a
+> private repo looks identical to a working one from inside the account that
+> owns it.
+
 Which repo a change belongs in:
 
 | Change | Repo |

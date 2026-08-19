@@ -1,0 +1,40 @@
+[package]
+name = "obc-learning"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's self-authored reflexes: mine bitemporal world memory for conditions that repeatedly preceded a bad outcome, and propose anticipatory rules with support and confidence -- inert until a human approves them."
+
+# The eighteenth crate, and the second one step 2 of docs/ENDGAME.md freed as a
+# side effect. It was blocked by `foresight`, which was blocked by `reflex`,
+# which was blocked by one action sink holding an `Arc<SpineClient>`. Three
+# crates and 2455 lines came out from behind one field.
+#
+# The other three layers are hand-authored: an operator decides what to watch.
+# This one authors rules from experience -- it mines the history for antecedents
+# that repeatedly preceded a bad outcome and proposes an anticipatory rule with
+# a support count and a confidence measured against the background rate.
+#
+# What makes it safe to ship is the thing it deliberately does *not* do:
+# a proposal is never activated. It sits in a pending list until a human or a
+# policy approves it, and only then is it converted -- conservatively, escalate
+# only -- into a foresight rule and pushed into the live engine's shared buffer.
+# A wrong correlation cannot start driving behaviour by itself. That invariant
+# is asserted from the outside in `tests/learning_approval_gate.rs`, against a
+# real ForesightEngine rather than a mock, which is why that test stayed
+# upstream when this crate left.
+#
+# The extraction moved no logic: one path, `crate::memory::world::WorldMemory`
+# to `obc_memory::`, and one import site in `src/tools/builtin/learn.rs`.
+#
+# `anyhow` is here because the compiler asked for it and a survey would not
+# have. It appears nowhere in a `use` line -- both call sites write
+# `anyhow::Result<...>` inline in a return type, which is the same shape that
+# made `extractability.py`'s first version report `config` as edge-free.
+[dependencies]
+anyhow = "1.0"
+obc-foresight = { path = "../obc-foresight" }
+obc-memory = { path = "../obc-memory" }
+obc-reflex = { path = "../obc-reflex" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

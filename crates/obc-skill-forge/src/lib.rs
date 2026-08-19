@@ -1,0 +1,1072 @@
+//! Skill Forge — automatic discovery and integration of new skills/tools.
+//!
+//! The Skill Forge lets operators extend the agent's capabilities at runtime by
+//! dropping skill manifest files into a watched directory. Each manifest
+//! describes a new tool: its name, description, parameter schema, and the
+//! shell command (or HTTP endpoint) used to execute it.
+//!
+//! # Skill Manifest Format
+//!
+//! Skill manifests are stored as JSON files with a `.skill.json` extension:
+//!
+//! ```json
+//! {
+//!   "name": "check_weather",
+//!   "version": "1.0.0",
+//!   "description": "Fetch the current weather for a city.",
+//!   "kind": {
+//!     "type": "shell",
+//!     "command": "curl -s 'https://wttr.in/{city}?format=3'"
+//!   },
+//!   "parameters": {
+//!     "type": "object",
+//!     "properties": {
+//!       "city": { "type": "string", "description": "City name." }
+//!     },
+//!     "required": ["city"]
+//!   },
+//!   "tags": ["weather", "internet"]
+//! }
+//! ```
+//!
+//! # Usage
+//!
+//! ```rust,no_run
+//! use obc_skill_forge::SkillForge;
+//!
+//! let forge = SkillForge::new("/etc/oh-ben-claw/skills");
+//! let tools = forge.load_all().unwrap();
+//! println!("Loaded {} skills", tools.len());
+//! ```
+
+use async_trait::async_trait;
+use obc_tools::{Tool, ToolResult};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+pub mod evolve;
+pub mod improve;
+pub mod rollout;
+pub mod synthesis;
+
+// ── Skill Manifest ────────────────────────────────────────────────────────────
+
+/// Describes how a skill tool executes its action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum SkillKind {
+    /// Execute a shell command. `{param_name}` placeholders in `command` are
+    /// replaced with the argument values at runtime.
+    Shell { command: String },
+    /// Make an HTTP GET request. `{param_name}` placeholders in `url` are
+    /// substituted with argument values.
+    Http {
+        url: String,
+        #[serde(default = "default_http_method")]
+        method: String,
+        #[serde(default)]
+        headers: std::collections::HashMap<String, String>,
+        #[serde(default)]
+        body_template: Option<String>,
+    },
+    /// Call another Oh-Ben-Claw tool by name with fixed args merged with
+    /// the runtime args.
+    Delegate {
+        tool: String,
+        #[serde(default)]
+        fixed_args: Value,
+    },
+    /// An ordered multi-step recipe: each step calls a registered tool.
+    /// `{param}` placeholders in step-arg **string values** are substituted
+    /// with runtime argument values. Executed by the agent chokepoint one step
+    /// at a time, so policy/Track 0/trust/approval evaluate every real call
+    /// (Phase 16 P2 learned recipes).
+    Sequence { steps: Vec<SkillStep> },
+}
+
+/// One step of a [`SkillKind::Sequence`] recipe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillStep {
+    /// Registered tool name to call.
+    pub tool: String,
+    /// Arguments for the call; string values may contain `{param}` placeholders.
+    #[serde(default)]
+    pub args: Value,
+}
+
+/// Substitute `{param}` placeholders in the string values of `template` with
+/// values from `runtime`. A string that is *exactly* one placeholder (e.g.
+/// `"{pin}"`) is replaced by the runtime value itself, preserving its JSON
+/// type (numbers stay numbers); placeholders embedded in longer strings are
+/// replaced textually. Objects and arrays are walked recursively.
+pub fn substitute_args(template: &Value, runtime: &Value) -> Value {
+    match template {
+        Value::String(s) => {
+            // Whole-value placeholder: type-preserving substitution.
+            if s.len() > 2 && s.starts_with('{') && s.ends_with('}') {
+                let key = &s[1..s.len() - 1];
+                if !key.contains(['{', '}']) {
+                    if let Some(val) = runtime.get(key) {
+                        return val.clone();
+                    }
+                }
+            }
+            let mut out = s.clone();
+            if let Some(obj) = runtime.as_object() {
+                for (key, val) in obj {
+                    let placeholder = format!("{{{key}}}");
+                    if out.contains(&placeholder) {
+                        let replacement = match val {
+                            Value::String(v) => v.clone(),
+                            other => other.to_string(),
+                        };
+                        out = out.replace(&placeholder, &replacement);
+                    }
+                }
+            }
+            Value::String(out)
+        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), substitute_args(v, runtime)))
+                .collect(),
+        ),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|v| substitute_args(v, runtime)).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+fn default_http_method() -> String {
+    "GET".to_string()
+}
+
+/// A complete skill manifest loaded from a `.skill.json` file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillManifest {
+    /// Unique tool name (snake_case, e.g. `"check_weather"`).
+    pub name: String,
+    /// Human-readable description shown to the LLM.
+    pub description: String,
+    /// How the skill is executed.
+    pub kind: SkillKind,
+    /// JSON Schema for the tool's parameters.
+    #[serde(default = "default_empty_schema")]
+    pub parameters: Value,
+    /// Semantic version of the skill (optional).
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Track 0 staged-rollout stage (`simulate`/`supervised`/`autonomous`).
+    /// Defaults to `autonomous` (authored/installed skills behave as before);
+    /// synthesized physical skills start at `simulate`.
+    #[serde(default)]
+    pub stage: obc_tool_api::RolloutStage,
+    /// Free-form tags for categorisation.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Whether this skill is active (default: true).
+    #[serde(default = "bool_true")]
+    pub enabled: bool,
+    /// Execution timeout in seconds (default: 30).
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_empty_schema() -> Value {
+    json!({"type": "object", "properties": {}})
+}
+
+fn bool_true() -> bool {
+    true
+}
+
+fn default_timeout() -> u64 {
+    30
+}
+
+impl SkillManifest {
+    /// Parse a manifest from a JSON string.
+    pub fn from_json(json: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(json)?)
+    }
+
+    /// Load a manifest from a file.
+    pub fn from_file(path: &Path) -> anyhow::Result<Self> {
+        let json = std::fs::read_to_string(path)?;
+        Self::from_json(&json)
+    }
+
+    /// Validate that the manifest has required fields.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.name.is_empty() {
+            anyhow::bail!("Skill manifest 'name' must not be empty");
+        }
+        if self.description.is_empty() {
+            anyhow::bail!("Skill manifest 'description' must not be empty");
+        }
+        // Name must be valid: lowercase, alphanumeric, underscores only
+        if !self.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            anyhow::bail!(
+                "Skill name '{}' contains invalid characters (use a-z, 0-9, _)",
+                self.name
+            );
+        }
+        if let SkillKind::Sequence { steps } = &self.kind {
+            if steps.is_empty() {
+                anyhow::bail!("Sequence skill '{}' has no steps", self.name);
+            }
+            if let Some(bad) = steps.iter().find(|s| s.tool.is_empty()) {
+                anyhow::bail!(
+                    "Sequence skill '{}' has a step with an empty tool name: {:?}",
+                    self.name,
+                    bad
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+// ── Skill Tool ────────────────────────────────────────────────────────────────
+
+/// A dynamically-loaded skill tool.
+///
+/// Wraps a `SkillManifest` and implements the `Tool` trait by executing the
+/// manifest's `kind` at runtime.
+pub struct SkillTool {
+    manifest: SkillManifest,
+    client: reqwest::Client,
+}
+
+impl SkillTool {
+    /// Create a tool from a manifest.
+    pub fn new(manifest: SkillManifest) -> anyhow::Result<Self> {
+        manifest.validate()?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(manifest.timeout_secs))
+            .build()
+            .unwrap_or_default();
+        Ok(Self { manifest, client })
+    }
+
+    /// Fill `{placeholder}` tokens in a template string with argument values.
+    fn substitute(template: &str, args: &Value) -> String {
+        let mut result = template.to_string();
+        if let Some(obj) = args.as_object() {
+            for (key, val) in obj {
+                let placeholder = format!("{{{key}}}");
+                let replacement = match val {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                result = result.replace(&placeholder, &replacement);
+            }
+        }
+        result
+    }
+}
+
+#[async_trait]
+impl Tool for SkillTool {
+    fn name(&self) -> &str {
+        &self.manifest.name
+    }
+
+    fn description(&self) -> &str {
+        &self.manifest.description
+    }
+
+    fn parameters_schema(&self) -> Value {
+        self.manifest.parameters.clone()
+    }
+
+    fn as_delegate(&self) -> Option<(String, Value)> {
+        match &self.manifest.kind {
+            SkillKind::Delegate { tool, fixed_args } if self.manifest.enabled => {
+                Some((tool.clone(), fixed_args.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    fn as_sequence(&self) -> Option<Vec<(String, Value)>> {
+        match &self.manifest.kind {
+            SkillKind::Sequence { steps } if self.manifest.enabled => Some(
+                steps
+                    .iter()
+                    .map(|s| (s.tool.clone(), s.args.clone()))
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
+    fn rollout_stage(&self) -> obc_tool_api::RolloutStage {
+        self.manifest.stage
+    }
+
+    /// Not physical, and not replayable — stated rather than inherited.
+    ///
+    /// A skill's name comes from its manifest, so no name-based check can
+    /// classify one; `scripts/check_physical_tools.py` requires a declaration
+    /// here for exactly that reason. This is what the declaration says and why.
+    ///
+    /// Only two of the four [`SkillKind`]s ever reach the Track 0 gate carrying
+    /// this value. `Delegate` resolves to the target tool and `Sequence` runs
+    /// each step back through the agent's chokepoint, so both are authorized
+    /// against the *step's* risk class and never against this one — which is the
+    /// design, and the reason a skill delegating to `gpio_write` is gated like
+    /// `gpio_write`.
+    ///
+    /// What is left is `Shell` and `Http`, neither of which drives an actuator.
+    /// So `physical: false`, matching the builtin `shell` tool this borrows its
+    /// reasoning from: side-effecting and not safely re-runnable, so the
+    /// self-improvement loop must quarantine a learned skill rather than verify
+    /// it by replay. The non-`None` blast radius and `reversible: false` are
+    /// what carry that signal; they change no gate.
+    fn risk_class(&self) -> obc_tool_api::RiskClass {
+        obc_tool_api::RiskClass {
+            reversible: false,
+            blast: obc_tool_api::BlastRadius::Low,
+            physical: false,
+        }
+    }
+
+    /// External: a skill's output is whatever a URL or a shell command produced.
+    ///
+    /// `SkillKind::Http` fetches an arbitrary URL, which is precisely what the
+    /// builtin `http` and `browser` tools declare `External` for; `Shell` runs
+    /// an arbitrary command whose output can be anything on the machine. Those
+    /// are the two kinds whose output this method describes — `Delegate` and
+    /// `Sequence` return the target tool's own output through the agent's
+    /// chokepoint, which carries the target's declaration, not this one.
+    ///
+    /// It was `Trusted` by default, which meant content a skill fetched from the
+    /// open web could be used as an argument to a privileged call without taint
+    /// tracking seeing it — the prompt-injection path the pool exists to catch,
+    /// left open by the one tool kind an operator can add at runtime.
+    fn output_trust(&self) -> obc_tool_api::OutputTrust {
+        obc_tool_api::OutputTrust::External
+    }
+
+    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
+        if !self.manifest.enabled {
+            return Ok(ToolResult::err(format!(
+                "Skill '{}' is disabled",
+                self.manifest.name
+            )));
+        }
+
+        match &self.manifest.kind {
+            SkillKind::Shell { command } => {
+                let cmd = Self::substitute(command, &args);
+                let timeout = tokio::time::Duration::from_secs(self.manifest.timeout_secs);
+
+                // Platform-aware shell selection: `sh -c` on Unix, `cmd /C` on Windows.
+                #[cfg(windows)]
+                let mut process = {
+                    let mut p = tokio::process::Command::new("cmd");
+                    p.arg("/C").arg(&cmd);
+                    p
+                };
+                #[cfg(not(windows))]
+                let mut process = {
+                    let mut p = tokio::process::Command::new("sh");
+                    p.arg("-c").arg(&cmd);
+                    p
+                };
+
+                let output = tokio::time::timeout(timeout, process.output()).await;
+
+                match output {
+                    Ok(Ok(out)) if out.status.success() => {
+                        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        Ok(ToolResult::ok(stdout))
+                    }
+                    Ok(Ok(out)) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        Ok(ToolResult::err(format!(
+                            "Command exited with status {}: {stderr}",
+                            out.status
+                        )))
+                    }
+                    Ok(Err(e)) => Ok(ToolResult::err(format!("Failed to run command: {e}"))),
+                    Err(_) => Ok(ToolResult::err(format!(
+                        "Command timed out after {}s",
+                        self.manifest.timeout_secs
+                    ))),
+                }
+            }
+
+            SkillKind::Http {
+                url,
+                method,
+                headers,
+                body_template,
+            } => {
+                let resolved_url = Self::substitute(url, &args);
+
+                let mut req = match method.to_uppercase().as_str() {
+                    "POST" | "PUT" | "PATCH" => {
+                        let body = body_template
+                            .as_deref()
+                            .map(|t| Self::substitute(t, &args))
+                            .unwrap_or_else(|| args.to_string());
+                        self.client
+                            .request(
+                                reqwest::Method::from_bytes(method.as_bytes())
+                                    .unwrap_or(reqwest::Method::POST),
+                                &resolved_url,
+                            )
+                            .body(body)
+                    }
+                    _ => self.client.get(&resolved_url),
+                };
+
+                for (k, v) in headers {
+                    req = req.header(k.as_str(), v.as_str());
+                }
+
+                match req.send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        let text = resp.text().await.unwrap_or_default();
+                        Ok(ToolResult::ok(text))
+                    }
+                    Ok(resp) => {
+                        let status = resp.status();
+                        let body = resp.text().await.unwrap_or_default();
+                        Ok(ToolResult::err(format!("HTTP {status}: {body}")))
+                    }
+                    Err(e) => Ok(ToolResult::err(format!("HTTP request failed: {e}"))),
+                }
+            }
+
+            SkillKind::Delegate { tool, .. } => {
+                // Delegate skills are resolved by the agent's execution
+                // chokepoint (see `Tool::as_delegate`), so policy/Track 0/
+                // approval evaluate the real underlying call. Executing the
+                // wrapper directly (outside an agent) cannot route the call.
+                Ok(ToolResult::err(format!(
+                    "Delegate skill '{}' targets tool '{}' and must be executed \
+                     through the agent (no tool router in standalone execution)",
+                    self.manifest.name, tool
+                )))
+            }
+
+            SkillKind::Sequence { steps } => {
+                // Same chokepoint rule as Delegate (see `Tool::as_sequence`).
+                Ok(ToolResult::err(format!(
+                    "Sequence skill '{}' ({} steps) must be executed through the \
+                     agent (no tool router in standalone execution)",
+                    self.manifest.name,
+                    steps.len()
+                )))
+            }
+        }
+    }
+}
+
+// ── SkillForge ────────────────────────────────────────────────────────────────
+
+/// Discovers and loads skills from a directory of `.skill.json` manifest files.
+pub struct SkillForge {
+    /// Directory to scan for skill manifests.
+    pub skill_dir: PathBuf,
+}
+
+impl SkillForge {
+    /// Create a forge that scans the given directory.
+    pub fn new(skill_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            skill_dir: skill_dir.into(),
+        }
+    }
+
+    /// The default skill directory (`~/.config/oh-ben-claw/skills`).
+    pub fn default_dir() -> PathBuf {
+        std::env::var("HOME")
+            .map(|h| {
+                PathBuf::from(h)
+                    .join(".config")
+                    .join("oh-ben-claw")
+                    .join("skills")
+            })
+            .unwrap_or_else(|_| PathBuf::from("/etc/oh-ben-claw/skills"))
+    }
+
+    /// Load all enabled skills from the skill directory.
+    ///
+    /// Silently skips files that cannot be parsed or fail validation, logging
+    /// warnings for each failure.
+    pub fn load_all(&self) -> anyhow::Result<Vec<Box<dyn Tool>>> {
+        let dir = &self.skill_dir;
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let entries = std::fs::read_dir(dir)?;
+        let mut tools: Vec<Box<dyn Tool>> = Vec::new();
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !is_skill_manifest(&path) {
+                continue;
+            }
+
+            match SkillManifest::from_file(&path) {
+                Ok(manifest) if !manifest.enabled => {
+                    tracing::debug!(name = %manifest.name, "Skipping disabled skill");
+                }
+                Ok(manifest) => match SkillTool::new(manifest) {
+                    Ok(tool) => {
+                        tracing::info!(name = %tool.name(), "Loaded skill from forge");
+                        tools.push(Box::new(tool));
+                    }
+                    Err(e) => {
+                        tracing::warn!(path = ?path, error = %e, "Failed to create skill tool");
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(path = ?path, error = %e, "Failed to parse skill manifest");
+                }
+            }
+        }
+
+        Ok(tools)
+    }
+
+    /// Load all skill manifests (without converting to tools) for inspection.
+    pub fn list_manifests(&self) -> anyhow::Result<Vec<SkillManifest>> {
+        let dir = &self.skill_dir;
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let entries = std::fs::read_dir(dir)?;
+        let mut manifests = Vec::new();
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !is_skill_manifest(&path) {
+                continue;
+            }
+            if let Ok(manifest) = SkillManifest::from_file(&path) {
+                manifests.push(manifest);
+            }
+        }
+
+        Ok(manifests)
+    }
+
+    /// Write a skill manifest to the skill directory.
+    ///
+    /// Creates the directory if it doesn't exist.
+    pub fn install_skill(&self, manifest: &SkillManifest) -> anyhow::Result<PathBuf> {
+        manifest.validate()?;
+        std::fs::create_dir_all(&self.skill_dir)?;
+        let path = self.skill_dir.join(format!("{}.skill.json", manifest.name));
+        let json = serde_json::to_string_pretty(manifest)?;
+        std::fs::write(&path, json)?;
+        tracing::info!(name = %manifest.name, path = ?path, "Installed skill");
+        Ok(path)
+    }
+
+    /// Remove a skill manifest from the skill directory.
+    pub fn remove_skill(&self, name: &str) -> anyhow::Result<()> {
+        let path = self.skill_dir.join(format!("{name}.skill.json"));
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+            tracing::info!(name = %name, "Removed skill");
+        }
+        Ok(())
+    }
+}
+
+fn is_skill_manifest(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.ends_with(".skill.json"))
+            .unwrap_or(false)
+}
+
+// ── SkillForgeTool ─────────────────────────────────────────────────────────────
+
+/// An agent tool for managing the skill forge at runtime.
+///
+/// Allows the agent (or a user via the agent) to list, inspect, install, and
+/// remove skills without restarting the system.
+pub struct SkillForgeTool {
+    forge: SkillForge,
+}
+
+impl SkillForgeTool {
+    /// Create with an explicit forge instance.
+    pub fn new(forge: SkillForge) -> Self {
+        Self { forge }
+    }
+
+    /// Create with the default skill directory.
+    pub fn default_dir() -> Self {
+        Self::new(SkillForge::new(SkillForge::default_dir()))
+    }
+}
+
+#[async_trait]
+impl Tool for SkillForgeTool {
+    fn name(&self) -> &str {
+        "skill_forge"
+    }
+
+    fn description(&self) -> &str {
+        "Manage the skill forge: list installed skills, install new skills from a JSON \
+        manifest, or remove existing skills. Note: a skill installed or removed here \
+        becomes callable (or uncallable) at the next skill sync — the periodic \
+        self-improvement pass or an operator promote — not instantly."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "install", "remove"],
+                    "description": "Action to perform."
+                },
+                "manifest": {
+                    "type": "object",
+                    "description": "Skill manifest JSON object (required for 'install' action)."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Skill name (required for 'remove' action)."
+                }
+            },
+            "required": ["action"]
+        })
+    }
+
+    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
+        let action = match args.get("action").and_then(|v| v.as_str()) {
+            Some(a) => a.to_string(),
+            None => return Ok(ToolResult::err("Missing required argument: action")),
+        };
+
+        match action.as_str() {
+            "list" => match self.forge.list_manifests() {
+                Ok(manifests) if manifests.is_empty() => Ok(ToolResult::ok("No skills installed.")),
+                Ok(manifests) => {
+                    let summary: Vec<Value> = manifests
+                        .iter()
+                        .map(|m| {
+                            json!({
+                                "name": m.name,
+                                "description": m.description,
+                                "version": m.version,
+                                "enabled": m.enabled,
+                                "tags": m.tags
+                            })
+                        })
+                        .collect();
+                    Ok(ToolResult::ok(
+                        serde_json::to_string_pretty(&summary).unwrap_or_default(),
+                    ))
+                }
+                Err(e) => Ok(ToolResult::err(format!("Failed to list skills: {e}"))),
+            },
+
+            "install" => {
+                let manifest_val = match args.get("manifest") {
+                    Some(m) => m.clone(),
+                    None => {
+                        return Ok(ToolResult::err(
+                            "Missing required argument: manifest (for 'install' action)",
+                        ))
+                    }
+                };
+                let manifest: SkillManifest = match serde_json::from_value(manifest_val) {
+                    Ok(m) => m,
+                    Err(e) => return Ok(ToolResult::err(format!("Invalid manifest: {e}"))),
+                };
+                match self.forge.install_skill(&manifest) {
+                    Ok(path) => Ok(ToolResult::ok(format!(
+                        "Skill '{}' installed to {}",
+                        manifest.name,
+                        path.display()
+                    ))),
+                    Err(e) => Ok(ToolResult::err(format!("Failed to install skill: {e}"))),
+                }
+            }
+
+            "remove" => {
+                let name = match args.get("name").and_then(|v| v.as_str()) {
+                    Some(n) => n.to_string(),
+                    None => {
+                        return Ok(ToolResult::err(
+                            "Missing required argument: name (for 'remove' action)",
+                        ))
+                    }
+                };
+                match self.forge.remove_skill(&name) {
+                    Ok(()) => Ok(ToolResult::ok(format!("Skill '{name}' removed."))),
+                    Err(e) => Ok(ToolResult::err(format!("Failed to remove skill: {e}"))),
+                }
+            }
+
+            other => Ok(ToolResult::err(format!(
+                "Unknown action '{other}'. Use 'list', 'install', or 'remove'."
+            ))),
+        }
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn sample_shell_manifest(name: &str) -> SkillManifest {
+        SkillManifest {
+            name: name.to_string(),
+            description: "A test skill.".to_string(),
+            kind: SkillKind::Shell {
+                command: "echo hello".to_string(),
+            },
+            parameters: default_empty_schema(),
+            version: Some("1.0.0".to_string()),
+            stage: Default::default(),
+            tags: vec!["test".to_string()],
+            enabled: true,
+            timeout_secs: 5,
+        }
+    }
+
+    #[test]
+    fn manifest_validate_rejects_empty_name() {
+        let mut m = sample_shell_manifest("valid");
+        m.name = String::new();
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn manifest_validate_rejects_invalid_chars() {
+        let mut m = sample_shell_manifest("valid");
+        m.name = "my-skill".to_string(); // hyphens are not allowed
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn manifest_validate_rejects_empty_description() {
+        let mut m = sample_shell_manifest("valid");
+        m.description = String::new();
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn manifest_validate_accepts_valid() {
+        let m = sample_shell_manifest("echo_test");
+        assert!(m.validate().is_ok());
+    }
+
+    #[test]
+    fn skill_tool_name_matches_manifest() {
+        let m = sample_shell_manifest("echo_test");
+        let tool = SkillTool::new(m).unwrap();
+        assert_eq!(tool.name(), "echo_test");
+    }
+
+    #[test]
+    fn substitute_fills_placeholders() {
+        let template = "curl https://example.com/{city}/weather?units={units}";
+        let args = json!({"city": "london", "units": "metric"});
+        let result = SkillTool::substitute(template, &args);
+        assert_eq!(
+            result,
+            "curl https://example.com/london/weather?units=metric"
+        );
+    }
+
+    #[test]
+    fn substitute_leaves_missing_placeholders() {
+        let template = "echo {name}";
+        let args = json!({});
+        let result = SkillTool::substitute(template, &args);
+        assert_eq!(result, "echo {name}");
+    }
+
+    #[tokio::test]
+    async fn shell_skill_executes_command() {
+        let m = SkillManifest {
+            kind: SkillKind::Shell {
+                command: "echo skill_works".to_string(),
+            },
+            ..sample_shell_manifest("echo_skill")
+        };
+        let tool = SkillTool::new(m).unwrap();
+        let result = tool.execute(json!({})).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("skill_works"));
+    }
+
+    #[tokio::test]
+    async fn shell_skill_substitutes_args_in_command() {
+        let m = SkillManifest {
+            kind: SkillKind::Shell {
+                command: "echo {greeting}".to_string(),
+            },
+            ..sample_shell_manifest("greet_skill")
+        };
+        let tool = SkillTool::new(m).unwrap();
+        let result = tool
+            .execute(json!({"greeting": "hello_world"}))
+            .await
+            .unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("hello_world"));
+    }
+
+    #[tokio::test]
+    async fn disabled_skill_returns_error() {
+        let m = SkillManifest {
+            enabled: false,
+            ..sample_shell_manifest("disabled_skill")
+        };
+        let tool = SkillTool::new(m).unwrap();
+        let result = tool.execute(json!({})).await.unwrap();
+        assert!(!result.success);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or(&result.output)
+            .contains("disabled"));
+    }
+
+    #[test]
+    fn forge_returns_empty_for_nonexistent_dir() {
+        let forge = SkillForge::new("/nonexistent/skills/dir");
+        let tools = forge.load_all().unwrap();
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn forge_install_and_load() {
+        let tmp = TempDir::new().unwrap();
+        let forge = SkillForge::new(tmp.path());
+        let manifest = sample_shell_manifest("install_test");
+        forge.install_skill(&manifest).unwrap();
+
+        let tools = forge.load_all().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name(), "install_test");
+    }
+
+    #[test]
+    fn forge_remove_skill() {
+        let tmp = TempDir::new().unwrap();
+        let forge = SkillForge::new(tmp.path());
+        let manifest = sample_shell_manifest("remove_test");
+        forge.install_skill(&manifest).unwrap();
+        forge.remove_skill("remove_test").unwrap();
+
+        let tools = forge.load_all().unwrap();
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn forge_skip_disabled_skills() {
+        let tmp = TempDir::new().unwrap();
+        let forge = SkillForge::new(tmp.path());
+        let mut manifest = sample_shell_manifest("disabled_test");
+        manifest.enabled = false;
+        forge.install_skill(&manifest).unwrap();
+
+        let tools = forge.load_all().unwrap();
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn forge_list_manifests() {
+        let tmp = TempDir::new().unwrap();
+        let forge = SkillForge::new(tmp.path());
+        forge
+            .install_skill(&sample_shell_manifest("skill_a"))
+            .unwrap();
+        forge
+            .install_skill(&sample_shell_manifest("skill_b"))
+            .unwrap();
+
+        let manifests = forge.list_manifests().unwrap();
+        assert_eq!(manifests.len(), 2);
+    }
+
+    #[test]
+    fn manifest_from_json_round_trip() {
+        let m = sample_shell_manifest("round_trip");
+        let json = serde_json::to_string(&m).unwrap();
+        let m2 = SkillManifest::from_json(&json).unwrap();
+        assert_eq!(m.name, m2.name);
+        assert_eq!(m.description, m2.description);
+    }
+
+    #[tokio::test]
+    async fn forge_tool_list_action_empty() {
+        let tmp = TempDir::new().unwrap();
+        let forge_tool = SkillForgeTool::new(SkillForge::new(tmp.path()));
+        let result = forge_tool.execute(json!({"action": "list"})).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains("No skills"));
+    }
+
+    #[tokio::test]
+    async fn forge_tool_install_then_list() {
+        let tmp = TempDir::new().unwrap();
+        let forge_tool = SkillForgeTool::new(SkillForge::new(tmp.path()));
+
+        let manifest_val = json!({
+            "name": "forge_tool_test",
+            "description": "A test skill installed via forge tool.",
+            "kind": { "type": "shell", "command": "echo ok" }
+        });
+
+        let install_result = forge_tool
+            .execute(json!({"action": "install", "manifest": manifest_val}))
+            .await
+            .unwrap();
+        assert!(install_result.success, "{:?}", install_result.error);
+
+        let list_result = forge_tool.execute(json!({"action": "list"})).await.unwrap();
+        assert!(list_result.success);
+        assert!(list_result.output.contains("forge_tool_test"));
+    }
+
+    #[tokio::test]
+    async fn forge_tool_remove_action() {
+        let tmp = TempDir::new().unwrap();
+        let forge_tool = SkillForgeTool::new(SkillForge::new(tmp.path()));
+
+        // Install first
+        let manifest_val = json!({
+            "name": "to_remove",
+            "description": "Will be removed.",
+            "kind": { "type": "shell", "command": "echo bye" }
+        });
+        forge_tool
+            .execute(json!({"action": "install", "manifest": manifest_val}))
+            .await
+            .unwrap();
+
+        // Then remove
+        let remove_result = forge_tool
+            .execute(json!({"action": "remove", "name": "to_remove"}))
+            .await
+            .unwrap();
+        assert!(remove_result.success);
+    }
+
+    #[tokio::test]
+    async fn forge_tool_unknown_action_error() {
+        let tmp = TempDir::new().unwrap();
+        let forge_tool = SkillForgeTool::new(SkillForge::new(tmp.path()));
+        let result = forge_tool
+            .execute(json!({"action": "destroy_everything"}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or(&result.output)
+            .contains("Unknown action"));
+    }
+
+    #[tokio::test]
+    async fn forge_tool_missing_action_error() {
+        let tmp = TempDir::new().unwrap();
+        let forge_tool = SkillForgeTool::new(SkillForge::new(tmp.path()));
+        let result = forge_tool.execute(json!({})).await.unwrap();
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn delegate_skill_exposes_target_and_refuses_standalone_execution() {
+        let m = SkillManifest {
+            kind: SkillKind::Delegate {
+                tool: "shell".to_string(),
+                fixed_args: json!({"fixed": "value"}),
+            },
+            ..sample_shell_manifest("delegate_skill")
+        };
+        let tool = SkillTool::new(m).unwrap();
+
+        // The agent chokepoint resolves the delegation via `as_delegate`.
+        let (target, fixed) = tool.as_delegate().expect("delegate target exposed");
+        assert_eq!(target, "shell");
+        assert_eq!(fixed["fixed"], "value");
+
+        // Standalone execution (no agent to route through) is an explicit error,
+        // never a fake success.
+        let result = tool.execute(json!({"runtime": "arg"})).await.unwrap();
+        assert!(!result.success);
+        assert!(result.error.as_deref().unwrap_or("").contains("shell"));
+    }
+
+    #[test]
+    fn substitute_args_preserves_types_and_replaces_inline() {
+        let template = json!({
+            "pin": "{pin}",
+            "url": "https://x/{city}/now",
+            "nested": {"level": "{pin}"},
+            "fixed": true,
+        });
+        let runtime = json!({"pin": 17, "city": "Oslo"});
+        let out = substitute_args(&template, &runtime);
+        assert_eq!(
+            out["pin"], 17,
+            "whole-value placeholder keeps the number type"
+        );
+        assert_eq!(
+            out["url"], "https://x/Oslo/now",
+            "inline placeholder is textual"
+        );
+        assert_eq!(out["nested"]["level"], 17, "recursion into objects");
+        assert_eq!(out["fixed"], true);
+        // Unknown placeholder is left as-is (visible, not silently dropped).
+        let out2 = substitute_args(&json!({"a": "{missing}"}), &json!({}));
+        assert_eq!(out2["a"], "{missing}");
+    }
+
+    #[test]
+    fn sequence_manifest_validation() {
+        let mut m = sample_shell_manifest("seq");
+        m.kind = SkillKind::Sequence { steps: vec![] };
+        assert!(m.validate().is_err(), "empty sequence rejected");
+        m.kind = SkillKind::Sequence {
+            steps: vec![SkillStep {
+                tool: "http".into(),
+                args: json!({}),
+            }],
+        };
+        assert!(m.validate().is_ok());
+    }
+
+    #[tokio::test]
+    async fn disabled_delegate_skill_exposes_no_target() {
+        let m = SkillManifest {
+            enabled: false,
+            kind: SkillKind::Delegate {
+                tool: "shell".to_string(),
+                fixed_args: json!({}),
+            },
+            ..sample_shell_manifest("delegate_skill_off")
+        };
+        let tool = SkillTool::new(m).unwrap();
+        assert!(tool.as_delegate().is_none());
+    }
+}

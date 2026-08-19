@@ -1,0 +1,48 @@
+[package]
+name = "obc-movement"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Open Body Control's actuation side: typed movement commands bounded by the deterministic Track 0 safety gate, recorded into bitemporal world memory, and dispatched through a pluggable actuator sink."
+
+# The thirteenth piece extracted (2026-08-08), and the one that shows what the
+# extraction queue is actually made of.
+#
+# `scripts/extractability.py` had it at one blocking edge for months. That edge
+# was `Arc<crate::spine::SpineClient>` — one struct field and one constructor
+# parameter, calling one method, in the single `ActuatorSink` implementation
+# that talked to the spine. Two lines of type held a 741-line module against a
+# 4611-line one.
+#
+# The module already had the right abstraction and was already using it: the
+# `ActuatorSink` trait, with a logging sink and a spine sink side by side. Only
+# the second named the spine. So `SpineActuatorSink` moved to
+# `src/spine/actuator.rs` upstream and implements this crate's trait from
+# there. Trait where the abstraction is, implementation where the dependency
+# is. The edge was turned on 2026-08-08 in its own commit, 39 lines, and this
+# extraction is the next day's work — the same order obc-position was done in,
+# so that if the turn is wrong it is 39 lines to inspect rather than a crate to
+# unpick.
+#
+# What is left is the act-side half of the perceive→remember→reflex→act loop:
+# every command bounded by the Track 0 gate *before* it reaches hardware (A7),
+# the commanded state recorded as an `actuator.{name}` fact in bitemporal world
+# memory so the brain and the reflex engine can both see where an actuator is
+# (A3), and dispatch through a sink so the caller does not change with the
+# backend (A1).
+#
+# Dependencies were read off the module and corrected by the compiler, which is
+# the only order that has ever worked here. Note what is *not* in this list:
+# nothing from the agent, nothing from the spine, nothing from tools. That is
+# the whole point of the edge turn.
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+obc-memory = { path = "../obc-memory" }
+obc-safety = { path = "../obc-safety" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1.42", default-features = false, features = ["rt", "macros"] }

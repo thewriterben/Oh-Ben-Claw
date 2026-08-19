@@ -5,8 +5,10 @@
 //! ```
 //!
 //! The pure half of the agent's deployment subsystem. `swarm` (LLM sub-agents
-//! that refine a scheme) and `saga` (an async multi-step rollout) stay in the host
-//! crate: both need a runtime and providers, and neither is needed to plan.
+//! that refine a scheme) and `saga` (a rollout mechanism: compensating actions
+//! unwound in reverse on failure, tested but not yet called by anything) stay in
+//! the host crate: both need a runtime and providers, and neither is needed to
+//! plan.
 
 pub mod advisor;
 pub mod firmware_scaffold;

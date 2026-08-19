@@ -1,0 +1,934 @@
+//! Safing reflex rules — System 1 behaviors that consume the suite mode hooks.
+//!
+//! The perception suites (power, comms, sensing, audio, …) record categorical
+//! mode facts into world memory: `power.mode`, `net.mode`, `sensor.{q}`'s
+//! `quality`, `audio.{stream}`'s `label`. On their own those are just
+//! observations. This module turns them into *reactions* — canonical
+//! [`ReflexRule`]s that fire deterministic, near-instant safing actions when a
+//! mode goes bad, without waking the LLM (System 2).
+//!
+//! Each rule matches a mode with a [`Condition::State`] and performs a
+//! conservative action:
+//! - **power critical** → escalate (and, if an actuator is given, `Stop` it —
+//!   bounded by the movement controller's Track 0 gate).
+//! - **power low** → publish a "shed load" advisory.
+//! - **net offline / degraded** → publish a connectivity-safing advisory so the
+//!   system drops to local/low-bandwidth behavior.
+//!
+//! Rules are debounced so a persistent bad mode doesn't spam actions, and
+//! escalations are additionally capped by the controller's escalation budget.
+//! The set is appended to the operator's configured rules; nothing here fires
+//! unless the corresponding suite is producing the mode fact.
+
+use crate::reflex::{Action, ActionSink, Cmp, Condition, ReflexRule};
+use async_trait::async_trait;
+use obc_movement::MovementCommand;
+use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+/// Topic safing advisories are published to (System 1 → local subscribers).
+pub const SAFING_TOPIC: &str = "obc/safing";
+
+/// Options controlling which safing rules are emitted.
+#[derive(Debug, Clone, Default)]
+pub struct SafingOptions {
+    /// If set, `power.mode == critical` also issues a `Stop` to this actuator
+    /// (`name`, `channel`) through the movement controller's Track 0 gate.
+    pub stop_actuator: Option<(String, i64)>,
+    /// Audio streams to watch for an `"alarm"` label → escalate (e.g. `["mic0"]`).
+    pub alarm_streams: Vec<String>,
+    /// Sensor quantities to watch for an out-of-range `quality` → escalate
+    /// (distrust bad data), e.g. `["temperature"]`.
+    pub unreliable_sensors: Vec<String>,
+    /// Numeric over-limit guards: `(quantity, threshold)` → escalate when
+    /// `sensor.{quantity}` value exceeds `threshold` (e.g. overheat).
+    pub overheat: Vec<(String, f64)>,
+    /// Debounce for every safing rule (ms). Default 5000 when `0`.
+    pub debounce_ms: u64,
+}
+
+fn debounce(opts: &SafingOptions) -> u64 {
+    if opts.debounce_ms == 0 {
+        5_000
+    } else {
+        opts.debounce_ms
+    }
+}
+
+fn state(entity: &str, field: &str, equals: &str) -> Condition {
+    Condition::State {
+        entity: entity.to_string(),
+        field: Some(field.to_string()),
+        equals: equals.to_string(),
+    }
+}
+
+fn rule(id: &str, when: Condition, then: Action, debounce_ms: u64) -> ReflexRule {
+    ReflexRule {
+        id: id.to_string(),
+        when,
+        then,
+        debounce_ms,
+        max_rate_hz: None,
+        fire_on_change: false,
+    }
+}
+
+/// `power.mode == critical` → escalate to System 2 with a reason.
+pub fn power_critical_escalate(opts: &SafingOptions) -> ReflexRule {
+    rule(
+        "safe-power-critical-escalate",
+        state("power.mode", "mode", "critical"),
+        Action::Escalate {
+            reason: format!(
+                "battery critical — entering low-power safing. {POWER_CRITICAL_PLAYBOOK}"
+            ),
+        },
+        debounce(opts),
+    )
+}
+
+/// `power.mode == critical` → `Stop` the configured actuator (Track 0–bounded).
+/// Only produced when [`SafingOptions::stop_actuator`] is set.
+pub fn power_critical_stop(opts: &SafingOptions) -> Option<ReflexRule> {
+    let (name, channel) = opts.stop_actuator.clone()?;
+    Some(rule(
+        "safe-power-critical-stop",
+        state("power.mode", "mode", "critical"),
+        Action::Move {
+            command: MovementCommand::Stop { name, channel },
+        },
+        debounce(opts),
+    ))
+}
+
+/// `power.mode == low` → publish a "shed non-essential load" advisory.
+pub fn power_low_shed(opts: &SafingOptions) -> ReflexRule {
+    rule(
+        "safe-power-low",
+        state("power.mode", "mode", "low"),
+        Action::Publish {
+            topic: SAFING_TOPIC.to_string(),
+            payload: json!({ "subsystem": "power", "mode": "low", "action": "shed_load" }),
+        },
+        debounce(opts),
+    )
+}
+
+/// `net.mode == offline` → publish a degraded/offline-safing advisory.
+pub fn net_offline_safe(opts: &SafingOptions) -> ReflexRule {
+    rule(
+        "safe-net-offline",
+        state("net.mode", "mode", "offline"),
+        Action::Publish {
+            topic: SAFING_TOPIC.to_string(),
+            payload: json!({ "subsystem": "comms", "mode": "offline", "action": "degraded_mode" }),
+        },
+        debounce(opts),
+    )
+}
+
+/// `net.mode == degraded` → publish a degraded-mode advisory.
+pub fn net_degraded_safe(opts: &SafingOptions) -> ReflexRule {
+    rule(
+        "safe-net-degraded",
+        state("net.mode", "mode", "degraded"),
+        Action::Publish {
+            topic: SAFING_TOPIC.to_string(),
+            payload: json!({ "subsystem": "comms", "mode": "degraded", "action": "reduce_bandwidth" }),
+        },
+        debounce(opts),
+    )
+}
+
+/// `audio.{stream}` label == `"alarm"` → escalate to System 2.
+pub fn audio_alarm_escalate(stream: &str, opts: &SafingOptions) -> ReflexRule {
+    rule(
+        &format!("safe-audio-alarm-{stream}"),
+        state(&format!("audio.{stream}"), "label", "alarm"),
+        Action::Escalate {
+            reason: format!("alarm sound detected on {stream}. {AUDIO_ALARM_PLAYBOOK}"),
+        },
+        debounce(opts),
+    )
+}
+
+/// `sensor.{quantity}` quality == `"out_of_range"` → escalate (distrust bad data).
+pub fn sensor_unreliable_escalate(quantity: &str, opts: &SafingOptions) -> ReflexRule {
+    rule(
+        &format!("safe-sensor-unreliable-{quantity}"),
+        state(&format!("sensor.{quantity}"), "quality", "out_of_range"),
+        Action::Escalate {
+            reason: format!("sensor {quantity} reading out of range. {SENSOR_UNRELIABLE_PLAYBOOK}"),
+        },
+        debounce(opts),
+    )
+}
+
+/// `sensor.{quantity}` numeric value `>` threshold → escalate (overheat /
+/// over-limit). Uses a numeric [`Condition::Sensor`]; `fact_to_f64` reads the
+/// reading's `value` field from the sensing fact.
+pub fn overheat_escalate(quantity: &str, threshold: f64, opts: &SafingOptions) -> ReflexRule {
+    rule(
+        &format!("safe-overheat-{quantity}"),
+        Condition::Sensor {
+            entity: format!("sensor.{quantity}"),
+            op: Cmp::Gt,
+            value: threshold,
+        },
+        Action::Escalate {
+            reason: format!("{quantity} over limit ({threshold}). {OVERHEAT_PLAYBOOK}"),
+        },
+        debounce(opts),
+    )
+}
+
+/// `power.mode` back to `normal`/`charging` → publish a clear-shed advisory so
+/// in-process load-shedding releases automatically (recovery).
+pub fn power_recovered_clear(opts: &SafingOptions) -> ReflexRule {
+    rule(
+        "safe-power-recovered",
+        Condition::Or {
+            any: vec![
+                state("power.mode", "mode", "normal"),
+                state("power.mode", "mode", "charging"),
+            ],
+        },
+        Action::Publish {
+            topic: SAFING_TOPIC.to_string(),
+            payload: json!({ "subsystem": "power", "action": "clear_shed" }),
+        },
+        debounce(opts),
+    )
+}
+
+/// `net.mode` back to `online` → publish a clear-net advisory so connectivity
+/// safing releases automatically (recovery).
+pub fn net_recovered_clear(opts: &SafingOptions) -> ReflexRule {
+    rule(
+        "safe-net-recovered",
+        state("net.mode", "mode", "online"),
+        Action::Publish {
+            topic: SAFING_TOPIC.to_string(),
+            payload: json!({ "subsystem": "comms", "action": "clear_net" }),
+        },
+        debounce(opts),
+    )
+}
+
+// ── Escalation playbooks ────────────────────────────────────────────────────────
+//
+// An `Action::Escalate` reason is the entire brief System 2 gets. A bare statement of
+// fact ("battery critical") leaves the woken model to improvise everything: which tools
+// to call, what counts as a conclusion, and where to write it down. On 2026-07-17 that
+// improvisation produced a note filed into the mesh perception namespace, which the
+// supervisor then read back as a live node and alarmed on for 100 minutes.
+//
+// So every playbook follows one rule: **each step names a tool with a contract, never an
+// action with a free-form target.** They also all say that the operator alert is already
+// handled — escalations fan out to the notification log-of-record and webhook before
+// System 2 is woken, so asking the model to "alert someone" invites it to invent a
+// channel it does not have.
+
+/// `power.mode == critical`. Safing has already stopped the configured actuator.
+pub const POWER_CRITICAL_PLAYBOOK: &str = "Low-power safing has already engaged and the \
+configured actuator was stopped automatically — do not re-actuate it. Triage: (1) `power` \
+action `status` for the latest reading and derived mode, then action `history` to see \
+whether the pack is genuinely falling or one sample dipped; (2) `record_incident` with \
+subject = the pack or device, `status: confirmed` if the decline is real and needs \
+attention, `status: false_alarm` if it already recovered, passing the readings as \
+evidence. An operator is alerted automatically. Full playbook: \
+docs/playbooks/safing-escalations.md#battery-critical.";
+
+/// `audio.{stream}` classified `alarm`.
+pub const AUDIO_ALARM_PLAYBOOK: &str = "An alarm sound was classified on an audio stream. \
+This is evidence about the environment, not a device fault — do not actuate anything in \
+response to a sound. Triage: (1) `hear` action `current` on that stream for the label and \
+confidence, then action `history` to see whether it is a single detection or a repeating \
+pattern; (2) `record_incident` with subject = the stream, `status: confirmed` if the \
+detection is reliable and recurring, `status: false_alarm` for an isolated low-confidence \
+hit, passing confidence and timestamps as evidence. An operator is alerted automatically. \
+Full playbook: docs/playbooks/safing-escalations.md#audio-alarm.";
+
+/// `sensor.{quantity}` quality == `out_of_range` — the reading itself is suspect.
+pub const SENSOR_UNRELIABLE_PLAYBOOK: &str = "A sensor stream is reporting out-of-range \
+quality: the *reading* is suspect, so do not act on its value or on any conclusion that \
+depends on it. Triage: (1) `sense` action `current` for that quantity's live quality, \
+action `history` for when it degraded, and action `anomalies` to see whether other \
+quantities went bad at the same moment — several at once points at the node or its bus \
+rather than one sensor; (2) `record_incident` with subject = the quantity, \
+`status: confirmed` for a genuine sensor fault, `status: false_alarm` if quality has \
+already returned to ok, passing the readings as evidence. An operator is alerted \
+automatically. Full playbook: docs/playbooks/safing-escalations.md#sensor-unreliable.";
+
+/// `sensor.{quantity}` over a numeric limit — check the sensor before believing the heat.
+pub const OVERHEAT_PLAYBOOK: &str = "A reading crossed its limit. Check the sensor before \
+believing it: (1) `sense` action `current` for that quantity — if quality is \
+`out_of_range` or `stale` this is a sensor fault, not a heat event — then action `history` \
+to see whether it climbed steadily or jumped in one step (a jump favours the sensor); \
+(2) if the reading is trustworthy, treat the heat as real; diagnose with reads, and any \
+actuation stays Track-0 gated; (3) `record_incident` with subject = the quantity, \
+`status: confirmed` for real heat, `status: false_alarm` for a bad sensor, passing the \
+readings as evidence. An operator is alerted automatically. Full playbook: \
+docs/playbooks/safing-escalations.md#overheat.";
+
+/// Triage directive handed to System 2 when the mesh presumes a node lost. It names
+/// the exact tools so the woken agent knows what to do without guessing; the full
+/// procedure lives in `docs/playbooks/mesh-node-lost.md`.
+pub const MESH_LOST_PLAYBOOK: &str = "A mesh node is presumed lost (LoRa escalation). \
+Triage: (1) call `mesh_status` to identify the offline/escalated node and its last state \
+(RSSI, last-seen, last command); (2) `mesh_command` it a `capabilities` ping to confirm \
+reachability; (3) record the outcome with `record_incident` — `status: resolved` if it \
+answered (the link recovered), `status: unresolved` if it did not, with the `mesh_status` \
+readings as evidence. If step 2 is refused for operator approval, do not retry it and do \
+not seek another route to the node: you have learned nothing about the node, so record \
+`status: investigating` and say in `detail` that the probe was not attempted because \
+`mesh_command` requires approval. A refused tool is a fact about your permissions, never \
+about the world. An operator is alerted automatically; you do not need to do that. \
+Every node action stays Track-0 gated. Full playbook: docs/playbooks/mesh-node-lost.md.";
+
+/// `mesh.escalated_count >= 1` → escalate to System 2: the mesh supervisor has
+/// presumed a node lost over the LoRa mesh. Fires only when mesh escalation is
+/// configured and a node has actually been given up on (the count is absent/zero
+/// otherwise), so it's a safe default. The escalate reason is the [`MESH_LOST_PLAYBOOK`]
+/// triage directive, so the wake is immediately actionable.
+pub fn mesh_node_lost_escalate(opts: &SafingOptions) -> ReflexRule {
+    rule(
+        "safe-mesh-node-lost",
+        Condition::Sensor {
+            entity: "mesh.escalated_count".to_string(),
+            op: Cmp::Ge,
+            value: 1.0,
+        },
+        Action::Escalate {
+            reason: MESH_LOST_PLAYBOOK.to_string(),
+        },
+        debounce(opts),
+    )
+}
+
+/// The standard safing rule set for the given options. Order is stable.
+pub fn standard_safing_rules(opts: &SafingOptions) -> Vec<ReflexRule> {
+    let mut rules = vec![power_critical_escalate(opts)];
+    if let Some(stop) = power_critical_stop(opts) {
+        rules.push(stop);
+    }
+    rules.push(power_low_shed(opts));
+    rules.push(net_offline_safe(opts));
+    rules.push(net_degraded_safe(opts));
+    rules.push(power_recovered_clear(opts));
+    rules.push(net_recovered_clear(opts));
+    rules.push(mesh_node_lost_escalate(opts));
+    for stream in &opts.alarm_streams {
+        rules.push(audio_alarm_escalate(stream, opts));
+    }
+    for quantity in &opts.unreliable_sensors {
+        rules.push(sensor_unreliable_escalate(quantity, opts));
+    }
+    for (quantity, threshold) in &opts.overheat {
+        rules.push(overheat_escalate(quantity, *threshold, opts));
+    }
+    rules
+}
+
+// ── Safing executor (consume advisories in-process) ──────────────────────────
+
+/// Host-side safing state, flipped by `obc/safing` advisories. Shareable across
+/// the running loops (poll tasks, controllers) that should back off under stress.
+/// Atomics so any task can read/observe it cheaply without a lock.
+#[derive(Debug, Default)]
+pub struct SafingState {
+    shed_load: AtomicBool,
+    degraded_net: AtomicBool,
+    offline: AtomicBool,
+}
+
+impl SafingState {
+    /// All-clear state.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Non-essential load should be shed (e.g. pause polling, dim, sleep).
+    pub fn shed_load(&self) -> bool {
+        self.shed_load.load(Ordering::Relaxed)
+    }
+
+    /// The network is degraded — prefer local/low-bandwidth behavior.
+    pub fn degraded_net(&self) -> bool {
+        self.degraded_net.load(Ordering::Relaxed)
+    }
+
+    /// The network is fully offline.
+    pub fn offline(&self) -> bool {
+        self.offline.load(Ordering::Relaxed)
+    }
+
+    /// Update flags from a safing advisory payload (the JSON published to
+    /// [`SAFING_TOPIC`]). Engage actions set flags; `clear_*` recovery actions
+    /// release them. Logs on each transition so engage/recover is visible.
+    pub fn apply_advisory(&self, payload: &Value) {
+        match payload.get("action").and_then(Value::as_str).unwrap_or("") {
+            "shed_load" => self.set(&self.shed_load, "shed_load"),
+            "degraded_mode" => {
+                self.set(&self.offline, "offline");
+                self.set(&self.degraded_net, "degraded_net");
+            }
+            "reduce_bandwidth" => self.set(&self.degraded_net, "degraded_net"),
+            // Recovery: a subsystem returned to normal.
+            "clear_shed" => self.unset(&self.shed_load, "shed_load"),
+            "clear_net" => {
+                self.unset(&self.offline, "offline");
+                self.unset(&self.degraded_net, "degraded_net");
+            }
+            _ => {}
+        }
+    }
+
+    fn set(&self, flag: &AtomicBool, name: &str) {
+        if !flag.swap(true, Ordering::Relaxed) {
+            tracing::warn!(flag = name, "safing engaged");
+        }
+    }
+
+    fn unset(&self, flag: &AtomicBool, name: &str) {
+        if flag.swap(false, Ordering::Relaxed) {
+            tracing::info!(flag = name, "safing released");
+        }
+    }
+
+    /// Clear all flags (recovery — call when modes return to normal).
+    pub fn clear(&self) {
+        for (flag, name) in [
+            (&self.shed_load, "shed_load"),
+            (&self.degraded_net, "degraded_net"),
+            (&self.offline, "offline"),
+        ] {
+            if flag.swap(false, Ordering::Relaxed) {
+                tracing::info!(flag = name, "safing cleared");
+            }
+        }
+    }
+}
+
+/// An [`ActionSink`] wrapper that consumes safing advisories in-process: a
+/// `Publish` to [`SAFING_TOPIC`] updates a shared [`SafingState`] (so the host
+/// actually backs off), and *also* forwards every action — including that publish
+/// — to an inner sink for distributed consumers. Mirrors `MovementActionSink`.
+pub struct SafingSink {
+    state: Arc<SafingState>,
+    inner: Arc<dyn ActionSink>,
+}
+
+impl SafingSink {
+    /// Wrap an inner sink, tapping `obc/safing` publishes into `state`.
+    pub fn new(state: Arc<SafingState>, inner: Arc<dyn ActionSink>) -> Self {
+        Self { state, inner }
+    }
+}
+
+#[async_trait]
+impl ActionSink for SafingSink {
+    async fn gpio_write(&self, node_id: &str, pin: i64, value: i64) -> anyhow::Result<()> {
+        self.inner.gpio_write(node_id, pin, value).await
+    }
+    async fn publish(&self, topic: &str, payload: &Value) -> anyhow::Result<()> {
+        if topic == SAFING_TOPIC {
+            self.state.apply_advisory(payload);
+        }
+        self.inner.publish(topic, payload).await
+    }
+    async fn escalate(&self, reason: &str) -> anyhow::Result<()> {
+        self.inner.escalate(reason).await
+    }
+    async fn move_actuator(&self, command: &MovementCommand) -> anyhow::Result<()> {
+        self.inner.move_actuator(command).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reflex::{Action, ReflexEngine};
+    use obc_memory::world::WorldMemory;
+    use obc_telemetry::comms::{CommsController, LinkReading, LinkThresholds};
+    use obc_telemetry::power::{BatteryReading, ChargeState, PowerController, PowerThresholds};
+    use std::sync::Arc;
+
+    fn opts_with_actuator() -> SafingOptions {
+        SafingOptions {
+            stop_actuator: Some(("arm".to_string(), 0)),
+            debounce_ms: 0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn standard_set_includes_stop_only_with_actuator() {
+        // base: power-critical-escalate, power-low, net-offline, net-degraded,
+        // power-recovered, net-recovered, mesh-node-lost = 7; +1 stop with an actuator = 8.
+        assert_eq!(standard_safing_rules(&SafingOptions::default()).len(), 7);
+        assert_eq!(standard_safing_rules(&opts_with_actuator()).len(), 8);
+    }
+
+    #[test]
+    fn mesh_lost_rule_directs_the_agent_to_its_tools() {
+        let r = mesh_node_lost_escalate(&SafingOptions::default());
+        match &r.then {
+            Action::Escalate { reason } => {
+                assert!(reason.contains("mesh_status"), "names the perceive tool");
+                assert!(reason.contains("mesh_command"), "names the act tool");
+                assert!(reason.contains("Track-0"), "reaffirms the safety gate");
+            }
+            _ => panic!("expected an escalate action"),
+        }
+    }
+
+    #[test]
+    fn every_escalation_names_its_tools_and_a_typed_place_to_record() {
+        // The design rule, made enforceable: an escalation reason is the entire brief
+        // System 2 gets, so each one must name tools with contracts rather than describe
+        // an intention. Adding a rule that escalates with a bare statement of fact —
+        // which is what all four non-mesh rules used to do — fails here.
+        //
+        // Bought with an incident (2026-07-17): the one unbounded step in the one
+        // playbook that existed told the model to "record the loss to world memory", and
+        // its improvised note became a phantom node the fleet alarmed on for 100 minutes.
+        // The audio/sensor/overheat rules only appear when configured, so switch them on
+        // — otherwise the four rules this test exists for are never constructed.
+        let opts = SafingOptions {
+            stop_actuator: Some(("arm".to_string(), 0)),
+            alarm_streams: vec!["mic0".to_string()],
+            unreliable_sensors: vec!["temperature".to_string()],
+            overheat: vec![("temperature".to_string(), 60.0)],
+            debounce_ms: 0,
+        };
+        let mut checked = 0;
+        {
+            for rule in standard_safing_rules(&opts) {
+                let Action::Escalate { reason } = &rule.then else {
+                    continue;
+                };
+                checked += 1;
+                let id = &rule.id;
+                assert!(
+                    reason.contains("record_incident"),
+                    "{id}: names the typed recording tool, so the model never improvises \
+                     an entity name or schema — reason was: {reason}"
+                );
+                assert!(
+                    reason.contains('`'),
+                    "{id}: names at least one tool in backticks (a perceive step), \
+                     rather than describing an intention — reason was: {reason}"
+                );
+                assert!(
+                    reason.contains("alerted automatically"),
+                    "{id}: says the operator alert is already handled; otherwise the \
+                     model invents a notification channel it does not have — reason \
+                     was: {reason}"
+                );
+                assert!(
+                    !reason.contains("world memory") && !reason.contains("world_memory"),
+                    "{id}: must not point the model at the raw store for recording — \
+                     reason was: {reason}"
+                );
+            }
+        }
+        assert!(
+            checked >= 5,
+            "expected every escalating rule to be covered, saw {checked}"
+        );
+    }
+
+    #[test]
+    fn a_playbook_step_that_can_be_refused_says_what_to_do_when_it_is() {
+        // A playbook is a promise about what the agent can do, and nothing checks that
+        // promise against the approval policy. `mesh_command` is operator-gated and its
+        // session grant dies with the brain, so on 2026-07-19 and again on 2026-07-20 the
+        // agent was woken, told to ping the node, and refused twelve seconds after boot —
+        // with no instruction for what to do next.
+        //
+        // The dangerous failure is not the refusal, it is what an agent might do with it:
+        // retry, look for another route, or report a conclusion it never tested. So the
+        // brief must name the refusal, forbid the workaround, and give a status that means
+        // "could not test" rather than "tested and found lost".
+        let r = MESH_LOST_PLAYBOOK;
+        assert!(
+            r.contains("refused"),
+            "names the refusal, so the model recognises it rather than improvising: {r}"
+        );
+        assert!(
+            r.contains("investigating"),
+            "gives a status meaning 'could not confirm' — `unresolved` would assert a loss \
+             that was never tested: {r}"
+        );
+        assert!(
+            r.contains("do not retry") && r.contains("another route"),
+            "forbids both workarounds explicitly; a blocked agent looking for a way around \
+             the gate is the failure this exists to prevent: {r}"
+        );
+        assert!(
+            r.contains("fact about your permissions"),
+            "states the general rule, not just this instance — a refusal is never evidence \
+             about the world: {r}"
+        );
+        // The branch is worthless if the status it names is not one record_incident takes.
+        assert!(
+            obc_tools::builtin::incident::STATUSES.contains(&"investigating"),
+            "the status the playbook names must be one the typed tool actually accepts"
+        );
+    }
+
+    #[test]
+    fn power_recovery_clears_shed_end_to_end() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let power =
+            PowerController::new(PowerThresholds::default()).with_world_memory(Arc::clone(&world));
+        let opts = SafingOptions {
+            debounce_ms: 1,
+            ..Default::default()
+        };
+        let engine = ReflexEngine::new(standard_safing_rules(&opts));
+        let state = SafingState::new();
+
+        // Drain to low → power-low fires → shed_load engages.
+        power
+            .ingest(
+                &BatteryReading {
+                    soc_pct: 15.0,
+                    voltage: None,
+                    current_a: None,
+                    charging: ChargeState::Discharging,
+                    source: None,
+                },
+                1_000,
+                obc_memory::world::Origin::Observed,
+            )
+            .unwrap();
+        for f in engine.tick(&world, 1_000).unwrap() {
+            if let Action::Publish { payload, .. } = f.action {
+                state.apply_advisory(&payload);
+            }
+        }
+        assert!(state.shed_load(), "shed_load should engage at low charge");
+
+        // Recharge to normal → power-recovered fires → shed_load releases.
+        power
+            .ingest(
+                &BatteryReading {
+                    soc_pct: 90.0,
+                    voltage: None,
+                    current_a: None,
+                    charging: ChargeState::Discharging,
+                    source: None,
+                },
+                2_000,
+                obc_memory::world::Origin::Observed,
+            )
+            .unwrap();
+        for f in engine.tick(&world, 2_000).unwrap() {
+            if let Action::Publish { payload, .. } = f.action {
+                state.apply_advisory(&payload);
+            }
+        }
+        assert!(
+            !state.shed_load(),
+            "shed_load should release once charge recovers"
+        );
+    }
+
+    #[test]
+    fn rule_ids_are_unique_and_stable() {
+        let rules = standard_safing_rules(&opts_with_actuator());
+        let mut ids: Vec<&str> = rules.iter().map(|r| r.id.as_str()).collect();
+        let n = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "duplicate rule ids");
+    }
+
+    // ── End-to-end: suite controller → world memory → reflex fires safing ──────
+
+    #[test]
+    fn power_critical_drives_escalate_and_stop_end_to_end() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let power =
+            PowerController::new(PowerThresholds::default()).with_world_memory(Arc::clone(&world));
+        // A real critical battery reading flows through the suite into world memory.
+        let status = power
+            .ingest(
+                &BatteryReading {
+                    soc_pct: 6.0,
+                    voltage: None,
+                    current_a: None,
+                    charging: ChargeState::Discharging,
+                    source: None,
+                },
+                1_000,
+                obc_memory::world::Origin::Observed,
+            )
+            .unwrap();
+        assert_eq!(status.mode.as_str(), "critical");
+
+        let engine = ReflexEngine::new(standard_safing_rules(&opts_with_actuator()));
+        let fired = engine.tick(&world, 2_000).unwrap();
+
+        // Both the escalate and the actuator-stop reflexes fired off power.mode.
+        assert!(fired
+            .iter()
+            .any(|f| f.rule_id == "safe-power-critical-escalate"
+                && matches!(f.action, Action::Escalate { .. })));
+        assert!(fired.iter().any(|f| {
+            f.rule_id == "safe-power-critical-stop"
+                && matches!(&f.action, Action::Move { command: MovementCommand::Stop { name, channel } } if name == "arm" && *channel == 0)
+        }));
+    }
+
+    #[test]
+    fn healthy_power_fires_no_engage_rule() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let power =
+            PowerController::new(PowerThresholds::default()).with_world_memory(Arc::clone(&world));
+        power
+            .ingest(
+                &BatteryReading {
+                    soc_pct: 85.0,
+                    voltage: None,
+                    current_a: None,
+                    charging: ChargeState::Discharging,
+                    source: None,
+                },
+                1_000,
+                obc_memory::world::Origin::Observed,
+            )
+            .unwrap();
+        let engine = ReflexEngine::new(standard_safing_rules(&SafingOptions::default()));
+        let ids: Vec<String> = engine
+            .tick(&world, 2_000)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.rule_id)
+            .collect();
+        // No engage rule fires at healthy charge — only the recovery rule may
+        // (its clear advisory is a harmless no-op when nothing is shed).
+        assert!(!ids.iter().any(|id| id == "safe-power-critical-escalate"));
+        assert!(!ids.iter().any(|id| id == "safe-power-low"));
+        assert!(ids.iter().all(|id| id == "safe-power-recovered"));
+    }
+
+    #[test]
+    fn net_offline_publishes_safing_advisory_end_to_end() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let comms =
+            CommsController::new(LinkThresholds::default()).with_world_memory(Arc::clone(&world));
+        // Every link down ⇒ net.mode offline.
+        comms
+            .ingest(
+                &LinkReading {
+                    link: "wifi".to_string(),
+                    rssi_dbm: None,
+                    latency_ms: None,
+                    loss_pct: None,
+                    up: Some(false),
+                    source: None,
+                },
+                1_000,
+            )
+            .unwrap();
+
+        let engine = ReflexEngine::new(standard_safing_rules(&SafingOptions::default()));
+        let fired = engine.tick(&world, 2_000).unwrap();
+        let advisory = fired
+            .iter()
+            .find(|f| f.rule_id == "safe-net-offline")
+            .expect("offline safing rule should fire");
+        match &advisory.action {
+            Action::Publish { topic, payload } => {
+                assert_eq!(topic, SAFING_TOPIC);
+                assert_eq!(payload["action"], "degraded_mode");
+            }
+            other => panic!("expected publish, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audio_alarm_escalates_end_to_end() {
+        use obc_audio::suite::{AudioController, HeardEvent, LoggingSpeechSink};
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let audio =
+            AudioController::new(Arc::new(LoggingSpeechSink)).with_world_memory(Arc::clone(&world));
+        audio
+            .observe(
+                &HeardEvent {
+                    stream: "mic0".to_string(),
+                    text: None,
+                    label: Some("alarm".to_string()),
+                    confidence: 0.98,
+                    source: None,
+                },
+                1_000,
+                obc_memory::world::Origin::Observed,
+            )
+            .unwrap();
+
+        let opts = SafingOptions {
+            alarm_streams: vec!["mic0".to_string()],
+            ..Default::default()
+        };
+        let engine = ReflexEngine::new(standard_safing_rules(&opts));
+        let fired = engine.tick(&world, 2_000).unwrap();
+        assert!(fired
+            .iter()
+            .any(|f| f.rule_id == "safe-audio-alarm-mic0"
+                && matches!(f.action, Action::Escalate { .. })));
+    }
+
+    #[test]
+    fn out_of_range_sensor_escalates_end_to_end() {
+        use obc_telemetry::sensing::{QuantitySpec, Sample, SensingController};
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let sensing = SensingController::new(vec![(
+            "temperature".to_string(),
+            QuantitySpec {
+                min: Some(-40.0),
+                max: Some(85.0),
+                max_staleness_ms: None,
+                unit: None,
+            },
+        )])
+        .with_world_memory(Arc::clone(&world));
+        sensing
+            .ingest(
+                &Sample {
+                    quantity: "temperature".into(),
+                    value: 200.0,
+                    unit: None,
+                    source: None,
+                },
+                1_000,
+                obc_memory::world::Origin::Observed,
+            )
+            .unwrap();
+
+        let opts = SafingOptions {
+            unreliable_sensors: vec!["temperature".to_string()],
+            ..Default::default()
+        };
+        let engine = ReflexEngine::new(standard_safing_rules(&opts));
+        let fired = engine.tick(&world, 2_000).unwrap();
+        assert!(fired
+            .iter()
+            .any(|f| f.rule_id == "safe-sensor-unreliable-temperature"));
+    }
+
+    #[test]
+    fn overheat_escalates_on_numeric_threshold_end_to_end() {
+        use obc_telemetry::sensing::{QuantitySpec, Sample, SensingController};
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        // No range limits, so the reading is in-range (quality ok) — the overheat
+        // guard fires purely on the numeric value crossing the threshold.
+        let sensing =
+            SensingController::new(vec![("cpu_temp".to_string(), QuantitySpec::default())])
+                .with_world_memory(Arc::clone(&world));
+        sensing
+            .ingest(
+                &Sample {
+                    quantity: "cpu_temp".into(),
+                    value: 92.0,
+                    unit: Some("C".into()),
+                    source: None,
+                },
+                1_000,
+                obc_memory::world::Origin::Observed,
+            )
+            .unwrap();
+
+        let opts = SafingOptions {
+            overheat: vec![("cpu_temp".to_string(), 80.0)],
+            ..Default::default()
+        };
+        let engine = ReflexEngine::new(standard_safing_rules(&opts));
+        let fired = engine.tick(&world, 2_000).unwrap();
+        assert!(fired.iter().any(|f| f.rule_id == "safe-overheat-cpu_temp"));
+
+        // Below threshold ⇒ no fire.
+        let world2 = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let s2 = SensingController::new(vec![]).with_world_memory(Arc::clone(&world2));
+        s2.ingest(
+            &Sample {
+                quantity: "cpu_temp".into(),
+                value: 50.0,
+                unit: None,
+                source: None,
+            },
+            1_000,
+            obc_memory::world::Origin::Observed,
+        )
+        .unwrap();
+        let engine2 = ReflexEngine::new(standard_safing_rules(&opts));
+        assert!(engine2.tick(&world2, 2_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn safing_state_applies_advisories() {
+        let s = SafingState::new();
+        assert!(!s.shed_load());
+        s.apply_advisory(&json!({ "action": "shed_load" }));
+        assert!(s.shed_load());
+        s.apply_advisory(&json!({ "action": "degraded_mode" }));
+        assert!(s.offline() && s.degraded_net());
+        s.clear();
+        assert!(!s.shed_load() && !s.offline() && !s.degraded_net());
+    }
+
+    #[tokio::test]
+    async fn safing_sink_taps_advisory_and_forwards() {
+        use crate::reflex::LoggingActionSink;
+        let state = Arc::new(SafingState::new());
+        let sink = SafingSink::new(Arc::clone(&state), Arc::new(LoggingActionSink));
+        // a power-low safing publish flips shed_load (and is still forwarded).
+        sink.publish(SAFING_TOPIC, &json!({ "action": "shed_load" }))
+            .await
+            .unwrap();
+        assert!(state.shed_load());
+        // an unrelated topic does not touch safing state.
+        let s2 = Arc::new(SafingState::new());
+        let sink2 = SafingSink::new(Arc::clone(&s2), Arc::new(LoggingActionSink));
+        sink2
+            .publish("obc/other", &json!({ "action": "shed_load" }))
+            .await
+            .unwrap();
+        assert!(!s2.shed_load());
+    }
+
+    #[test]
+    fn power_low_fires_shed_load() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let power = PowerController::new(PowerThresholds {
+            low_pct: 20.0,
+            critical_pct: 10.0,
+        })
+        .with_world_memory(Arc::clone(&world));
+        power
+            .ingest(
+                &BatteryReading {
+                    soc_pct: 15.0,
+                    voltage: None,
+                    current_a: None,
+                    charging: ChargeState::Discharging,
+                    source: None,
+                },
+                1_000,
+                obc_memory::world::Origin::Observed,
+            )
+            .unwrap();
+        let engine = ReflexEngine::new(standard_safing_rules(&SafingOptions::default()));
+        let fired = engine.tick(&world, 2_000).unwrap();
+        assert!(fired.iter().any(|f| f.rule_id == "safe-power-low"));
+        // critical/offline rules must NOT fire at merely-low charge
+        assert!(!fired
+            .iter()
+            .any(|f| f.rule_id == "safe-power-critical-escalate"));
+    }
+}
