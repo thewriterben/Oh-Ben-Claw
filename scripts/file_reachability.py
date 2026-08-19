@@ -608,6 +608,28 @@ ITEM_ALIASES = {
 }
 
 
+# Item-level disclosure, because the file-level marker cannot say this.
+#
+# `<!-- unwired: path -->` asserts a whole file is parked. On 2026-08-19 that
+# was used on `crates/obc-agent/src/reflexion.rs` and it was wrong: four of its
+# public items have no caller, but `judge.rs` calls `parse_quality_score` from
+# it on every scored turn. Deleting the module fails to compile —
+# `error[E0433]: cannot find 'reflexion' in 'super'` — which is how the mistake
+# was found, by trying the cut the disclosure implied was safe.
+#
+# The survey could not have seen that caller: `parse_quality_score` is
+# `pub(crate)`, and this script measures *public API*. A module can therefore
+# look dead at the surface while something crate-internal inside it is
+# load-bearing. That is a real limit and this marker is the way to write around
+# it rather than mislabel the file.
+#
+#     <!-- unwired-item: reflexion_loop -->
+DISCLOSED_ITEMS: dict[str, set[str]] = {}
+for name, text in DOCS.items():
+    for m in re.finditer(r"<!--\s*unwired-item:\s*(\S+?)\s*-->", text):
+        DISCLOSED_ITEMS.setdefault(m.group(1).strip(), set()).add(name)
+
+
 def item_claims(name: str) -> list[str]:
     """Where the docs name this public item as a thing that exists.
 
@@ -647,10 +669,26 @@ for r in rows:
     # of them.
     disclosing = DISCLOSED_BY.get(r["file"], set())
     for name in r["nowhere"]:
-        claims = [d for d in item_claims(name) if d not in disclosing]
+        excused = disclosing | DISCLOSED_ITEMS.get(name, set())
+        claims = [d for d in item_claims(name) if d not in excused]
         if claims:
             item_over.append((name, r["file"], claims))
 item_over.sort(key=lambda t: t[0])
+
+# The guard the item markers need. A marker naming something that is not an
+# unreferenced public item is either stale (the item was wired, or renamed) or
+# wrong from the start, and either way it is silently excusing nothing while
+# looking like a disclosure.
+_live_nowhere = {n for r in rows for n in r["nowhere"]}
+_stale_item_markers = sorted(k for k in DISCLOSED_ITEMS if k not in _live_nowhere)
+if _stale_item_markers:
+    print(f"!! {len(_stale_item_markers)} `unwired-item:` marker(s) name something "
+          f"that is not an unreferenced public item:", file=sys.stderr)
+    for k in _stale_item_markers:
+        print(f"!!   {k}  (in {', '.join(sorted(DISCLOSED_ITEMS[k]))})", file=sys.stderr)
+    print("!! it was wired, renamed, or never matched. Remove the marker or fix "
+          "the name.", file=sys.stderr)
+    raise SystemExit(2)
 
 # The guard DOC_ALIASES has, for this table. Two ways an entry can be dead
 # weight, and both look like a clean result:

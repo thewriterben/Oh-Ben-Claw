@@ -1142,15 +1142,33 @@ from having been forgotten.
   has — nothing applies a deployment scheme to nodes on purpose, and the
   deterministic `DeploymentPlanner` is what the CLI actually calls.
 
-<!-- unwired: crates/obc-agent/src/reflexion.rs -->
-- [ ] **`crates/obc-agent/src/reflexion.rs` (487 LOC, 7 tests) — deliberately
-  unwired.**
+<!-- unwired-item: reflexion_loop -->
+<!-- unwired-item: create_plan -->
+<!-- unwired-item: synthesize_results -->
+- [ ] **`crates/obc-agent/src/reflexion.rs` — four unwired items in a live
+  module.**
   Two orchestration patterns from the literature: a Reflexion loop (generate →
   critique → revise, Shinn et al. 2023) and Plan-and-Execute, which decomposes a
   task into numbered steps and tracks their status. `ReflexionConfig`,
   `reflexion_loop`, `create_plan` and `synthesize_results` are constructed
-  nowhere in the workspace. It is not feature-gated and `obc-config` has no
-  block for it, so there is no configuration under which it runs.
+  nowhere. There is no `[reflexion]` config block and no feature gate, so there
+  is no configuration under which the loop runs.
+
+  **The module is not dead, and this entry said it was until 2026-08-19.** It
+  read "487 LOC, 7 tests — deliberately unwired", with a file-level
+  `<!-- unwired: -->` marker. `judge.rs` calls
+  `super::reflexion::parse_quality_score` on every scored turn, and three of the
+  seven tests cover that function. Removing the module fails to compile:
+  `error[E0433]: cannot find 'reflexion' in 'super'`. That is how the error was
+  caught — by attempting the cut this entry implied was safe, and reading the
+  build output instead of the disclosure.
+
+  `file_reachability.py` never claimed otherwise. It listed the file under
+  *some* unreferenced public items, 3 of 10, and `parse_quality_score` is
+  `pub(crate)` — outside a survey that measures public API by design. The
+  mistake was mine, in reading "no public caller" as "no caller". The item-level
+  `<!-- unwired-item: -->` markers above exist because the file-level one could
+  only say something untrue.
 
   **Condition to wire:** a decision about when the agent should self-critique
   rather than answer, because the cost is a multiple of the turn and the benefit
@@ -1162,17 +1180,8 @@ from having been forgotten.
   a critique round may re-execute, since a plan step that actuates is not
   free to retry.
 
-  **Found 2026-08-19 by the instrument, not by reading.** `ARCHITECTURE.md`
-  ticked "Reflexion / Plan-and-Execute" in its comparison table and
-  `obc-agent`'s own `Cargo.toml` description sold "System 2 deliberation,
-  reflexion, judging" — the text that would appear on crates.io. It hid behind
-  three common names: `summary` matches 81 times across the workspace,
-  `is_complete` 7 and `PlanStep` 8, all unrelated code, so the file read as
-  "7 of 10 items used" and never reached the unwired list.
-
-  Disclosed rather than cut, deliberately: 487 lines with 7 passing tests is a
-  complete component parked, the same shape as `feedback.rs` and `saga.rs`, and
-  deletion is the one move here that cannot be undone by editing a document.
+  **Condition to cut:** the loop and the planner can go without touching
+  `parse_quality_score`, which the judge needs. Cutting the whole file cannot.
 - [ ] **`deployment/saga.rs` (257 LOC, 4 tests) — deliberately unwired.** Forward
   actions paired with compensating ones, unwinding in reverse on the first
   failure, so a half-applied fleet rolls back. It has no pipeline because

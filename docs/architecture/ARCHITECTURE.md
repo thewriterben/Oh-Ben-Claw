@@ -216,7 +216,7 @@ Oh-Ben-Claw is built on top of the [ZeroClaw](https://github.com/zeroclaw-labs/z
 | Human approval | ✗ | ✅ 3 autonomy levels |
 | Cost tracking | ✗ | ✅ Daily/monthly budgets |
 | Docker sandbox | ✗ | ✅ |
-| Reflexion / Plan-and-Execute | ✗ | ⏸ module present, unwired (ROADMAP.md) |
+| Reflexion / Plan-and-Execute | ✗ | ⏸ written, not wired (ROADMAP.md) |
 | Edge-native mode | ✗ | ✅ (ESP32-S3, NanoPi) |
 | A2A protocol | ✗ | ✅ Client + server |
 | Structured output | ✗ | ✅ JSON mode / JSON Schema |
@@ -224,7 +224,9 @@ Oh-Ben-Claw is built on top of the [ZeroClaw](https://github.com/zeroclaw-labs/z
 | WASM sandbox | ✗ | ✅ Runtime adapter |
 | Persistent cost tracking | ✗ | ✅ SQLite-backed |
 
-<!-- unwired: crates/obc-agent/src/reflexion.rs -->
+<!-- unwired-item: reflexion_loop -->
+<!-- unwired-item: create_plan -->
+<!-- unwired-item: synthesize_results -->
 ⏸ marks a component that is present, tested, and has no caller. ROADMAP.md
 carries the reasoning and a stated condition for wiring each. They are listed
 rather than dropped because a reader comparing the two projects should be able
