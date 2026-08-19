@@ -378,6 +378,15 @@ jobs:
       #
       # Two rules: every drawn path resolves, and `crates/` is listed in full
       # rather than partially, since a short list there reads as a complete one.
+      #
+      # A third, added the same day: every `<!-- unwired: -->` disclosure marker
+      # must name a file that exists. That marker is not decoration — it is how
+      # file_reachability.py tells a deliberately parked component from an
+      # undisclosed one, so a stale path in a marker corrupts a measurement
+      # rather than a description. `crates/obc-movement/src/feedback.rs` was
+      # reported unwired *and undisclosed* while ROADMAP.md disclosed it in full
+      # three screens up, because the paragraph named a pre-extraction path and
+      # no marker existed at all.
       - name: the tree on the front page is a tree we have
         run: python3 scripts/check_tree.py
       - name: Install cargo-audit

@@ -405,6 +405,24 @@ DISCLOSED_BY = {
     for name, text in DOCS.items()
     for m in re.finditer(r"<!--\s*unwired:\s*(\S+?)\s*-->", text)
 }
+# A marker that resolves to nothing discloses nothing, and this survey has no
+# way to tell that from a component nobody disclosed: both produce a "—" in the
+# column below. On 2026-08-19 `crates/obc-movement/src/feedback.rs` was reported
+# undisclosed while ROADMAP.md disclosed it in full, three screens up.
+#
+# `scripts/check_tree.py` gates this in CI. The refusal here is not redundant
+# with that: it is the difference between a gate somebody can skip and a
+# measurement that will not lie about itself when run by hand.
+_stale_markers = sorted(p for p in DISCLOSED_BY if not (ROOT / p).exists())
+if _stale_markers:
+    print(f"!! {len(_stale_markers)} `unwired:` marker(s) name a file that does "
+          f"not exist:", file=sys.stderr)
+    for p in _stale_markers:
+        print(f"!!   {p}  (in {DISCLOSED_BY[p]})", file=sys.stderr)
+    print("!! a marker that resolves to nothing discloses nothing — the column "
+          "below would\n!! report the component as undisclosed and be wrong. "
+          "Fix the path.", file=sys.stderr)
+    raise SystemExit(2)
 # A missing input must not read as a clean result. Both README.md and ROADMAP.md
 # were absent the first time this ran — it was pointed at a partial checkout — and
 # it reported "0 of 17 are presented as shipped", which is the most reassuring
