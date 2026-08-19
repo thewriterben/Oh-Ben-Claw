@@ -185,7 +185,11 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 
 **Audio Pipeline** connects microphones to speech-to-text (OpenAI Whisper or local `whisper.cpp`) and synthesizes spoken replies via TTS.
 
-**Sensor Fusion** combines readings from multiple sensors into a unified structure (averaging, median, min/max, weighted, and a simple Kalman filter).
+**Pose Fusion** combines several noisy pose estimates — wheel odometry, GPS, an IMU or visual estimate — into one best pose: a weighted average of position and a *circular* weighted mean of heading, so 350° and 10° fuse to 0° rather than 180°. Sources are declared as `[[navigation.pose_source]]`, and the result is written to the `sensor.pos_x/pos_y/heading` entities the localizer already reads, so fusion drops in front of navigation without changing it (`crates/obc-navigation/src/pose_fusion.rs`).
+
+> **Corrected 2026-08-19.** This paragraph read "**Sensor Fusion** combines readings from multiple sensors into a unified structure (averaging, median, min/max, weighted, and a simple Kalman filter)" — which described `src/peripherals/fusion.rs`, a module that was cut. Pose fusion is a different thing that does exist, so the paragraph is repointed rather than deleted: averaging a batch of sensor readings and fusing several estimates of where the robot is are not the same capability, and the old sentence promised the first.
+>
+> `check_tree.py`'s rule 4 could not have caught this. It holds backticked paths to the tree, and this paragraph named no path at all — a feature described in prose, with nothing to resolve. Prose that names nothing is the gap that rule leaves.
 
 **Browser Automation** drives Chrome via the DevTools Protocol with seven tools (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_scroll`, `browser_new_tab`, `browser_close_tab`); falls back to plain HTTP fetch when no CDP endpoint is reachable.
 

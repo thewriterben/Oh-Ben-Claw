@@ -1111,6 +1111,37 @@ from having been forgotten.
   The same stale-path failure as the README tree, one layer further in: there,
   prose pointed at directories that had moved; here, a correct disclosure was
   invisible to the instrument that reads disclosures.
+<!-- unwired: crates/obc-agent/src/reflexion.rs -->
+- [ ] **`crates/obc-agent/src/reflexion.rs` (487 LOC, 7 tests) — deliberately
+  unwired.**
+  Two orchestration patterns from the literature: a Reflexion loop (generate →
+  critique → revise, Shinn et al. 2023) and Plan-and-Execute, which decomposes a
+  task into numbered steps and tracks their status. `ReflexionConfig`,
+  `reflexion_loop`, `create_plan` and `synthesize_results` are constructed
+  nowhere in the workspace. It is not feature-gated and `obc-config` has no
+  block for it, so there is no configuration under which it runs.
+
+  **Condition to wire:** a decision about when the agent should self-critique
+  rather than answer, because the cost is a multiple of the turn and the benefit
+  is not uniform. Reflection is known to degrade without a real verification
+  signal (Huang et al., ICLR 2024) — `docs/V2-STRATEGY.md` already says so — and
+  this agent has real ones available: a sensor reading, a camera frame, a test
+  run. Wiring the loop against the model's own say-so would make turns slower
+  and no better. It also needs an iteration bound and a Track 0 answer for what
+  a critique round may re-execute, since a plan step that actuates is not
+  free to retry.
+
+  **Found 2026-08-19 by the instrument, not by reading.** `ARCHITECTURE.md`
+  ticked "Reflexion / Plan-and-Execute" in its comparison table and
+  `obc-agent`'s own `Cargo.toml` description sold "System 2 deliberation,
+  reflexion, judging" — the text that would appear on crates.io. It hid behind
+  three common names: `summary` matches 81 times across the workspace,
+  `is_complete` 7 and `PlanStep` 8, all unrelated code, so the file read as
+  "7 of 10 items used" and never reached the unwired list.
+
+  Disclosed rather than cut, deliberately: 487 lines with 7 passing tests is a
+  complete component parked, the same shape as `feedback.rs` and `saga.rs`, and
+  deletion is the one move here that cannot be undone by editing a document.
 - [ ] **`deployment/saga.rs` (257 LOC, 4 tests) — deliberately unwired.** Forward
   actions paired with compensating ones, unwinding in reverse on the first
   failure, so a half-applied fleet rolls back. It has no pipeline because

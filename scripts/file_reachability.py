@@ -583,8 +583,15 @@ item_over = []
 for r in rows:
     if r["used"] == 0:
         continue
+    # A disclosed file's own disclosure names its items -- that is what a
+    # disclosure is. Subtract the documents that carry the marker, exactly as
+    # the file-level column does, or writing the honest paragraph turns three
+    # items into three overclaims. Third time today that being right in prose
+    # tripped a check that reads prose; `strip_audit` is the first cousin of all
+    # of them.
+    disclosing = DISCLOSED_BY.get(r["file"], set())
     for name in r["nowhere"]:
-        claims = item_claims(name)
+        claims = [d for d in item_claims(name) if d not in disclosing]
         if claims:
             item_over.append((name, r["file"], claims))
 item_over.sort(key=lambda t: t[0])

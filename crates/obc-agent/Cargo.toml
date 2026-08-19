@@ -3,7 +3,12 @@ name = "obc-agent"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Open Body Control's reasoning loop: the agent that turns a request into tool calls against a real body -- orchestration, delegation to sub-agents, a worker pool, edge agents, System 2 deliberation, reflexion, judging, streaming, safing, and the world context a turn is given."
+description = "Open Body Control's reasoning loop: the agent that turns a request into tool calls against a real body -- orchestration, delegation to sub-agents, a worker pool, edge agents, System 2 deliberation, judging, streaming, safing, and the world context a turn is given."
+
+# `reflexion` was in that sentence until 2026-08-19. The module is here and has
+# no caller, so the description was selling a capability the crate does not
+# deliver -- to crates.io, which is the furthest any claim in this repository
+# travels. See ROADMAP.md for what wiring it would take.
 
 # The twenty-eighth crate, 7885 lines in fourteen files, and the last structural
 # piece of the endgame. For every day this project has measured extractability,
