@@ -305,9 +305,15 @@ fn floats_to_bytes(floats: &[f32]) -> Vec<u8> {
 }
 
 fn bytes_to_floats(bytes: &[u8]) -> Vec<f32> {
+    // `as_chunks::<4>()` rather than `chunks_exact(4)`: it hands back
+    // `&[u8; 4]`, which is what `from_le_bytes` wants, instead of a slice that
+    // has to be indexed four times to prove it is four bytes long. The trailing
+    // remainder (`.1`) is dropped exactly as `chunks_exact` dropped it.
     bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 
