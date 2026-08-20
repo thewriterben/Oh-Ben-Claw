@@ -1,7 +1,7 @@
 # Safing escalation playbooks
 
 The four non-mesh safing rules that wake System 2. Each section is the long form of the
-triage directive carried in the rule's `Action::Escalate` reason (`src/agent/safing.rs`);
+triage directive carried in the rule's `Action::Escalate` reason (`crates/obc-reflex/src/safing.rs`);
 the mesh playbook has its own file, [mesh-node-lost.md](mesh-node-lost.md).
 
 ## The rule these follow

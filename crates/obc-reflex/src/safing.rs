@@ -20,7 +20,7 @@
 //! The set is appended to the operator's configured rules; nothing here fires
 //! unless the corresponding suite is producing the mode fact.
 
-use crate::reflex::{Action, ActionSink, Cmp, Condition, ReflexRule};
+use crate::{Action, ActionSink, Cmp, Condition, ReflexRule};
 use async_trait::async_trait;
 use obc_movement::MovementCommand;
 use serde_json::{json, Value};
@@ -450,7 +450,7 @@ impl ActionSink for SafingSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reflex::{Action, ReflexEngine};
+    use crate::{Action, ReflexEngine};
     use obc_memory::world::WorldMemory;
     use obc_telemetry::comms::{CommsController, LinkReading, LinkThresholds};
     use obc_telemetry::power::{BatteryReading, ChargeState, PowerController, PowerThresholds};
@@ -573,11 +573,15 @@ mod tests {
             "states the general rule, not just this instance — a refusal is never evidence \
              about the world: {r}"
         );
-        // The branch is worthless if the status it names is not one record_incident takes.
-        assert!(
-            obc_tools::builtin::incident::STATUSES.contains(&"investigating"),
-            "the status the playbook names must be one the typed tool actually accepts"
-        );
+        // The fifth assertion is not here. "`investigating` is a status
+        // `record_incident` accepts" is a claim about the tool layer, which is
+        // above this crate — `obc-tools` depends on `obc-reflex`, so asserting
+        // it from inside would be a dev-dependency cycle pointing the wrong way
+        // down the stack. It is `a_playbook_names_a_status_the_typed_tool_takes`
+        // in `tests/reflex_boundary.rs` upstream, the file that exists because
+        // the same thing happened to `content_relayed_by_a_trusted_writer_is_now_gated`
+        // when this crate was extracted. A rule can say what the agent should
+        // do; only a test that can see both layers can check the agent can.
     }
 
     #[test]
@@ -884,7 +888,7 @@ mod tests {
 
     #[tokio::test]
     async fn safing_sink_taps_advisory_and_forwards() {
-        use crate::reflex::LoggingActionSink;
+        use crate::LoggingActionSink;
         let state = Arc::new(SafingState::new());
         let sink = SafingSink::new(Arc::clone(&state), Arc::new(LoggingActionSink));
         // a power-low safing publish flips shed_load (and is still forwarded).

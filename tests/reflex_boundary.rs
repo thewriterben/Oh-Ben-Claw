@@ -233,3 +233,28 @@ async fn a_measured_reading_still_drives_safing() {
         fired.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
     );
 }
+
+/// A fourth joined them on 2026-08-20, when `safing.rs` followed the types it
+/// spells into `obc-reflex`. Thirteen of its fourteen tests came with it; this
+/// assertion could not, for the same reason as the three above and in the same
+/// direction: `obc-tools` depends on `obc-reflex`, so the rule library cannot
+/// name the tool layer from inside without a cycle.
+///
+/// The claim is small and worth keeping whole. `MESH_LOST_PLAYBOOK` tells a
+/// woken agent to file an incident with status `investigating` rather than
+/// `unresolved`, because a refusal is not evidence the node is lost. That
+/// instruction is worthless if `record_incident` does not accept the word — the
+/// agent would follow the playbook exactly and be rejected by the tool. Only a
+/// test that can see the playbook and the tool's status list at once can say so.
+#[test]
+fn a_playbook_names_a_status_the_typed_tool_takes() {
+    let r = oh_ben_claw::agent::safing::MESH_LOST_PLAYBOOK;
+    assert!(
+        r.contains("investigating"),
+        "the playbook must name the status it wants: {r}"
+    );
+    assert!(
+        oh_ben_claw::tools::builtin::incident::STATUSES.contains(&"investigating"),
+        "the status the playbook names must be one the typed tool actually accepts"
+    );
+}
