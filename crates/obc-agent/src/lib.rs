@@ -28,7 +28,23 @@ pub mod pool;
 /// find this module's own vocabulary would be the wrong shape, and `src/main.rs`.
 pub use obc_reflex as reflex;
 pub mod reflexion;
-pub mod safing;
+/// The standard safing rule set, moved to [`obc_reflex::safing`] on 2026-08-20.
+///
+/// The alias above is why this took eight days longer than it should have.
+/// `safing.rs` imported `crate::reflex::{Action, ActionSink, Cmp, Condition,
+/// ReflexRule}` — five names that read like this crate's and are all declared
+/// in `obc-reflex`. One line, and the module looked agent-owned to every
+/// instrument that reads imports. It named nothing else here.
+///
+/// Its fourteen tests came with it. The two suites they drive — telemetry and
+/// audio — are `obc-reflex` dev-dependencies now, which is legal because
+/// neither depends on it: `perceive → remember → reflex` runs one way.
+///
+/// Re-exported rather than repointed, unlike the thirteen sites in the note
+/// above, because this one has a caller outside the workspace's control: the
+/// public path is `oh_ben_claw::agent::safing`, and `src/main.rs`, four
+/// integration tests and OBC-Prime's playbook all spell it that way.
+pub use obc_reflex::safing;
 /// The `ReplayExecutor` impl for [`Agent`], moved here from `skill_forge` on
 /// 2026-08-13. It was that module's only reference to this one, and therefore
 /// the whole `agent <-> skill_forge` cycle.

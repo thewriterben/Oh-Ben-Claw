@@ -55,7 +55,7 @@ Reads and reversible memory appends are `safe()`. Physical effects declare a bla
 
 ## Safing rules
 
-`src/agent/safing.rs`. Canonical, debounced rules that turn the mode hooks into reactions. Enabled with `[reflex] safing = true`; merged into the operator's configured rules in `main`.
+`crates/obc-reflex/src/safing.rs`. Canonical, debounced rules that turn the mode hooks into reactions. Enabled with `[reflex] safing = true`; merged into the operator's configured rules in `main`.
 
 | Rule id | Trigger | Action |
 |---|---|---|

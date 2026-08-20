@@ -21,6 +21,18 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
+/// The standard safing rule set — the library of rules this engine was built to
+/// run, and the escalation text `docs/playbooks/safing-escalations.md`
+/// documents.
+///
+/// It spent its life in `obc-agent` because that is where the reflex engine
+/// used to live, and it kept spelling this crate's types through the agent's
+/// `pub use obc_reflex as reflex` alias long after the engine had left. Every
+/// name it imports — [`Action`], [`ActionSink`], [`Cmp`], [`Condition`],
+/// [`ReflexRule`] — is declared here; nothing in it named the agent. Moved
+/// 2026-08-20.
+pub mod safing;
+
 /// Extract a numeric value from a world-memory fact value: a number, a bool
 /// (1.0/0.0), a numeric string, or a sensor-fusion object `{"value": …}`.
 fn fact_to_f64(v: &Value) -> Option<f64> {
