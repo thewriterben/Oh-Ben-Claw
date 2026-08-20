@@ -26,9 +26,16 @@
 //! ## 5. Action Audit (`audit`) — Track 0
 //! Tamper-evident, hash-chained + HMAC'd append-only log of physical-action
 //! decisions; `audit::verify` detects any edit, insertion, deletion, or reorder.
+//!
+//! ## 6. Authorization (`authorize`) — Track 0
+//! The join: [`authorize::track0_authorize`] reads a tool's declared
+//! [`risk::RiskClass`], consults the gate, writes the audit record, and refuses.
+//! It lived in `obc-agent` until 2026-08-19, which left every repository without
+//! the agent holding both halves of this layer and no wire between them.
 
 pub mod audit;
 pub mod audit_sign;
+pub mod authorize;
 pub mod frame_auth;
 pub mod limits;
 pub mod pairing;

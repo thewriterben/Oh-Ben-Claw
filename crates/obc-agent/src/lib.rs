@@ -53,7 +53,7 @@ use obc_approval::ApprovalManager;
 use obc_memory::trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};
 use obc_memory::MemoryStore;
 use obc_providers::{ChatMessage, ChatRole, Provider};
-use obc_safety::audit::{ActionAuditor, Decision};
+use obc_safety::audit::ActionAuditor;
 use obc_safety::limits::SafetyGate;
 use obc_safety::trust::{self, TrustGate, TrustScorer};
 use obc_safety::PolicyEngine;
@@ -1220,56 +1220,16 @@ fn describe_simulation(tool: &Arc<dyn Tool>, args: &Value) -> String {
     }
 }
 
-// ── Track 0: physical-action authorization ──────────────────────────────────────
-
-/// Authorize a single tool call against the Track 0 safety layer.
-///
-/// Non-physical tools pass through untouched (returns `Ok`). For physical tools,
-/// the deterministic [`SafetyGate`] (when configured) is consulted using the
-/// action's `node_id`/`pin`/`value`, and the resulting decision is appended to
-/// the tamper-evident audit log (when configured). Auditing never blocks the
-/// action path. Returns `Err(reason)` only when the gate refuses the action.
-fn track0_authorize(
-    safety: Option<&SafetyGate>,
-    auditor: Option<&Mutex<ActionAuditor>>,
-    tool: &str,
-    risk: RiskClass,
-    args: &Value,
-) -> std::result::Result<(), String> {
-    if !risk.physical {
-        return Ok(());
-    }
-
-    let node_id = args
-        .get("node_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("local");
-    let pin = args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0);
-    let value = args.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
-    let now = now_ms();
-
-    let decision = match safety {
-        Some(gate) => match gate.check(node_id, tool, pin, value, now) {
-            Ok(()) => Decision::Allowed,
-            Err(violation) => Decision::Denied(violation.to_string()),
-        },
-        // No deterministic gate configured: the approval layer governs; we still
-        // audit the action as allowed-through-here.
-        None => Decision::Allowed,
-    };
-
-    if let Some(auditor) = auditor {
-        let mut a = auditor.lock().unwrap_or_else(|e| e.into_inner());
-        if let Err(e) = a.record(now, node_id, tool, args, risk, decision.clone()) {
-            tracing::warn!(error = %e, "Track 0 action audit write failed");
-        }
-    }
-
-    match decision {
-        Decision::Denied(reason) => Err(reason),
-        _ => Ok(()),
-    }
-}
+// ── Track 0: physical-action authorization ────────────────────────────────
+//
+// `track0_authorize` moved to `obc_safety::authorize` on 2026-08-19. It only
+// ever touched SafetyGate, ActionAuditor, Decision and RiskClass -- all four
+// defined there -- so keeping it here meant the one function that reads a
+// tool's declared risk and acts on it was unavailable to anything without the
+// agent, including the public repository that vendors the rest of Track 0.
+//
+// Re-exported below so this crate's callers are unchanged.
+pub use obc_safety::authorize::track0_authorize;
 
 /// Current wall-clock time in milliseconds since the Unix epoch.
 fn now_ms() -> u64 {
@@ -1381,13 +1341,6 @@ mod tests {
     use obc_tool_api::BlastRadius;
     use serde_json::json;
 
-    #[test]
-    fn track0_passes_nonphysical_tools() {
-        // A normal (non-physical) tool is never gated.
-        let r = track0_authorize(None, None, "shell", RiskClass::safe(), &json!({}));
-        assert!(r.is_ok());
-    }
-
     fn autonomy(
         level: obc_approval::AutonomyLevel,
         auto_approve: Vec<String>,
@@ -1469,19 +1422,6 @@ mod tests {
         );
         assert!(denied.is_err());
         assert!(denied.unwrap_err().contains("pin"));
-    }
-
-    #[test]
-    fn track0_without_gate_allows_physical() {
-        // No gate configured ⇒ deterministic layer is permissive (approval governs).
-        let r = track0_authorize(
-            None,
-            None,
-            "gpio_write",
-            RiskClass::physical(false, BlastRadius::High),
-            &json!({"pin": 99, "value": 1}),
-        );
-        assert!(r.is_ok());
     }
 
     #[test]
