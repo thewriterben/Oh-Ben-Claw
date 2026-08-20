@@ -1161,28 +1161,14 @@ impl Agent {
     }
 }
 
-/// Consult the approval policy for a tool call. `Ok(())` to proceed; `Err(reason)`
-/// to refuse — either denied outright by dynamic trust, or (in this autonomous
-/// loop) needing operator approval that hasn't been granted. With no manager
-/// attached, or under Full autonomy, everything is permitted.
-fn approval_authorize(
-    approval: Option<&ApprovalManager>,
-    tool: &str,
-    node_id: &str,
-    risk: RiskClass,
-) -> std::result::Result<(), String> {
-    let Some(approval) = approval else {
-        return Ok(());
-    };
-    match approval.decide(tool, Some(node_id), risk) {
-        obc_approval::Decision::Allow => Ok(()),
-        obc_approval::Decision::Deny => Err("denied by approval policy".to_string()),
-        obc_approval::Decision::NeedsApproval => Err(
-            "requires operator approval (autonomy is supervised/manual and it is not auto-approved or granted)"
-                .to_string(),
-        ),
-    }
-}
+// `approval_authorize` moved to `obc_approval` on 2026-08-20, for the same
+// reason `track0_authorize` moved to `obc_safety` the day before: it only
+// touched ApprovalManager, Decision and RiskClass, and keeping it here left
+// every repository without the agent holding the approval logic and none of
+// the entry point to it.
+//
+// Re-exported so this crate's callers are unchanged.
+pub use obc_approval::approval_authorize;
 
 /// Merge a delegate skill's fixed args with the runtime args (runtime wins).
 fn merge_delegate_args(fixed: Value, runtime: &Value) -> Value {
@@ -1340,55 +1326,6 @@ mod tests {
     use obc_safety::limits::{SafetyGate, SafetyLimit};
     use obc_tool_api::BlastRadius;
     use serde_json::json;
-
-    fn autonomy(
-        level: obc_approval::AutonomyLevel,
-        auto_approve: Vec<String>,
-    ) -> obc_approval::AutonomyConfig {
-        obc_approval::AutonomyConfig {
-            level,
-            auto_approve,
-            always_ask: vec![],
-        }
-    }
-    fn approval_mgr(cfg: &obc_approval::AutonomyConfig) -> ApprovalManager {
-        let path = std::env::temp_dir().join(format!(
-            "obc_agent_grants_{}.json",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        ApprovalManager::with_grants(cfg, obc_approval::ForeverGrants::load(path), false)
-    }
-
-    #[test]
-    fn approval_no_manager_permits_everything() {
-        assert!(approval_authorize(None, "shell", "local", RiskClass::safe()).is_ok());
-    }
-
-    #[test]
-    fn approval_full_autonomy_permits() {
-        let mgr = approval_mgr(&autonomy(obc_approval::AutonomyLevel::Full, vec![]));
-        assert!(approval_authorize(Some(&mgr), "shell", "local", RiskClass::safe()).is_ok());
-    }
-
-    #[test]
-    fn approval_supervised_refuses_ungranted_tool() {
-        let mgr = approval_mgr(&autonomy(obc_approval::AutonomyLevel::Supervised, vec![]));
-        let err = approval_authorize(Some(&mgr), "shell", "local", RiskClass::safe());
-        assert!(err.is_err());
-        assert!(err.unwrap_err().contains("approval"));
-    }
-
-    #[test]
-    fn approval_supervised_permits_auto_approved_tool() {
-        let mgr = approval_mgr(&autonomy(
-            obc_approval::AutonomyLevel::Supervised,
-            vec!["sensor_read".to_string()],
-        ));
-        assert!(approval_authorize(Some(&mgr), "sensor_read", "local", RiskClass::safe()).is_ok());
-    }
 
     #[test]
     fn track0_gate_allows_in_policy_and_denies_out_of_policy() {

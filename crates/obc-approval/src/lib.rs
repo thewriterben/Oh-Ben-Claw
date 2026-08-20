@@ -762,6 +762,51 @@ impl ApprovalManager {
     }
 }
 
+// ── The join: a decision, turned into an outcome ────────────────────────────
+
+/// Consult the approval policy for a tool call. `Ok(())` to proceed;
+/// `Err(reason)` to refuse — either denied outright by dynamic trust, or (in an
+/// autonomous loop) needing operator approval that has not been granted. With
+/// no manager attached, or under `Full` autonomy, everything is permitted.
+///
+/// # Why it lives here
+///
+/// It lived in `obc-agent` until 2026-08-20, which is the same shape of problem
+/// `track0_authorize` had the day before: this crate held [`ApprovalManager`]
+/// and [`Decision`], and the one function that turns a `Decision` into a refusal
+/// a caller can act on lived somewhere that a repository vendoring this crate
+/// does not have. Every call to [`ApprovalManager::decide`] outside the agent
+/// was in this crate's own test module — the logic was present and the entry
+/// point was not.
+///
+/// It touches [`ApprovalManager`], [`Decision`] and `RiskClass`, all three
+/// already here. Moving it added no dependency in either direction.
+///
+/// # What it does not do
+///
+/// It does not prompt. [`ApprovalManager::request_approval`] is the interactive
+/// path; this is the autonomous one, where "needs approval" is a refusal with a
+/// reason rather than a question. That distinction is the reason the string
+/// says *why* rather than just failing.
+pub fn approval_authorize(
+    approval: Option<&ApprovalManager>,
+    tool: &str,
+    node_id: &str,
+    risk: RiskClass,
+) -> Result<(), String> {
+    let Some(approval) = approval else {
+        return Ok(());
+    };
+    match approval.decide(tool, Some(node_id), risk) {
+        Decision::Allow => Ok(()),
+        Decision::Deny => Err("denied by approval policy".to_string()),
+        Decision::NeedsApproval => Err(
+            "requires operator approval (autonomy is supervised/manual and it is not auto-approved or granted)"
+                .to_string(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1293,6 +1338,61 @@ mod tests {
         assert_eq!(c.approved_call, 1);
         assert_eq!(c.approved_session, 1);
         assert_eq!(c.approved_forever, 1);
+    }
+
+    // ── approval_authorize ───────────────────────────────────────────────
+    //
+    // These four moved here from `obc-agent` with the function on 2026-08-20,
+    // plus a fifth that is new. They never needed the agent: a manager, a tool
+    // name and a risk class.
+
+    fn authorize_mgr(level: AutonomyLevel, auto_approve: Vec<String>) -> ApprovalManager {
+        let cfg = AutonomyConfig {
+            level,
+            auto_approve,
+            always_ask: vec![],
+        };
+        manager(&cfg, false)
+    }
+
+    #[test]
+    fn approval_no_manager_permits_everything() {
+        assert!(approval_authorize(None, "shell", "local", RiskClass::safe()).is_ok());
+    }
+
+    #[test]
+    fn approval_full_autonomy_permits() {
+        let mgr = authorize_mgr(AutonomyLevel::Full, vec![]);
+        assert!(approval_authorize(Some(&mgr), "shell", "local", RiskClass::safe()).is_ok());
+    }
+
+    #[test]
+    fn approval_supervised_refuses_ungranted_tool() {
+        let mgr = authorize_mgr(AutonomyLevel::Supervised, vec![]);
+        let err = approval_authorize(Some(&mgr), "shell", "local", RiskClass::safe());
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("approval"));
+    }
+
+    #[test]
+    fn approval_supervised_permits_auto_approved_tool() {
+        let mgr = authorize_mgr(AutonomyLevel::Supervised, vec!["sensor_read".to_string()]);
+        assert!(approval_authorize(Some(&mgr), "sensor_read", "local", RiskClass::safe()).is_ok());
+    }
+
+    /// The refusal says *why*, and that is load-bearing rather than decorative.
+    ///
+    /// An autonomous loop cannot ask, so "needs approval" reaches it as an
+    /// error string. A caller that logs it must be able to tell a policy denial
+    /// from a missing grant — they call for different operator actions — and
+    /// the only carrier is the text.
+    #[test]
+    fn a_refusal_distinguishes_denied_from_merely_ungranted() {
+        let mgr = authorize_mgr(AutonomyLevel::Supervised, vec![]);
+        let ungranted =
+            approval_authorize(Some(&mgr), "shell", "local", RiskClass::safe()).unwrap_err();
+        assert!(ungranted.contains("requires operator approval"));
+        assert!(!ungranted.contains("denied by approval policy"));
     }
 }
 
