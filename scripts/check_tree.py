@@ -43,6 +43,41 @@ The two rules
    in a marker misleads the instrument, and the instrument is what gets
    believed.
 
+4. Every backticked repository path in a *present-tense* document must exist.
+
+   Rules 1-3 check the tree and the markers -- the two places a path is
+   structural. This one checks the other several hundred, where a path is
+   written inline in a sentence, and it is the larger surface by an order of
+   magnitude.
+
+   It was measured on 2026-08-19 and not built, which is a specific kind of
+   mistake worth naming: a count in a conversation is not an instrument, and the
+   things it counted go on rotting. `docs/SUBSYSTEM-SUITES-STATUS.md` and
+   `docs/playbooks/safing-escalations.md` both pointed at `src/agent/safing.rs`
+   -- a path dead since `obc-agent` was extracted on 2026-08-14 -- and were
+   found on 2026-08-20 only because the file moved again and someone grepped.
+
+   `docs/SAFETY-CASE.md` is the sharpest case. Its rows are `| control |
+   evidence | argument |`, and the evidence column is a file path. Seven of its
+   nine safety controls cited a file that has not existed since the security
+   modules became `obc-safety`. The argument each row makes is true; the
+   evidence it offers cannot be opened. That is worse than an ordinary stale
+   link, because a safety case is a document whose entire function is to be
+   checkable by someone who does not trust it.
+
+   *Records are not claims.* A line inside a blockquote, or in a paragraph
+   carrying a date, is reporting what was once true -- README.md's own note that
+   the tree "listed `src/security/limits.rs` ... until 2026-08-02" is a correct
+   sentence containing a dead path, and rewriting it would falsify the record.
+   This is `strip_audit`'s principle in the fourth place it has come up: a
+   measurement that counts the report about a past error as a present claim
+   converges on a lie. Eight of the thirty-one paths this rule first found were
+   records, and skipping them is not leniency -- counting them would be wrong.
+
+   ROADMAP.md and CHANGELOG.md are excluded entirely for the same reason, not
+   as an exception: they are append-only ledgers, dated end to end. 137 of their
+   paths do not resolve and every one of them is correct.
+
 What this cannot check
 ----------------------
 That a comment beside a path is true. `movement/ # Track 0-bounded actuation +
@@ -91,6 +126,116 @@ MARKER_RE = re.compile(r"<!--\s*unwired:\s*(\S+?)\s*-->")
 # document nobody thought to enumerate is the one that rots unnoticed.
 MARKER_GLOB = "**/*.md"
 MARKER_SKIP = ("target/", "node_modules/", "gui/dist/", ".git/")
+
+# ── Rule 4 ───────────────────────────────────────────────────────────────────
+
+# The documents that present the software as *shipped*. Deliberately the same
+# set as `file_reachability.py`'s DOC_NAMES minus the two ledgers, plus the
+# vendored playbooks -- those are copied verbatim into OBC-Prime, where a reader
+# has no way to check a path against a repository they do not have.
+CLAIM_DOCS = (
+    "README.md",
+    "docs/SUBSYSTEM-SUITES-STATUS.md",
+    "docs/SAFETY-CASE.md",
+    "docs/ECOSYSTEM-INTEGRATION.md",
+    "docs/EMBODIED-ARCHITECTURE.md",
+    "docs/architecture/ARCHITECTURE.md",
+    "docs/playbooks/safing-escalations.md",
+    "docs/playbooks/mesh-node-lost.md",
+    "docs/playbooks/vision-analytics.md",
+)
+
+# ROADMAP.md, CHANGELOG.md and docs/ACCELERAPP-CROSS-POLLINATION.md are the
+# ledgers. Named here rather than merely absent so that adding one to
+# CLAIM_DOCS is a decision someone has to reverse on purpose.
+LEDGERS = ("ROADMAP.md", "CHANGELOG.md", "docs/ACCELERAPP-CROSS-POLLINATION.md")
+
+# A backticked token that is a path *somewhere else*. The claim is true and the
+# file is not ours to have, so requiring it to exist would force the document to
+# stop naming it -- which is the opposite of what a comparison document is for.
+#
+# Guarded below: an entry that no longer appears in any claim document is an
+# error, because a suppression nobody can see is how the first stale path got in.
+NOT_OURS = {
+    # OBC-deployment-generator's own source, named by the document that exists
+    # to compare the two repositories side by side.
+    "lib/obc-data.ts",
+    "lib/firmware-generator.ts",
+    "server/routers.ts",
+    # Emitted *by* that generator into firmware it writes. `Cargo.toml`,
+    # `src/main.rs` and `config.rs` are in the same sentence and happen to
+    # resolve here, which is the trap: they would pass for the wrong reason.
+    ".cargo/config.toml",
+    # The generator's backend, and Accelerapp's codegen trees. Named in the
+    # cell *opposite* ours in a three-column comparison table, which is the
+    # clearest signal a path is deliberately somebody else's: the row exists
+    # to say we have `firmware/obc-esp32-s3/` and they have these.
+    "server/",
+    "platforms/",
+    "rtos/",
+}
+
+# What counts as a path rather than a symbol. A backticked token needs a slash
+# (`lib.rs` alone is a filename in a sentence, not a location) and then either a
+# known extension or a trailing slash.
+PATH_EXT = ("rs", "py", "toml", "md", "yml", "yaml", "ino", "json", "ts", "tsx",
+            "sh", "lock", "txt", "csv", "html", "css", "svg")
+CLAIM_RE = re.compile(r"`([^`\n]+)`")
+PATH_RE = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9_./@-]*(?:\.(?:" +
+                     "|".join(PATH_EXT) + r")|/)$")
+
+# A paragraph carrying one of these is reporting, not claiming.
+DATE_RE = re.compile(r"20\d\d-\d\d-\d\d")
+
+
+def record_lines(lines: list[str]) -> set[int]:
+    """1-based line numbers that record rather than claim.
+
+    Two shapes, both conservative. A blockquote is a quotation -- of an older
+    note, an audit, a review -- and a quotation that has been silently corrected
+    is no longer a quotation. A paragraph containing a date is dated by its
+    author, and a dead path in it is usually the point of the sentence.
+    """
+    out: set[int] = set()
+    for n, line in enumerate(lines, 1):
+        if line.lstrip().startswith(">"):
+            out.add(n)
+    start = 1
+    for n, line in enumerate(lines + [""], 1):
+        if not line.strip():
+            if any(DATE_RE.search(x) for x in lines[start - 1:n - 1]):
+                out.update(range(start, n))
+            start = n + 1
+    return out
+
+
+def claim_paths() -> tuple[list[tuple[str, int, str]], int, set[str]]:
+    """(document, line, path) for unresolved paths; record count; NOT_OURS seen."""
+    bad: list[tuple[str, int, str]] = []
+    records = 0
+    seen: set[str] = set()
+    for doc in CLAIM_DOCS:
+        p = ROOT / doc
+        if not p.is_file():
+            bad.append((doc, 0, "<the document itself is missing>"))
+            continue
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        skip = record_lines(lines)
+        for n, line in enumerate(lines, 1):
+            for tok in CLAIM_RE.findall(line):
+                tok = tok.strip()
+                if "/" not in tok or not PATH_RE.match(tok):
+                    continue
+                if tok in NOT_OURS:
+                    seen.add(tok)
+                    continue
+                if (ROOT / tok.rstrip("/")).exists():
+                    continue
+                if n in skip:
+                    records += 1
+                    continue
+                bad.append((doc, n, tok))
+    return bad, records, seen
 
 
 def marker_paths() -> list[tuple[str, int, str]]:
@@ -214,12 +359,36 @@ def main() -> int:
         (doc, n, p) for doc, n, p in markers if not (ROOT / p).exists()
     ]
 
+    stale_claims, records, seen_not_ours = claim_paths()
+
+    # A suppression that no longer suppresses anything. Left in place it grows
+    # into the reason a real stale path is invisible, so it fails here rather
+    # than being quietly tidied.
+    unused = sorted(NOT_OURS - seen_not_ours)
+    for tok in unused:
+        stale_claims.append(
+            ("scripts/check_tree.py", 0,
+             f"<NOT_OURS entry `{tok}` is claimed by no document — remove it>")
+        )
+
+    for led in LEDGERS:
+        if led in CLAIM_DOCS:
+            stale_claims.append(
+                ("scripts/check_tree.py", 0,
+                 f"<`{led}` is a ledger and cannot be a claim document>")
+            )
+
     print(f"{len(paths)} path(s) drawn in README.md's tree (block at line "
           f"{top + 1}), {len(markers)} unwired marker(s)")
+    print(f"{len(CLAIM_DOCS)} present-tense document(s) checked for backticked "
+          f"repository paths\n    ({records} skipped as records: blockquotes "
+          f"and dated paragraphs)")
 
-    if not missing and not incomplete and not stale_markers:
+    if not missing and not incomplete and not stale_markers and not stale_claims:
         print("ok: every path the tree draws exists, `crates/` is listed in "
-              "full, and every\n    unwired marker names a file that is here")
+              "full, every\n    unwired marker names a file that is here, and "
+              "every path a present-tense\n    document offers as evidence can "
+              "be opened")
         return 0
 
     if missing:
@@ -240,10 +409,23 @@ def main() -> int:
               f"the survey will report the\n{'':<2}component as undisclosed "
               f"while the document beside it explains itself.")
 
-    print(f"\n{len(missing) + len(incomplete) + len(stale_markers)} problem(s). "
-          f"A tree that names a directory the repository\ndoes not have is not "
-          f"out of date in a way a reader can see — every line of it\nlooks "
-          f"exactly as correct as the lines that are.")
+    if stale_claims:
+        print("\n── Offered as evidence by a present-tense document, not here ──")
+        for doc, n, p in stale_claims:
+            where = f"{doc}:{n}" if n else doc
+            print(f"  {where:<44}{p}")
+        print(f"{'':<2}These are not broken links. A path in one of these "
+              f"documents is the\n{'':<2}evidence for the sentence around it, "
+              f"and a reader who cannot open it is\n{'':<2}left with the "
+              f"sentence alone — which is the state the document exists to\n"
+              f"{'':<2}improve on. If the claim is about another repository, "
+              f"add the path to\n{'':<2}NOT_OURS with a reason; if the file "
+              f"moved, follow it.")
+
+    print(f"\n{len(missing) + len(incomplete) + len(stale_markers) + len(stale_claims)} "
+          f"problem(s). A tree that names a directory the repository\ndoes not "
+          f"have is not out of date in a way a reader can see — every line of "
+          f"it\nlooks exactly as correct as the lines that are.")
     return 1
 
 

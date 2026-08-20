@@ -23,7 +23,7 @@ The same three concepts are now implemented in three languages:
 
 | Concept | Oh-Ben-Claw (Rust) — canonical | Deployment generator (TS) | Accelerapp (Python) |
 |---|---|---|---|
-| **Hardware registry** | `src/peripherals/registry.rs` (VID/PID, `Connector`, vendor, ~44 boards) | `lib/obc-data.ts` `KNOWN_BOARDS` (no VID/PID, no connectors, ~20 boards) | platform classes + `hardware_devices.yaml` |
+| **Hardware registry** | `crates/obc-planner/src/peripherals/registry.rs` (VID/PID, `Connector`, vendor, ~44 boards) | `lib/obc-data.ts` `KNOWN_BOARDS` (no VID/PID, no connectors, ~20 boards) | platform classes + `hardware_devices.yaml` |
 | **Deployment planner** | `src/deployment/{planner,scheme,inventory}.rs` | `planDeployment` / `generateConfigToml` | — |
 | **Firmware generation** | `firmware/obc-esp32-s3/` | `lib/firmware-generator.ts` | `firmware/`, `platforms/`, `rtos/` codegen |
 
@@ -79,7 +79,7 @@ Either way, **align the schemas now**: drop `"mqtt"` from the TS `transport` uni
 - **Long-term:** extract the canonical firmware as a **template package** consumed by both the generator and Accelerapp (the "codegen pipeline" play from `ACCELERAPP-CROSS-POLLINATION.md` §3) — and route non-ESP32-S3 / multi-platform targets to **Accelerapp's** richer `platforms/` + `rtos/` generators.
 
 ### 4.4 Live-ops bridge: from configurator to fleet console
-OBC already exposes a **gateway REST API** (`src/gateway/mod.rs`): `GET /api/v1/status`, `/metrics`, `/nodes`, `/tools`, `POST /chat`, `/tools/{name}`, `GET|POST|PATCH|DELETE /scheduler/tasks`, `/tunnel`. The generator's empty tRPC backend (`server/routers.ts`) is the natural bridge.
+OBC already exposes a **gateway REST API** (`crates/obc-gateway/src/lib.rs`): `GET /api/v1/status`, `/metrics`, `/nodes`, `/tools`, `POST /chat`, `/tools/{name}`, `GET|POST|PATCH|DELETE /scheduler/tasks`, `/tunnel`. The generator's empty tRPC backend (`server/routers.ts`) is the natural bridge.
 
 Wire the generator's backend to proxy the OBC gateway, turning the mobile/web app into a **remote fleet console** that complements the Tauri desktop GUI:
 
