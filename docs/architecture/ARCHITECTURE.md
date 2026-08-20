@@ -46,7 +46,7 @@ The MQTT spine is the nervous system of the Oh-Ben-Claw system. All communicatio
 | `obc/tools/{node_id}/result/{call_id}` | Node → Brain | Tool call result |
 | `obc/broadcast/command` | Brain → All | Global command to all nodes |
 
-**P2P Mesh (optional)** — the `src/spine/p2p.rs` module implements a broker-free mesh network for edge scenarios where no central MQTT broker is available. Nodes discover peers via mDNS and communicate over direct TCP connections.
+**P2P Mesh (optional)** — the `crates/obc-spine/src/p2p.rs` module implements a broker-free mesh network for edge scenarios where no central MQTT broker is available. Nodes discover peers via mDNS and communicate over direct TCP connections.
 
 ### Layer 3: The Appendages (Peripheral Nodes)
 
@@ -56,18 +56,18 @@ Peripheral nodes are the sensory and motor organs of the system. Each node runs 
 
 | Subsystem | Location | Purpose |
 |---|---|---|
-| Security | `src/security/` | Policy engine, HMAC pairing, encrypted vault |
-| Memory | `src/memory/` | SQLite, bitemporal world model, heartbeat, journal, image, vector |
-| Channels | `src/channels/` | Telegram, Discord, Slack, Feishu, IRC, Signal, Matrix, … |
-| Providers | `src/providers/` | LLM adapters, failover, retry |
-| Tools | `src/tools/` | Shell, file, HTTP, browser, OTA, vision, audio, hardware |
+| Security | `crates/obc-safety/` | Policy engine, HMAC pairing, encrypted vault |
+| Memory | `crates/obc-memory/` | SQLite, bitemporal world model, heartbeat, journal, image, vector |
+| Channels | `crates/obc-channels/` | Telegram, Discord, Slack, Feishu, IRC, Signal, Matrix, … |
+| Providers | `crates/obc-providers/` | LLM adapters, failover, retry |
+| Tools | `crates/obc-tools/` | Shell, file, HTTP, browser, OTA, vision, audio, hardware |
 | Deployment | `src/deployment/` | Hardware inventory, planner, swarm (Phase 13) |
-| MCP | `src/mcp/` | Model Context Protocol client + server |
-| Skill Forge | `src/skill_forge/` | Community skill registry (ClawHub) |
-| Vision | `src/vision/` | Camera → LLM vision → action pipeline |
-| Audio | `src/audio/` | Microphone → STT → agent → TTS pipeline |
-| A2A | `src/a2a/` | Agent-to-Agent protocol (Google A2A) for inter-agent interoperability |
-| Streaming | `src/agent/streaming.rs` | Streaming tool call accumulation and response building |
+| MCP | `crates/obc-mcp/` | Model Context Protocol client + server |
+| Skill Forge | `crates/obc-skill-forge/` | Community skill registry (ClawHub) |
+| Vision | `crates/obc-vision/` | Camera → LLM vision → action pipeline |
+| Audio | `crates/obc-audio/` | Microphone → STT → agent → TTS pipeline |
+| A2A | `crates/obc-a2a/` | Agent-to-Agent protocol (Google A2A) for inter-agent interoperability |
+| Streaming | `crates/obc-agent/src/streaming.rs` | Streaming tool call accumulation and response building |
 
 ---
 
@@ -154,7 +154,7 @@ Pairing secrets must be at least 16 characters. The `NodePairingManager::validat
 
 ### Tool Policy Engine
 
-The policy engine (`src/security/policy.rs`) evaluates every tool call against a list of rules:
+The policy engine (`crates/obc-safety/src/policy.rs`) evaluates every tool call against a list of rules:
 
 - Rules match tool names using glob patterns (e.g., `shell*`, `gpio_write`).
 - Rules can inspect argument values with `arg_contains` filters.
@@ -163,7 +163,7 @@ The policy engine (`src/security/policy.rs`) evaluates every tool call against a
 
 ### Secrets Vault
 
-The encrypted secrets vault (`src/security/vault.rs`) stores API keys and other credentials:
+The encrypted secrets vault (`crates/obc-safety/src/vault.rs`) stores API keys and other credentials:
 
 - Encryption: AES-256-GCM with a 96-bit nonce.
 - Key derivation: Argon2id with a random 16-byte salt.

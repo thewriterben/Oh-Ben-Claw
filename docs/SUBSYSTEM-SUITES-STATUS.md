@@ -41,7 +41,7 @@ Reads and reversible memory appends are `safe()`. Physical effects declare a bla
 
 ## Reflex engine (System 1)
 
-`src/agent/reflex.rs`. A rule is *when `Condition` holds, do `Action`*, subject to debounce/rate and an escalation budget. `tick()` snapshots the referenced world-memory entities and evaluates.
+`crates/obc-reflex/src/lib.rs`. A rule is *when `Condition` holds, do `Action`*, subject to debounce/rate and an escalation budget. `tick()` snapshots the referenced world-memory entities and evaluates.
 
 **Conditions**
 - `Sensor { entity, op, value }` — numeric compare (reads a number, bool, numeric string, or the `value` field of an object fact).

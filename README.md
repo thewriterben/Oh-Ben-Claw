@@ -367,7 +367,7 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 
 ### Accessories
 
-Sensors and I/O over I2C / SPI / 1-Wire / GPIO — including BME280, BMP388, AHT20, MPU6050, LSM6DS3, SHT31, ADS1115, MCP4725, INA260, PCF8574, MCP23017, MAX31855, DS18B20, SSD1306, DHT22/DHT11 — plus **embodied actuation & power** accessories added for the control stack: **SG90** servo, **TB6612FNG** / **PCA9685** motor & PWM drivers, **INMP441** mic, **MAX98357A** amp, **MAX17048** fuel gauge, and **SIM7600** cellular. The full machine-readable list is the registry single-source-of-truth (`src/peripherals/registry.rs` → `registry.json`).
+Sensors and I/O over I2C / SPI / 1-Wire / GPIO — including BME280, BMP388, AHT20, MPU6050, LSM6DS3, SHT31, ADS1115, MCP4725, INA260, PCF8574, MCP23017, MAX31855, DS18B20, SSD1306, DHT22/DHT11 — plus **embodied actuation & power** accessories added for the control stack: **SG90** servo, **TB6612FNG** / **PCA9685** motor & PWM drivers, **INMP441** mic, **MAX98357A** amp, **MAX17048** fuel gauge, and **SIM7600** cellular. The full machine-readable list is the registry single-source-of-truth (`crates/obc-planner/src/peripherals/registry.rs` → `registry.json`).
 
 ---
 

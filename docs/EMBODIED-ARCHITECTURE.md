@@ -93,7 +93,7 @@ Localization is also now *uncertainty-aware*: a particle filter (`src/navigation
 
 ## ClawCam — a bidirectional embodied subsystem
 
-ClawCam (the vision subsystem, reached over the MCP stdio/HTTP bridge) is wired as a full **perceive → remember → react → act** participant, not just a detection feed. One shared `clawcam_client` carries both directions (`src/vision/`):
+ClawCam (the vision subsystem, reached over the MCP stdio/HTTP bridge) is wired as a full **perceive → remember → react → act** participant, not just a detection feed. One shared `clawcam_client` carries both directions (`crates/obc-vision/`):
 
 **Read (perceive → remember):**
 - *Detections* fold into `vision.subject.{species}` facts (`clawcam_ingest`), and a rolling `vision.count.{subject}` counter is maintained so foresight can trend the **detection rate**.
