@@ -171,6 +171,21 @@ impl SafetyGate {
             .find(|l| l.node_id == node_id && l.tool == tool)
     }
 
+    /// Whether any limit rule covers this node+tool.
+    ///
+    /// [`SafetyGate::check`] returns `Ok(())` in two situations that are not
+    /// the same fact: a rule matched and the action passed it, or no rule
+    /// matched and nothing bounded the action at all. Collapsing them is
+    /// harmless for the *decision* — both allow — and not harmless for the
+    /// *record*, which is what a safety case is made of. `docs/SAFETY-CASE.md`
+    /// §3.3 promises an evidence trail; until 2026-08-21 that trail could not
+    /// distinguish "checked and fine" from "never checked".
+    ///
+    /// Callers that only need to allow or refuse should keep using `check`.
+    pub fn covers(&self, node_id: &str, tool: &str) -> bool {
+        self.rule_for(node_id, tool).is_some()
+    }
+
     /// Check a physical action against the configured limits.
     ///
     /// Returns `Ok(())` if allowed (and records the fire time for rate

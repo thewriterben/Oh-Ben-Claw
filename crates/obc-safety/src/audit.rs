@@ -39,8 +39,17 @@ pub const GENESIS: &str = "GENESIS";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "reason")]
 pub enum Decision {
-    /// Action was permitted and executed.
+    /// Action was permitted: a limit rule covered it and it passed.
     Allowed,
+    /// Action was permitted because nothing bounded it — no limit rule covers
+    /// this node+tool, or no [`SafetyGate`](crate::limits::SafetyGate) is
+    /// configured at all. Carries which of the two.
+    ///
+    /// Added 2026-08-21. Both of these used to record as [`Decision::Allowed`],
+    /// which made an unbounded action indistinguishable from a checked one in
+    /// the one artifact whose purpose is to tell them apart. The decision is
+    /// unchanged — this is still an allow — and only the record is now honest.
+    AllowedUncovered(String),
     /// Action was refused (carries the reason, e.g. a safety violation).
     Denied(String),
     /// Action requires operator approval before it can run.
