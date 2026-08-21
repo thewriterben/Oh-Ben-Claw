@@ -185,7 +185,9 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 
 **Audio Pipeline** connects microphones to speech-to-text (OpenAI Whisper or local `whisper.cpp`) and synthesizes spoken replies via TTS.
 
-**Sensor Fusion** combines readings from multiple sensors into a unified structure (averaging, median, min/max, weighted, and a simple Kalman filter).
+**Pose Fusion** combines several noisy pose estimates — wheel odometry, GNSS, an IMU or visual estimate — into one best pose: a weighted average of position and a **circular** weighted mean of heading, so 350° and 10° fuse to 0° rather than 180°. It writes the fused pose to the `sensor.pos_x/pos_y/heading` world-memory entities the navigation localizer already reads, so it drops in front of navigation with no changes to it.
+
+> Corrected 2026-08-21. This paragraph described "Sensor Fusion ... averaging, median, min/max, weighted, and a simple Kalman filter". There is no such module and there is no Kalman filter in the tree: `crates/obc-navigation/src/pose_fusion.rs` fuses *poses*, and its own header says it "is not full SLAM ... it is the sensor-fusion layer that a SLAM front-end would feed". A partial correction on 2026-08-19 renamed the claim in one place and left this paragraph and the ZeroClaw comparison row untouched.
 
 **Browser Automation** drives Chrome via the DevTools Protocol with seven tools (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_scroll`, `browser_new_tab`, `browser_close_tab`); falls back to plain HTTP fetch when no CDP endpoint is reachable.
 
