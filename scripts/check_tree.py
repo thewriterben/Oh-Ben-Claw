@@ -187,6 +187,57 @@ PATH_RE = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9_./@-]*(?:\.(?:" +
 # A paragraph carrying one of these is reporting, not claiming.
 DATE_RE = re.compile(r"20\d\d-\d\d-\d\d")
 
+# ── Rule 5 ───────────────────────────────────────────────────────────────────
+
+# `docs/SAFETY-CASE.md`'s §3 table is `| # | Mechanism | Where | Guarantee |`,
+# and on 2026-08-21 the Guarantee column started naming the test that fails when
+# each control stops holding. That is the difference between a safety case and a
+# list of assertions: a reader who does not trust the author can run the name.
+#
+# The names rot the way paths rot, and more quietly — a renamed test still
+# passes, so nothing goes red, and the citation silently becomes decoration. So
+# every test this document cites must exist.
+#
+# Only the §3 rows, and only tokens with three or more underscores. Test names
+# in this repository are sentences (`a_tool_that_understates_its_risk_is_never_
+# gated`); three underscores is enough to exclude `risk_class`, `allowed_pins`
+# and `value_min`, which are fields, without a list of exceptions to maintain.
+SAFETY_CASE = "docs/SAFETY-CASE.md"
+CONTROL_ROW_RE = re.compile(r"^\|\s*3\.\d+\s*\|")
+TEST_TOKEN_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+){3,}$")
+FN_RE = re.compile(r"\bfn\s+(\w+)")
+RS_GLOB = "**/*.rs"
+RS_SKIP = ("target/", "node_modules/")
+
+
+def cited_tests() -> tuple[list[tuple[int, str]], int]:
+    """(line, name) for every test SAFETY-CASE's §3 table cites but does not have."""
+    doc = ROOT / SAFETY_CASE
+    if not doc.is_file():
+        return [(0, f"<{SAFETY_CASE} is missing>")], 0
+
+    defined: set[str] = set()
+    for rs in ROOT.glob(RS_GLOB):
+        rel = rs.relative_to(ROOT).as_posix()
+        if any(rel.startswith(s) or f"/{s}" in f"/{rel}" for s in RS_SKIP):
+            continue
+        defined.update(FN_RE.findall(rs.read_text(encoding="utf-8", errors="replace")))
+
+    missing, cited = [], 0
+    for n, line in enumerate(doc.read_text(encoding="utf-8", errors="replace")
+                             .splitlines(), 1):
+        if not CONTROL_ROW_RE.match(line):
+            continue
+        for tok in CLAIM_RE.findall(line):
+            tok = tok.strip()
+            if not TEST_TOKEN_RE.match(tok):
+                continue
+            cited += 1
+            if tok not in defined:
+                missing.append((n, tok))
+    return missing, cited
+
+
 
 def record_lines(lines: list[str]) -> set[int]:
     """1-based line numbers that record rather than claim.
@@ -360,6 +411,7 @@ def main() -> int:
     ]
 
     stale_claims, records, seen_not_ours = claim_paths()
+    uncited, cited_count = cited_tests()
 
     # A suppression that no longer suppresses anything. Left in place it grows
     # into the reason a real stale path is invisible, so it fails here rather
@@ -383,12 +435,15 @@ def main() -> int:
     print(f"{len(CLAIM_DOCS)} present-tense document(s) checked for backticked "
           f"repository paths\n    ({records} skipped as records: blockquotes "
           f"and dated paragraphs)")
+    print(f"{cited_count} test(s) cited by {SAFETY_CASE}'s safety controls")
 
-    if not missing and not incomplete and not stale_markers and not stale_claims:
+    if (not missing and not incomplete and not stale_markers
+            and not stale_claims and not uncited):
         print("ok: every path the tree draws exists, `crates/` is listed in "
-              "full, every\n    unwired marker names a file that is here, and "
-              "every path a present-tense\n    document offers as evidence can "
-              "be opened")
+              "full, every\n    unwired marker names a file that is here, every "
+              "path a present-tense\n    document offers as evidence can be "
+              "opened, and every test the safety\n    case cites is one you can "
+              "run")
         return 0
 
     if missing:
@@ -422,7 +477,16 @@ def main() -> int:
               f"add the path to\n{'':<2}NOT_OURS with a reason; if the file "
               f"moved, follow it.")
 
-    print(f"\n{len(missing) + len(incomplete) + len(stale_markers) + len(stale_claims)} "
+    if uncited:
+        print(f"\n── Cited as evidence by a safety control, and not a test ──")
+        for n, name in uncited:
+            print(f"  {SAFETY_CASE}:{n}  {name}")
+        print(f"{'':<2}A safety case exists to be checkable by someone who does "
+              f"not trust it.\n{'':<2}A control that cites a test nobody can run "
+              f"is back to being an assertion,\n{'':<2}and it fails quietly: a "
+              f"renamed test still passes, so nothing goes red.")
+
+    print(f"\n{len(missing) + len(incomplete) + len(stale_markers) + len(stale_claims) + len(uncited)} "
           f"problem(s). A tree that names a directory the repository\ndoes not "
           f"have is not out of date in a way a reader can see — every line of "
           f"it\nlooks exactly as correct as the lines that are.")
