@@ -25,15 +25,26 @@ The test is organised in three phases so you can stop at any milestone:
 |------|-----|-------|
 | ESP32-S3 board — XIAO ESP32-S3 (default fw pin map) or Waveshare Touch LCD 2.1 (build `--features board-waveshare-21`) | 1 | The compute node. Examples below use the **default/XIAO map**; Waveshare deltas: outputs 43/44, DHT22=IO0, I2C 15/7 (see BRINGUP.md §2). |
 | USB-C cable (data) | 1 | For flashing + serial. |
-| I2C sensors (optional but recommended) | — | MAX17048 fuel gauge (@0x36), MPU6050 IMU (@0x68), BME280 (@0x76/0x77). Default: SDA=GPIO4, SCL=GPIO5 · Waveshare: SDA=15, SCL=7. |
+| I2C sensors (optional but recommended) | — | MAX17048 fuel gauge (@0x36), MPU6050 IMU (@0x68), BME280 (@0x76/0x77). Default: SDA=GPIO5 (silk D4), SCL=GPIO6 (silk D5) · Waveshare: SDA=15, SCL=7. |
 | I2S MEMS mic (INMP441 / SPH0645) | 1 opt | SCK=GPIO0, WS=GPIO1, SD=GPIO2 (default build only; n/a on Waveshare). |
-| OV2640 camera (FPC) | 1 opt | Only for the camera test; needs PSRAM on the board (n/a on Waveshare — no connector). |
-| LED + resistor (or a scope/meter) | 1 | On an allow-listed output pin — default build: **21, 3, 6, 7, 8** (21 = XIAO onboard LED, active-LOW) · Waveshare build: **43, 44**. |
+| OV2640 camera (FPC) | 1 opt | Only for the camera test; needs PSRAM on the board. **Disputed:** this row has said "n/a on Waveshare — no connector" since 2026-07-30, while `firmware/obc-esp32-s3/src/camera.rs` says its pin map *is* the Waveshare's, "OV2640 via the FPC connector". One of them is wrong and nobody has looked at the board. Settle it before trusting either. |
+| LED + resistor (or a scope/meter) | 1 | On an allow-listed output pin — default build: **21, 3, 7, 8** (21 = XIAO onboard LED, active-LOW) · Waveshare build: **43, 44**. |
 | LoRa boards (Heltec WiFi LoRa 32 V3, T-Beam, or RAK4631), **915 MHz (US)** | 2 | Phase B/C. Buy the 915 MHz variant; attach antennas before powering. |
 | Linux/Mac host or Windows PC | 1 | Runs the OBC brain in Phase C. |
 
 > ⚠️ **Never power a LoRa board without its antenna attached** — transmitting with no
 > antenna can destroy the RF amplifier.
+
+> **Changed 2026-08-21.** GPIO 6 left the default allow-list and the I2C bus moved
+> from 4/5 to 5/6. GPIO 6 is silk D5, the pad Seeed marks SCL: it was both a Track 0
+> output and — once the bus moved onto the labelled pads — half the sensor bus. If you
+> have an older printout, the two rows above are the ones that changed.
+>
+> The dates live here rather than in the table rows on purpose.
+> `scripts/check_bench_constants.py` treats a dated line as a historical record and
+> skips it, so putting "changed on <date>" beside a live pin list would switch the
+> check off for exactly the line that most needs it. That happened once, within an
+> hour of the script being written.
 
 ---
 
@@ -95,7 +106,7 @@ Watch the boot log. You should see:
 Oh-Ben-Claw ESP32-S3 firmware v0.1.0 ready
 Node ID: obc-esp32-s3-001
 on-MCU safing rules loaded (6 built-in)
-I2C sensor bus ready (SDA=4, SCL=5)      # only if sensors wired (Waveshare build: SDA=15, SCL=7)
+I2C sensor bus ready (SDA=5, SCL=6)      # only if sensors wired (Waveshare build: SDA=15, SCL=7)
 I2S mic ready (SCK=0, WS=1, SD=2)        # only if mic wired
 ```
 

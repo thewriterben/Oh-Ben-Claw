@@ -442,6 +442,26 @@ jobs:
         run: python3 scripts/check_node_selfreport.py --selftest
       - name: the node describes the build it is
         run: python3 scripts/check_node_selfreport.py
+      # A bench document is read by someone standing in front of hardware, where
+      # a wrong instruction and a broken board look identical. That makes stale
+      # bench prose more expensive than stale prose anywhere else: the reader
+      # cannot tell which of the two is lying, and the plausible conclusion is
+      # usually the wrong one.
+      #
+      # On 2026-08-21 GPIO 6 left the Track 0 allow-list and the I2C bus moved
+      # from 4/5 to 5/6. `docs/HARDWARE-TEST-WALKTHROUGH.md`, current as of
+      # 2026-07-30, was still telling an operator to wire an LED to pin 6 — a
+      # pin the node now refuses — and to expect a boot banner reading
+      # `SDA=4, SCL=5` that the node would never print.
+      #
+      # The firmware side is read from `board.rs` and `main.rs`, so the gate
+      # cannot drift from the constants it is checking against. It does not
+      # check that those constants are right for the board: prose and firmware
+      # can agree and both be wrong, which is what the hardware run is for.
+      - name: the numbers in bench prose are the numbers in the firmware
+        run: python3 scripts/check_bench_constants.py --selftest
+      - name: bench documents match the firmware they describe
+        run: python3 scripts/check_bench_constants.py
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run security audit
