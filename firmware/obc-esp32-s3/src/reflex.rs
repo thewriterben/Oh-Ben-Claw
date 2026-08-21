@@ -57,11 +57,11 @@ impl Condition {
     pub fn eval(&self, snapshot: &HashMap<String, f64>) -> bool {
         match self {
             Condition::Sensor { entity, op, value } => {
-                snapshot.get(entity).map_or(false, |v| op.test(*v, *value))
+                snapshot.get(entity).is_some_and(|v| op.test(*v, *value))
             }
             Condition::GpioEq { entity, value } => snapshot
                 .get(entity)
-                .map_or(false, |v| Cmp::Eq.test(*v, *value as f64)),
+                .is_some_and(|v| Cmp::Eq.test(*v, *value as f64)),
             Condition::And { all } => all.iter().all(|c| c.eval(snapshot)),
             Condition::Or { any } => any.iter().any(|c| c.eval(snapshot)),
         }
@@ -203,17 +203,35 @@ mod tests {
     fn scratch_eval_ignores_debounce_history() {
         let mut eng = ReflexEngine::new(vec![rule(
             "batt-crit",
-            Condition::Sensor { entity: "sensor.battery_soc".into(), op: Cmp::Le, value: 10.0 },
-            Action::Escalate { reason: "critical".into() },
+            Condition::Sensor {
+                entity: "sensor.battery_soc".into(),
+                op: Cmp::Le,
+                value: 10.0,
+            },
+            Action::Escalate {
+                reason: "critical".into(),
+            },
             5_000,
         )]);
         // Stateful path: fires once, then is debounced on an immediate re-tick.
-        assert_eq!(eng.evaluate(&snap(&[("sensor.battery_soc", 6.0)]), 1_000).len(), 1);
-        assert!(eng.evaluate(&snap(&[("sensor.battery_soc", 6.0)]), 1_100).is_empty());
+        assert_eq!(
+            eng.evaluate(&snap(&[("sensor.battery_soc", 6.0)]), 1_000)
+                .len(),
+            1
+        );
+        assert!(eng
+            .evaluate(&snap(&[("sensor.battery_soc", 6.0)]), 1_100)
+            .is_empty());
         // Scratch path ignores that history and still reports the live match…
-        assert_eq!(eng.evaluate_scratch(&snap(&[("sensor.battery_soc", 6.0)])).len(), 1);
+        assert_eq!(
+            eng.evaluate_scratch(&snap(&[("sensor.battery_soc", 6.0)]))
+                .len(),
+            1
+        );
         // …and a healthy reading fires nothing.
-        assert!(eng.evaluate_scratch(&snap(&[("sensor.battery_soc", 85.0)])).is_empty());
+        assert!(eng
+            .evaluate_scratch(&snap(&[("sensor.battery_soc", 85.0)]))
+            .is_empty());
     }
 
     fn snap(pairs: &[(&str, f64)]) -> HashMap<String, f64> {
@@ -221,12 +239,22 @@ mod tests {
     }
 
     fn rule(id: &str, when: Condition, then: Action, debounce_ms: u64) -> ReflexRule {
-        ReflexRule { id: id.to_string(), when, then, debounce_ms, max_rate_hz: None }
+        ReflexRule {
+            id: id.to_string(),
+            when,
+            then,
+            debounce_ms,
+            max_rate_hz: None,
+        }
     }
 
     #[test]
     fn sensor_threshold_fires_and_missing_entity_is_false() {
-        let cond = Condition::Sensor { entity: "sensor.temp".into(), op: Cmp::Gt, value: 28.0 };
+        let cond = Condition::Sensor {
+            entity: "sensor.temp".into(),
+            op: Cmp::Gt,
+            value: 28.0,
+        };
         assert!(cond.eval(&snap(&[("sensor.temp", 30.0)])));
         assert!(!cond.eval(&snap(&[("sensor.temp", 20.0)])));
         assert!(!cond.eval(&snap(&[]))); // missing entity → false
@@ -236,11 +264,22 @@ mod tests {
     fn and_or_compose() {
         let c = Condition::And {
             all: vec![
-                Condition::Sensor { entity: "a".into(), op: Cmp::Ge, value: 1.0 },
+                Condition::Sensor {
+                    entity: "a".into(),
+                    op: Cmp::Ge,
+                    value: 1.0,
+                },
                 Condition::Or {
                     any: vec![
-                        Condition::Sensor { entity: "b".into(), op: Cmp::Lt, value: 0.0 },
-                        Condition::GpioEq { entity: "c".into(), value: 1 },
+                        Condition::Sensor {
+                            entity: "b".into(),
+                            op: Cmp::Lt,
+                            value: 0.0,
+                        },
+                        Condition::GpioEq {
+                            entity: "c".into(),
+                            value: 1,
+                        },
                     ],
                 },
             ],
@@ -253,8 +292,14 @@ mod tests {
     fn debounce_blocks_rapid_refire() {
         let mut eng = ReflexEngine::new(vec![rule(
             "r1",
-            Condition::Sensor { entity: "sensor.temp".into(), op: Cmp::Gt, value: 28.0 },
-            Action::Escalate { reason: "hot".into() },
+            Condition::Sensor {
+                entity: "sensor.temp".into(),
+                op: Cmp::Gt,
+                value: 28.0,
+            },
+            Action::Escalate {
+                reason: "hot".into(),
+            },
             500,
         )]);
         let s = snap(&[("sensor.temp", 30.0)]);
@@ -266,11 +311,17 @@ mod tests {
     #[test]
     fn gpio_write_action_round_trips_host_json() {
         // Host emits {"type":"gpio_write","node_id":"n","pin":2,"value":1}.
-        let a: Action = serde_json::from_str(
-            r#"{"type":"gpio_write","node_id":"node-1","pin":2,"value":1}"#,
-        )
-        .unwrap();
-        assert_eq!(a, Action::GpioWrite { node_id: "node-1".into(), pin: 2, value: 1 });
+        let a: Action =
+            serde_json::from_str(r#"{"type":"gpio_write","node_id":"node-1","pin":2,"value":1}"#)
+                .unwrap();
+        assert_eq!(
+            a,
+            Action::GpioWrite {
+                node_id: "node-1".into(),
+                pin: 2,
+                value: 1
+            }
+        );
     }
 
     #[test]
@@ -292,6 +343,13 @@ mod tests {
         let fired = eng.evaluate(&snap(&[("sensor.temp", 75.0)]), 0);
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].rule_id, "overheat");
-        assert!(matches!(fired[0].action, Action::GpioWrite { pin: 7, value: 1, .. }));
+        assert!(matches!(
+            fired[0].action,
+            Action::GpioWrite {
+                pin: 7,
+                value: 1,
+                ..
+            }
+        ));
     }
 }

@@ -55,9 +55,16 @@ pub enum SafetyViolation {
     /// The pin is not in the policy's allow-list.
     PinNotAllowed { pin: i64 },
     /// The value is outside the permitted range.
-    ValueOutOfRange { value: i64, min: Option<i64>, max: Option<i64> },
+    ValueOutOfRange {
+        value: i64,
+        min: Option<i64>,
+        max: Option<i64>,
+    },
     /// The write fired again before the minimum interval elapsed.
-    RateLimited { min_interval_ms: u64, since_last_ms: u64 },
+    RateLimited {
+        min_interval_ms: u64,
+        since_last_ms: u64,
+    },
 }
 
 impl std::fmt::Display for SafetyViolation {
@@ -67,10 +74,19 @@ impl std::fmt::Display for SafetyViolation {
                 write!(f, "safety: pin {pin} not in allow-list")
             }
             SafetyViolation::ValueOutOfRange { value, min, max } => {
-                write!(f, "safety: value {value} out of range (min={min:?}, max={max:?})")
+                write!(
+                    f,
+                    "safety: value {value} out of range (min={min:?}, max={max:?})"
+                )
             }
-            SafetyViolation::RateLimited { min_interval_ms, since_last_ms } => {
-                write!(f, "safety: rate limit ({since_last_ms}ms since last, min {min_interval_ms}ms)")
+            SafetyViolation::RateLimited {
+                min_interval_ms,
+                since_last_ms,
+            } => {
+                write!(
+                    f,
+                    "safety: rate limit ({since_last_ms}ms since last, min {min_interval_ms}ms)"
+                )
             }
         }
     }
@@ -113,9 +129,10 @@ impl SafetyGate {
     /// clean. A push that contains no `gpio_write` limit leaves the policy intact
     /// (a node never silently loses its actuator gate).
     pub fn apply_pushed(&mut self, limits: Vec<SafetyLimit>, node_id: &str) -> bool {
-        if let Some(limit) = limits.into_iter().find(|l| {
-            l.tool == "gpio_write" && (l.node_id.is_empty() || l.node_id == node_id)
-        }) {
+        if let Some(limit) = limits
+            .into_iter()
+            .find(|l| l.tool == "gpio_write" && (l.node_id.is_empty() || l.node_id == node_id))
+        {
             self.policy = limit;
             self.last_fire.clear();
             true
