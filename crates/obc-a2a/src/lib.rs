@@ -352,80 +352,18 @@ impl A2AMessage {
     }
 }
 
-// ── A2A Client (JSONRPC binding) ──────────────────────────────────────────────
-
-/// Client for the JSON-RPC binding of A2A v1.0.
-pub struct A2AClient {
-    base_url: String,
-    client: reqwest::Client,
-    next_id: u64,
-}
-
-impl A2AClient {
-    /// Create a new A2A client pointing at the given agent URL.
-    pub fn new(base_url: String) -> Self {
-        Self {
-            base_url,
-            client: reqwest::Client::new(),
-            next_id: 1,
-        }
-    }
-
-    /// Discover the remote agent's capabilities via
-    /// `/.well-known/agent-card.json`.
-    pub async fn discover(&self) -> Result<AgentCard> {
-        let url = format!(
-            "{}{}",
-            self.base_url.trim_end_matches('/'),
-            WELL_KNOWN_AGENT_CARD_PATH
-        );
-        let card: AgentCard = self.client.get(&url).send().await?.json().await?;
-        Ok(card)
-    }
-
-    /// Send a message (`SendMessage`); blocking by default per spec.
-    pub async fn send_message(&mut self, message: Message) -> Result<SendMessageResult> {
-        let result = self
-            .rpc("SendMessage", json!({ "message": message }))
-            .await?;
-        Ok(serde_json::from_value(result)?)
-    }
-
-    /// Fetch a task by id (`GetTask`).
-    pub async fn get_task(&mut self, task_id: &str) -> Result<Task> {
-        let result = self.rpc("GetTask", json!({ "id": task_id })).await?;
-        Ok(serde_json::from_value(result)?)
-    }
-
-    /// Request cancellation of a task (`CancelTask`); returns the updated task.
-    pub async fn cancel_task(&mut self, task_id: &str) -> Result<Task> {
-        let result = self.rpc("CancelTask", json!({ "id": task_id })).await?;
-        Ok(serde_json::from_value(result)?)
-    }
-
-    async fn rpc(&mut self, method: &str, params: Value) -> Result<Value> {
-        let id = self.next_id;
-        self.next_id += 1;
-        let req = A2AMessage::new(method, Some(params), Some(json!(id)));
-        let resp: Value = self
-            .client
-            .post(&self.base_url)
-            .header("A2A-Version", A2A_PROTOCOL_VERSION)
-            .json(&req)
-            .send()
-            .await?
-            .json()
-            .await?;
-        if let Some(err) = resp.get("error") {
-            anyhow::bail!(
-                "A2A error {}: {}",
-                err["code"].as_i64().unwrap_or(0),
-                err["message"].as_str().unwrap_or("unknown")
-            );
-        }
-        Ok(resp.get("result").cloned().unwrap_or(Value::Null))
-    }
-}
+// `A2AClient` -- the JSON-RPC client half of A2A v1.0 -- lived here until
+// 2026-08-21. `new`, `discover`, `send_message`, `get_task` and `cancel_task`
+// were complete, public, and constructed nowhere in the workspace.
+//
+// `scripts/file_reachability.py` reported it as "constructed nowhere and
+// claimed as shipped" on every run since ARCHITECTURE.md entered its claim set,
+// and README.md said so in a blockquote as well. Two instruments and a document
+// agreeing, for days, with nothing acting on it.
+//
+// The server half above is live and wired in `src/main.rs`: this repository can
+// be *called* by another agent, and never called one. That asymmetry is now
+// what the comparison table says.
 
 // ── A2A Server (JSONRPC binding) ──────────────────────────────────────────────
 

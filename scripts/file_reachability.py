@@ -98,6 +98,63 @@ def workspace_files() -> list[Path]:
         out += sorted(CRATES.glob("*/src/**/*.rs"))
     return out
 
+
+MOD_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;", re.M)
+
+
+def orphan_files() -> list[tuple[str, int, int]]:
+    """(path, lines, tests) for files on disk that no crate ever compiles.
+
+    This survey walks the *filesystem*, which is the right scope for asking
+    whether a component is wired — and the wrong one for noticing that a file
+    is not part of any crate at all. Rust reaches a module only through a `mod`
+    declaration; a `.rs` file nobody declares is inert in a stronger sense than
+    anything else this script reports. It is not dead code, because it is not
+    code: rustc never sees it, `cargo test` never runs its tests, and
+    `cargo clippy -- -D warnings` never lints it.
+
+    Found on 2026-08-21, with exactly one instance in 192 files:
+    `crates/obc-providers/src/streaming.rs`, 313 lines and six tests that had
+    never run. This script had been listing it among "files with some
+    unreferenced public items", which is a true sentence and a misleading one —
+    it reads as *compiled code nobody calls*, and every reader would take it
+    that way. The distinction between "checked and unused" and "never checked"
+    is the same distinction `Decision::AllowedUncovered` was added for the day
+    before, one layer up.
+
+    Only `crates/*/src`. The root crate has `src/bin/*` and other targets Cargo
+    discovers without a `mod`, so the same rule there would report five false
+    positives, and a check with false positives is one people learn to skip.
+    """
+    out: list[tuple[str, int, int]] = []
+    if not CRATES.is_dir():
+        return out
+    for cargo in sorted(CRATES.glob("*/Cargo.toml")):
+        src = cargo.parent / "src"
+        roots = [src / n for n in ("lib.rs", "main.rs") if (src / n).exists()]
+        if not roots:
+            continue
+        live, stack = set(roots), list(roots)
+        while stack:
+            cur = stack.pop()
+            text = read(cur)
+            base = (cur.parent if cur.name in ("lib.rs", "main.rs", "mod.rs")
+                    else cur.with_suffix(""))
+            for name in MOD_RE.findall(text):
+                for cand in (base / f"{name}.rs", base / name / "mod.rs"):
+                    if cand.exists() and cand not in live:
+                        live.add(cand)
+                        stack.append(cand)
+        for f in sorted(set(src.rglob("*.rs")) - live):
+            text = read(f)
+            out.append((
+                f.relative_to(ROOT).as_posix(),
+                len(text.splitlines()),
+                len(re.findall(r"#\[(?:tokio::)?test\]", text)),
+            ))
+    return out
+
+
 # The section rules below are drawn with box characters, and a Windows console
 # defaults to cp1252, which cannot encode them. Printing one raised
 # UnicodeEncodeError and killed the run *after* the survey had done its work
@@ -574,9 +631,16 @@ ITEM_ALIASES = {
     # recording the state when `skill_forge/registry.rs` existed, and I read
     # that record as a description of the tree. The guard caught it, which is
     # the second time today an instrument was right about me.
-    "A2AClient": ("A2A protocol",),
-    "StreamingToolCallAccumulator": ("Streaming tool calls",),
-    "StreamingResponseBuilder": ("Streaming tool calls",),
+    # And these three are gone on 2026-08-21, one day after being added, by the
+    # same guard and for the same reason as the reflexion three before them.
+    # They were declared to ask "is this claimed thing reachable?"; the answer
+    # was no in all three cases, the code was deleted, and an alias for a symbol
+    # that no longer exists is a suppression pointing at nothing.
+    #
+    # Third time the guard has been right about me this week. The lifecycle is
+    # the point: an alias is a question, a question that gets answered stops
+    # being a question, and the guard is what stops answered questions from
+    # accumulating as furniture.
 }
 
 
@@ -690,6 +754,20 @@ for r in dead:
     if elsewhere:
         contradictions.append((r["file"], DISCLOSED_BY[r["file"]], elsewhere))
 contradictions.sort()
+
+orphans = orphan_files()
+if orphans:
+    print("\n── On disk, and in no crate's module graph ──")
+    print(f"{'file':<44}{'loc':>6}{'tests':>8}")
+    for path, loc, tests in orphans:
+        print(f"  {path:<42}{loc:>6}{tests:>8}")
+    total_tests = sum(t for _, _, t in orphans)
+    print(f"\n{len(orphans)} file(s) rustc has never seen"
+          + (f", carrying {total_tests} test(s) that have never run." if total_tests else ".")
+          + "\nNot dead code — not code. `cargo test` does not run these, "
+            "`cargo clippy -- -D warnings`\ndoes not lint them, and the list "
+            "below would report them as merely unreferenced,\nwhich reads as "
+            "compiled-and-uncalled. Add the `mod` declaration, or delete the file.")
 
 print("\n── Disclosed as unwired in one document, presented as shipped in another ──")
 if _missing:

@@ -66,7 +66,7 @@ Peripheral nodes are the sensory and motor organs of the system. Each node runs 
 | Vision | `crates/obc-vision/` | Camera → LLM vision → action pipeline |
 | Audio | `crates/obc-audio/` | Microphone → STT → agent → TTS pipeline |
 | A2A | `crates/obc-a2a/` | Agent-to-Agent protocol (Google A2A) for inter-agent interoperability |
-| Streaming | `crates/obc-agent/src/streaming.rs` | Streaming tool call accumulation and response building. Compiles and is public; nothing in the workspace calls into it |
+| ~~Streaming~~ | removed 2026-08-21 | Accumulation and response building, plus the SSE parsers they consumed. The parser half had never been in a `mod` declaration, so it was never compiled |
 
 ---
 
@@ -211,8 +211,8 @@ Oh-Ben-Claw is built on top of the [ZeroClaw](https://github.com/zeroclaw-labs/z
 | Docker sandbox | ✗ | ✗ — the `native`/`docker`/`wasm` runtime abstraction was removed 2026-07-30 rather than wired; see README |
 | Reflexion / Plan-and-Execute | ✗ | ✗ — implemented, never wired, removed 2026-08-21 |
 | Edge-native mode | ✗ | ✅ (ESP32-S3, NanoPi) |
-| A2A protocol | ✗ | ✅ server (`A2AServer`, wired in `src/main.rs`) — `A2AClient` is constructed nowhere |
+| A2A protocol | ✗ | ✅ server only (`A2AServer`, wired in `src/main.rs`). The client was removed 2026-08-21 for never being constructed: this agent can be called by another and cannot call one |
 | Structured output | ✗ | ✅ JSON mode / JSON Schema |
-| Streaming tool calls | ✗ | ✗ — `obc-agent/src/streaming.rs` compiles and nothing outside it calls in |
+| Streaming tool calls | ✗ | ✗ — removed 2026-08-21. No provider streams; `Provider::chat_completion` is the only path a turn takes |
 | WASM sandbox | ✗ | ✗ — `WasmRuntime` was removed 2026-07-30 rather than given its `wasmtime` dependency; see README |
 | Persistent cost tracking | ✗ | ✅ SQLite-backed |

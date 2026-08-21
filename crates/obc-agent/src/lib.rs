@@ -75,7 +75,21 @@ pub use obc_reflex::safing;
 /// to name this module — which is also why forgetting to declare it failed at
 /// the *use* site in main.rs rather than here.
 mod skill_replay;
-pub mod streaming;
+// Streaming tool-call accumulation and response building lived here until
+// 2026-08-21, when both halves of the feature were removed for never having
+// been connected to anything.
+//
+// `StreamingToolCallAccumulator` and `StreamingResponseBuilder` were public,
+// compiled, and referenced by nothing outside this file. The provider half was
+// worse: `crates/obc-providers/src/streaming.rs` -- the SSE parsers those
+// types existed to consume -- was never listed in a `mod` declaration, so it
+// was never compiled at all, and its six tests have never run. Neither
+// `cargo test` nor `cargo clippy -D warnings` had anything to say about 313
+// lines sitting in the source tree.
+//
+// `docs/architecture/ARCHITECTURE.md` ticked "Streaming tool calls" as shipped
+// until 2026-08-21. No provider streams; `Provider::chat_completion` is the
+// only path a turn takes.
 pub mod system2;
 pub mod world_context;
 pub use edge::{EdgeAgent, EdgeAgentBuilder};
