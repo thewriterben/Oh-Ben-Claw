@@ -170,7 +170,25 @@ const MAX_LLM_RESPONSE_SIZE: usize = 8 * 1024;
 /// XIAO ESP32-S3 safe set: the onboard user LED (GPIO21, active-low — write 0 to
 /// light it) plus exposed header pads (D2=GPIO3, D5=GPIO6, D8=GPIO7, D9=GPIO8).
 /// Deliberately avoids GPIO26–37 (consumed by the XIAO's octal PSRAM) and the
-/// I2C (GPIO4/5) and I2S (GPIO1/2) pins.
+/// I2S (GPIO1/2) pins.
+///
+/// **Unresolved, and it will bite an external I2C sensor.** The line above used
+/// to end "and the I2C (GPIO4/5) pins", which is true of *this firmware's* bus
+/// and not of the board's. Seeed's XIAO ESP32-S3 puts its labelled I2C on
+/// SDA=GPIO5 (silk D4) and SCL=GPIO6 (silk D5). So:
+///
+/// * GPIO6 is in this list, and it is the pad marked SCL. A Track 0
+///   `gpio_write` to pin 6 drives a wired sensor's clock line, and it is
+///   configured as an output at boot whether or not any limit allows it.
+/// * `I2C_PINS` is (4, 5), which is silk D3 and D4. D3 is not an I2C pad at
+///   all, and D4 — the board's SDA — is used here as SCL.
+///
+/// The stated reason for 4/5 is that they are the OV2640's SCCB lines, but the
+/// sensor bus is `#[cfg(not(feature = "camera"))]`: those pins are only ever
+/// opened in the build where the camera is absent. Whichever way this is
+/// resolved it needs a board on a bench, so it is written down rather than
+/// quietly changed — a wrong pin here fails as a silent stub read, which looks
+/// exactly like a sensor that is not fitted.
 #[cfg(not(feature = "board-waveshare-21"))]
 const OUTPUT_PINS: &[i32] = &[21, 3, 6, 7, 8];
 
@@ -182,6 +200,42 @@ const OUTPUT_PINS: &[i32] = &[21, 3, 6, 7, 8];
 /// GPIO0 is reserved for the DHT22, 19/20 carry the native-USB console.
 #[cfg(feature = "board-waveshare-21")]
 const OUTPUT_PINS: &[i32] = &[43, 44];
+
+/// The board this build targets, as reported by `capabilities`.
+///
+/// A host that has never seen the node has no other way to learn this, so it
+/// must come from the same `cfg` as the pin maps above. It was the string
+/// literal `"seeed-xiao-esp32-s3"` until 2026-08-21 — announced by the
+/// Waveshare build too, alongside the XIAO's `OUTPUT_PINS`, an I2C bus it does
+/// not open, and a microphone it cannot have.
+#[cfg(not(feature = "board-waveshare-21"))]
+const BOARD_NAME: &str = "seeed-xiao-esp32-s3";
+#[cfg(feature = "board-waveshare-21")]
+const BOARD_NAME: &str = "waveshare-esp32-s3-touch-lcd-2.1";
+
+/// I2C sensor bus as `(SDA, SCL)`, for the log line and for `capabilities`.
+///
+/// These numbers and the `pins.gpioN` handles the driver is opened with are two
+/// facts that must agree, and nothing checks that they do: a const cannot be
+/// compared against a HAL pin type. Change one, change the other, three lines
+/// apart in `main()`.
+///
+/// Note for the default build: these are the OV2640's SCCB lines, not the
+/// XIAO's labelled I2C pads, which are SDA=GPIO5 (silk D4) and SCL=GPIO6 (silk
+/// D5). See the comment on `OUTPUT_PINS` — an external sensor wired to the
+/// silk-marked bus is not on this bus.
+#[cfg(not(feature = "board-waveshare-21"))]
+const I2C_PINS: (i32, i32) = (4, 5);
+#[cfg(feature = "board-waveshare-21")]
+const I2C_PINS: (i32, i32) = (15, 7);
+
+/// Whether this build opens the I2C sensor bus at all. The camera owns the same
+/// pins on the default build, so the two are mutually exclusive.
+const HAS_I2C: bool = !cfg!(feature = "camera");
+
+/// Whether this build can sample audio. The I2S mic is compiled out on the
+/// Waveshare board: GPIO0 is the DHT22 there and GPIO1/2 are LCD lines.
+const HAS_MIC: bool = !cfg!(feature = "board-waveshare-21");
 
 /// DHT22/AM2302 data line. Uses D10 (GPIO9) — a free exposed pad that avoids the
 /// actuator outputs, the I2C bus (4/5), and the I2S mic pins (1/2). Wire the
@@ -448,10 +502,16 @@ fn main() -> anyhow::Result<()> {
         use esp_idf_svc::hal::i2c::I2cDriver;
         use esp_idf_svc::hal::units::FromValueType;
         let i2c_cfg = I2cConfig::new().baudrate(100_u32.kHz().into());
+        // The numbers come from I2C_PINS so the log line, `capabilities` and
+        // the driver cannot drift apart. The pin *handles* still have to be
+        // named literally -- they are distinct types -- so the const and the
+        // handles remain two facts that must agree by hand. Said out loud on
+        // I2C_PINS rather than left for a bench to discover.
         #[cfg(not(feature = "board-waveshare-21"))]
-        let (sda, scl, sda_no, scl_no) = (pins.gpio4, pins.gpio5, 4, 5);
+        let (sda, scl) = (pins.gpio4, pins.gpio5);
         #[cfg(feature = "board-waveshare-21")]
-        let (sda, scl, sda_no, scl_no) = (pins.gpio15, pins.gpio7, 15, 7);
+        let (sda, scl) = (pins.gpio15, pins.gpio7);
+        let (sda_no, scl_no) = I2C_PINS;
         match I2cDriver::new(peripherals.i2c0, sda, scl, &i2c_cfg) {
             Ok(drv) => {
                 agent_state.sensors = Some(sensors::SensorBus::new(drv));
@@ -727,9 +787,15 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
     let result: anyhow::Result<String> = (|| {
         match req.cmd.as_str() {
         "capabilities" | "announce" => {
+            // Computed before the macro deliberately: `json!` tt-munches, so a
+            // bare `if` in value position reads as a nested object. `None`
+            // serialises as null, which is the honest answer for a build whose
+            // camera has taken the bus.
+            let i2c_bus: Option<[i32; 2]> =
+                if HAS_I2C { Some([I2C_PINS.0, I2C_PINS.1]) } else { None };
             let caps = serde_json::json!({
                 "node_id": NODE_ID,
-                "board": "seeed-xiao-esp32-s3",
+                "board": BOARD_NAME,
                 "firmware_version": FIRMWARE_VERSION,
                 "edge_agent": true,
                 "tools": [
@@ -744,10 +810,14 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                     {"name": "agent_config", "description": "Configure WiFi and LLM settings."},
                     {"name": "agent_clear", "description": "Clear the agent conversation history."}
                 ],
-                "gpio": [21, 3, 6, 7, 8],
-                "camera": false,
-                "microphone": true,
-                "i2c_bus": [4, 5],
+                // Every field below varies by build, so every one of them is
+                // read from the constant the behaviour uses rather than
+                // written out here. All five were literals until 2026-08-21,
+                // and all five were wrong on some build — see BOARD_NAME.
+                "gpio": OUTPUT_PINS,
+                "camera": cfg!(feature = "camera"),
+                "microphone": HAS_MIC,
+                "i2c_bus": i2c_bus,
                 "transport": "usb-serial-jtag",
                 "wifi": true
             });
