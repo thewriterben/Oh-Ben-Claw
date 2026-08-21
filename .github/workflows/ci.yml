@@ -415,6 +415,33 @@ jobs:
       # no marker existed at all.
       - name: the tree on the front page is a tree we have
         run: python3 scripts/check_tree.py
+      # What the node says about itself must come from the constants that
+      # govern what it does.
+      #
+      # The ESP32-S3 firmware answers `capabilities` with the board name, its
+      # safe GPIO outputs, its I2C bus, and whether it has a camera and a
+      # microphone. A host that has never seen the board has no other source
+      # for any of it. All five were hardcoded literals, and all five were
+      # wrong on some build: a `board-waveshare-21` node announced the XIAO's
+      # name, the XIAO's OUTPUT_PINS `[21, 3, 6, 7, 8]` when its gate actually
+      # allows `[43, 44]`, an I2C bus on 4/5 when it opens 15/7, and a
+      # microphone that is `#[cfg]`'d out of that build entirely. A
+      # `--features camera` build reported `"camera": false`.
+      #
+      # Nothing caught it because nothing compares a self-description against
+      # the thing it describes — and this crate is compiled by no CI anywhere,
+      # so there was no compiler to catch it either. This gate needs no ESP
+      # toolchain: it checks that no build-varying field is a literal, which
+      # hands the value question back to the compiler via shared constants.
+      #
+      # rustfmt is NOT a substitute. It does not parse macro bodies, and the
+      # whole `capabilities` object lives inside `serde_json::json!` — a
+      # deliberate `,,,` injected there passes `rustfmt --emit=stdout` with
+      # exit 0.
+      - name: the node's self-report comes from the constants it acts on
+        run: python3 scripts/check_node_selfreport.py --selftest
+      - name: the node describes the build it is
+        run: python3 scripts/check_node_selfreport.py
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run security audit
