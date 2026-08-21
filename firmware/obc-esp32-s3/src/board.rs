@@ -35,15 +35,29 @@ pub struct Board {
 
 /// Seeed XIAO ESP32-S3 (Sense) — the default build.
 ///
-/// `i2c` is the OV2640's SCCB pair, **not** the board's labelled I2C pads,
-/// which are SDA=GPIO5 (silk D4) and SCL=GPIO6 (silk D5). GPIO6 is in
-/// `output_pins` and is the pad marked SCL. Unresolved and needs a bench — see
-/// the note on the Track 0 outputs in `main.rs`.
+/// `i2c` is the board's **labelled** bus: SDA=GPIO5 (silk D4), SCL=GPIO6 (silk
+/// D5). A sensor wired to the pads marked SDA and SCL is on this bus, which is
+/// the only arrangement anyone reading the silkscreen will produce.
+///
+/// It was `(4, 5)` until 2026-08-21 — silk D3 and D4, where D3 is not an I2C
+/// pad at all and D4, the board's SDA, was driven as SCL. GPIO6 was
+/// simultaneously in `output_pins`, so the pad marked SCL was a Track 0
+/// actuator output, configured as an output at boot. An external sensor could
+/// not work, and it failed as a silent stub read — indistinguishable from a
+/// sensor that is not fitted.
+///
+/// The reason given for 4/5 was the OV2640's SCCB. That pin map belongs to the
+/// Waveshare board (see `camera.rs`), not this one, and the sensor bus is
+/// compiled out under `--features camera` regardless — so those pins were only
+/// ever opened in the build where the camera is absent.
+///
+/// **Not verified on hardware.** Nothing in CI can build this crate, and the
+/// change is a claim about a board rather than about code.
 #[allow(dead_code)] // the board this build is not; the host harness asserts both
 pub const XIAO_ESP32_S3: Board = Board {
     name: "seeed-xiao-esp32-s3",
-    output_pins: &[21, 3, 6, 7, 8],
-    i2c: Some((4, 5)),
+    output_pins: &[21, 3, 7, 8],
+    i2c: Some((5, 6)),
     has_mic: true,
 };
 

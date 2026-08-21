@@ -7,8 +7,11 @@
 //!
 //! Pin map: Waveshare ESP32-S3 Touch LCD 2.1 (OV2640 via the FPC connector). PWDN
 //! and RESET are not broken out on this board (`-1`). SCCB (camera I2C) is on
-//! GPIO4/5 — the same pins as the sensor I2C bus, which is why enabling this
-//! feature disables that bus in `main`.
+//! GPIO4/5. Enabling this feature still disables the sensor I2C bus in `main`,
+//! but as of 2026-08-21 that is no longer because they collide: the default bus
+//! moved to GPIO5/6 (the XIAO's labelled pads) and this pin map is the
+//! Waveshare board's, whose bus is 15/7. The gate is kept because turning the
+//! bus on in a build that has never run with it needs a bench, not a guess.
 //!
 //! **Untested on metal by its author, and the highest-FFI-risk module in the tree.**
 //! The struct field names (`pin_sccb_sda`/`pin_sccb_scl` in esp32-camera ≥2.0; the

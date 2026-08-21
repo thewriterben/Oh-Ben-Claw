@@ -71,11 +71,11 @@ see `docs/datasheets/waveshare-esp32-s3-touch-lcd-2.1.md`).
 |---------------------|-----------------------------|----------------------------------|
 | Command I/O         | native USB-Serial-JTAG      | native USB-Serial-JTAG (19/20)   |
 | Spine uplink (UART1)| TX=43 (D6), RX=44 (D7)      | **disabled** (pins repurposed)   |
-| I2C sensor bus      | SDA=4, SCL=5                | SDA=15, SCL=7 (hardwired conn.)  |
+| I2C sensor bus      | SDA=5 (D4), SCL=6 (D5)      | SDA=15, SCL=7 (hardwired conn.)  |
 | DHT22 data          | 9 (D10)                     | 0 (header IO0, 10 kΩ pull-up)    |
 | I2S microphone      | SCK=0, WS=1, SD=2           | n/a (stub)                       |
 | Camera (OV2640)     | opt-in `camera` feature     | n/a — no connector (stub)        |
-| Output GPIOs (safe) | **21, 3, 6, 7, 8**          | **43, 44**                       |
+| Output GPIOs (safe) | **21, 3, 7, 8**             | **43, 44**                       |
 
 The output pins are the only pins the Track 0 gate permits `gpio_write` on by
 default (boot allow-list). Wire your actuator-enable line / LED to one of them —

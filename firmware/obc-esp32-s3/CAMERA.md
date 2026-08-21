@@ -4,12 +4,21 @@ The camera is **opt-in**. The default firmware build needs no PSRAM and no camer
 component — `camera_capture` returns a stub. This guide turns on a real OV2640
 capture via the `espressif/esp32-camera` IDF component. Three files + a feature flag.
 
-> **Board caveat.** On the Waveshare ESP32-S3 Touch LCD 2.1 the camera's SCCB
-> (its I2C control bus) is on **GPIO4/5 — the same pins as the I2C sensor bus**.
-> The firmware therefore **disables the sensor I2C bus when the `camera` feature is
-> on** (`#[cfg(not(feature = "camera"))]`). You get sensors *or* the camera on this
-> board unless you rewire one of them. Battery safing (MAX17048) reverts to the stub
-> in camera builds.
+> **Board caveat, corrected 2026-08-21.** On the Waveshare ESP32-S3 Touch
+> LCD 2.1 the camera's SCCB (its I2C control bus) is on **GPIO4/5**. This
+> block used to add "the same pins as the I2C sensor bus", and that was the
+> stated reason the firmware disables the sensor bus in camera builds.
+> It is not true of either build: the Waveshare's sensor bus is 15/7, and
+> the default XIAO bus moved from 4/5 to **5/6** (the pads the silkscreen
+> marks SDA and SCL) on the same day.
+>
+> The firmware still **disables the sensor I2C bus when the `camera` feature
+> is on** (`#[cfg(not(feature = "camera"))]`), so you still get sensors *or*
+> the camera, and battery safing (MAX17048) still reverts to the stub in
+> camera builds. That gate is now conservative rather than necessary, and
+> removing it means running the bus in a build that has never had it — a
+> bench job, not an edit. `main.rs` and `camera.rs` also disagree about
+> whether this board has a camera connector at all; resolve that first.
 
 ## 1. Pull the camera component
 

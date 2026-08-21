@@ -76,8 +76,8 @@
 //! ## I2C Sensor Bus (BME280, MPU6050, SHT31, etc.)
 //! | Signal | GPIO (default / XIAO) | GPIO (`board-waveshare-21`) |
 //! |--------|-----------------------|------------------------------|
-//! | SDA    | 4                     | 15 (hardwired I2C connector) |
-//! | SCL    | 5                     | 7  (hardwired I2C connector) |
+//! | SDA    | 5 (silk D4)           | 15 (hardwired I2C connector) |
+//! | SCL    | 6 (silk D5)           | 7  (hardwired I2C connector) |
 //!
 //! ## Board pin maps
 //! The default pin map targets the **XIAO ESP32-S3 (Sense)**. Build with
@@ -177,27 +177,17 @@ const MAX_LLM_RESPONSE_SIZE: usize = 8 * 1024;
 /// GPIO pins configured as outputs during startup.
 ///
 /// XIAO ESP32-S3 safe set: the onboard user LED (GPIO21, active-low — write 0 to
-/// light it) plus exposed header pads (D2=GPIO3, D5=GPIO6, D8=GPIO7, D9=GPIO8).
-/// Deliberately avoids GPIO26–37 (consumed by the XIAO's octal PSRAM) and the
-/// I2S (GPIO1/2) pins.
+/// light it) plus exposed header pads (D2=GPIO3, D8=GPIO7, D9=GPIO8).
+/// Deliberately avoids GPIO26–37 (consumed by the XIAO's octal PSRAM), the I2C
+/// bus (GPIO5/6) and the I2S pins (GPIO1/2).
 ///
-/// **Unresolved, and it will bite an external I2C sensor.** The line above used
-/// to end "and the I2C (GPIO4/5) pins", which is true of *this firmware's* bus
-/// and not of the board's. Seeed's XIAO ESP32-S3 puts its labelled I2C on
-/// SDA=GPIO5 (silk D4) and SCL=GPIO6 (silk D5). So:
-///
-/// * GPIO6 is in this list, and it is the pad marked SCL. A Track 0
-///   `gpio_write` to pin 6 drives a wired sensor's clock line, and it is
-///   configured as an output at boot whether or not any limit allows it.
-/// * `I2C_PINS` is (4, 5), which is silk D3 and D4. D3 is not an I2C pad at
-///   all, and D4 — the board's SDA — is used here as SCL.
-///
-/// The stated reason for 4/5 is that they are the OV2640's SCCB lines, but the
-/// sensor bus is `#[cfg(not(feature = "camera"))]`: those pins are only ever
-/// opened in the build where the camera is absent. Whichever way this is
-/// resolved it needs a board on a bench, so it is written down rather than
-/// quietly changed — a wrong pin here fails as a silent stub read, which looks
-/// exactly like a sensor that is not fitted.
+/// **GPIO6 left this list on 2026-08-21.** It is silk D5, the pad Seeed marks
+/// SCL, and it was both a Track 0 actuator output and — once the I2C bus moved
+/// to the labelled pins — half of the sensor bus. A `gpio_write` to pin 6 would
+/// have driven a wired sensor's clock line, and it was configured as an output
+/// at boot whether or not any limit allowed it. Removing it narrows what the
+/// gate can drive, which is the safe direction; `bodies/benchtop` uses [3, 7]
+/// and is unaffected.
 ///
 /// The per-board values live in `board.rs` so a host-side test can assert every
 /// one of them; this alias keeps the call sites here unchanged.
@@ -219,7 +209,7 @@ const I2C_PINS: (i32, i32) = match BOARD.i2c {
 };
 
 /// DHT22/AM2302 data line. Uses D10 (GPIO9) — a free exposed pad that avoids the
-/// actuator outputs, the I2C bus (4/5), and the I2S mic pins (1/2). Wire the
+/// actuator outputs, the I2C bus (5/6), and the I2S mic pins (1/2). Wire the
 /// module's `out` pin here (with `+`→3V3 and `-`→GND).
 #[cfg(not(feature = "board-waveshare-21"))]
 const DHT22_GPIO: i32 = 9;
@@ -467,16 +457,26 @@ fn main() -> anyhow::Result<()> {
     );
 
     let mut agent_state = AgentState::new();
-    // Real I2C sensor bus. Default (XIAO): SDA=GPIO4, SCL=GPIO5. Waveshare 2.1
-    // build: SDA=GPIO15, SCL=GPIO7 — the board's hardwired I2C connector (shared
-    // with the onboard QMI8658 IMU / PCF85063 RTC / touch at 0x15/0x20/0x51/0x6B/
-    // 0x7E; BME280 0x76 and MPU-6050 0x68 don't collide). If init fails (or no
-    // sensors are fitted), reads fall back to the stub so the node still boots
-    // and the reflex loop still runs.
+    // Real I2C sensor bus. Default (XIAO): SDA=GPIO5, SCL=GPIO6 — the pads the
+    // silkscreen marks SDA and SCL (D4/D5). Waveshare 2.1 build: SDA=GPIO15,
+    // SCL=GPIO7 — the board's hardwired I2C connector (shared with the onboard
+    // QMI8658 IMU / PCF85063 RTC / touch at 0x15/0x20/0x51/0x6B/0x7E; BME280
+    // 0x76 and MPU-6050 0x68 don't collide). If init fails (or no sensors are
+    // fitted), reads fall back to the stub so the node still boots and the
+    // reflex loop still runs.
     //
-    // Disabled when the `camera` feature is on: the OV2640's SCCB uses the same
-    // GPIO4/5 pins as the default bus, so the two can't share. (Not applicable
-    // to the Waveshare build — no camera connector there.)
+    // Still disabled when the `camera` feature is on, but the reason no longer
+    // holds and is left in place deliberately. It used to read "the OV2640's
+    // SCCB uses the same GPIO4/5 pins as the default bus". Two things are wrong
+    // with that: the default bus is 5/6 as of 2026-08-21, and `camera.rs` says
+    // its pin map is the *Waveshare* board's, whose bus is 15/7. So no build
+    // actually has the collision this gate exists for.
+    //
+    // It is not removed here because doing so turns the bus on in a build that
+    // has never run with it, and the two files disagree about which board even
+    // has a camera — `camera.rs` describes an FPC connector on the Waveshare
+    // while the old comment here said that board has none. That wants a bench
+    // and a datasheet, not a guess.
     #[cfg(not(feature = "camera"))]
     {
         use esp_idf_svc::hal::i2c::config::Config as I2cConfig;
@@ -489,7 +489,7 @@ fn main() -> anyhow::Result<()> {
         // handles remain two facts that must agree by hand. Said out loud on
         // I2C_PINS rather than left for a bench to discover.
         #[cfg(not(feature = "board-waveshare-21"))]
-        let (sda, scl) = (pins.gpio4, pins.gpio5);
+        let (sda, scl) = (pins.gpio5, pins.gpio6);
         #[cfg(feature = "board-waveshare-21")]
         let (sda, scl) = (pins.gpio15, pins.gpio7);
         let (sda_no, scl_no) = I2C_PINS;
