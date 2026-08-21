@@ -219,7 +219,14 @@ mod tests {
         let fired = eng.evaluate(&snap(&[(BATTERY_SOC_ENTITY, 6.0)]), 1_000);
         // both critical (gpio cut) and low (escalate) fire below the critical line
         assert!(fired.iter().any(|f| f.rule_id == "safe-battery-critical"
-            && matches!(f.action, Action::GpioWrite { pin: DEFAULT_SAFE_PIN, value: 0, .. })));
+            && matches!(
+                f.action,
+                Action::GpioWrite {
+                    pin: DEFAULT_SAFE_PIN,
+                    value: 0,
+                    ..
+                }
+            )));
         assert!(fired.iter().any(|f| f.rule_id == "safe-battery-low"));
     }
 
@@ -227,7 +234,9 @@ mod tests {
     fn healthy_battery_fires_nothing() {
         let mut eng = ReflexEngine::new(default_safing_rules());
         // healthy battery + a fresh link (no silence entity) → nothing fires
-        assert!(eng.evaluate(&snap(&[(BATTERY_SOC_ENTITY, 85.0)]), 1_000).is_empty());
+        assert!(eng
+            .evaluate(&snap(&[(BATTERY_SOC_ENTITY, 85.0)]), 1_000)
+            .is_empty());
     }
 
     #[test]
@@ -250,7 +259,9 @@ mod tests {
     fn missing_battery_entity_does_not_fire() {
         // No fuel gauge → no battery_soc in the snapshot → safing stays dormant.
         let mut eng = ReflexEngine::new(default_safing_rules());
-        assert!(eng.evaluate(&snap(&[("sensor.temperature", 22.0)]), 1_000).is_empty());
+        assert!(eng
+            .evaluate(&snap(&[("sensor.temperature", 22.0)]), 1_000)
+            .is_empty());
     }
 
     #[test]
@@ -259,7 +270,14 @@ mod tests {
         let mut eng = ReflexEngine::new(default_safing_rules());
         let fired = eng.evaluate(&snap(&[(TEMPERATURE_ENTITY, 78.0)]), 1_000);
         assert!(fired.iter().any(|f| f.rule_id == "safe-overtemp-critical"
-            && matches!(f.action, Action::GpioWrite { pin: DEFAULT_SAFE_PIN, value: 0, .. })));
+            && matches!(
+                f.action,
+                Action::GpioWrite {
+                    pin: DEFAULT_SAFE_PIN,
+                    value: 0,
+                    ..
+                }
+            )));
         assert!(fired.iter().any(|f| f.rule_id == "safe-overtemp-warn"));
 
         // High humidity escalates a condensation warning.
@@ -281,8 +299,14 @@ mod tests {
     fn with_defaults_preserves_self_protection() {
         let host = vec![ReflexRule {
             id: "host-rule".to_string(),
-            when: Condition::Sensor { entity: "sensor.temperature".into(), op: Cmp::Gt, value: 60.0 },
-            then: Action::Escalate { reason: "hot".into() },
+            when: Condition::Sensor {
+                entity: "sensor.temperature".into(),
+                op: Cmp::Gt,
+                value: 60.0,
+            },
+            then: Action::Escalate {
+                reason: "hot".into(),
+            },
             debounce_ms: 0,
             max_rate_hz: None,
         }];
