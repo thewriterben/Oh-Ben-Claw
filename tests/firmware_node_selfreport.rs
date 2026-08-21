@@ -103,6 +103,27 @@ fn the_two_boards_are_distinguishable_by_their_report() {
     }
 }
 
+/// The XIAO's bus is the one its silkscreen marks, and its Track 0 outputs do
+/// not overlap it. Both halves of that changed on 2026-08-21 and both are
+/// asserted here, because the failure they replace was silent: a sensor on the
+/// labelled pads simply read as a stub, and pin 6 — the pad marked SCL — was an
+/// actuator output.
+#[test]
+fn the_xiao_bus_is_the_labelled_one_and_no_output_pin_sits_on_it() {
+    assert_eq!(
+        XIAO.i2c,
+        Some((5, 6)),
+        "SDA=GPIO5 (silk D4), SCL=GPIO6 (silk D5)"
+    );
+    for b in [&XIAO, &WAVESHARE] {
+        let (sda, scl) = b.i2c.expect("both boards declare a bus");
+        for &pin in b.output_pins {
+            assert_ne!(pin, sda, "{}: output pin {pin} is the bus SDA", b.name);
+            assert_ne!(pin, scl, "{}: output pin {pin} is the bus SCL", b.name);
+        }
+    }
+}
+
 /// Whatever build this harness is compiled under, `ACTIVE` must be one of the
 /// boards declared here rather than a third thing assembled by `#[cfg]`.
 #[test]
