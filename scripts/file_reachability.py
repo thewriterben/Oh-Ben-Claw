@@ -540,9 +540,20 @@ ITEM_ALIASES = {
     # first run: that phrasing exists only in CHANGELOG.md, which is not a claim
     # document. An alias is allowed to be specific; it is not allowed to be
     # aspirational.
-    "reflexion_loop": ("Reflexion / Plan-and-Execute",),
-    "create_plan": ("Reflexion / Plan-and-Execute", "Plan-and-Execute"),
-    "synthesize_results": ("Reflexion / Plan-and-Execute", "Plan-and-Execute"),
+    #
+    # And the three entries that were here are gone, 2026-08-21, because the
+    # guard rejected them too -- correctly, and for the best possible reason.
+    # `reflexion_loop`, `create_plan` and `synthesize_results` were exactly what
+    # these aliases were built to surface: implemented, ticked ✅ in
+    # ARCHITECTURE.md's comparison table, and called from nowhere. Adding the
+    # aliases made the survey say so. Acting on what it said deleted the
+    # functions, and an alias for a function that no longer exists is a
+    # suppression pointing at nothing.
+    #
+    # Which is the shape to expect. An entry here is not permanent furniture; it
+    # is a question asked of one symbol, and a question that gets answered stops
+    # being a question. The dict being empty means every claim in the table that
+    # this mechanism could check, it has.
 }
 
 

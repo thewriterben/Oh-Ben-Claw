@@ -39,10 +39,35 @@ pub const KAPPA_THRESHOLD: f64 = 0.6;
 #[derive(Debug, Clone)]
 pub struct JudgeScore {
     /// Quality in `[0.0, 1.0]` (defaults to 0.7 when the judge output carries
-    /// no parseable score — same convention as the reflexion critique loop).
+    /// no parseable score — see [`parse_quality_score`]).
     pub score: f32,
     /// The judge's raw critique text.
     pub rationale: String,
+}
+
+/// Parse a `QUALITY_SCORE: 0.85` line out of a critique, clamped to `[0, 1]`,
+/// defaulting to 0.7 when the model did not emit one.
+///
+/// Written for `reflexion.rs`'s critique loop and moved here on 2026-08-21,
+/// when that module was removed. It had been the judge's parser for as long as
+/// the judge existed -- `judge.rs` was the only caller outside the file -- and
+/// it survived a public-API survey that reported the module as entirely unused
+/// because `pub(crate)` is not public API. That is the whole reason the wrong
+/// conclusion was drawn about this file once already.
+///
+/// The last line wins: a critique that reasons its way to a revised score ends
+/// with the one it meant. The 0.7 default is deliberately mid-range, so a judge
+/// that forgets the format neither passes nor fails a response on that alone.
+pub(crate) fn parse_quality_score(critique: &str) -> f32 {
+    for line in critique.lines().rev() {
+        if let Some(pos) = line.to_uppercase().find("QUALITY_SCORE:") {
+            let score_str = line[pos + 14..].trim();
+            if let Ok(score) = score_str.parse::<f32>() {
+                return score.clamp(0.0, 1.0);
+            }
+        }
+    }
+    0.7
 }
 
 /// An LLM acting as an advisory quality judge.
@@ -109,7 +134,7 @@ impl LlmJudge {
             .chat_completion(&messages, &[], &self.config)
             .await?;
         Ok(JudgeScore {
-            score: super::reflexion::parse_quality_score(&completion.message),
+            score: parse_quality_score(&completion.message),
             rationale: completion.message,
         })
     }
@@ -270,6 +295,28 @@ mod tests {
     use async_trait::async_trait;
     use obc_providers::ChatCompletion;
     use obc_tool_api::Tool;
+
+    // ── The score parser ─────────────────────────────────────────────────────
+    // Moved from `reflexion.rs` with the function on 2026-08-21. They are the
+    // only tests that module had which were testing something still reachable.
+
+    #[test]
+    fn a_score_the_judge_emitted_is_the_score_used() {
+        let critique = "The response is good.\nQUALITY_SCORE: 0.87";
+        assert!((parse_quality_score(critique) - 0.87).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_judge_that_forgot_the_format_neither_passes_nor_fails_the_response() {
+        let critique = "The response is good but could be better.";
+        assert!((parse_quality_score(critique) - 0.7).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_score_outside_the_range_is_clamped_rather_than_trusted() {
+        let critique = "QUALITY_SCORE: 1.5";
+        assert!((parse_quality_score(critique) - 1.0).abs() < 1e-5);
+    }
 
     struct FixedJudgeProvider(&'static str);
     #[async_trait]
