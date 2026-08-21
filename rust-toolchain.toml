@@ -1,2 +1,11 @@
 [toolchain]
-channel = "stable"
+# Pinned 2026-08-20, to the same version `.github/workflows/ci.yml` pins. The
+# long version of why is in that file's `env:` block; the short version is that
+# `channel = "stable"` meant a green PR merged into a red `main` on the day
+# stable shipped a new clippy lint, with no commit in between.
+#
+# Keep this and `RUST_VERSION` in step. A local toolchain older than CI's is how
+# `cargo clippy -- -D warnings` passes on a laptop and fails on a runner, which
+# is exactly what happened here: 1.97.1 does not have the lint that broke main.
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]

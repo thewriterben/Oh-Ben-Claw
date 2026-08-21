@@ -1,0 +1,56 @@
+name: stable watch
+
+# What pinning costs, and who pays it.
+#
+# `ci.yml` pins RUST_VERSION so that two runs of one commit are the same build.
+# The price is that a new lint, or a new soundness fix, or a stdlib deprecation
+# is never seen — the repository would sit on 1.98.0 until someone remembered
+# to look, and "someone remembered" is not a mechanism.
+#
+# So this job runs the same checks against whatever stable actually is, once a
+# week and on demand. It is deliberately NOT a required check and does not run
+# on pull requests: a failure here is a message that Rust changed, not a reason
+# anybody's merge is blocked. That separation is the whole point. On 2026-08-20
+# the two were the same thing, and the result was `main` red on a tree that had
+# passed nine of nine jobs eighteen hours earlier.
+#
+# When this goes red: read it, fix the code if the lint is right (it usually
+# is), then bump RUST_VERSION in ci.yml and channel in rust-toolchain.toml in
+# the same commit. Fixing the code without bumping leaves the next surprise
+# exactly where this one was.
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC. Rust releases on a Thursday every six weeks, so this
+    # sees a new stable within four days of it existing.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  stable:
+    name: does the current stable still like this tree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `--force` because rust-toolchain.toml pins a version and this job's
+      # entire purpose is to ignore it.
+      - name: Install whatever stable is today
+        run: |
+          rustup toolchain install stable --profile minimal \
+            --component rustfmt --component clippy --force
+          echo "RUSTUP_TOOLCHAIN=stable" >> "$GITHUB_ENV"
+
+      - name: Say which version this is, so the log is readable a month later
+        run: |
+          rustc --version
+          cargo clippy --version
+          echo "pinned in ci.yml: $(grep -oP 'RUST_VERSION: "\K[^"]+' .github/workflows/ci.yml)"
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace

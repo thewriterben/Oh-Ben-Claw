@@ -7,6 +7,22 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Pinned 2026-08-20, and the reason is on the record rather than in someone's
+  # memory. PR #106 was green on all nine jobs at 04:03 UTC. The merge commit
+  # for the same Rust content failed two of them at 22:16, with no change to
+  # this repository in between: stable went 1.97.1 -> 1.98.0 and brought
+  # `clippy::chunks_exact_to_as_chunks` with it. Under `-D warnings` a new lint
+  # is a new build failure, so the gate moved while the code stood still, and
+  # `main` was red on a tree that had already passed.
+  #
+  # That is not a lint problem — the lint was right and #109 took its
+  # suggestion. It is that `channel = "stable"` makes two runs of the same
+  # commit different builds, which is the one property CI is for.
+  #
+  # The cost of pinning is that a new lint is never found. `stable-watch.yml`
+  # pays it: same checks, real stable, on a schedule, where a failure is a
+  # message and not a blocked merge. Bump this line when that job goes red.
+  RUST_VERSION: "1.98.0"
 jobs:
   # ── Build & Test (host) ────────────────────────────────────────────────────
   build-and-test:
@@ -14,9 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust 1.98.0
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           components: rustfmt, clippy
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -79,8 +96,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust 1.98.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
@@ -167,8 +186,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust 1.98.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
@@ -233,7 +254,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -258,8 +281,10 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust 1.98.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
@@ -295,9 +320,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust 1.98.0
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           targets: aarch64-unknown-linux-gnu
       - name: Install cross-compilation tools
         run: sudo apt-get install -y gcc-aarch64-linux-gnu
@@ -436,8 +462,9 @@ jobs:
     # a step in the one above.
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           components: clippy, rustfmt
       - name: Tauri system dependencies
         run: |
