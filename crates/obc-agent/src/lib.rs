@@ -27,7 +27,28 @@ pub mod pool;
 /// here is the four sites inside `agent` itself, where reaching for a crate to
 /// find this module's own vocabulary would be the wrong shape, and `src/main.rs`.
 pub use obc_reflex as reflex;
-pub mod reflexion;
+// The reflexion loop and plan-and-execute orchestration lived here until
+// 2026-08-21, when they were removed for never having been called.
+//
+// `reflexion_loop`, `create_plan` and `synthesize_results` had no caller
+// anywhere in the workspace — not `main.rs`, not a test, not a bench. The
+// patterns were implemented, documented, and never wired to anything, and
+// `docs/architecture/ARCHITECTURE.md` carried a ✅ for "Reflexion /
+// Plan-and-Execute" in the table comparing this project to ZeroClaw. A tick in
+// a comparison table is a claim in its strongest form: it is read as settled,
+// it is read fast, and it is trusted *because* it does not argue.
+//
+// `scripts/file_reachability.py` had been reporting all three as claimed by
+// that document and reachable from nothing, in its own output, for as long as
+// ARCHITECTURE.md has been in its document set. The instrument was right and
+// nobody acted on it, which is the more useful half of this note.
+//
+// One function survived, because it was never dead: `parse_quality_score` is
+// the judge's score parser and always was — `judge.rs` called it across the
+// module boundary. It is `pub(crate)`, which is why a *public*-API survey
+// reported this file as entirely unreferenced, and why a disclosure saying so
+// was written and was wrong. It now sits in `judge`, next to its only caller.
+
 /// The standard safing rule set, moved to [`obc_reflex::safing`] on 2026-08-20.
 ///
 /// The alias above is why this took eight days longer than it should have.

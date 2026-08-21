@@ -3,7 +3,7 @@ name = "obc-agent"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Open Body Control's reasoning loop: the agent that turns a request into tool calls against a real body -- orchestration, delegation to sub-agents, a worker pool, edge agents, System 2 deliberation, reflexion, judging, streaming, safing, and the world context a turn is given."
+description = "Open Body Control's reasoning loop: the agent that turns a request into tool calls against a real body -- orchestration, delegation to sub-agents, a worker pool, edge agents, System 2 deliberation, judging, streaming, and the world context a turn is given."
 
 # The twenty-eighth crate, 7885 lines in fourteen files, and the last structural
 # piece of the endgame. For every day this project has measured extractability,
@@ -28,10 +28,14 @@ description = "Open Body Control's reasoning loop: the agent that turns a reques
 # What it is: the loop that turns a request into tool calls against a real body.
 # Orchestration and delegation to sub-agents, a worker pool, edge agents that
 # run beside a node rather than in the brain, System 2 deliberation for when the
-# reflexes are not enough, reflexion and judging over what a turn actually did,
-# streaming, and `safing` -- the path that brings a body to a safe state when
-# the reasoning cannot continue. That last one is why this crate depends on
-# obc-approval and obc-spine rather than only on the tool layer.
+# reflexes are not enough, judging over what a turn actually did, and streaming.
+#
+# Two things this line used to claim and no longer does. `safing` left for
+# obc-reflex on 2026-08-20, following the rule types it is written in.
+# `reflexion` was removed on 2026-08-21: the loop and the plan-and-execute
+# orchestration beside it had no caller anywhere, and a description is a claim
+# like any other. Its one live function was the judge's score parser, which is
+# in `judge.rs` now.
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"

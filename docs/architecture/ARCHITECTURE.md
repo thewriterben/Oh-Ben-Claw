@@ -210,7 +210,7 @@ Oh-Ben-Claw is built on top of the [ZeroClaw](https://github.com/zeroclaw-labs/z
 | Human approval | ✗ | ✅ 3 autonomy levels |
 | Cost tracking | ✗ | ✅ Daily/monthly budgets |
 | Docker sandbox | ✗ | ✅ |
-| Reflexion / Plan-and-Execute | ✗ | ✅ |
+| Reflexion / Plan-and-Execute | ✗ | ✗ — implemented, never wired, removed 2026-08-21 |
 | Edge-native mode | ✗ | ✅ (ESP32-S3, NanoPi) |
 | A2A protocol | ✗ | ✅ Client + server |
 | Structured output | ✗ | ✅ JSON mode / JSON Schema |
