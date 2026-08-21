@@ -1552,7 +1552,6 @@ pub struct Config {
     /// Browser automation configuration (new in Phase 12).
     #[serde(default)]
     pub browser: BrowserConfig,
-    /// ClawHub community skill registry configuration (new in Phase 12).
     /// Deployment scheme generator configuration (new in Phase 13).
     #[serde(default)]
     pub deployment: DeploymentConfig,
