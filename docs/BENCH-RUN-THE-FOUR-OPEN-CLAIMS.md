@@ -14,6 +14,27 @@ Record results in [§5](#5-recording). A row filled in with "worked" and no date
 commit or observation is the kind of claim this project has spent a month
 removing.
 
+**There is a runner: `scripts/bench_run.py`.** It sends every command below,
+captures the raw replies, asks you for the things only eyes can settle, and
+writes the §5 record filled in — including the exchange verbatim. It never
+infers a physical observation from a reply, because "the reply said refused" and
+"the pin did not move" are different claims and step 1 exists because of the
+gap between them.
+
+```
+python scripts/bench_run.py --dry-run    # simulated node; proves the script runs
+python scripts/bench_run.py              # auto-detects the port
+python scripts/bench_run.py --port COM6
+```
+
+Run `--dry-run` once before you wire anything, so the first time you meet the
+prompts is not while holding a soldering iron. It talks to a simulated node that
+enforces the same policy, so refusals go down the refusal path; it says nothing
+about your firmware or your board.
+
+Everything needed to flash is already installed on this machine: `espup`,
+`espflash`, the `esp` rust toolchain, and pyserial.
+
 ---
 
 ## 0. Before you start
