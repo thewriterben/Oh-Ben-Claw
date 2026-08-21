@@ -126,6 +126,11 @@ use board::ACTIVE as BOARD;
 /// On-MCU Track 0 safety gate — deterministic, host-pushable actuator limits.
 mod safety;
 
+/// Pure decode and compensation arithmetic for the I2C sensors. No ESP
+/// dependencies, so `tests/firmware_sensor_math.rs` executes it on the host
+/// against the BME280 datasheet's own double-precision algorithm.
+mod sensor_math;
+
 /// Real I2C sensor drivers (MAX17048 fuel gauge, MPU6050 IMU).
 // Under `--features camera` the I2C bus is disabled (shared SCCB pins), so the
 // sensor constructor/probe paths are intentionally unused in that build.
