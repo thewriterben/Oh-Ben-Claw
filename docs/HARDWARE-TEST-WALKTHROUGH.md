@@ -27,7 +27,7 @@ The test is organised in three phases so you can stop at any milestone:
 | USB-C cable (data) | 1 | For flashing + serial. |
 | I2C sensors (optional but recommended) | — | MAX17048 fuel gauge (@0x36), MPU6050 IMU (@0x68), BME280 (@0x76/0x77). Default: SDA=GPIO5 (silk D4), SCL=GPIO6 (silk D5) · Waveshare: SDA=15, SCL=7. |
 | I2S MEMS mic (INMP441 / SPH0645) | 1 opt | SCK=GPIO0, WS=GPIO1, SD=GPIO2 (default build only; n/a on Waveshare). |
-| OV2640 camera (FPC) | 1 opt | Only for the camera test; needs PSRAM on the board. **Disputed:** this row has said "n/a on Waveshare — no connector" since 2026-07-30, while `firmware/obc-esp32-s3/src/camera.rs` says its pin map *is* the Waveshare's, "OV2640 via the FPC connector". One of them is wrong and nobody has looked at the board. Settle it before trusting either. |
+| OV2640 camera (FPC) | 1 opt | Only for the camera test; needs PSRAM on the board. **n/a on Waveshare — no camera connector.** Settled 2026-08-21 by looking at the board: its only FPC connector is the screen's. This row was right; `camera.rs` was the one claiming otherwise and has been corrected. `--features camera` with `board-waveshare-21` is now a compile error. |
 | LED + resistor (or a scope/meter) | 1 | On an allow-listed output pin — default build: **21, 3, 7, 8** (21 = XIAO onboard LED, active-LOW) · Waveshare build: **43, 44**. |
 | LoRa boards (Heltec WiFi LoRa 32 V3, T-Beam, or RAK4631), **915 MHz (US)** | 2 | Phase B/C. Buy the 915 MHz variant; attach antennas before powering. |
 | Linux/Mac host or Windows PC | 1 | Runs the OBC brain in Phase C. |

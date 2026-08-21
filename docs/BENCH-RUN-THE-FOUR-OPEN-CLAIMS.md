@@ -1,7 +1,8 @@
 # Bench run — the four things only a board can settle
 
-**Status: not yet run.** Every claim below is unverified. This document exists so
-that one sitting with a board settles all four, rather than four separate
+**Status: one of four settled, three to go.** §4 needed only eyes and is done —
+the Waveshare has no camera connector. The remaining three need a powered board.
+This document exists so that one sitting settles them, rather than three separate
 afternoons discovering them one at a time.
 
 Everything checkable without hardware already is: 33 firmware tests run on the
@@ -142,23 +143,24 @@ half. The arithmetic is checked; the device conversation is not.
 
 ---
 
-## 4. Does the Waveshare have a camera connector?
+## 4. ~~Does the Waveshare have a camera connector?~~ **Settled 2026-08-21**
 
-Two files in this repository disagree, and nobody has looked at the board.
+**No.** Its only FPC connector is the screen's — observed directly, no power
+needed. This was the one question on the list that needed eyes rather than a
+bench, and it took under a minute.
 
-- `docs/HARDWARE-TEST-WALKTHROUGH.md` has said "n/a on Waveshare — no
-  connector" since 2026-07-30.
-- `firmware/obc-esp32-s3/src/camera.rs` says its pin map **is** the Waveshare's:
-  "OV2640 via the FPC connector", SCCB on GPIO4/5.
+`camera.rs` was the sole source claiming otherwise; `Cargo.toml`,
+`BENCH-PINOUT-CARDS.md` Card 3 and `HARDWARE-TEST-WALKTHROUGH.md` had all said
+"no camera connector" since July. It has been corrected, and
+`--features camera` with `board-waveshare-21` is now a compile error: that map's
+pins are the Waveshare's LCD lines.
 
-This needs no power — look at the board and say whether an FPC connector is
-present. Whichever way it goes, one of those two files is wrong and should be
-corrected in the same sitting.
+It opened a new question rather than closing one cleanly. If the map is not the
+Waveshare's, whose is it? XCLK=15, SCCB=4/5 and PCLK=13 match the ESP32-S3-EYE
+v2.2, but the data bus does not. Until someone checks it against a datasheet for
+a board they are holding, every pin in `camera.rs` is unattributed.
 
-While you are there: the camera feature disables the I²C sensor bus, and the
-stated reason ("the same pins as the sensor bus") is no longer true of either
-build. If the connector exists and you can run a camera build, check whether the
-sensor bus can simply stay on.
+**Three claims remain**, and all three need a powered board.
 
 ---
 

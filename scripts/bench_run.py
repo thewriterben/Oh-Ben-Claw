@@ -325,11 +325,12 @@ def main() -> int:
 
     print()
     print("=" * 68)
-    print("  4. Does the Waveshare have a camera connector?  (no power needed)")
+    print("  4. Waveshare camera connector -- SETTLED 2026-08-21, not asked")
     print("=" * 68)
-    rec["waveshare FPC connector"] = ask(
-        "Waveshare board in hand: is an FPC camera connector present?",
-        "yes/no/no-board")
+    print("  It has none; its only FPC connector is the screen's. Observed")
+    print("  directly, no power needed. `camera.rs` was the sole source saying")
+    print("  otherwise and has been corrected.")
+    rec["waveshare FPC connector"] = "none (settled 2026-08-21 by observation)"
 
     print()
     print("  Anything that failed *plausibly* -- looked fine, wasn't?")
