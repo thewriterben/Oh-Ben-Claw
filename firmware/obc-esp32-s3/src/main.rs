@@ -114,6 +114,15 @@ mod reflex;
 /// On-MCU safing mirror (Phase 18) — built-in battery self-protection.
 mod safing;
 
+/// What this node is, and what it tells a host about itself. No ESP
+/// dependencies, so `tests/firmware_node_selfreport.rs` compiles it for the
+/// host and asserts every board's answer — including the one this build is not.
+mod board;
+
+/// The board this build targets. Everything that varies by board is read from
+/// here rather than written out again wherever it is needed.
+use board::ACTIVE as BOARD;
+
 /// On-MCU Track 0 safety gate — deterministic, host-pushable actuator limits.
 mod safety;
 
@@ -189,53 +198,25 @@ const MAX_LLM_RESPONSE_SIZE: usize = 8 * 1024;
 /// resolved it needs a board on a bench, so it is written down rather than
 /// quietly changed — a wrong pin here fails as a silent stub read, which looks
 /// exactly like a sensor that is not fitted.
-#[cfg(not(feature = "board-waveshare-21"))]
-const OUTPUT_PINS: &[i32] = &[21, 3, 6, 7, 8];
-
-/// GPIO pins configured as outputs during startup (Waveshare 2.1 board).
 ///
-/// The round RGB LCD consumes GPIO 1–3, 5–14, 16–18, 21, 38–41, 45–48; only the
-/// 12-pin header is exposed. 43/44 are the free header pins once the UART1
-/// spine uplink is disabled (it is, on this build — the XIAO is the mesh node).
-/// GPIO0 is reserved for the DHT22, 19/20 carry the native-USB console.
-#[cfg(feature = "board-waveshare-21")]
-const OUTPUT_PINS: &[i32] = &[43, 44];
+/// The per-board values live in `board.rs` so a host-side test can assert every
+/// one of them; this alias keeps the call sites here unchanged.
+const OUTPUT_PINS: &[i32] = BOARD.output_pins;
 
-/// The board this build targets, as reported by `capabilities`.
-///
-/// A host that has never seen the node has no other way to learn this, so it
-/// must come from the same `cfg` as the pin maps above. It was the string
-/// literal `"seeed-xiao-esp32-s3"` until 2026-08-21 — announced by the
-/// Waveshare build too, alongside the XIAO's `OUTPUT_PINS`, an I2C bus it does
-/// not open, and a microphone it cannot have.
-#[cfg(not(feature = "board-waveshare-21"))]
-const BOARD_NAME: &str = "seeed-xiao-esp32-s3";
-#[cfg(feature = "board-waveshare-21")]
-const BOARD_NAME: &str = "waveshare-esp32-s3-touch-lcd-2.1";
-
-/// I2C sensor bus as `(SDA, SCL)`, for the log line and for `capabilities`.
+/// I2C sensor bus as `(SDA, SCL)`, for the log line at the init site.
 ///
 /// These numbers and the `pins.gpioN` handles the driver is opened with are two
 /// facts that must agree, and nothing checks that they do: a const cannot be
 /// compared against a HAL pin type. Change one, change the other, three lines
 /// apart in `main()`.
 ///
-/// Note for the default build: these are the OV2640's SCCB lines, not the
-/// XIAO's labelled I2C pads, which are SDA=GPIO5 (silk D4) and SCL=GPIO6 (silk
-/// D5). See the comment on `OUTPUT_PINS` — an external sensor wired to the
-/// silk-marked bus is not on this bus.
-#[cfg(not(feature = "board-waveshare-21"))]
-const I2C_PINS: (i32, i32) = (4, 5);
-#[cfg(feature = "board-waveshare-21")]
-const I2C_PINS: (i32, i32) = (15, 7);
-
-/// Whether this build opens the I2C sensor bus at all. The camera owns the same
-/// pins on the default build, so the two are mutually exclusive.
-const HAS_I2C: bool = !cfg!(feature = "camera");
-
-/// Whether this build can sample audio. The I2S mic is compiled out on the
-/// Waveshare board: GPIO0 is the DHT22 there and GPIO1/2 are LCD lines.
-const HAS_MIC: bool = !cfg!(feature = "board-waveshare-21");
+/// `(-1, -1)` is unreachable — the arm that reads this is
+/// `#[cfg(not(feature = "camera"))]`, and every board declares a bus. It exists
+/// because `board::Board::i2c` is an `Option` for boards that may not.
+const I2C_PINS: (i32, i32) = match BOARD.i2c {
+    Some(pins) => pins,
+    None => (-1, -1),
+};
 
 /// DHT22/AM2302 data line. Uses D10 (GPIO9) — a free exposed pad that avoids the
 /// actuator outputs, the I2C bus (4/5), and the I2S mic pins (1/2). Wire the
@@ -786,43 +767,18 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
     // commands (e.g. a Track 0 safety denial) would send no reply at all.
     let result: anyhow::Result<String> = (|| {
         match req.cmd.as_str() {
-        "capabilities" | "announce" => {
-            // Computed before the macro deliberately: `json!` tt-munches, so a
-            // bare `if` in value position reads as a nested object. `None`
-            // serialises as null, which is the honest answer for a build whose
-            // camera has taken the bus.
-            let i2c_bus: Option<[i32; 2]> =
-                if HAS_I2C { Some([I2C_PINS.0, I2C_PINS.1]) } else { None };
-            let caps = serde_json::json!({
-                "node_id": NODE_ID,
-                "board": BOARD_NAME,
-                "firmware_version": FIRMWARE_VERSION,
-                "edge_agent": true,
-                "tools": [
-                    {"name": "gpio_read", "description": "Read a GPIO pin value (0 or 1)."},
-                    {"name": "gpio_write", "description": "Set a GPIO pin high (1) or low (0)."},
-                    {"name": "camera_capture", "description": "Capture a JPEG image from the OV2640 camera."},
-                    {"name": "audio_sample", "description": "Sample audio from the I2S microphone."},
-                    {"name": "sensor_read", "description": "Read a value from an I2C/SPI sensor."},
-                    {"name": "set_reflex_rules", "description": "Push the on-MCU reflex (System 1) rule set."},
-                    {"name": "set_limits", "description": "Push the Track 0 actuator safety limits (allow-list, range, rate)."},
-                    {"name": "agent_chat", "description": "Chat with the on-device LLM agent."},
-                    {"name": "agent_config", "description": "Configure WiFi and LLM settings."},
-                    {"name": "agent_clear", "description": "Clear the agent conversation history."}
-                ],
-                // Every field below varies by build, so every one of them is
-                // read from the constant the behaviour uses rather than
-                // written out here. All five were literals until 2026-08-21,
-                // and all five were wrong on some build — see BOARD_NAME.
-                "gpio": OUTPUT_PINS,
-                "camera": cfg!(feature = "camera"),
-                "microphone": HAS_MIC,
-                "i2c_bus": i2c_bus,
-                "transport": "usb-serial-jtag",
-                "wifi": true
-            });
-            Ok(caps.to_string())
-        }
+        // The whole reply is built in `board.rs`, which has no ESP
+        // dependencies, so `tests/firmware_node_selfreport.rs` asserts every
+        // board's answer under the ordinary workspace `cargo test` — including
+        // the board this build is not. Nothing in CI can compile this crate, so
+        // that shim is the only place any of this is checked.
+        "capabilities" | "announce" => Ok(board::describe(
+            &BOARD,
+            cfg!(feature = "camera"),
+            NODE_ID,
+            FIRMWARE_VERSION,
+        )
+        .to_string()),
 
         "gpio_read" => {
             let pin = req.args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
