@@ -32,7 +32,6 @@ The core agent is the central reasoning and orchestration engine. It runs on a c
 - Interfacing with LLM providers (OpenAI, Anthropic, Gemini, Ollama, OpenRouter, …)
 - Routing incoming messages from communication channels to the agent loop
 - Resolving and dispatching tool calls to local or remote peripheral nodes
-- Writing daily journal entries and responding to proactive HEARTBEAT tasks
 
 ### Layer 2: The Spine (MQTT Communication Backbone)
 
@@ -57,17 +56,17 @@ Peripheral nodes are the sensory and motor organs of the system. Each node runs 
 | Subsystem | Location | Purpose |
 |---|---|---|
 | Security | `crates/obc-safety/` | Policy engine, HMAC pairing, encrypted vault |
-| Memory | `crates/obc-memory/` | SQLite, bitemporal world model, heartbeat, journal, image, vector |
+| Memory | `crates/obc-memory/` | SQLite, bitemporal world model, vector, trajectory, liveness, expiry |
 | Channels | `crates/obc-channels/` | Telegram, Discord, Slack, Feishu, IRC, Signal, Matrix, … |
 | Providers | `crates/obc-providers/` | LLM adapters, failover, retry |
 | Tools | `crates/obc-tools/` | Shell, file, HTTP, browser, OTA, vision, audio, hardware |
 | Deployment | `src/deployment/` | Hardware inventory, planner, swarm (Phase 13) |
 | MCP | `crates/obc-mcp/` | Model Context Protocol client + server |
-| Skill Forge | `crates/obc-skill-forge/` | Community skill registry (ClawHub) |
+| Skill Forge | `crates/obc-skill-forge/` | Skill synthesis, improvement, evolution and staged rollout — all live. The ClawHub *registry and install* half is not in the tree |
 | Vision | `crates/obc-vision/` | Camera → LLM vision → action pipeline |
 | Audio | `crates/obc-audio/` | Microphone → STT → agent → TTS pipeline |
 | A2A | `crates/obc-a2a/` | Agent-to-Agent protocol (Google A2A) for inter-agent interoperability |
-| Streaming | `crates/obc-agent/src/streaming.rs` | Streaming tool call accumulation and response building |
+| Streaming | `crates/obc-agent/src/streaming.rs` | Streaming tool call accumulation and response building. Compiles and is public; nothing in the workspace calls into it |
 
 ---
 
@@ -195,25 +194,25 @@ Oh-Ben-Claw is built on top of the [ZeroClaw](https://github.com/zeroclaw-labs/z
 | Tool discovery | Static configuration | Dynamic via node announcements |
 | Multi-device | Multiple boards, direct connections | Fleet of nodes over network |
 | Browser automation | ✗ | ✅ CDP (7 tools) |
-| Image memory | ✗ | ✅ SQLite-backed |
+| Image memory | ✗ | ✗ — `obc-memory/src/image.rs` was removed 2026-07-30 |
 | Deployment planner | ✗ | ✅ Rule-based + LLM swarm |
 | GUI | ✗ | ✅ Tauri 2 + React 18 |
 | Node pairing | ✗ | ✅ HMAC-SHA256 |
 | MCP integration | ✗ | ✅ Client + server |
 | Vision pipeline | ✗ | ✅ |
 | Audio pipeline | ✗ | ✅ |
-| Sensor fusion | ✗ | ✅ |
-| Proactive tasks | ✗ | ✅ HEARTBEAT.md |
-| ClawHub registry | ✗ | ✅ |
+| Pose fusion | ✗ | ✅ `obc-navigation/src/pose_fusion.rs` — weighted position, circular-mean heading. Not a Kalman/median sensor-fusion layer |
+| Proactive tasks | ✗ | ✗ — the module behind it is parked, and ROADMAP.md carries the disclosure |
+| ClawHub registry | ✗ | ✗ — no registry or install code is in the tree; `[clawhub]` still parses |
 | Model failover | ✗ | ✅ |
 | Retry policy | ✗ | ✅ Exponential backoff |
 | Human approval | ✗ | ✅ 3 autonomy levels |
 | Cost tracking | ✗ | ✅ Daily/monthly budgets |
-| Docker sandbox | ✗ | ✅ |
+| Docker sandbox | ✗ | ✗ — the `native`/`docker`/`wasm` runtime abstraction was removed 2026-07-30 rather than wired; see README |
 | Reflexion / Plan-and-Execute | ✗ | ✗ — implemented, never wired, removed 2026-08-21 |
 | Edge-native mode | ✗ | ✅ (ESP32-S3, NanoPi) |
-| A2A protocol | ✗ | ✅ Client + server |
+| A2A protocol | ✗ | ✅ server (`A2AServer`, wired in `src/main.rs`) — `A2AClient` is constructed nowhere |
 | Structured output | ✗ | ✅ JSON mode / JSON Schema |
-| Streaming tool calls | ✗ | ✅ Accumulator + builder |
-| WASM sandbox | ✗ | ✅ Runtime adapter |
+| Streaming tool calls | ✗ | ✗ — `obc-agent/src/streaming.rs` compiles and nothing outside it calls in |
+| WASM sandbox | ✗ | ✗ — `WasmRuntime` was removed 2026-07-30 rather than given its `wasmtime` dependency; see README |
 | Persistent cost tracking | ✗ | ✅ SQLite-backed |

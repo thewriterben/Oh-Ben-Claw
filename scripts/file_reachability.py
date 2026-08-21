@@ -552,8 +552,31 @@ ITEM_ALIASES = {
     #
     # Which is the shape to expect. An entry here is not permanent furniture; it
     # is a question asked of one symbol, and a question that gets answered stops
-    # being a question. The dict being empty means every claim in the table that
-    # this mechanism could check, it has.
+    # being a question.
+    #
+    # ── The other twenty-two, 2026-08-21 ─────────────────────────────────────
+    # Removing the reflexion aliases raised the obvious question: of the 22 other
+    # ticks in that table, how many were true? All 22 were checked by hand. Eight
+    # were false or overstated -- image memory (the file was deleted 2026-07-30),
+    # proactive tasks (heartbeat is disclosed unwired in ROADMAP.md, and this
+    # script's own contradiction section has been saying so), the ClawHub
+    # registry, the Docker sandbox and the WASM sandbox (both removed rather than
+    # wired, and README.md says so in a blockquote three pages away), the A2A
+    # *client* half, streaming tool calls, and sensor fusion, which is pose
+    # fusion and has no Kalman filter in it.
+    #
+    # These are the ones a symbol can carry. The rest of that table's rows are
+    # true and are backed by things this script already sees reached -- there is
+    # nothing for an alias to add, and adding one would be decoration.
+    # `ClawHubClient` and `SkillRegistryIndex` were declared here for two
+    # minutes and the guard threw them out: they are not public items, they
+    # are not items at all. README.md names them in a *dated blockquote*
+    # recording the state when `skill_forge/registry.rs` existed, and I read
+    # that record as a description of the tree. The guard caught it, which is
+    # the second time today an instrument was right about me.
+    "A2AClient": ("A2A protocol",),
+    "StreamingToolCallAccumulator": ("Streaming tool calls",),
+    "StreamingResponseBuilder": ("Streaming tool calls",),
 }
 
 
