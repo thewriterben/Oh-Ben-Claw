@@ -60,16 +60,23 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-FIRMWARE = ROOT / "firmware" / "obc-esp32-s3" / "src" / "main.rs"
+FIRMWARE = ROOT / "firmware" / "obc-esp32-s3" / "src" / "board.rs"
+
+# The anchor moved with the object. `describe` lives in board.rs so that
+# tests/firmware_node_selfreport.rs can compile it for the host; this script is
+# now the lint that stops a *new* build-varying field being written out as a
+# literal, which the tests would not notice because they assert the fields that
+# exist rather than the ones someone adds.
+ANCHOR = "pub fn describe"
 
 # Fields whose correct value depends on which board or feature set was built.
 # Each maps to what it must be derived from, for the error message.
 BUILD_VARYING = {
-    "board": "a BOARD_NAME const behind the same cfg as the pin maps",
-    "gpio": "OUTPUT_PINS",
-    "i2c_bus": "an I2C_PINS const, the one the driver is opened with",
-    "camera": "cfg!(feature = \"camera\")",
-    "microphone": "cfg!(not(feature = \"board-waveshare-21\"))",
+    "board": "board.name",
+    "gpio": "board.output_pins, the list the Track 0 gate is seeded with",
+    "i2c_bus": "board.i2c, the pins the driver is opened with",
+    "camera": "the camera_on parameter",
+    "microphone": "board.has_mic",
 }
 
 # A literal is a bare string, number, array of numbers, or bool. Anything else
@@ -93,12 +100,12 @@ def capabilities_block(text: str) -> str:
     does not silently stop this from checking anything -- a checker that
     quietly finds nothing to check is worse than no checker.
     """
-    start = text.find('"capabilities"')
+    start = text.find(ANCHOR)
     if start == -1:
-        sys.exit("could not find the `capabilities` arm in " + str(FIRMWARE))
+        sys.exit(f"could not find `{ANCHOR}` in {FIRMWARE}")
     open_brace = text.find("json!({", start)
     if open_brace == -1:
-        sys.exit("found the `capabilities` arm but no `json!({` in it")
+        sys.exit(f"found `{ANCHOR}` but no `json!({{` in it")
     i = text.index("{", open_brace + len("json!("))
     depth = 0
     for j in range(i, len(text)):
@@ -145,20 +152,20 @@ def field_values(block: str) -> dict[str, str]:
 SELFTEST = [
     ("the hardcoded gpio list that caused this",
      '"node_id": NODE_ID, "gpio": [21, 3, 6, 7, 8], "wifi": true', False),
-    ("the same field, wired to OUTPUT_PINS",
-     '"node_id": NODE_ID, "gpio": OUTPUT_PINS, "wifi": true', True),
+    ("the same field, read off the board",
+     '"node_id": node_id, "gpio": board.output_pins, "wifi": true', True),
     ("a hardcoded board name",
      '"board": "seeed-xiao-esp32-s3"', False),
-    ("a board name behind a const",
-     '"board": BOARD_NAME', True),
+    ("a board name read off the board",
+     '"board": board.name', True),
     ("a hardcoded microphone claim",
      '"microphone": true', False),
-    ("a microphone claim from cfg!",
-     '"microphone": cfg!(not(feature = "board-waveshare-21"))', True),
+    ("a microphone claim read off the board",
+     '"microphone": board.has_mic', True),
     ("a hardcoded i2c bus",
      '"i2c_bus": [4, 5]', False),
-    ("an i2c bus from the const the driver uses",
-     '"i2c_bus": [I2C_PINS.0, I2C_PINS.1]', True),
+    ("an i2c bus computed from the board's",
+     '"i2c_bus": i2c', True),
     ("fields that do not vary by build are left alone",
      '"node_id": NODE_ID, "firmware_version": FIRMWARE_VERSION, "edge_agent": true', True),
     ("the tools array does not register as a field",
