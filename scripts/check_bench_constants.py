@@ -62,6 +62,7 @@ FW = ROOT / "firmware" / "obc-esp32-s3" / "src"
 
 # Documents a person reads with hardware in front of them.
 BENCH_DOCS = [
+    "docs/BENCH-RUN-THE-FOUR-OPEN-CLAIMS.md",
     "docs/HARDWARE-TEST-WALKTHROUGH.md",
     "docs/BENCH-WALKTHROUGH.md",
     "docs/BENCH-WALKTHROUGH-ADVANCED.md",
