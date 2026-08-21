@@ -140,8 +140,21 @@ impl SafetyGate {
         }
 
         // 2) Value range.
-        if self.policy.value_min.map_or(false, |min| value < min)
-            || self.policy.value_max.map_or(false, |max| value > max)
+        //
+        // `is_some_and` rather than `map_or(false, ..)`: clippy 1.98 flags the
+        // latter, and this file had never been told. `firmware/obc-esp32-s3`
+        // is not a workspace member -- it builds for `xtensa-esp32s3-espidf`
+        // with its own toolchain -- so `cargo clippy --workspace --all-targets
+        // -- -D warnings` has never seen it. The host mirror of this gate,
+        // `crates/obc-safety/src/limits.rs`, has been linted on every PR for
+        // months; the on-MCU copy that `docs/SAFETY-CASE.md` §4 calls the
+        // load-bearing property of the whole safety case has been linted never.
+        //
+        // Found on 2026-08-21 by OBC-Prime's `bench` demo, which compiles this
+        // file through a `#[path]` shim to check that host and node agree about
+        // a limit table. Pulling it into a linted crate linted it.
+        if self.policy.value_min.is_some_and(|min| value < min)
+            || self.policy.value_max.is_some_and(|max| value > max)
         {
             return Err(SafetyViolation::ValueOutOfRange {
                 value,
