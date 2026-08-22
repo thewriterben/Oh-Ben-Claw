@@ -228,7 +228,12 @@ def main() -> int:
     print("=" * 68)
     print("  1. Does a refusal stop the wire moving?")
     print("=" * 68)
-    print("  Wire an LED + 330R from GPIO 3 to ground, and a second on GPIO 7.")
+    print("  Wire, each through 330R to ground:")
+    print("    GPIO 3  -- the CONTROL. In the pushed table, so it must light.")
+    print("    GPIO 8  -- the REFUSAL. An output at boot but NOT in the pushed")
+    print("               table, so it must stay dark. Step 1b writes to it, and")
+    print("               a bare pin cannot tell you it stayed dark.")
+    print("    GPIO 7  -- optional second allowed pin.")
     input("  Press Enter when the LEDs are wired. ")
 
     applied = node.send("set_limits", {"limits": LIMITS}).get("result", {})
