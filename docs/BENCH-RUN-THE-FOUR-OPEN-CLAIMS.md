@@ -38,8 +38,27 @@ prompts is not while holding a soldering iron. It talks to a simulated node that
 enforces the same policy, so refusals go down the refusal path; it says nothing
 about your firmware or your board.
 
-Everything needed to flash is already installed on this machine: `espup`,
-`espflash`, the `esp` rust toolchain, and pyserial.
+`espup`, `espflash` and the `esp` rust toolchain are installed on this machine
+and flashing works. **pyserial is the one to check**, because "installed" and
+"importable" are different claims:
+
+```powershell
+python -c "import serial; print(serial.__version__)"
+```
+
+On 2026-08-22 that failed in the flashing shell with `ModuleNotFoundError` while
+the same package imported fine elsewhere — pyserial was installed with `--user`,
+into `%APPDATA%\Python\Python314\site-packages`, which Python skips inside a
+virtualenv or when `PYTHONNOUSERSITE` is set. Installing it against the
+interpreter by full path avoids the whole question:
+
+```powershell
+python -c "import sys; print(sys.executable)"   # then use that path:
+& "C:\Python314\python.exe" -m pip install pyserial
+```
+
+`bench_run.py` now says this itself, with your interpreter's real path filled
+in, instead of a bare traceback.
 
 ---
 

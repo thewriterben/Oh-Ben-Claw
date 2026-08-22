@@ -58,7 +58,20 @@ class Node:
             self.port = "(simulated)"
             self._sim = _Sim()
             return
-        import serial  # imported here so --dry-run needs no pyserial
+        try:
+            import serial  # imported here so --dry-run needs no pyserial
+        except ModuleNotFoundError:
+            sys.exit(
+                "pyserial is not importable from this interpreter.\n"
+                f"  interpreter: {sys.executable}\n"
+                "  install it into THIS one, not whichever python is on PATH\n"
+                "  in another window:\n\n"
+                f'    "{sys.executable}" -m pip install pyserial\n\n'
+                "  It can be installed and still not import: a --user install\n"
+                "  lands in %APPDATA%\\Python\\PythonXY\\site-packages, which is\n"
+                "  skipped inside a virtualenv or when PYTHONNOUSERSITE is set.\n"
+                "  The line above sidesteps both by naming the interpreter."
+            )
 
         self.port = port or self._detect(serial)
         self.ser = serial.Serial(self.port, BAUD, timeout=2)
