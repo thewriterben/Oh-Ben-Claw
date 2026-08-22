@@ -4,13 +4,22 @@ The camera is **opt-in**. The default firmware build needs no PSRAM and no camer
 component — `camera_capture` returns a stub. This guide turns on a real OV2640
 capture via the `espressif/esp32-camera` IDF component. Three files + a feature flag.
 
-> **Board caveat, corrected 2026-08-21.** On the Waveshare ESP32-S3 Touch
-> LCD 2.1 the camera's SCCB (its I2C control bus) is on **GPIO4/5**. This
-> block used to add "the same pins as the I2C sensor bus", and that was the
-> stated reason the firmware disables the sensor bus in camera builds.
-> It is not true of either build: the Waveshare's sensor bus is 15/7, and
-> the default XIAO bus moved from 4/5 to **5/6** (the pads the silkscreen
-> marks SDA and SCL) on the same day.
+> **Board caveat, corrected twice on 2026-08-21 — the second time by looking
+> at the board.** This document and `camera.rs` both described the pin map
+> below as the Waveshare ESP32-S3-Touch-LCD-2.1's, "OV2640 via the FPC
+> connector". **That board has no camera connector.** Its only FPC connector
+> is the screen's. `Cargo.toml` and `BENCH-PINOUT-CARDS.md` Card 3 had said so
+> since July; the firmware said otherwise and nothing compared them.
+>
+> Which board the map is for is now an open question — see `camera.rs`. Building
+> it against `board-waveshare-21` is a compile error, because those pins are
+> that board's LCD lines.
+>
+> The earlier correction the same day: the sensor-bus overlap ("the same pins as
+> the I2C sensor bus") was the stated reason for disabling that bus in camera
+> builds, and it is not true of either build. The Waveshare's bus is 15/7 and
+> the default XIAO bus moved from 4/5 to **5/6** (the pads the silkscreen marks
+> SDA and SCL).
 >
 > The firmware still **disables the sensor I2C bus when the `camera` feature
 > is on** (`#[cfg(not(feature = "camera"))]`), so you still get sensors *or*
