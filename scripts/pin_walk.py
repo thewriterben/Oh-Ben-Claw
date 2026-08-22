@@ -68,6 +68,10 @@ def main() -> int:
                          "only a pad that blinks in time is the pin you drove.")
     ap.add_argument("--off", action="store_true",
                     help="drive every output pin low and exit")
+    ap.add_argument("--report", action="store_true",
+                    help="write each boot-policy pin high, read it back, write it "
+                         "low. Says whether the pin follows the write, without "
+                         "needing anybody to look at an LED.")
     ap.add_argument("--seconds", type=float, default=2.0,
                     help="how long each pin stays high (default 2)")
     ap.add_argument("--passes", type=int, default=3)
@@ -80,6 +84,41 @@ def main() -> int:
         for p in BOOT_PINS:
             print(f"  pin {p} -> 0")
             write(node, p, 0)
+        return 0
+
+    if a.report:
+        print("\n  Writing each boot-policy pin high, reading it back, writing it low.")
+        print("  The read-back only means something because the firmware now")
+        print("  configures these pins INPUT_OUTPUT: with plain OUTPUT the input")
+        print("  path is off and gpio_get_level returns 0 whatever the pin does.")
+        print()
+        for pin in BOOT_PINS:
+            before = node.send("gpio_read", {"pin": pin}, rid=f"rep-{pin}-b").get("result")
+            w1 = node.send("gpio_write", {"pin": pin, "value": 1}, rid=f"rep-{pin}-1")
+            time.sleep(0.15)
+            high = node.send("gpio_read", {"pin": pin}, rid=f"rep-{pin}-h").get("result")
+            node.send("gpio_write", {"pin": pin, "value": 0}, rid=f"rep-{pin}-0")
+            time.sleep(0.15)
+            low = node.send("gpio_read", {"pin": pin}, rid=f"rep-{pin}-l").get("result")
+            verdict = ("pin follows the write" if (high == 1 and low == 0)
+                       else "WRITE ok, PIN DID NOT MOVE" if w1.get("ok")
+                       else "write refused")
+            print(f"    GPIO {pin:>2}: before={before!r} after write 1={high!r} "
+                  f"after write 0={low!r}   {verdict}")
+            time.sleep(0.7)
+
+        print("\n  Pins this build drives for its own reasons, for comparison:")
+        for pin, what in ((43, "UART1 TX, silk D6 -- idles HIGH"),
+                          (1, "I2S WS, silk D0"),
+                          (0, "I2S SCK"),
+                          (2, "I2S SD")):
+            r = node.send("gpio_read", {"pin": pin}, rid=f"cmp-{pin}").get("result")
+            print(f"    GPIO {pin:>2}: {r!r}   ({what})")
+
+        if node.unsolicited:
+            print(f"\n  {len(node.unsolicited)} unsolicited line(s) from the node were")
+            print("  skipped while matching replies by id. That is the node's own")
+            print("  telemetry, not an answer to anything asked here.")
         return 0
 
     if a.blink:
