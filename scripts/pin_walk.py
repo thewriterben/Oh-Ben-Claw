@@ -25,6 +25,14 @@ GPIO 21 is in that list but is not brought out to the XIAO's 14-pin header, so
 nothing on the breadboard will respond to it. It is included because the node
 should still accept the write: if 21 is refused, the problem is the gate, not
 the wiring.
+
+A lit pad is not evidence. Some pads are high before this script runs: GPIO 43
+(silk `D6`) is the UART1 spine uplink and an idle UART transmit line sits HIGH
+from boot, so an LED there glows steadily no matter which pin you drive. On
+2026-08-22 that produced a false positive -- `D6` lit while GPIO 3 was held
+high, which reads as "D6 is GPIO 3" and is not. Prefer `--blink`: a pad that
+changes in time with the script is the pin you drove; a pad that is merely lit
+is a pad that was already lit.
 """
 
 import argparse
@@ -54,6 +62,10 @@ def main() -> int:
     ap.add_argument("--pin", type=int, help="drive only this pin")
     ap.add_argument("--hold", action="store_true",
                     help="hold the pin high until you press Enter")
+    ap.add_argument("--blink", action="store_true",
+                    help="blink the pin ~1 Hz forever. Prefer this to --hold: a "
+                         "pad that is lit may simply be an idle UART line, and "
+                         "only a pad that blinks in time is the pin you drove.")
     ap.add_argument("--off", action="store_true",
                     help="drive every output pin low and exit")
     ap.add_argument("--seconds", type=float, default=2.0,
@@ -68,6 +80,27 @@ def main() -> int:
         for p in BOOT_PINS:
             print(f"  pin {p} -> 0")
             write(node, p, 0)
+        return 0
+
+    if a.blink:
+        pin = a.pin or 3
+        print(f"\n  Blinking GPIO {pin} about once a second, forever. Ctrl+C to stop.")
+        print("  Look for a pad that BLINKS, not one that is lit.")
+        print()
+        print("  A steadily lit pad proves nothing: GPIO 43 (silk `D6`) is the")
+        print("  UART1 spine uplink, and an idle UART transmit line sits HIGH.")
+        print("  It is lit from boot, whatever this script does. So is anything")
+        print("  else with an internal pull-up. Only the blink is evidence.")
+        print()
+        try:
+            while True:
+                write(node, pin, 1)
+                time.sleep(0.6)
+                write(node, pin, 0)
+                time.sleep(0.6)
+        except KeyboardInterrupt:
+            write(node, pin, 0)
+            print(f"\n  GPIO {pin} -> 0")
         return 0
 
     if a.hold:
