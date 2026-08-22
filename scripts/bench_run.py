@@ -48,6 +48,27 @@ LIMITS = [
 ]
 
 
+def _decode_result(raw):
+    """The firmware's `result` is always a String. Give back what it holds.
+
+    `Response` in `firmware/obc-esp32-s3/src/main.rs` declares `result: String`,
+    so `capabilities` arrives as a JSON *document inside a JSON string* and a
+    sensor reading arrives as `"41.7"`, not `41.7`. This script read `result`
+    as though it were already an object and crashed on the first real node it
+    ever met -- while `--dry-run` passed, because the simulator had been written
+    from the documentation instead of from the wire format. A simulator that
+    disagrees with the firmware validates the script against a fiction.
+    """
+    if not isinstance(raw, str):
+        return raw
+    if raw == "":
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
 class Node:
     """A serial link to the node, or a simulation of one."""
 
@@ -151,9 +172,12 @@ class Node:
                     break
         self.log.append((line, raw))
         try:
-            return json.loads(raw) if raw else {}
+            reply = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
             return {"_unparsed": raw}
+        if isinstance(reply, dict) and "result" in reply:
+            reply["result"] = _decode_result(reply["result"])
+        return reply
 
 
 class _Sim:
@@ -162,7 +186,24 @@ class _Sim:
     Deliberately not a mock that agrees with everything: it enforces the pushed
     policy, so the refusal steps in a --dry-run go down the refusal path and the
     record shows what a real refusal would look like.
+
+    It must also *speak* the way the firmware speaks. `Response.result` is a
+    `String`, so every reply below wraps its payload with `json.dumps` a second
+    time and refusals carry `refused: true`. Until 2026-08-22 this class emitted
+    bare objects and numbers, so --dry-run exercised a protocol the node does
+    not use and the script crashed the first time it met real hardware.
     """
+
+    @staticmethod
+    def _ok(rid, payload) -> str:
+        """`ok` reply. `payload` goes inside the string, as the firmware does."""
+        return json.dumps({"id": rid, "ok": True, "result": json.dumps(payload)})
+
+    @staticmethod
+    def _refuse(rid, why: str) -> str:
+        """Track 0 refusing. `refused` distinguishes policy from malfunction."""
+        return json.dumps({"id": rid, "ok": False, "result": "",
+                           "refused": True, "error": why})
 
     def __init__(self) -> None:
         self.pins = [21, 3, 7, 8]
@@ -174,12 +215,15 @@ class _Sim:
         cmd, args = req["cmd"], req.get("args", {})
         rid = req.get("id")
         if cmd in ("capabilities", "announce"):
-            return json.dumps({
-                "id": rid, "ok": True, "result": {
-                    "node_id": NODE_ID, "board": "seeed-xiao-esp32-s3",
-                    "firmware_version": "0.4.2", "gpio": self.pins,
-                    "i2c_bus": [5, 6], "camera": False, "microphone": True,
-                }})
+            return self._ok(rid, {
+                "node_id": NODE_ID, "board": "seeed-xiao-esp32-s3",
+                "firmware_version": "0.4.2", "gpio": self.pins,
+                "i2c_bus": [5, 6], "camera": False, "microphone": True,
+                "edge_agent": True, "transport": "usb-serial-jtag", "wifi": True,
+                # The real node also carries a `tools` array. Not reproduced
+                # here: nothing in this procedure reads it, and inventing a
+                # plausible copy is how the shape drifted in the first place.
+            })
         if cmd == "set_limits":
             for lim in args.get("limits", []):
                 if lim.get("tool") == "gpio_write" and lim.get("node_id") in ("", NODE_ID):
@@ -187,30 +231,31 @@ class _Sim:
                     self.vmin, self.vmax = lim.get("value_min"), lim.get("value_max")
                     self.interval = lim.get("min_interval_ms")
                     self.last.clear()
-                    return json.dumps({"id": rid, "ok": True, "result": {
+                    return self._ok(rid, {
                         "applied": True, "allowed_pins": self.pins,
                         "value_min": self.vmin, "value_max": self.vmax,
-                        "min_interval_ms": self.interval}})
-            return json.dumps({"id": rid, "ok": True, "result": {"applied": False}})
+                        "min_interval_ms": self.interval})
+            return self._ok(rid, {"applied": False})
         if cmd == "gpio_write":
             pin, value, now = args.get("pin"), args.get("value"), time.time() * 1000
             if pin not in self.pins:
-                return json.dumps({"id": rid, "ok": False, "error": "pin not in the allow-list"})
+                return self._refuse(rid, "pin not in the allow-list")
             if self.vmin is not None and not (self.vmin <= value <= self.vmax):
-                return json.dumps({"id": rid, "ok": False, "error": "value out of range"})
+                return self._refuse(rid, "value out of range")
             if self.interval and pin in self.last and now - self.last[pin] < self.interval:
-                return json.dumps({"id": rid, "ok": False, "error": "faster than min_interval_ms"})
+                return self._refuse(rid, "faster than min_interval_ms")
             self.last[pin] = now
-            return json.dumps({"id": rid, "ok": True, "result": None})
+            return self._ok(rid, None)
         if cmd == "gpio_read":
-            return json.dumps({"id": rid, "ok": True, "result": 0})
+            return self._ok(rid, 0)
         if cmd == "sensor_read":
             if args.get("sensor") == "bme280":
-                return json.dumps({"id": rid, "ok": True, "result": 41.7})
+                return self._ok(rid, 41.7)
             if args.get("field") == "battery_soc":
-                return json.dumps({"id": rid, "ok": True, "result": 87.5})
-            return json.dumps({"id": rid, "ok": True, "result": 9.79})
-        return json.dumps({"id": rid, "ok": False, "error": f"unknown cmd {cmd}"})
+                return self._ok(rid, 87.5)
+            return self._ok(rid, 9.79)
+        return json.dumps({"id": rid, "ok": False, "result": "",
+                           "error": f"unknown cmd {cmd}"})
 
 
 def ask(question: str, options: str = "y/n") -> str:
@@ -263,7 +308,13 @@ def main() -> int:
     print("=" * 68)
     print("  0. What is this node?")
     print("=" * 68)
-    caps = node.send("capabilities").get("result", {})
+    caps = node.send("capabilities").get("result")
+    if not isinstance(caps, dict):
+        # Never index a reply whose shape you have not checked. The first real
+        # node this script met returned a JSON string and it died on .get().
+        if caps is not None:
+            print(f"    !! `result` is a {type(caps).__name__}, not an object: {caps!r}")
+        caps = {}
     show("capabilities", caps)
     rec["board reported"] = caps.get("board", "(none)")
     rec["node_id reported"] = caps.get("node_id", "(none)")
@@ -277,6 +328,23 @@ def main() -> int:
           f"{rec['gpio reported']}, I2C {rec['i2c reported']}.")
     print("    Those came from the node, not from this script. If they disagree")
     print("    with the board in front of you, that disagreement is the finding.")
+
+    # The node's own answer is the only way to tell which build is on it. The
+    # 4/5 bus and GPIO 6 as an output are the pre-2026-08-21 firmware: on that
+    # build the sensor pads are not the bus the firmware drives, so every
+    # reading is a stub, and GPIO 6 is an output while the corrected build has
+    # it free.
+    stale = []
+    if caps.get("i2c_bus") == [4, 5]:
+        stale.append("I2C on 4/5 (corrected build drives 5/6)")
+    if isinstance(caps.get("gpio"), list) and 6 in caps["gpio"]:
+        stale.append("GPIO 6 still an output")
+    if stale:
+        print()
+        print("    !! THIS IS OLD FIRMWARE: " + "; ".join(stale))
+        print(f"       reported version {caps.get('firmware_version')!r}.")
+        print("       Reflash before going further. Sensor readings from this")
+        print("       build are stubs that look like readings.")
 
     if a.probe:
         print()
@@ -295,7 +363,9 @@ def main() -> int:
         print(f"    --probe only. Nothing was wired, nothing was written, no")
         print(f"    record file. node_id {'matches' if ok else 'DOES NOT match'}"
               f" {NODE_ID!r}.")
-        return 0 if ok else 1
+        if stale:
+            print("    Exiting non-zero on the firmware, not the node id.")
+        return 0 if (ok and not stale) else 1
 
     print()
     print("=" * 68)
@@ -309,7 +379,10 @@ def main() -> int:
     print("    GPIO 7  -- optional second allowed pin.")
     input("  Press Enter when the LEDs are wired. ")
 
-    applied = node.send("set_limits", {"limits": LIMITS}).get("result", {})
+    applied = node.send("set_limits", {"limits": LIMITS}).get("result")
+    if not isinstance(applied, dict):
+        print(f"    !! set_limits `result` is not an object: {applied!r}")
+        applied = {}
     show("set_limits", applied)
     rec["set_limits applied"] = applied.get("applied")
     if not applied.get("applied"):
