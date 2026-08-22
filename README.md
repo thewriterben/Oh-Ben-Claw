@@ -753,6 +753,7 @@ Oh-Ben-Claw/
 │   ├── obc-agent/            # The agent loop, dispatcher, and the Track 0 chokepoint
 │   ├── obc-approval/         # Autonomy levels, per-call risk check, persisted grants
 │   ├── obc-audio/            # Audio pipeline + audio suite (hear / speak)
+│   ├── obc-body/             # ClawBot body model -> Track 0 limits (lib.rs unwired - ROADMAP)
 │   ├── obc-channels/         # Telegram, Discord, Feishu, IRC, Signal, Matrix, ...
 │   ├── obc-config/           # Configuration schema and loading (Config::validate)
 │   ├── obc-conscience/       # What the agent may observe and reach; decision log
