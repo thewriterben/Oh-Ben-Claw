@@ -101,6 +101,21 @@ one of the Heltecs, and flashing node firmware onto one overwrites its gateway
 build. That is not hypothetical: it happened on 2026-08-22.
 
 ```powershell
+.\scripts\flash-node.ps1              # from anywhere inside the repo
+.\scripts\flash-node.ps1 -PortOnly    # says what it would flash, and stops
+```
+
+That script exists because the four-line version below has four independent
+ways to go wrong and each one has cost a bench cycle: `export-esp.ps1` not
+sourced, `CARGO_TARGET_DIR` not set, the wrong working directory, the wrong
+board. It sources the environment, sets the target dir, resolves the crate from
+its own location, and picks the port by USB vendor id — refusing to flash
+anything that is not VID `303A`, rather than taking whatever is present.
+
+The manual form, for a machine that does not have the script, or when you want
+to see what it is doing:
+
+```powershell
 . $env:USERPROFILE\export-esp.ps1          # LIBCLANG_PATH etc. for the esp toolchain
 $env:CARGO_TARGET_DIR = "C:\e"             # REQUIRED on Windows -- see below
 cd F:\Documents\GitHub\Oh-Ben-Claw\firmware\obc-esp32-s3    # absolute on purpose
