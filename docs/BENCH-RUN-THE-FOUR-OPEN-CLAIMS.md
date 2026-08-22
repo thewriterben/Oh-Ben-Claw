@@ -116,11 +116,22 @@ confirmed against a second source — two references disagree about which end of
 the right-hand column the power pins sit at. The silk is on the board in front
 of you and is not in doubt.
 
-`D2` = GPIO 3 is **bench-verified, 2026-08-22**: with `pin_walk --pin 3 --blink`
-toggling the pin, `D2` was the only pad on the board swinging 0 ↔ 3.3 V on a
-meter. That is a measurement on this board, not a citation. `D8` = GPIO 7 and
-`D9` = GPIO 8 are still from a vendor pin list and are confirmed electrically by
-step 1-pre before anything depends on them.
+All three pads are **bench-verified, 2026-08-22**. With
+`pin_walk --pin N --blink` toggling each pin in turn and a meter on the board's
+pads directly, exactly one pad swung 0 ↔ 3.3 V each time:
+
+| Driven | Pad that swung |
+|---|---|
+| GPIO 3 | `D2` |
+| GPIO 7 | `D8` |
+| GPIO 8 | `D9` |
+
+That is a measurement on this board, not a citation, and it agrees with what
+`HARDWARE-TEST-WALKTHROUGH.md` had already recorded for `D2` and `D8`. The doubt
+was misplaced: what could not be sourced was the *order the pads run down each
+column*, and that was allowed to spread into doubt about the *mapping*, which is
+a different claim. The mapping is now settled by instrument. The ordering
+remains unsourced and no longer matters — nothing here counts pads.
 
 Each LED is `pin's row → 330 Ω → LED long leg | LED short leg → GND`. On a
 breadboard: sit the XIAO across the centre channel so each pin owns the rest of
