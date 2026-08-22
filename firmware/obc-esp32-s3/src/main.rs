@@ -457,11 +457,33 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Configure output pins via raw ESP-IDF sys API.
+    //
+    // Two things here used to be wrong in the same way: a return value nobody
+    // read, and a mode that made the read-back lie.
+    //
+    // `gpio_set_direction` returns `esp_err_t` and this loop discarded it. If it
+    // fails the pin stays as `gpio_reset_pin` left it -- input, weak pull-up,
+    // output driver off -- and `gpio_set_level` on such a pin still returns
+    // ESP_OK. So every write reports success and no wire moves, which is
+    // precisely the failure the Track 0 bench exists to detect, arriving through
+    // the floor rather than through the gate.
+    //
+    // The mode is INPUT_OUTPUT rather than OUTPUT because `GPIO_MODE_OUTPUT`
+    // disables the input path, and `gpio_get_level` then returns 0 whatever the
+    // pin is doing. `gpio_read` is load-bearing in the bench procedure -- step
+    // 1b reads pin 8 back after a refused write -- and a read that is always 0
+    // agrees with "the pin stayed low" for the wrong reason.
     unsafe {
         use esp_idf_svc::sys::*;
         for &pin in OUTPUT_PINS {
-            gpio_reset_pin(pin);
-            gpio_set_direction(pin, gpio_mode_t_GPIO_MODE_OUTPUT);
+            let reset = gpio_reset_pin(pin);
+            let dir = gpio_set_direction(pin, gpio_mode_t_GPIO_MODE_INPUT_OUTPUT);
+            if reset != ESP_OK || dir != ESP_OK {
+                log::error!(
+                    "GPIO {pin}: setup FAILED (reset={reset}, set_direction={dir}). \
+                     Writes to this pin will report success and move nothing."
+                );
+            }
         }
     }
 
