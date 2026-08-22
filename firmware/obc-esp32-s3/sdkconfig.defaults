@@ -18,8 +18,23 @@
 # from one binary at one call site is the signature; a genuine bug in the I2C
 # driver would fail the same way twice.
 #
-# 16384 is a number chosen to get past it, not a number derived from a
-# measurement. `stack_headroom()` in main.rs now logs the high-water mark on
-# either side of the suspect region, so the next boot reports what is actually
-# needed and this line can be set from evidence or put back to 8192.
+# Measured on hardware at 16384, 2026-08-22, XIAO ESP32-S3, default build:
+#
+#   Stack headroom after init:       6516 bytes
+#   Stack headroom after AgentState: 6468 bytes
+#
+# uxTaskGetStackHighWaterMark returns the minimum free the task has EVER had, so
+# by the end of driver init this build had already used 16384 - 6516 = 9868
+# bytes. 8192 was not marginally short, it was short by about 1.7 KB, and the
+# overflow was certain rather than unlucky.
+#
+# It also says where the stack did NOT go: AgentState::new() costs 48 bytes.
+# The 9.8 KB is spent before the startup banner, in `Peripherals::take` and the
+# USB / UART / GPIO driver init above it. Which of those, and why the same
+# 8192 carried the pre-2026-08-21 build, is not answered here - add another
+# stack_headroom() call between them if it needs answering.
+#
+# 16384 is kept rather than trimmed to ~12 KB: the agent and camera paths run
+# deeper than boot does, and 6.5 KB of headroom on a 320 KB heap is cheap
+# insurance against finding this out again from a corrupted backtrace.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
