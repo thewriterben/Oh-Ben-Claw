@@ -81,29 +81,38 @@ in, instead of a bare traceback.
 | Sensor | BME280 on **SDA=GPIO5, SCL=GPIO6** — the pads the silkscreen marks |
 
 **GPIO numbers, not header labels.** The silk differs per board, and on the XIAO
-the two numbering schemes do not line up at all:
+the two numbering schemes do not line up:
 
-| Role | GPIO | XIAO silk | Position, counting from the USB-C end |
+| Role | GPIO | XIAO silk | Which column |
 |---|---|---|---|
-| control, must light | 3 | `D2` | left side, 3rd pad down |
-| refusal, must stay dark | 8 | `D9` | right side, 5th pad down |
-| optional second allowed | 7 | `D8` | right side, 6th pad down |
-| shared return | — | `GND` | right side, 2nd pad down |
+| control, must light | 3 | `D2` | the `D0`–`D6` side |
+| refusal, must stay dark | 8 | `D9` | the `D7`–`D10` / power side |
+| optional second allowed | 7 | `D8` | same side, next to `D9` |
+| shared return | — | `GND` | same side, with `5V` and `3V3` |
 
-`D8` is GPIO 7 and `D9` is GPIO 8: the labels are one apart from the numbers, in
-the direction most likely to look correct. On a FireBeetle they are elsewhere
-again. Find the pad that carries GPIO 3 on your board's vendor pinout; a
-`D`-number copied from another board's card is the mistake this whole document
-exists to avoid.
+`D8` is GPIO 7 and `D9` is GPIO 8 — one apart, in the direction most likely to
+look correct. Wire by matching digits and you wire the wrong two pins, and the
+test looks like it passed.
 
-`D2` = GPIO 3 and `D8` = GPIO 7 are also recorded in
-`HARDWARE-TEST-WALKTHROUGH.md`. `D9` = GPIO 8 is from the vendor pin list and
-has not been bench-verified here — step 1-pre below is what settles it.
+**Find those pads by their printed labels, not by counting positions.** An
+earlier version of this document gave positions ("3rd pad down"). They came out
+of a secondary pinout listing whose top-to-bottom ordering could not be
+confirmed against a second source — two references disagree about which end of
+the right-hand column the power pins sit at. The silk is on the board in front
+of you and is not in doubt. `D2` = GPIO 3 and `D8` = GPIO 7 are recorded in
+`HARDWARE-TEST-WALKTHROUGH.md`; `D9` = GPIO 8 is from a vendor pin list and is
+confirmed electrically by step 1-pre before anything depends on it.
 
-Each LED goes `GPIO pad → 330 Ω → LED long leg | LED short leg → GND`. All three
-share the one GND pad. Nothing connects to 3V3 or 5V. Backwards, an LED simply
-never lights, which on the refusal pin is indistinguishable from the result the
-test is looking for — hence 1-pre.
+Each LED is `pin's row → 330 Ω → LED long leg | LED short leg → GND`. On a
+breadboard: sit the XIAO across the centre channel so each pin owns the rest of
+its own row on its own side; jumper `GND` to the `−` rail on that edge; then for
+each pin, a resistor from its row to an empty row, the LED's long leg in that
+empty row, its short leg in the `−` rail. The two `−` rails on a 400-point board
+are usually not joined to each other — bridge them, or keep each LED on the rail
+nearest its pin. Nothing connects to `3V3` or `5V`.
+
+Backwards, an LED simply never lights, which on the refusal pin is
+indistinguishable from the result the test is looking for — hence 1-pre.
 
 ### Flashing
 
