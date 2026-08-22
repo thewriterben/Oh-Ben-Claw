@@ -43,15 +43,42 @@ Everything needed to flash is already installed on this machine: `espup`,
 | | |
 |---|---|
 | Board | ESP32-S3, default build (the XIAO pin map, whatever board it is on) |
-| Flash | `cd firmware/obc-esp32-s3 && cargo run` — see BRINGUP.md §1 |
+| Flash | see below — **on Windows this needs one env var or it fails** |
 | Serial | 115200, native USB-Serial-JTAG, newline-delimited JSON |
-| Wire | LED + 330 Ω from **GPIO 3** to ground; a second on **GPIO 7** |
+| Wire | LED + 330 Ω to ground on **GPIO 3** (control), **GPIO 8** (refusal), optionally **GPIO 7** |
 | Sensor | BME280 on **SDA=GPIO5, SCL=GPIO6** — the pads the silkscreen marks |
 
 **GPIO numbers, not header labels.** The silk differs per board: on a XIAO,
 GPIO 3 and 7 are `D2` and `D8`; on a FireBeetle they are elsewhere. Find the pad
 that carries GPIO 3 on your board's vendor pinout. A `D`-number copied from
 another board's card is the mistake this whole document exists to avoid.
+
+### Flashing
+
+```powershell
+. $env:USERPROFILE\export-esp.ps1          # LIBCLANG_PATH etc. for the esp toolchain
+$env:CARGO_TARGET_DIR = "C:\e"             # REQUIRED on Windows -- see below
+cd firmware\obc-esp32-s3
+cargo run                                  # flashes, then opens the monitor
+```
+
+The `CARGO_TARGET_DIR` line is not optional and not a preference. Without it
+`esp-idf-sys` aborts with *"Too long output directory … Shorten your project
+path down to no more than 10 characters"* after several minutes of compiling,
+which is a slow and confusing way to learn it. `subst` and junctions do not
+help: the check resolves the real path. It is documented in BRINGUP.md §0.3 and
+is repeated here because a person following this document at a bench should not
+have to cross-reference another one to get past step zero.
+
+Set it per shell; it does not persist. Two other one-time settings are already
+done on this machine and are listed only so a fresh machine knows to do them:
+`git config --global core.longpaths true`, and the ESP-IDF framework installed
+to a short root (`ESP_IDF_TOOLS_INSTALL_DIR = custom:C:/esp`, set in
+`.cargo/config.toml`).
+
+**Exit the monitor with Ctrl+C before running `bench_run.py`.** It holds the
+serial port, and the script will otherwise fail to open it in a way that looks
+like a hardware fault.
 
 Note the firmware commit before you begin: `git rev-parse --short HEAD`.
 
@@ -82,6 +109,13 @@ see a wire.
 
 4. **The refusal.** `gpio_write` pin 8. Expect a refusal in the reply, the LED
    dark, and `gpio_read` on pin 8 returning 0.
+
+   GPIO 8 is the honest choice because it is a real output — it is in
+   `OUTPUT_PINS`, so the firmware configures it at boot — but it is *not* in the
+   limit table this body pushes (`allowed_pins = [3, 7]`). So a dark LED there
+   means the gate refused, not that the pin was never driveable. **It needs an
+   LED on it.** Watching a bare pin stay dark proves nothing at all; this
+   document told you to wire 3 and 7 and then asked about 8 until 2026-08-22.
 
    **Watch the pin, not the reply.** A gate that refuses in the log while the
    pin twitches is the exact failure this step exists to rule out. Use a meter
