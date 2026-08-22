@@ -191,6 +191,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--probe", action="store_true",
+        help="ask the node what it is, print the answer, and stop. No wiring, "
+             "no prompts, no record. Use it when the boot banner is not "
+             "readable -- on a board whose only console is the same "
+             "USB-Serial-JTAG the firmware takes over for commands, it is not.")
     ap.add_argument("--out", default="bench-run-record.md")
     a = ap.parse_args()
 
@@ -223,6 +229,25 @@ def main() -> int:
           f"{rec['gpio reported']}, I2C {rec['i2c reported']}.")
     print("    Those came from the node, not from this script. If they disagree")
     print("    with the board in front of you, that disagreement is the finding.")
+
+    if a.probe:
+        print()
+        print("    verbatim exchange:")
+        for sent, got in node.log:
+            print(f"      >> {sent}")
+            print(f"      << {got or '(nothing)'}")
+        print()
+        if not caps:
+            print("    The node did not answer. That is a finding too: either the")
+            print("    firmware is not running, something else holds the port")
+            print("    (the espflash monitor does -- Ctrl+C it), or the command")
+            print("    channel is not up. It is NOT evidence about the pin map.")
+            return 1
+        ok = caps.get("node_id") == NODE_ID
+        print(f"    --probe only. Nothing was wired, nothing was written, no")
+        print(f"    record file. node_id {'matches' if ok else 'DOES NOT match'}"
+              f" {NODE_ID!r}.")
+        return 0 if ok else 1
 
     print()
     print("=" * 68)

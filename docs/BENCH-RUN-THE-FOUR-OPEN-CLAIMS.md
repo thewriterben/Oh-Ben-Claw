@@ -105,8 +105,35 @@ copy of the limit table, so that a compromised or absent host cannot talk it
 round. Six host-side tests assert the gate refuses correctly. None of them can
 see a wire.
 
-1. **Boot.** The banner must read `obc-esp32-s3-001`. Anything else and every
+1. **Identify the node.** It must be `obc-esp32-s3-001`. Anything else and every
    step below tests the boot policy instead of the pushed one.
+
+   Ask it, do not read it off the monitor:
+
+   ```powershell
+   python scripts\bench_run.py --probe
+   ```
+
+   `--probe` sends `capabilities`, prints the node id, board name, output pins
+   and I2C pins the node reports about itself, and stops. Nothing is wired,
+   nothing is written, no record file is produced. Exit 0 means the node id
+   matched.
+
+   The boot banner is not a reliable instrument on this board and the earlier
+   version of this step was wrong to lean on it. On the XIAO the console and the
+   JSON command channel are the *same* USB-Serial-JTAG peripheral, and `main`
+   installs `UsbSerialDriver` on it before printing anything. The host-side log
+   therefore ends mid-word around `main_task: Calling app_main` — which looks
+   exactly like a crash. Observed 2026-08-22: a first flash whose log ended at
+   `main_task: Calling ap`, mid-word, followed by a ROM banner. Whether that
+   board was crashing or merely un-observable is not settled by the log — which
+   is the point. A console the program under test takes away from you cannot
+   report on the program, in either direction. `--probe` asks over the channel
+   that survives, and a silent node there is a real finding rather than an
+   artefact of the instrument.
+
+   On a board with a separate UART console the banner is still worth reading.
+   `--probe` is correct on both.
 
 2. **Push the table and read back what stuck.** `set_limits` does not
    acknowledge — it returns the active policy:
@@ -152,8 +179,11 @@ marked SDA and SCL was not on the bus the firmware was driving, and GPIO 6 was
 simultaneously a Track 0 output. It failed as a silent stub read, which is
 indistinguishable from a sensor that is not fitted.
 
-1. **The banner.** `I2C sensor bus ready (SDA=5, SCL=6)`. If it says 4/5 you are
-   running an old build.
+1. **Which bus is it actually driving.** `python scripts\bench_run.py --probe`
+   prints the node's own `i2c_bus`; it must be `[5, 6]`. `[4, 5]` means an old
+   build and every reading below would be a stub. The banner line
+   `I2C sensor bus ready (SDA=5, SCL=6)` says the same thing when you can see it
+   — see step 1.1 for why, on this board, you often cannot.
 
 2. **Scan.** The BME280 answers at `0x76` or `0x77`. If nothing answers, the
    wiring or the pull-ups are the first suspects, not the firmware.
@@ -223,7 +253,7 @@ board:             ____________________  (XIAO / FireBeetle / Waveshare / other)
 build:             default | --features board-waveshare-21 | --features camera
 
 1. refusal stops the wire
-   boot banner said:            ____________________
+   node reported (capabilities):____________________
    set_limits returned applied: ____________________
    control (pin 3 lights):      pass / fail
    refusal (pin 8 dark):        pass / fail   measured with: eye / meter / scope
@@ -231,7 +261,7 @@ build:             default | --features board-waveshare-21 | --features camera
    rate limit holds:            pass / fail
 
 2. BME280 on 5/6
-   banner SDA/SCL:              ____________________
+   i2c_bus reported:            ____________________
    address that answered:       ____________________
    humidity at rest:            ________ %RH
    responds to breath:          yes / no
