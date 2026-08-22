@@ -80,6 +80,21 @@ in, instead of a bare traceback.
 | Wire | LED + 330 Ω to ground on **GPIO 3** (control), **GPIO 8** (refusal), optionally **GPIO 7** |
 | Sensor | BME280 on **SDA=GPIO5, SCL=GPIO6** — the pads the silkscreen marks |
 
+**The board needs pins in it.** The XIAO ships with its headers loose in the
+bag, not fitted. An unsoldered board resting on a breadboard connects to
+nothing: every row under it is empty, and a jumper poked into a castellated hole
+makes contact by luck rather than by design. Solder the headers before starting.
+
+This cost most of an evening on 2026-08-22 and every symptom pointed somewhere
+else. The control LED would not light. Two other pads glowed steadily — GPIO 43,
+the UART uplink, which idles high, and a pin in the I2S microphone group — which
+read as "the pin map is wrong". `gpio_write` returned `ok` while nothing moved,
+which read as "the firmware reports success and does nothing", the exact failure
+this document exists to catch. A meter found no pad swinging anywhere, which
+read as "the pin does not drive". All four readings were true and none of them
+was the problem: the chip was driving GPIO 3 correctly the whole time, into an
+unconnected pad. Check this first; it is the cheapest question on the page.
+
 **GPIO numbers, not header labels.** The silk differs per board, and on the XIAO
 the two numbering schemes do not line up:
 
