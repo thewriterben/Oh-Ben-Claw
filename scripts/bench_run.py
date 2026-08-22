@@ -48,17 +48,55 @@ LIMITS = [
 ]
 
 
+def _decode_result(raw):
+    """The firmware's `result` is always a String. Give back what it holds.
+
+    `Response` in `firmware/obc-esp32-s3/src/main.rs` declares `result: String`,
+    so `capabilities` arrives as a JSON *document inside a JSON string* and a
+    sensor reading arrives as `"41.7"`, not `41.7`. This script read `result`
+    as though it were already an object and crashed on the first real node it
+    ever met -- while `--dry-run` passed, because the simulator had been written
+    from the documentation instead of from the wire format. A simulator that
+    disagrees with the firmware validates the script against a fiction.
+    """
+    if not isinstance(raw, str):
+        return raw
+    if raw == "":
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
 class Node:
     """A serial link to the node, or a simulation of one."""
 
     def __init__(self, port: str | None, dry: bool):
         self.dry = dry
         self.log: list[tuple[str, str]] = []
+        # Lines the node said that were not answers to anything we asked:
+        # beacons, link_state, reflex ticks. Kept rather than dropped -- they
+        # are the node's own account of what it was doing during the run.
+        self.unsolicited: list[str] = []
         if dry:
             self.port = "(simulated)"
             self._sim = _Sim()
             return
-        import serial  # imported here so --dry-run needs no pyserial
+        try:
+            import serial  # imported here so --dry-run needs no pyserial
+        except ModuleNotFoundError:
+            sys.exit(
+                "pyserial is not importable from this interpreter.\n"
+                f"  interpreter: {sys.executable}\n"
+                "  install it into THIS one, not whichever python is on PATH\n"
+                "  in another window:\n\n"
+                f'    "{sys.executable}" -m pip install pyserial\n\n'
+                "  It can be installed and still not import: a --user install\n"
+                "  lands in %APPDATA%\\Python\\PythonXY\\site-packages, which is\n"
+                "  skipped inside a virtualenv or when PYTHONNOUSERSITE is set.\n"
+                "  The line above sidesteps both by naming the interpreter."
+            )
 
         self.port = port or self._detect(serial)
         self.ser = serial.Serial(self.port, BAUD, timeout=2)
@@ -66,7 +104,25 @@ class Node:
         self.ser.reset_input_buffer()
 
     @staticmethod
-    def _detect(serial) -> str:
+    def _kind(p) -> str:
+        """What the USB descriptor says this port physically is.
+
+        The node is an ESP32-S3 talking over its *native* USB-Serial-JTAG, so it
+        enumerates under Espressif's own VID. A USB-UART bridge chip cannot be
+        the node: the XIAO has no bridge fitted. On this bench the bridges are
+        the Heltecs (`BENCH-PINOUT-CARDS.md` Card 0), and mistaking one for the
+        node is not hypothetical -- on 2026-08-22 a build was flashed to the
+        LoRa base station because it was the only port present.
+        """
+        vid = getattr(p, "vid", None)
+        if vid == 0x303A:
+            return "native"          # Espressif USB-Serial-JTAG -- could be the node
+        if vid in (0x10C4, 0x1A86, 0x0403, 0x067B):
+            return "bridge"          # CP210x / CH34x / FTDI / Prolific
+        return "unknown"
+
+    @classmethod
+    def _detect(cls, serial) -> str:
         from serial.tools import list_ports
 
         found = list(list_ports.comports())
@@ -75,37 +131,87 @@ class Node:
                 "no serial ports found. Plug the board in over USB-C (a data\n"
                 "cable, not charge-only) and try again, or pass --port."
             )
-        if len(found) == 1:
-            print(f"using the only port present: {found[0].device} "
-                  f"({found[0].description})")
-            return found[0].device
-        print("more than one serial port is present:")
         for p in found:
-            print(f"  {p.device}  {p.description}")
-        sys.exit("pass --port to say which one is the node.")
+            print(f"  {p.device}  {p.description}  [{cls._kind(p)}]")
+
+        native = [p for p in found if cls._kind(p) == "native"]
+        if len(native) == 1:
+            print(f"using {native[0].device}: the only native USB-Serial-JTAG port.")
+            return native[0].device
+        if len(native) > 1:
+            sys.exit("more than one native USB port present. Pass --port.")
+
+        # Nothing that could be the node. Say what these ports are instead of
+        # picking one because it is the only one.
+        sys.exit(
+            "none of these ports is an ESP32-S3 native USB port.\n"
+            "Every port above is a USB-UART bridge chip (CP210x/CH34x/FTDI) or\n"
+            "unrecognised. The node is a XIAO ESP32-S3, which has no bridge\n"
+            "fitted -- it enumerates under Espressif's VID 0x303A. A CP210x on\n"
+            "this bench is one of the Heltecs; `BENCH-PINOUT-CARDS.md` Card 0\n"
+            "records the base station `gw-D8` on COM3.\n\n"
+            "Plug the XIAO in (data cable, not charge-only). If it still does\n"
+            "not appear, that is the finding -- do not fall back to a bridge\n"
+            "port, and do not flash one: it is a different board with a\n"
+            "different pin map and its own firmware.\n\n"
+            "--port overrides this if you know better."
+        )
 
     def send(self, cmd: str, args: dict | None = None, rid: str | None = None) -> dict:
         req = {"id": rid or cmd, "cmd": cmd, "args": args or {}}
         line = json.dumps(req)
         if self.dry:
-            raw = self._sim.handle(req)
+            # The simulator interleaves a telemetry line before its answer, the
+            # way the node does, so --dry-run actually exercises the id match
+            # instead of agreeing that there is nothing to match against.
+            raw = ""
+            for chunk in self._sim.handle(req):
+                try:
+                    obj = json.loads(chunk)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict) or obj.get("id") != req["id"]:
+                    self.unsolicited.append(chunk)
+                    continue
+                raw = chunk
+                break
         else:
             self.ser.write((line + "\n").encode())
             raw = ""
             deadline = time.time() + 3
             while time.time() < deadline:
                 chunk = self.ser.readline().decode(errors="replace").strip()
-                if not chunk:
+                if not chunk.startswith("{"):
                     continue
-                # The node also logs; a reply is the line that parses as JSON.
-                if chunk.startswith("{"):
-                    raw = chunk
-                    break
+                # A reply is the line whose `id` is the one we just sent.
+                #
+                # Matching "the first line that parses as JSON" was wrong, and
+                # wrong in the worst available way. This node talks unprompted:
+                # `beacon` every ~30 s, `link_state`, and a `reflex` line every
+                # ~10 s while no host is attached. Every one of those is JSON on
+                # the same wire. Taking the first one as the answer attributes
+                # somebody else's sentence to this command -- which, in a
+                # procedure that exists to stop a reply being mistaken for a
+                # wire, is the same error one level down. Observed 2026-08-22:
+                # gpio_read replies came back as 'done', the *previous*
+                # gpio_write's result, with every reply shifted by one.
+                try:
+                    obj = json.loads(chunk)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict) or obj.get("id") != req["id"]:
+                    self.unsolicited.append(chunk)
+                    continue
+                raw = chunk
+                break
         self.log.append((line, raw))
         try:
-            return json.loads(raw) if raw else {}
+            reply = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
             return {"_unparsed": raw}
+        if isinstance(reply, dict) and "result" in reply:
+            reply["result"] = _decode_result(reply["result"])
+        return reply
 
 
 class _Sim:
@@ -114,24 +220,67 @@ class _Sim:
     Deliberately not a mock that agrees with everything: it enforces the pushed
     policy, so the refusal steps in a --dry-run go down the refusal path and the
     record shows what a real refusal would look like.
+
+    It must also *speak* the way the firmware speaks. `Response.result` is a
+    `String`, so every reply below wraps its payload with `json.dumps` a second
+    time and refusals carry `refused: true`. Until 2026-08-22 this class emitted
+    bare objects and numbers, so --dry-run exercised a protocol the node does
+    not use and the script crashed the first time it met real hardware.
     """
+
+    @staticmethod
+    def _ok(rid, payload) -> str:
+        """`ok` reply. `payload` goes inside the string, as the firmware does."""
+        return json.dumps({"id": rid, "ok": True, "result": json.dumps(payload)})
+
+    @staticmethod
+    def _refuse(rid, why: str) -> str:
+        """Track 0 refusing. `refused` distinguishes policy from malfunction."""
+        return json.dumps({"id": rid, "ok": False, "result": "",
+                           "refused": True, "error": why})
 
     def __init__(self) -> None:
         self.pins = [21, 3, 7, 8]
         self.vmin, self.vmax = 0, 1
         self.interval = None
         self.last: dict[int, float] = {}
+        self.tick = 0
 
-    def handle(self, req: dict) -> str:
+    def _chatter(self) -> list[str]:
+        """What the node says when nobody asked.
+
+        The real node emits `link_state`, `beacon` and a `reflex` line on its own
+        schedule, on the same wire as the replies. A simulator that only ever
+        speaks when spoken to lets a request/response bug through, which is
+        exactly what happened on 2026-08-22.
+        """
+        self.tick += 1
+        if self.tick % 2:
+            return [json.dumps({"node_id": NODE_ID, "ts_ms": self.tick * 1000,
+                                "type": "beacon"})]
+        return [json.dumps({
+            "action": {"reason": "host link lost — entering offline safing",
+                       "type": "escalate"},
+            "applied": False, "error": None, "node_id": NODE_ID,
+            "rule_id": "safe-link-offline", "ts_ms": self.tick * 1000,
+            "type": "reflex"})]
+
+    def handle(self, req: dict) -> list[str]:
+        return self._chatter() + [self._answer(req)]
+
+    def _answer(self, req: dict) -> str:
         cmd, args = req["cmd"], req.get("args", {})
         rid = req.get("id")
         if cmd in ("capabilities", "announce"):
-            return json.dumps({
-                "id": rid, "ok": True, "result": {
-                    "node_id": NODE_ID, "board": "seeed-xiao-esp32-s3",
-                    "firmware_version": "0.4.2", "gpio": self.pins,
-                    "i2c_bus": [5, 6], "camera": False, "microphone": True,
-                }})
+            return self._ok(rid, {
+                "node_id": NODE_ID, "board": "seeed-xiao-esp32-s3",
+                "firmware_version": "0.4.2", "gpio": self.pins,
+                "i2c_bus": [5, 6], "camera": False, "microphone": True,
+                "edge_agent": True, "transport": "usb-serial-jtag", "wifi": True,
+                # The real node also carries a `tools` array. Not reproduced
+                # here: nothing in this procedure reads it, and inventing a
+                # plausible copy is how the shape drifted in the first place.
+            })
         if cmd == "set_limits":
             for lim in args.get("limits", []):
                 if lim.get("tool") == "gpio_write" and lim.get("node_id") in ("", NODE_ID):
@@ -139,30 +288,31 @@ class _Sim:
                     self.vmin, self.vmax = lim.get("value_min"), lim.get("value_max")
                     self.interval = lim.get("min_interval_ms")
                     self.last.clear()
-                    return json.dumps({"id": rid, "ok": True, "result": {
+                    return self._ok(rid, {
                         "applied": True, "allowed_pins": self.pins,
                         "value_min": self.vmin, "value_max": self.vmax,
-                        "min_interval_ms": self.interval}})
-            return json.dumps({"id": rid, "ok": True, "result": {"applied": False}})
+                        "min_interval_ms": self.interval})
+            return self._ok(rid, {"applied": False})
         if cmd == "gpio_write":
             pin, value, now = args.get("pin"), args.get("value"), time.time() * 1000
             if pin not in self.pins:
-                return json.dumps({"id": rid, "ok": False, "error": "pin not in the allow-list"})
+                return self._refuse(rid, "pin not in the allow-list")
             if self.vmin is not None and not (self.vmin <= value <= self.vmax):
-                return json.dumps({"id": rid, "ok": False, "error": "value out of range"})
+                return self._refuse(rid, "value out of range")
             if self.interval and pin in self.last and now - self.last[pin] < self.interval:
-                return json.dumps({"id": rid, "ok": False, "error": "faster than min_interval_ms"})
+                return self._refuse(rid, "faster than min_interval_ms")
             self.last[pin] = now
-            return json.dumps({"id": rid, "ok": True, "result": None})
+            return self._ok(rid, None)
         if cmd == "gpio_read":
-            return json.dumps({"id": rid, "ok": True, "result": 0})
+            return self._ok(rid, 0)
         if cmd == "sensor_read":
             if args.get("sensor") == "bme280":
-                return json.dumps({"id": rid, "ok": True, "result": 41.7})
+                return self._ok(rid, 41.7)
             if args.get("field") == "battery_soc":
-                return json.dumps({"id": rid, "ok": True, "result": 87.5})
-            return json.dumps({"id": rid, "ok": True, "result": 9.79})
-        return json.dumps({"id": rid, "ok": False, "error": f"unknown cmd {cmd}"})
+                return self._ok(rid, 87.5)
+            return self._ok(rid, 9.79)
+        return json.dumps({"id": rid, "ok": False, "result": "",
+                           "error": f"unknown cmd {cmd}"})
 
 
 def ask(question: str, options: str = "y/n") -> str:
@@ -191,6 +341,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--probe", action="store_true",
+        help="ask the node what it is, print the answer, and stop. No wiring, "
+             "no prompts, no record. Use it when the boot banner is not "
+             "readable -- on a board whose only console is the same "
+             "USB-Serial-JTAG the firmware takes over for commands, it is not.")
     ap.add_argument("--out", default="bench-run-record.md")
     a = ap.parse_args()
 
@@ -209,7 +365,13 @@ def main() -> int:
     print("=" * 68)
     print("  0. What is this node?")
     print("=" * 68)
-    caps = node.send("capabilities").get("result", {})
+    caps = node.send("capabilities").get("result")
+    if not isinstance(caps, dict):
+        # Never index a reply whose shape you have not checked. The first real
+        # node this script met returned a JSON string and it died on .get().
+        if caps is not None:
+            print(f"    !! `result` is a {type(caps).__name__}, not an object: {caps!r}")
+        caps = {}
     show("capabilities", caps)
     rec["board reported"] = caps.get("board", "(none)")
     rec["node_id reported"] = caps.get("node_id", "(none)")
@@ -224,6 +386,44 @@ def main() -> int:
     print("    Those came from the node, not from this script. If they disagree")
     print("    with the board in front of you, that disagreement is the finding.")
 
+    # The node's own answer is the only way to tell which build is on it. The
+    # 4/5 bus and GPIO 6 as an output are the pre-2026-08-21 firmware: on that
+    # build the sensor pads are not the bus the firmware drives, so every
+    # reading is a stub, and GPIO 6 is an output while the corrected build has
+    # it free.
+    stale = []
+    if caps.get("i2c_bus") == [4, 5]:
+        stale.append("I2C on 4/5 (corrected build drives 5/6)")
+    if isinstance(caps.get("gpio"), list) and 6 in caps["gpio"]:
+        stale.append("GPIO 6 still an output")
+    if stale:
+        print()
+        print("    !! THIS IS OLD FIRMWARE: " + "; ".join(stale))
+        print(f"       reported version {caps.get('firmware_version')!r}.")
+        print("       Reflash before going further. Sensor readings from this")
+        print("       build are stubs that look like readings.")
+
+    if a.probe:
+        print()
+        print("    verbatim exchange:")
+        for sent, got in node.log:
+            print(f"      >> {sent}")
+            print(f"      << {got or '(nothing)'}")
+        print()
+        if not caps:
+            print("    The node did not answer. That is a finding too: either the")
+            print("    firmware is not running, something else holds the port")
+            print("    (the espflash monitor does -- Ctrl+C it), or the command")
+            print("    channel is not up. It is NOT evidence about the pin map.")
+            return 1
+        ok = caps.get("node_id") == NODE_ID
+        print(f"    --probe only. Nothing was wired, nothing was written, no")
+        print(f"    record file. node_id {'matches' if ok else 'DOES NOT match'}"
+              f" {NODE_ID!r}.")
+        if stale:
+            print("    Exiting non-zero on the firmware, not the node id.")
+        return 0 if (ok and not stale) else 1
+
     print()
     print("=" * 68)
     print("  1. Does a refusal stop the wire moving?")
@@ -236,7 +436,42 @@ def main() -> int:
     print("    GPIO 7  -- optional second allowed pin.")
     input("  Press Enter when the LEDs are wired. ")
 
-    applied = node.send("set_limits", {"limits": LIMITS}).get("result", {})
+    # Prove BOTH LEDs before any policy is pushed.
+    #
+    # At boot the node's own allow-list is OUTPUT_PINS = [21, 3, 7, 8], so pin 8
+    # is writable right now. After set_limits it will not be, and step 1b then
+    # asks you to observe that it stayed dark. A dark LED proves a refusal only
+    # if that LED has been seen to light: otherwise a refused write, a wrong
+    # pad, a backwards LED and a broken jumper are the same observation. The
+    # control on pin 3 has always been here; the refusal pin never had one,
+    # which left the load-bearing step resting on an unproven wire.
+    print("\n  1-pre. Prove the wiring while the boot policy still allows it.")
+    for pin, role in ((3, "control"), (8, "refusal")):
+        r = node.send("gpio_write", {"pin": pin, "value": 1}, rid=f"pre-{pin}-on")
+        show(f"gpio_write pin {pin} value 1 (boot policy)", r)
+        if r.get("ok") is not True:
+            print(f"    !! pin {pin} was refused at boot, before any limit was")
+            print("       pushed. That is not the state this test assumes. Stop.")
+        rec[f"pre-check pin {pin} lit"] = ask(
+            f"Did the LED on GPIO {pin} ({role}) light just now?")
+        node.send("gpio_write", {"pin": pin, "value": 0}, rid=f"pre-{pin}-off")
+        if rec[f"pre-check pin {pin} lit"].startswith("n"):
+            print(f"    !! GPIO {pin}'s LED did not light with the write ALLOWED.")
+            print("       Fix the wiring now. Every later observation of this pin")
+            print("       would otherwise be unreadable: a refusal and a dead")
+            print("       wire look identical.")
+
+    # The pre-check just wrote to pin 3. If the gate carries its last-write
+    # timestamps across set_limits, step 1a's write would be refused as
+    # too-fast and would read as a failed control. Wait out the interval rather
+    # than assume the push clears it -- the simulator clears it, which is
+    # exactly the kind of agreement that has already been wrong once today.
+    time.sleep(0.8)
+
+    applied = node.send("set_limits", {"limits": LIMITS}).get("result")
+    if not isinstance(applied, dict):
+        print(f"    !! set_limits `result` is not an object: {applied!r}")
+        applied = {}
     show("set_limits", applied)
     rec["set_limits applied"] = applied.get("applied")
     if not applied.get("applied"):

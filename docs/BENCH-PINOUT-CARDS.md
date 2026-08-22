@@ -49,6 +49,18 @@ Gateway 40 — UART1(TX=4,RX=2) ⇄ LoRa. Wire compute TX→GPIO2, GND↔GND.
 Power each board in turn, note the two hex digits, write them on tape *and* in this
 table. Ten minutes once, versus inferring it wrongly every time.
 
+⚠ **The base station `gw-D8` on COM3 was overwritten on 2026-08-22.** Node firmware
+(`firmware/obc-esp32-s3`, default XIAO pin map) was flashed to it by mistake: the XIAO was
+not plugged in, COM3 was the only port present, and every board on this bench is an
+ESP32-S3 with 8 MB of flash, so the flash log looked exactly right. **It is not a working
+base station until it is reflashed with the gateway build.** Anything in Stage 3 that
+assumes a live base is currently untrue.
+
+The cheap check that would have caught it, and that `bench_run.py` now enforces: the node
+is native USB-Serial-JTAG, Espressif VID `0x303a`. The Heltecs are CP210x bridges, VID
+`0x10c4`. Roles are tape and ports re-enumerate, but the USB descriptor is a property of
+the hardware.
+
 ⚠ `BENCH-WALKTHROUGH.md` §3.3 and `PHASE-B-LORA-MESH.md` both showed the base on **COM6**.
 That was stale — COM6 is the XIAO on this bench. Ports re-enumerate; confirm before trusting
 any port in any doc. Node ids do not.
