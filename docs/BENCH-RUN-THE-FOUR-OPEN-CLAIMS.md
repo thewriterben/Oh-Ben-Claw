@@ -25,8 +25,13 @@ gap between them.
 ```
 python scripts/bench_run.py --dry-run    # simulated node; proves the script runs
 python scripts/bench_run.py              # auto-detects the port
-python scripts/bench_run.py --port COM6
+python scripts/bench_run.py --port COM3      # only if auto-detect picks the wrong one
 ```
+
+Prefer the auto-detecting form. Ports re-enumerate: this board came up on COM3
+on 2026-08-22, and `BENCH-PINOUT-CARDS.md` Card 0 records it on COM6 from an
+earlier session. Neither number is a property of the board. The node id in the
+boot banner is.
 
 Run `--dry-run` once before you wire anything, so the first time you meet the
 prompts is not while holding a soldering iron. It talks to a simulated node that
@@ -75,6 +80,15 @@ done on this machine and are listed only so a fresh machine knows to do them:
 `git config --global core.longpaths true`, and the ESP-IDF framework installed
 to a short root (`ESP_IDF_TOOLS_INSTALL_DIR = custom:C:/esp`, set in
 `.cargo/config.toml`).
+
+One known flake, so it does not read as a broken toolchain the first time it
+happens: on 2026-08-22 the first `cargo run` after setting `CARGO_TARGET_DIR`
+died with `internal compiler error: Segmentation fault` from the xtensa gcc
+compiling esp-idf's `esp_lcd_panel_rgb.c`, `during RTL pass: ira`. Re-running
+the identical command succeeded and it has not repeated. It is a compiler crash
+inside a vendored C file, not anything this repo controls. Retry once. If it
+reproduces on the same file twice in a row, that is a different problem and
+worth recording rather than retrying.
 
 **Exit the monitor with Ctrl+C before running `bench_run.py`.** It holds the
 serial port, and the script will otherwise fail to open it in a way that looks
