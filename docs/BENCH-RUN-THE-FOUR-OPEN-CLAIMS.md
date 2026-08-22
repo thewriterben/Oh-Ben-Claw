@@ -80,10 +80,30 @@ in, instead of a bare traceback.
 | Wire | LED + 330 Ω to ground on **GPIO 3** (control), **GPIO 8** (refusal), optionally **GPIO 7** |
 | Sensor | BME280 on **SDA=GPIO5, SCL=GPIO6** — the pads the silkscreen marks |
 
-**GPIO numbers, not header labels.** The silk differs per board: on a XIAO,
-GPIO 3 and 7 are `D2` and `D8`; on a FireBeetle they are elsewhere. Find the pad
-that carries GPIO 3 on your board's vendor pinout. A `D`-number copied from
-another board's card is the mistake this whole document exists to avoid.
+**GPIO numbers, not header labels.** The silk differs per board, and on the XIAO
+the two numbering schemes do not line up at all:
+
+| Role | GPIO | XIAO silk | Position, counting from the USB-C end |
+|---|---|---|---|
+| control, must light | 3 | `D2` | left side, 3rd pad down |
+| refusal, must stay dark | 8 | `D9` | right side, 5th pad down |
+| optional second allowed | 7 | `D8` | right side, 6th pad down |
+| shared return | — | `GND` | right side, 2nd pad down |
+
+`D8` is GPIO 7 and `D9` is GPIO 8: the labels are one apart from the numbers, in
+the direction most likely to look correct. On a FireBeetle they are elsewhere
+again. Find the pad that carries GPIO 3 on your board's vendor pinout; a
+`D`-number copied from another board's card is the mistake this whole document
+exists to avoid.
+
+`D2` = GPIO 3 and `D8` = GPIO 7 are also recorded in
+`HARDWARE-TEST-WALKTHROUGH.md`. `D9` = GPIO 8 is from the vendor pin list and
+has not been bench-verified here — step 1-pre below is what settles it.
+
+Each LED goes `GPIO pad → 330 Ω → LED long leg | LED short leg → GND`. All three
+share the one GND pad. Nothing connects to 3V3 or 5V. Backwards, an LED simply
+never lights, which on the refusal pin is indistinguishable from the result the
+test is looking for — hence 1-pre.
 
 ### Flashing
 
@@ -207,7 +227,19 @@ see a wire.
    `--probe` asks over the channel that survives, and silence there is a finding
    about the node rather than an artefact of the instrument.
 
-2. **Push the table and read back what stuck.** `set_limits` does not
+2. **Prove both LEDs before pushing anything.** At boot the node allows writes
+   to its own `OUTPUT_PINS` = `[21, 3, 7, 8]`, so GPIO 8 is writable right now
+   and will not be once the table is pushed. The runner writes each of GPIO 3
+   and GPIO 8 high, asks whether it lit, and writes it low again.
+
+   This exists because step 4 asks you to observe that GPIO 8 *stayed dark*, and
+   a dark LED proves a refusal only if that LED has been seen to light. A
+   refused write, a wrong pad, a backwards LED and a broken jumper are the same
+   observation. The control on GPIO 3 was always checked; the refusal pin — the
+   load-bearing one — was not, so the strongest claim in this procedure rested
+   on an unverified wire.
+
+3. **Push the table and read back what stuck.** `set_limits` does not
    acknowledge — it returns the active policy:
 
    ```json
@@ -216,11 +248,11 @@ see a wire.
 
    `"applied":false` means no limit matched this node. Stop and fix that first.
 
-3. **The control.** `gpio_write` pin 3, value 1. **The LED lights.** If it does
+4. **The control.** `gpio_write` pin 3, value 1. **The LED lights.** If it does
    not, every refusal below is meaningless — a dark LED would prove nothing,
    because a disconnected wire and a working gate look identical.
 
-4. **The refusal.** `gpio_write` pin 8. Expect a refusal in the reply, the LED
+5. **The refusal.** `gpio_write` pin 8. Expect a refusal in the reply, the LED
    dark, and `gpio_read` on pin 8 returning 0.
 
    GPIO 8 is the honest choice because it is a real output — it is in
@@ -234,11 +266,11 @@ see a wire.
    pin twitches is the exact failure this step exists to rule out. Use a meter
    or a scope if you have one.
 
-5. **Without the host.** Stop the agent. Send the same refused command straight
+6. **Without the host.** Stop the agent. Send the same refused command straight
    down the serial line. It must still refuse. This is the only step anywhere
    that tests the property the safety case actually claims.
 
-6. **The rate limit.** Two writes to pin 3 inside 500 ms. The second is refused
+7. **The rate limit.** Two writes to pin 3 inside 500 ms. The second is refused
    and the pin holds its value rather than flickering.
 
 ---
