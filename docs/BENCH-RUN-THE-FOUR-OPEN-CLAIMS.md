@@ -114,9 +114,13 @@ earlier version of this document gave positions ("3rd pad down"). They came out
 of a secondary pinout listing whose top-to-bottom ordering could not be
 confirmed against a second source — two references disagree about which end of
 the right-hand column the power pins sit at. The silk is on the board in front
-of you and is not in doubt. `D2` = GPIO 3 and `D8` = GPIO 7 are recorded in
-`HARDWARE-TEST-WALKTHROUGH.md`; `D9` = GPIO 8 is from a vendor pin list and is
-confirmed electrically by step 1-pre before anything depends on it.
+of you and is not in doubt.
+
+`D2` = GPIO 3 is **bench-verified, 2026-08-22**: with `pin_walk --pin 3 --blink`
+toggling the pin, `D2` was the only pad on the board swinging 0 ↔ 3.3 V on a
+meter. That is a measurement on this board, not a citation. `D8` = GPIO 7 and
+`D9` = GPIO 8 are still from a vendor pin list and are confirmed electrically by
+step 1-pre before anything depends on them.
 
 Each LED is `pin's row → 330 Ω → LED long leg | LED short leg → GND`. On a
 breadboard: sit the XIAO across the centre channel so each pin owns the rest of
