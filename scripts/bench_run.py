@@ -379,6 +379,38 @@ def main() -> int:
     print("    GPIO 7  -- optional second allowed pin.")
     input("  Press Enter when the LEDs are wired. ")
 
+    # Prove BOTH LEDs before any policy is pushed.
+    #
+    # At boot the node's own allow-list is OUTPUT_PINS = [21, 3, 7, 8], so pin 8
+    # is writable right now. After set_limits it will not be, and step 1b then
+    # asks you to observe that it stayed dark. A dark LED proves a refusal only
+    # if that LED has been seen to light: otherwise a refused write, a wrong
+    # pad, a backwards LED and a broken jumper are the same observation. The
+    # control on pin 3 has always been here; the refusal pin never had one,
+    # which left the load-bearing step resting on an unproven wire.
+    print("\n  1-pre. Prove the wiring while the boot policy still allows it.")
+    for pin, role in ((3, "control"), (8, "refusal")):
+        r = node.send("gpio_write", {"pin": pin, "value": 1}, rid=f"pre-{pin}-on")
+        show(f"gpio_write pin {pin} value 1 (boot policy)", r)
+        if r.get("ok") is not True:
+            print(f"    !! pin {pin} was refused at boot, before any limit was")
+            print("       pushed. That is not the state this test assumes. Stop.")
+        rec[f"pre-check pin {pin} lit"] = ask(
+            f"Did the LED on GPIO {pin} ({role}) light just now?")
+        node.send("gpio_write", {"pin": pin, "value": 0}, rid=f"pre-{pin}-off")
+        if rec[f"pre-check pin {pin} lit"].startswith("n"):
+            print(f"    !! GPIO {pin}'s LED did not light with the write ALLOWED.")
+            print("       Fix the wiring now. Every later observation of this pin")
+            print("       would otherwise be unreadable: a refusal and a dead")
+            print("       wire look identical.")
+
+    # The pre-check just wrote to pin 3. If the gate carries its last-write
+    # timestamps across set_limits, step 1a's write would be refused as
+    # too-fast and would read as a failed control. Wait out the interval rather
+    # than assume the push clears it -- the simulator clears it, which is
+    # exactly the kind of agreement that has already been wrong once today.
+    time.sleep(0.8)
+
     applied = node.send("set_limits", {"limits": LIMITS}).get("result")
     if not isinstance(applied, dict):
         print(f"    !! set_limits `result` is not an object: {applied!r}")
