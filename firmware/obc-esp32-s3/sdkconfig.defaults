@@ -7,5 +7,19 @@
 # CONFIG_SPIRAM_MODE_OCT=y      # or CONFIG_SPIRAM_MODE_QUAD=y for a quad-SPI module
 # CONFIG_SPIRAM_SPEED_80M=y
 
-# A little more main-task stack for the agent + capture paths (harmless).
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# Main-task stack.
+#
+# 8192 was not enough: on 2026-08-22, on a XIAO ESP32-S3, the main task
+# overflowed and FreeRTOS caught it in vTaskSwitchContext right after the
+# startup banner. The next boot of the same binary died differently -- a
+# LoadProhibited inside `find_desc_for_source`, reached from
+# `i2c_driver_install` -> `esp_intr_alloc` -- which is what an already-corrupt
+# stack looks like when the damage lands somewhere else. Two different crashes
+# from one binary at one call site is the signature; a genuine bug in the I2C
+# driver would fail the same way twice.
+#
+# 16384 is a number chosen to get past it, not a number derived from a
+# measurement. `stack_headroom()` in main.rs now logs the high-water mark on
+# either side of the suspect region, so the next boot reports what is actually
+# needed and this line can be set from evidence or put back to 8192.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384

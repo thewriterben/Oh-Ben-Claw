@@ -398,6 +398,18 @@ struct LlmResponse {
     choices: Vec<LlmChoice>,
 }
 
+/// Bytes of stack the calling task has never used — FreeRTOS's high-water mark.
+///
+/// Reported rather than assumed. On 2026-08-22 the main task overflowed its
+/// 8 KB stack and the crash surfaced inside `i2c_driver_install`, several
+/// frames away from whatever actually consumed the stack. A backtrace names
+/// where the stack ran out, not where it went. These lines say how much was
+/// left at two points that bracket the suspect region, so the next person
+/// reads a number instead of inferring one from a corrupted trace.
+fn stack_headroom() -> u32 {
+    unsafe { esp_idf_svc::sys::uxTaskGetStackHighWaterMark(core::ptr::null_mut()) }
+}
+
 fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
@@ -461,7 +473,10 @@ fn main() -> anyhow::Result<()> {
          capabilities, announce, agent_chat, agent_config, agent_clear"
     );
 
+    info!("Stack headroom after init: {} bytes", stack_headroom());
+
     let mut agent_state = AgentState::new();
+    info!("Stack headroom after AgentState: {} bytes", stack_headroom());
     // Real I2C sensor bus. Default (XIAO): SDA=GPIO5, SCL=GPIO6 — the pads the
     // silkscreen marks SDA and SCL (D4/D5). Waveshare 2.1 build: SDA=GPIO15,
     // SCL=GPIO7 — the board's hardwired I2C connector (shared with the onboard
