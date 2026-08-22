@@ -75,6 +75,10 @@ class Node:
     def __init__(self, port: str | None, dry: bool):
         self.dry = dry
         self.log: list[tuple[str, str]] = []
+        # Lines the node said that were not answers to anything we asked:
+        # beacons, link_state, reflex ticks. Kept rather than dropped -- they
+        # are the node's own account of what it was doing during the run.
+        self.unsolicited: list[str] = []
         if dry:
             self.port = "(simulated)"
             self._sim = _Sim()
@@ -157,19 +161,49 @@ class Node:
         req = {"id": rid or cmd, "cmd": cmd, "args": args or {}}
         line = json.dumps(req)
         if self.dry:
-            raw = self._sim.handle(req)
+            # The simulator interleaves a telemetry line before its answer, the
+            # way the node does, so --dry-run actually exercises the id match
+            # instead of agreeing that there is nothing to match against.
+            raw = ""
+            for chunk in self._sim.handle(req):
+                try:
+                    obj = json.loads(chunk)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict) or obj.get("id") != req["id"]:
+                    self.unsolicited.append(chunk)
+                    continue
+                raw = chunk
+                break
         else:
             self.ser.write((line + "\n").encode())
             raw = ""
             deadline = time.time() + 3
             while time.time() < deadline:
                 chunk = self.ser.readline().decode(errors="replace").strip()
-                if not chunk:
+                if not chunk.startswith("{"):
                     continue
-                # The node also logs; a reply is the line that parses as JSON.
-                if chunk.startswith("{"):
-                    raw = chunk
-                    break
+                # A reply is the line whose `id` is the one we just sent.
+                #
+                # Matching "the first line that parses as JSON" was wrong, and
+                # wrong in the worst available way. This node talks unprompted:
+                # `beacon` every ~30 s, `link_state`, and a `reflex` line every
+                # ~10 s while no host is attached. Every one of those is JSON on
+                # the same wire. Taking the first one as the answer attributes
+                # somebody else's sentence to this command -- which, in a
+                # procedure that exists to stop a reply being mistaken for a
+                # wire, is the same error one level down. Observed 2026-08-22:
+                # gpio_read replies came back as 'done', the *previous*
+                # gpio_write's result, with every reply shifted by one.
+                try:
+                    obj = json.loads(chunk)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict) or obj.get("id") != req["id"]:
+                    self.unsolicited.append(chunk)
+                    continue
+                raw = chunk
+                break
         self.log.append((line, raw))
         try:
             reply = json.loads(raw) if raw else {}
@@ -210,8 +244,31 @@ class _Sim:
         self.vmin, self.vmax = 0, 1
         self.interval = None
         self.last: dict[int, float] = {}
+        self.tick = 0
 
-    def handle(self, req: dict) -> str:
+    def _chatter(self) -> list[str]:
+        """What the node says when nobody asked.
+
+        The real node emits `link_state`, `beacon` and a `reflex` line on its own
+        schedule, on the same wire as the replies. A simulator that only ever
+        speaks when spoken to lets a request/response bug through, which is
+        exactly what happened on 2026-08-22.
+        """
+        self.tick += 1
+        if self.tick % 2:
+            return [json.dumps({"node_id": NODE_ID, "ts_ms": self.tick * 1000,
+                                "type": "beacon"})]
+        return [json.dumps({
+            "action": {"reason": "host link lost — entering offline safing",
+                       "type": "escalate"},
+            "applied": False, "error": None, "node_id": NODE_ID,
+            "rule_id": "safe-link-offline", "ts_ms": self.tick * 1000,
+            "type": "reflex"})]
+
+    def handle(self, req: dict) -> list[str]:
+        return self._chatter() + [self._answer(req)]
+
+    def _answer(self, req: dict) -> str:
         cmd, args = req["cmd"], req.get("args", {})
         rid = req.get("id")
         if cmd in ("capabilities", "announce"):
