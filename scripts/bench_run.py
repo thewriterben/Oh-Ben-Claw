@@ -79,7 +79,25 @@ class Node:
         self.ser.reset_input_buffer()
 
     @staticmethod
-    def _detect(serial) -> str:
+    def _kind(p) -> str:
+        """What the USB descriptor says this port physically is.
+
+        The node is an ESP32-S3 talking over its *native* USB-Serial-JTAG, so it
+        enumerates under Espressif's own VID. A USB-UART bridge chip cannot be
+        the node: the XIAO has no bridge fitted. On this bench the bridges are
+        the Heltecs (`BENCH-PINOUT-CARDS.md` Card 0), and mistaking one for the
+        node is not hypothetical -- on 2026-08-22 a build was flashed to the
+        LoRa base station because it was the only port present.
+        """
+        vid = getattr(p, "vid", None)
+        if vid == 0x303A:
+            return "native"          # Espressif USB-Serial-JTAG -- could be the node
+        if vid in (0x10C4, 0x1A86, 0x0403, 0x067B):
+            return "bridge"          # CP210x / CH34x / FTDI / Prolific
+        return "unknown"
+
+    @classmethod
+    def _detect(cls, serial) -> str:
         from serial.tools import list_ports
 
         found = list(list_ports.comports())
@@ -88,14 +106,31 @@ class Node:
                 "no serial ports found. Plug the board in over USB-C (a data\n"
                 "cable, not charge-only) and try again, or pass --port."
             )
-        if len(found) == 1:
-            print(f"using the only port present: {found[0].device} "
-                  f"({found[0].description})")
-            return found[0].device
-        print("more than one serial port is present:")
         for p in found:
-            print(f"  {p.device}  {p.description}")
-        sys.exit("pass --port to say which one is the node.")
+            print(f"  {p.device}  {p.description}  [{cls._kind(p)}]")
+
+        native = [p for p in found if cls._kind(p) == "native"]
+        if len(native) == 1:
+            print(f"using {native[0].device}: the only native USB-Serial-JTAG port.")
+            return native[0].device
+        if len(native) > 1:
+            sys.exit("more than one native USB port present. Pass --port.")
+
+        # Nothing that could be the node. Say what these ports are instead of
+        # picking one because it is the only one.
+        sys.exit(
+            "none of these ports is an ESP32-S3 native USB port.\n"
+            "Every port above is a USB-UART bridge chip (CP210x/CH34x/FTDI) or\n"
+            "unrecognised. The node is a XIAO ESP32-S3, which has no bridge\n"
+            "fitted -- it enumerates under Espressif's VID 0x303A. A CP210x on\n"
+            "this bench is one of the Heltecs; `BENCH-PINOUT-CARDS.md` Card 0\n"
+            "records the base station `gw-D8` on COM3.\n\n"
+            "Plug the XIAO in (data cable, not charge-only). If it still does\n"
+            "not appear, that is the finding -- do not fall back to a bridge\n"
+            "port, and do not flash one: it is a different board with a\n"
+            "different pin map and its own firmware.\n\n"
+            "--port overrides this if you know better."
+        )
 
     def send(self, cmd: str, args: dict | None = None, rid: str | None = None) -> dict:
         req = {"id": rid or cmd, "cmd": cmd, "args": args or {}}

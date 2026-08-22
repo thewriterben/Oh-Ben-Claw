@@ -25,13 +25,21 @@ gap between them.
 ```
 python scripts/bench_run.py --dry-run    # simulated node; proves the script runs
 python scripts/bench_run.py              # auto-detects the port
-python scripts/bench_run.py --port COM3      # only if auto-detect picks the wrong one
+python scripts/bench_run.py --port COMn       # only if auto-detect picks wrong
 ```
 
-Prefer the auto-detecting form. Ports re-enumerate: this board came up on COM3
-on 2026-08-22, and `BENCH-PINOUT-CARDS.md` Card 0 records it on COM6 from an
-earlier session. Neither number is a property of the board. The node id in the
-boot banner is.
+Prefer the auto-detecting form, and note that it detects by *chip*, not by
+position. The node is a XIAO ESP32-S3 speaking over the ESP32-S3's native
+USB-Serial-JTAG, so it enumerates under Espressif's VID `0x303A`. The Heltecs
+each have a CP210x USB-UART bridge (`0x10C4`). The runner refuses to talk to a
+bridge port rather than picking it because it is the only one present.
+
+That refusal exists because the alternative happened. On 2026-08-22 the only
+port on the bench was **COM3, a CP210x** — and `BENCH-PINOUT-CARDS.md` Card 0
+records COM3 as the LoRa **base station `gw-D8`**, not the node. The node
+firmware was flashed onto the base station. No port number in any document
+would have caught that; the USB descriptor does, every time, without a bench
+note to keep current.
 
 Run `--dry-run` once before you wire anything, so the first time you meet the
 prompts is not while holding a soldering iron. It talks to a simulated node that
@@ -78,6 +86,19 @@ that carries GPIO 3 on your board's vendor pinout. A `D`-number copied from
 another board's card is the mistake this whole document exists to avoid.
 
 ### Flashing
+
+**Check which board you are about to flash first.** `espflash` writes to
+whatever port it finds, and every board on this bench is an ESP32-S3 with 8 MB
+of flash, so nothing in the flash log distinguishes them — chip type, revision
+and flash size all match. The USB descriptor does:
+
+```powershell
+python -c "from serial.tools import list_ports; [print(p.device, hex(p.vid or 0), p.description) for p in list_ports.comports()]"
+```
+
+`0x303a` is the node (native USB-Serial-JTAG). `0x10c4` is a CP210x bridge —
+one of the Heltecs, and flashing node firmware onto one overwrites its gateway
+build. That is not hypothetical: it happened on 2026-08-22.
 
 ```powershell
 . $env:USERPROFILE\export-esp.ps1          # LIBCLANG_PATH etc. for the esp toolchain
@@ -138,21 +159,28 @@ see a wire.
    nothing is written, no record file is produced. Exit 0 means the node id
    matched.
 
-   The boot banner is not a reliable instrument on this board and the earlier
-   version of this step was wrong to lean on it. On the XIAO the console and the
-   JSON command channel are the *same* USB-Serial-JTAG peripheral, and `main`
-   installs `UsbSerialDriver` on it before printing anything. The host-side log
-   therefore ends mid-word around `main_task: Calling app_main` — which looks
-   exactly like a crash. Observed 2026-08-22: a first flash whose log ended at
-   `main_task: Calling ap`, mid-word, followed by a ROM banner. Whether that
-   board was crashing or merely un-observable is not settled by the log — which
-   is the point. A console the program under test takes away from you cannot
-   report on the program, in either direction. `--probe` asks over the channel
-   that survives, and a silent node there is a real finding rather than an
-   artefact of the instrument.
+   A truncated boot log is not evidence either way, and this step used to lean
+   on one. Observed 2026-08-22: a flash whose log ended mid-word at
+   `main_task: Calling ap`, followed by a ROM banner. That reads as a crash and
+   is not one.
 
-   On a board with a separate UART console the banner is still worth reading.
-   `--probe` is correct on both.
+   `main` takes both serial interfaces before it prints a single line —
+   `UsbSerialDriver` on the native USB-Serial-JTAG (GPIO 19/20), then
+   `UartDriver` on UART1 at **GPIO 43/44**, which are the ESP32-S3's default
+   UART0 pins. So whichever interface a given board uses for its console, the
+   firmware has taken it over by the time the first `info!` runs:
+
+   - **XIAO** — console is the native USB, which `UsbSerialDriver` claims.
+   - **Heltec V3** — console is UART0 through the CP210x on GPIO 43/44, which
+     the UART1 spine uplink claims.
+
+   The 2026-08-22 log was the second case: it was a Heltec, flashed by mistake
+   (see the port note above), and its console died exactly where the spine
+   uplink took its pins. A console the program under test seizes cannot report
+   on that program in either direction — it can show neither a crash nor health.
+
+   `--probe` asks over the channel that survives, and silence there is a finding
+   about the node rather than an artefact of the instrument.
 
 2. **Push the table and read back what stuck.** `set_limits` does not
    acknowledge — it returns the active policy:
