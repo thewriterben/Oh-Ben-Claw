@@ -103,9 +103,19 @@ build. That is not hypothetical: it happened on 2026-08-22.
 ```powershell
 . $env:USERPROFILE\export-esp.ps1          # LIBCLANG_PATH etc. for the esp toolchain
 $env:CARGO_TARGET_DIR = "C:\e"             # REQUIRED on Windows -- see below
-cd firmware\obc-esp32-s3
-cargo run                                  # flashes, then opens the monitor
+cd F:\Documents\GitHub\Oh-Ben-Claw\firmware\obc-esp32-s3    # absolute on purpose
+cargo run -- --port COM6                   # flashes, then opens the monitor
 ```
+
+The `cd` is absolute because `export-esp.ps1` leaves you wherever you were,
+which is not necessarily the repo — a relative `cd firmware\obc-esp32-s3` fails
+from `$HOME` and the next line then runs `cargo run` in the wrong crate or none.
+
+`--port` is named because the runner is `espflash flash --monitor` and espflash
+picks a port on its own when it is not told. Use the port the previous check
+identified as VID `0x303a`; anything else on this bench is a Heltec. Naming it
+costs nothing and it is the difference between flashing the node and flashing
+the base station.
 
 The `CARGO_TARGET_DIR` line is not optional and not a preference. Without it
 `esp-idf-sys` aborts with *"Too long output directory … Shorten your project
