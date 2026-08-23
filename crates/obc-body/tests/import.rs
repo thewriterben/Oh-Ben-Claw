@@ -13,11 +13,23 @@ use obc_body::{safety_limits, servo_command};
 use obc_movement::MovementCommand;
 
 const ORIGIN: Transform = Transform {
-    xyz_mm: Vec3 { x: 0.0, y: 0.0, z: 0.0 },
-    rpy_rad: Vec3 { x: 0.0, y: 0.0, z: 0.0 },
+    xyz_mm: Vec3 {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    },
+    rpy_rad: Vec3 {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    },
 };
 
-const Z: Vec3 = Vec3 { x: 0.0, y: 0.0, z: 1.0 };
+const Z: Vec3 = Vec3 {
+    x: 0.0,
+    y: 0.0,
+    z: 1.0,
+};
 const QUARTER: f64 = core::f64::consts::FRAC_PI_2;
 
 const fn limits(lower: f64, upper: f64) -> JointLimits {
@@ -67,10 +79,20 @@ const fn robot(joints: &'static [Joint]) -> Robot {
     }
 }
 
-const fn channel(joint_id: &'static str, id: Option<ChannelId>, inverted: bool,
-                 offset: Option<Radians>) -> Channel {
-    Channel { joint_id, channel: id, bus: None, bus_address: None, inverted,
-              zero_offset: offset }
+const fn channel(
+    joint_id: &'static str,
+    id: Option<ChannelId>,
+    inverted: bool,
+    offset: Option<Radians>,
+) -> Channel {
+    Channel {
+        joint_id,
+        channel: id,
+        bus: None,
+        bus_address: None,
+        inverted,
+        zero_offset: offset,
+    }
 }
 
 const NO_POWER: Power = Power {
@@ -123,7 +145,10 @@ fn no_angle_the_gate_admits_can_exceed_the_declared_travel() {
 
     // And the cost of that guarantee is reported rather than absorbed.
     assert!(converted.travel_given_up_deg > 0.0);
-    assert!(converted.travel_given_up_deg < 2.0, "under a degree per bound");
+    assert!(
+        converted.travel_given_up_deg < 2.0,
+        "under a degree per bound"
+    );
 }
 
 #[test]
@@ -143,7 +168,10 @@ fn a_ninety_degree_joint_enforces_eighty_nine() {
     assert_eq!(limit.allowed_pins, Some(vec![3]));
     assert_eq!(limit.value_min, Some(-89));
     assert_eq!(limit.value_max, Some(89));
-    assert_eq!(limit.min_interval_ms, None, "velocity is not a command rate");
+    assert_eq!(
+        limit.min_interval_ms, None,
+        "velocity is not a command rate"
+    );
 }
 
 // ------------------------------------------------------------- refusals, not defaults
@@ -165,21 +193,36 @@ fn a_joint_with_unknown_limits_gets_no_limit_at_all() {
 #[test]
 fn a_mimicking_joint_with_a_channel_is_reported_as_a_wiring_error() {
     const J: &[Joint] = &[Joint {
-        mimic: Some(Mimic { joint: "shoulder", multiplier: -1.0, offset: 0.0 }),
+        mimic: Some(Mimic {
+            joint: "shoulder",
+            multiplier: -1.0,
+            offset: 0.0,
+        }),
         ..joint("right-jaw", Some(limits(-QUARTER, QUARTER)))
     }];
-    const C: &[Channel] = &[channel("right-jaw", Some(ChannelId::Number(4)), false, None)];
+    const C: &[Channel] = &[channel(
+        "right-jaw",
+        Some(ChannelId::Number(4)),
+        false,
+        None,
+    )];
 
     let report = safety_limits("node-1", &robot(J), &harness(C, &[]));
     assert!(report.limits.is_empty());
-    assert!(report.unbounded[0].reason.contains("not independently commandable"));
+    assert!(report.unbounded[0]
+        .reason
+        .contains("not independently commandable"));
 }
 
 #[test]
 fn a_named_channel_cannot_become_an_integer_pin() {
     const J: &[Joint] = &[joint("shoulder", Some(limits(-QUARTER, QUARTER)))];
-    const C: &[Channel] =
-        &[channel("shoulder", Some(ChannelId::Name("AX-12/ID3")), false, None)];
+    const C: &[Channel] = &[channel(
+        "shoulder",
+        Some(ChannelId::Name("AX-12/ID3")),
+        false,
+        None,
+    )];
 
     let report = safety_limits("node-1", &robot(J), &harness(C, &[]));
     assert!(report.limits.is_empty());
@@ -220,7 +263,10 @@ fn exactly_one_degree_of_travel_bounds_tightly_rather_than_being_refused() {
     let report = safety_limits("node-1", &robot(J), &harness(C, &[]));
     assert!(report.is_complete(), "{:?}", report.unbounded);
     assert_eq!(report.converted[0].enforced, (0, 0));
-    assert!(report.converted[0].travel_given_up_deg.abs() < 1e-9, "nothing given up");
+    assert!(
+        report.converted[0].travel_given_up_deg.abs() < 1e-9,
+        "nothing given up"
+    );
 }
 
 #[test]
@@ -241,7 +287,10 @@ fn a_range_too_narrow_to_bound_yields_no_limit_rather_than_an_inverted_one() {
 fn a_harness_for_a_different_robot_imports_nothing() {
     const J: &[Joint] = &[joint("shoulder", Some(limits(-QUARTER, QUARTER)))];
     const C: &[Channel] = &[channel("shoulder", Some(ChannelId::Number(3)), false, None)];
-    const OTHER: Harness = Harness { robot_id: "some-other-arm", ..harness(C, &[]) };
+    const OTHER: Harness = Harness {
+        robot_id: "some-other-arm",
+        ..harness(C, &[])
+    };
 
     let report = safety_limits("node-1", &robot(J), &OTHER);
     assert!(report.limits.is_empty());
@@ -255,10 +304,8 @@ fn inversion_swaps_which_end_is_which() {
     // Getting this backwards produces a limit that denies the real range and
     // permits its mirror. Asymmetric travel makes the mistake visible.
     const J: &[Joint] = &[joint("elbow", Some(limits(0.0, QUARTER)))];
-    const STRAIGHT: &[Channel] =
-        &[channel("elbow", Some(ChannelId::Number(1)), false, None)];
-    const FLIPPED: &[Channel] =
-        &[channel("elbow", Some(ChannelId::Number(1)), true, None)];
+    const STRAIGHT: &[Channel] = &[channel("elbow", Some(ChannelId::Number(1)), false, None)];
+    const FLIPPED: &[Channel] = &[channel("elbow", Some(ChannelId::Number(1)), true, None)];
 
     let straight = safety_limits("n", &robot(J), &harness(STRAIGHT, &[]));
     let flipped = safety_limits("n", &robot(J), &harness(FLIPPED, &[]));
@@ -291,11 +338,20 @@ fn a_zero_offset_shifts_both_ends_together() {
 
 #[test]
 fn servo_command_is_the_one_place_degrees_appear() {
-    let ch = channel("elbow", Some(ChannelId::Number(2)), true, Some(Radians(0.1)));
+    let ch = channel(
+        "elbow",
+        Some(ChannelId::Number(2)),
+        true,
+        Some(Radians(0.1)),
+    );
     let command = servo_command("elbow", &ch, 2, Radians(0.5));
 
     match command {
-        MovementCommand::ServoAngle { name, channel, degrees } => {
+        MovementCommand::ServoAngle {
+            name,
+            channel,
+            degrees,
+        } => {
             assert_eq!(name, "elbow");
             assert_eq!(channel, 2);
             // -1 * 0.5 + 0.1 = -0.4 rad
@@ -346,7 +402,10 @@ fn an_unchecked_cable_run_is_surfaced_as_a_note() {
     }];
 
     let report = safety_limits("node-1", &robot(J), &harness(C, RUNS));
-    assert!(report.is_complete(), "an unchecked run does not block a limit");
+    assert!(
+        report.is_complete(),
+        "an unchecked run does not block a limit"
+    );
     assert!(report
         .notes
         .iter()
