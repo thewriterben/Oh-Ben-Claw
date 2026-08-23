@@ -15,6 +15,7 @@ members = [
     "crates/obc-conscience",
     "crates/obc-a2a",
     "crates/obc-movement",
+    "crates/obc-body",
     "crates/obc-navigation",
     "crates/obc-tool-api",
     "crates/obc-reflex",

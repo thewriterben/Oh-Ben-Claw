@@ -1,0 +1,38 @@
+[package]
+name = "obc-body"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Turns a cited ClawBot body model into Track 0 safety limits and movement commands, so a bound enforced on hardware traces to a datasheet rather than to a config file somebody typed."
+
+# The first crate here that depends on something outside this repository.
+#
+# Every limit the Track 0 gate enforces is currently hand-written: a pin
+# allowlist and a value range, typed into config by whoever set the node up. The
+# gate is only as good as those numbers, and nothing checks them against the
+# mechanism they are supposed to bound.
+#
+# ClawBot is the platform's mechanism model. Its joint limits are citation-gated
+# — a limit with no source fails its validator — and its Rust binding is const
+# data with zero dependencies, published precisely so this repo could read it
+# without taking a runtime dependency on a Python tool. Its ADR-0010 draws the
+# line this crate sits on: ClawBot publishes the contract and never commands,
+# and deliberately does NOT write this repo's config format, because that would
+# take our format as its dependency. So the importer is ours to write. This is
+# it.
+#
+# Licence note: `clawbot` is Apache-2.0 while this workspace is MIT. Permissive
+# both ways and compatible in this direction; the obligation is to preserve
+# ClawBot's NOTICE and attribution, not to relicense anything here.
+#
+# Pinned to a git REV, not a branch, and the reason is this repo's .gitignore:
+# Cargo.lock is not tracked here. A branch dependency with no lock file follows
+# the branch head, so a commit in another repository would silently change what
+# this crate compiles against — and this crate derives the numbers the Track 0
+# gate enforces. A rev makes an upstream change a visible edit to this file.
+#
+# When ClawBot#1 merges this becomes a tag.
+[dependencies]
+clawbot = { git = "https://github.com/thewriterben/ClawBot", rev = "d73bf11bb358f01ea402cccceb2ad032621a415c" }
+obc-movement = { path = "../obc-movement" }
+obc-safety = { path = "../obc-safety" }

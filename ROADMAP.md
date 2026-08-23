@@ -1091,6 +1091,35 @@ from having been forgotten.
   loop. Gated by `tests/clawcam_spatial_wiring.rs` against a real controller and
   a real grid; its four existing unit tests never touched either, so all four
   could pass while the module could not affect navigation, which is what it was.
+<!-- unwired: crates/obc-body/src/lib.rs -->
+- [ ] **`crates/obc-body/src/lib.rs` (258 LOC, 16 tests) — deliberately unwired.**
+  Reads [ClawBot](https://github.com/thewriterben/ClawBot)'s body model — a
+  mechanism description whose joint limits are citation-gated, so a limit with no
+  source fails its validator — and derives `SafetyLimit`s from it. The point is
+  that a bound enforced on hardware would trace to a datasheet instead of to a
+  number somebody typed into config.
+
+  It is the first crate here that depends on something outside this repository.
+  ClawBot's ADR-0010 draws the line it sits on: that repo publishes the contract
+  and never commands, and deliberately does *not* write our config format,
+  because that would take our format as its dependency. So the importer is ours,
+  and this is it.
+
+  **Condition to wire: two, and the first is not ours.** ClawBot's `data/robots/`
+  is empty — it holds one cited actuator and no robot record, because a robot
+  record needs a real mechanism with real datasheets and a described-from-memory
+  arm is the invented data its schema exists to refuse. Until one exists the
+  importer has nothing real to import, and every test here builds its own
+  fixtures and says so. Second: loading these into a live gate means the limits
+  the hardware obeys change when a file in another repository changes. That is an
+  operational decision with a human in it, not a plumbing task — a deliberate
+  load step, not a build-time include.
+
+  What it does today that is worth having anyway: `ImportReport::unbounded` names
+  every joint the model cannot bound and why, and the conversion refuses rather
+  than widens. A joint whose travel nobody sourced produces **no limit at all**,
+  because a permissive `SafetyLimit` looks exactly like a real one.
+
 <!-- unwired: crates/obc-movement/src/feedback.rs -->
 - [ ] **`crates/obc-movement/src/feedback.rs` (269 LOC, 6 tests) — deliberately
   unwired.**
