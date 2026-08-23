@@ -31,8 +31,13 @@ description = "Turns a cited ClawBot body model into Track 0 safety limits and m
 # this crate compiles against — and this crate derives the numbers the Track 0
 # gate enforces. A rev makes an upstream change a visible edit to this file.
 #
-# When ClawBot#1 merges this becomes a tag.
+# ClawBot#1 merged on 2026-08-23, so the pin moves off the review branch and onto
+# the merged main commit (61cd4fd). It stays a REV rather than becoming the tag
+# that comment promised, and the reason is that ClawBot has cut no release: there
+# are no tags in that repository, and inventing v0.1.0 here would be this repo
+# declaring a release milestone in someone else's. When one is cut, this becomes
+# it -- one line, and the rev keeps the same immutability guarantee until then.
 [dependencies]
-clawbot = { git = "https://github.com/thewriterben/ClawBot", rev = "d73bf11bb358f01ea402cccceb2ad032621a415c" }
+clawbot = { git = "https://github.com/thewriterben/ClawBot", rev = "61cd4fdfcaef895f9136c28066354325e1443feb" }
 obc-movement = { path = "../obc-movement" }
 obc-safety = { path = "../obc-safety" }
