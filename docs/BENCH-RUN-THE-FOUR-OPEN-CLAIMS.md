@@ -25,16 +25,48 @@ gap between them.
 ```
 python scripts/bench_run.py --dry-run    # simulated node; proves the script runs
 python scripts/bench_run.py              # auto-detects the port
-python scripts/bench_run.py --port COM6
+python scripts/bench_run.py --port COMn       # only if auto-detect picks wrong
 ```
+
+Prefer the auto-detecting form, and note that it detects by *chip*, not by
+position. The node is a XIAO ESP32-S3 speaking over the ESP32-S3's native
+USB-Serial-JTAG, so it enumerates under Espressif's VID `0x303A`. The Heltecs
+each have a CP210x USB-UART bridge (`0x10C4`). The runner refuses to talk to a
+bridge port rather than picking it because it is the only one present.
+
+That refusal exists because the alternative happened. On 2026-08-22 the only
+port on the bench was **COM3, a CP210x** — and `BENCH-PINOUT-CARDS.md` Card 0
+records COM3 as the LoRa **base station `gw-D8`**, not the node. The node
+firmware was flashed onto the base station. No port number in any document
+would have caught that; the USB descriptor does, every time, without a bench
+note to keep current.
 
 Run `--dry-run` once before you wire anything, so the first time you meet the
 prompts is not while holding a soldering iron. It talks to a simulated node that
 enforces the same policy, so refusals go down the refusal path; it says nothing
 about your firmware or your board.
 
-Everything needed to flash is already installed on this machine: `espup`,
-`espflash`, the `esp` rust toolchain, and pyserial.
+`espup`, `espflash` and the `esp` rust toolchain are installed on this machine
+and flashing works. **pyserial is the one to check**, because "installed" and
+"importable" are different claims:
+
+```powershell
+python -c "import serial; print(serial.__version__)"
+```
+
+On 2026-08-22 that failed in the flashing shell with `ModuleNotFoundError` while
+the same package imported fine elsewhere — pyserial was installed with `--user`,
+into `%APPDATA%\Python\Python314\site-packages`, which Python skips inside a
+virtualenv or when `PYTHONNOUSERSITE` is set. Installing it against the
+interpreter by full path avoids the whole question:
+
+```powershell
+python -c "import sys; print(sys.executable)"   # then use that path:
+& "C:\Python314\python.exe" -m pip install pyserial
+```
+
+`bench_run.py` now says this itself, with your interpreter's real path filled
+in, instead of a bare traceback.
 
 ---
 
@@ -48,19 +80,116 @@ Everything needed to flash is already installed on this machine: `espup`,
 | Wire | LED + 330 Ω to ground on **GPIO 3** (control), **GPIO 8** (refusal), optionally **GPIO 7** |
 | Sensor | BME280 on **SDA=GPIO5, SCL=GPIO6** — the pads the silkscreen marks |
 
-**GPIO numbers, not header labels.** The silk differs per board: on a XIAO,
-GPIO 3 and 7 are `D2` and `D8`; on a FireBeetle they are elsewhere. Find the pad
-that carries GPIO 3 on your board's vendor pinout. A `D`-number copied from
-another board's card is the mistake this whole document exists to avoid.
+**The board needs pins in it.** The XIAO ships with its headers loose in the
+bag, not fitted. An unsoldered board resting on a breadboard connects to
+nothing: every row under it is empty, and a jumper poked into a castellated hole
+makes contact by luck rather than by design. Solder the headers before starting.
+
+This cost most of an evening on 2026-08-22 and every symptom pointed somewhere
+else. The control LED would not light. Two other pads glowed steadily — GPIO 43,
+the UART uplink, which idles high, and a pin in the I2S microphone group — which
+read as "the pin map is wrong". `gpio_write` returned `ok` while nothing moved,
+which read as "the firmware reports success and does nothing", the exact failure
+this document exists to catch. A meter found no pad swinging anywhere, which
+read as "the pin does not drive". All four readings were true and none of them
+was the problem: the chip was driving GPIO 3 correctly the whole time, into an
+unconnected pad. Check this first; it is the cheapest question on the page.
+
+**GPIO numbers, not header labels.** The silk differs per board, and on the XIAO
+the two numbering schemes do not line up:
+
+| Role | GPIO | XIAO silk | Which column |
+|---|---|---|---|
+| control, must light | 3 | `D2` | the `D0`–`D6` side |
+| refusal, must stay dark | 8 | `D9` | the `D7`–`D10` / power side |
+| optional second allowed | 7 | `D8` | same side, next to `D9` |
+| shared return | — | `GND` | same side, with `5V` and `3V3` |
+
+`D8` is GPIO 7 and `D9` is GPIO 8 — one apart, in the direction most likely to
+look correct. Wire by matching digits and you wire the wrong two pins, and the
+test looks like it passed.
+
+**Find those pads by their printed labels, not by counting positions.** An
+earlier version of this document gave positions ("3rd pad down"). They came out
+of a secondary pinout listing whose top-to-bottom ordering could not be
+confirmed against a second source — two references disagree about which end of
+the right-hand column the power pins sit at. The silk is on the board in front
+of you and is not in doubt.
+
+All three pads are **bench-verified, 2026-08-22**. With
+`pin_walk --pin N --blink` toggling each pin in turn and a meter on the board's
+pads directly, exactly one pad swung 0 ↔ 3.3 V each time:
+
+| Driven | Pad that swung |
+|---|---|
+| GPIO 3 | `D2` |
+| GPIO 7 | `D8` |
+| GPIO 8 | `D9` |
+
+That is a measurement on this board, not a citation, and it agrees with what
+`HARDWARE-TEST-WALKTHROUGH.md` had already recorded for `D2` and `D8`. The doubt
+was misplaced: what could not be sourced was the *order the pads run down each
+column*, and that was allowed to spread into doubt about the *mapping*, which is
+a different claim. The mapping is now settled by instrument. The ordering
+remains unsourced and no longer matters — nothing here counts pads.
+
+Each LED is `pin's row → 330 Ω → LED long leg | LED short leg → GND`. On a
+breadboard: sit the XIAO across the centre channel so each pin owns the rest of
+its own row on its own side; jumper `GND` to the `−` rail on that edge; then for
+each pin, a resistor from its row to an empty row, the LED's long leg in that
+empty row, its short leg in the `−` rail. The two `−` rails on a 400-point board
+are usually not joined to each other — bridge them, or keep each LED on the rail
+nearest its pin. Nothing connects to `3V3` or `5V`.
+
+Backwards, an LED simply never lights, which on the refusal pin is
+indistinguishable from the result the test is looking for — hence 1-pre.
 
 ### Flashing
+
+**Check which board you are about to flash first.** `espflash` writes to
+whatever port it finds, and every board on this bench is an ESP32-S3 with 8 MB
+of flash, so nothing in the flash log distinguishes them — chip type, revision
+and flash size all match. The USB descriptor does:
+
+```powershell
+python -c "from serial.tools import list_ports; [print(p.device, hex(p.vid or 0), p.description) for p in list_ports.comports()]"
+```
+
+`0x303a` is the node (native USB-Serial-JTAG). `0x10c4` is a CP210x bridge —
+one of the Heltecs, and flashing node firmware onto one overwrites its gateway
+build. That is not hypothetical: it happened on 2026-08-22.
+
+```powershell
+.\scripts\flash-node.ps1              # from anywhere inside the repo
+.\scripts\flash-node.ps1 -PortOnly    # says what it would flash, and stops
+```
+
+That script exists because the four-line version below has four independent
+ways to go wrong and each one has cost a bench cycle: `export-esp.ps1` not
+sourced, `CARGO_TARGET_DIR` not set, the wrong working directory, the wrong
+board. It sources the environment, sets the target dir, resolves the crate from
+its own location, and picks the port by USB vendor id — refusing to flash
+anything that is not VID `303A`, rather than taking whatever is present.
+
+The manual form, for a machine that does not have the script, or when you want
+to see what it is doing:
 
 ```powershell
 . $env:USERPROFILE\export-esp.ps1          # LIBCLANG_PATH etc. for the esp toolchain
 $env:CARGO_TARGET_DIR = "C:\e"             # REQUIRED on Windows -- see below
-cd firmware\obc-esp32-s3
-cargo run                                  # flashes, then opens the monitor
+cd F:\Documents\GitHub\Oh-Ben-Claw\firmware\obc-esp32-s3    # absolute on purpose
+cargo run -- --port COM6                   # flashes, then opens the monitor
 ```
+
+The `cd` is absolute because `export-esp.ps1` leaves you wherever you were,
+which is not necessarily the repo — a relative `cd firmware\obc-esp32-s3` fails
+from `$HOME` and the next line then runs `cargo run` in the wrong crate or none.
+
+`--port` is named because the runner is `espflash flash --monitor` and espflash
+picks a port on its own when it is not told. Use the port the previous check
+identified as VID `0x303a`; anything else on this bench is a Heltec. Naming it
+costs nothing and it is the difference between flashing the node and flashing
+the base station.
 
 The `CARGO_TARGET_DIR` line is not optional and not a preference. Without it
 `esp-idf-sys` aborts with *"Too long output directory … Shorten your project
@@ -75,6 +204,15 @@ done on this machine and are listed only so a fresh machine knows to do them:
 `git config --global core.longpaths true`, and the ESP-IDF framework installed
 to a short root (`ESP_IDF_TOOLS_INSTALL_DIR = custom:C:/esp`, set in
 `.cargo/config.toml`).
+
+One known flake, so it does not read as a broken toolchain the first time it
+happens: on 2026-08-22 the first `cargo run` after setting `CARGO_TARGET_DIR`
+died with `internal compiler error: Segmentation fault` from the xtensa gcc
+compiling esp-idf's `esp_lcd_panel_rgb.c`, `during RTL pass: ira`. Re-running
+the identical command succeeded and it has not repeated. It is a compiler crash
+inside a vendored C file, not anything this repo controls. Retry once. If it
+reproduces on the same file twice in a row, that is a different problem and
+worth recording rather than retrying.
 
 **Exit the monitor with Ctrl+C before running `bench_run.py`.** It holds the
 serial port, and the script will otherwise fail to open it in a way that looks
@@ -91,10 +229,56 @@ copy of the limit table, so that a compromised or absent host cannot talk it
 round. Six host-side tests assert the gate refuses correctly. None of them can
 see a wire.
 
-1. **Boot.** The banner must read `obc-esp32-s3-001`. Anything else and every
+1. **Identify the node.** It must be `obc-esp32-s3-001`. Anything else and every
    step below tests the boot policy instead of the pushed one.
 
-2. **Push the table and read back what stuck.** `set_limits` does not
+   Ask it, do not read it off the monitor:
+
+   ```powershell
+   python scripts\bench_run.py --probe
+   ```
+
+   `--probe` sends `capabilities`, prints the node id, board name, output pins
+   and I2C pins the node reports about itself, and stops. Nothing is wired,
+   nothing is written, no record file is produced. Exit 0 means the node id
+   matched.
+
+   A truncated boot log is not evidence either way, and this step used to lean
+   on one. Observed 2026-08-22: a flash whose log ended mid-word at
+   `main_task: Calling ap`, followed by a ROM banner. That reads as a crash and
+   is not one.
+
+   `main` takes both serial interfaces before it prints a single line —
+   `UsbSerialDriver` on the native USB-Serial-JTAG (GPIO 19/20), then
+   `UartDriver` on UART1 at **GPIO 43/44**, which are the ESP32-S3's default
+   UART0 pins. So whichever interface a given board uses for its console, the
+   firmware has taken it over by the time the first `info!` runs:
+
+   - **XIAO** — console is the native USB, which `UsbSerialDriver` claims.
+   - **Heltec V3** — console is UART0 through the CP210x on GPIO 43/44, which
+     the UART1 spine uplink claims.
+
+   The 2026-08-22 log was the second case: it was a Heltec, flashed by mistake
+   (see the port note above), and its console died exactly where the spine
+   uplink took its pins. A console the program under test seizes cannot report
+   on that program in either direction — it can show neither a crash nor health.
+
+   `--probe` asks over the channel that survives, and silence there is a finding
+   about the node rather than an artefact of the instrument.
+
+2. **Prove both LEDs before pushing anything.** At boot the node allows writes
+   to its own `OUTPUT_PINS` = `[21, 3, 7, 8]`, so GPIO 8 is writable right now
+   and will not be once the table is pushed. The runner writes each of GPIO 3
+   and GPIO 8 high, asks whether it lit, and writes it low again.
+
+   This exists because step 4 asks you to observe that GPIO 8 *stayed dark*, and
+   a dark LED proves a refusal only if that LED has been seen to light. A
+   refused write, a wrong pad, a backwards LED and a broken jumper are the same
+   observation. The control on GPIO 3 was always checked; the refusal pin — the
+   load-bearing one — was not, so the strongest claim in this procedure rested
+   on an unverified wire.
+
+3. **Push the table and read back what stuck.** `set_limits` does not
    acknowledge — it returns the active policy:
 
    ```json
@@ -103,11 +287,11 @@ see a wire.
 
    `"applied":false` means no limit matched this node. Stop and fix that first.
 
-3. **The control.** `gpio_write` pin 3, value 1. **The LED lights.** If it does
+4. **The control.** `gpio_write` pin 3, value 1. **The LED lights.** If it does
    not, every refusal below is meaningless — a dark LED would prove nothing,
    because a disconnected wire and a working gate look identical.
 
-4. **The refusal.** `gpio_write` pin 8. Expect a refusal in the reply, the LED
+5. **The refusal.** `gpio_write` pin 8. Expect a refusal in the reply, the LED
    dark, and `gpio_read` on pin 8 returning 0.
 
    GPIO 8 is the honest choice because it is a real output — it is in
@@ -121,11 +305,11 @@ see a wire.
    pin twitches is the exact failure this step exists to rule out. Use a meter
    or a scope if you have one.
 
-5. **Without the host.** Stop the agent. Send the same refused command straight
+6. **Without the host.** Stop the agent. Send the same refused command straight
    down the serial line. It must still refuse. This is the only step anywhere
    that tests the property the safety case actually claims.
 
-6. **The rate limit.** Two writes to pin 3 inside 500 ms. The second is refused
+7. **The rate limit.** Two writes to pin 3 inside 500 ms. The second is refused
    and the pin holds its value rather than flickering.
 
 ---
@@ -138,8 +322,11 @@ marked SDA and SCL was not on the bus the firmware was driving, and GPIO 6 was
 simultaneously a Track 0 output. It failed as a silent stub read, which is
 indistinguishable from a sensor that is not fitted.
 
-1. **The banner.** `I2C sensor bus ready (SDA=5, SCL=6)`. If it says 4/5 you are
-   running an old build.
+1. **Which bus is it actually driving.** `python scripts\bench_run.py --probe`
+   prints the node's own `i2c_bus`; it must be `[5, 6]`. `[4, 5]` means an old
+   build and every reading below would be a stub. The banner line
+   `I2C sensor bus ready (SDA=5, SCL=6)` says the same thing when you can see it
+   — see step 1.1 for why, on this board, you often cannot.
 
 2. **Scan.** The BME280 answers at `0x76` or `0x77`. If nothing answers, the
    wiring or the pull-ups are the first suspects, not the firmware.
@@ -209,7 +396,7 @@ board:             ____________________  (XIAO / FireBeetle / Waveshare / other)
 build:             default | --features board-waveshare-21 | --features camera
 
 1. refusal stops the wire
-   boot banner said:            ____________________
+   node reported (capabilities):____________________
    set_limits returned applied: ____________________
    control (pin 3 lights):      pass / fail
    refusal (pin 8 dark):        pass / fail   measured with: eye / meter / scope
@@ -217,7 +404,7 @@ build:             default | --features board-waveshare-21 | --features camera
    rate limit holds:            pass / fail
 
 2. BME280 on 5/6
-   banner SDA/SCL:              ____________________
+   i2c_bus reported:            ____________________
    address that answered:       ____________________
    humidity at rest:            ________ %RH
    responds to breath:          yes / no

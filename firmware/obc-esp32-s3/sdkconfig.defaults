@@ -7,5 +7,34 @@
 # CONFIG_SPIRAM_MODE_OCT=y      # or CONFIG_SPIRAM_MODE_QUAD=y for a quad-SPI module
 # CONFIG_SPIRAM_SPEED_80M=y
 
-# A little more main-task stack for the agent + capture paths (harmless).
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# Main-task stack.
+#
+# 8192 was not enough: on 2026-08-22, on a XIAO ESP32-S3, the main task
+# overflowed and FreeRTOS caught it in vTaskSwitchContext right after the
+# startup banner. The next boot of the same binary died differently -- a
+# LoadProhibited inside `find_desc_for_source`, reached from
+# `i2c_driver_install` -> `esp_intr_alloc` -- which is what an already-corrupt
+# stack looks like when the damage lands somewhere else. Two different crashes
+# from one binary at one call site is the signature; a genuine bug in the I2C
+# driver would fail the same way twice.
+#
+# Measured on hardware at 16384, 2026-08-22, XIAO ESP32-S3, default build:
+#
+#   Stack headroom after init:       6516 bytes
+#   Stack headroom after AgentState: 6468 bytes
+#
+# uxTaskGetStackHighWaterMark returns the minimum free the task has EVER had, so
+# by the end of driver init this build had already used 16384 - 6516 = 9868
+# bytes. 8192 was not marginally short, it was short by about 1.7 KB, and the
+# overflow was certain rather than unlucky.
+#
+# It also says where the stack did NOT go: AgentState::new() costs 48 bytes.
+# The 9.8 KB is spent before the startup banner, in `Peripherals::take` and the
+# USB / UART / GPIO driver init above it. Which of those, and why the same
+# 8192 carried the pre-2026-08-21 build, is not answered here - add another
+# stack_headroom() call between them if it needs answering.
+#
+# 16384 is kept rather than trimmed to ~12 KB: the agent and camera paths run
+# deeper than boot does, and 6.5 KB of headroom on a 320 KB heap is cheap
+# insurance against finding this out again from a corrupted backtrace.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
