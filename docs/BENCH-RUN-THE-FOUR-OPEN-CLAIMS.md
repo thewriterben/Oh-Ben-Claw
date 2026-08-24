@@ -51,6 +51,32 @@ in `gate_probe.py`. That tool reads the node's **reply** — the node saying
 refuses in the log while the pin twitches would pass every reply-level test in
 this repo.
 
+### The meter path: no LEDs, keep the resistors
+
+Section 1 asks which instrument is on the pins and phrases every observation for
+it. On `meter` it takes a **voltage** and decides what the voltage means, and the
+record carries `0.000 V (low)` instead of `y`. A yes is unfalsifiable a month
+later; a number is not.
+
+**Drop the LEDs. Keep one 330R from each pin to the ground rail.** The resistor
+was always the load-bearing part — it defines the pin when nothing is driving it.
+A bare pin under a high-impedance meter reads the air, and on 2026-08-21 the air
+read HIGH on GPIO 43 off an idle UART TX and was taken for a pin that had moved.
+Anything the run measures between **0.5 V and 2.0 V** is reported as *neither* —
+not rounded to whichever real state is nearer.
+
+Two things a meter cannot do, both now written into the run rather than left for
+you to remember:
+
+- **It cannot see a pulse shorter than its update rate.** If the gate refuses
+  and the pin twitches for a millisecond, a steady 0.00 V is what you will read.
+  Step 1b asks whether MIN/MAX or peak-hold was armed and records the answer, so
+  a flat reading is not left standing for a claim it cannot make. Arm it if your
+  meter has it; a scope is the only instrument that settles this outright.
+- **It cannot judge "held steady".** Step 1d used to ask that. It now reads which
+  state pin 3 *settled* in and checks that against what the replies said
+  happened — the smaller question the instrument can actually answer.
+
 Prefer the auto-detecting form, and note that it detects by *chip*, not by
 position. The node is a XIAO ESP32-S3 speaking over the ESP32-S3's native
 USB-Serial-JTAG, so it enumerates under Espressif's VID `0x303A`. The Heltecs
