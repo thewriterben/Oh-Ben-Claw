@@ -28,6 +28,29 @@ python scripts/bench_run.py              # auto-detects the port
 python scripts/bench_run.py --port COMn       # only if auto-detect picks wrong
 ```
 
+**Run it in two passes, not one.** Section 1 needs three LEDs and three
+resistors on GPIO 3/7/8. Sections 2 and 3 need three I2C modules on GPIO 5/6,
+each with four jumpers. On a 400-point breadboard both rigs at once is a crowd,
+and crowding is how a jumper ends up one row off:
+
+```powershell
+python scripts/bench_run.py --sections 1     --out bench-run-record-gate.md
+# then tear the LEDs down and build the sensor rig
+python scripts/bench_run.py --sections 2,3   --out bench-run-record-sensors.md
+```
+
+Keep both records; neither is the whole run. Section 0 — what the node says it
+is — runs in both passes, which is the point: each record can name the node it
+was talking to. A section that was not selected is written into the record as
+*not run*, never left blank, because a blank row and a passing row look the same
+three weeks later.
+
+The LEDs cannot come out before the section-1 pass, however green the gate looks
+in `gate_probe.py`. That tool reads the node's **reply** — the node saying
+`refused`. Step 1b is the only place anything checks the **wire**. A gate that
+refuses in the log while the pin twitches would pass every reply-level test in
+this repo.
+
 Prefer the auto-detecting form, and note that it detects by *chip*, not by
 position. The node is a XIAO ESP32-S3 speaking over the ESP32-S3's native
 USB-Serial-JTAG, so it enumerates under Espressif's VID `0x303A`. The Heltecs
