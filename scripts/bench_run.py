@@ -79,6 +79,7 @@ class Node:
         # beacons, link_state, reflex ticks. Kept rather than dropped -- they
         # are the node's own account of what it was doing during the run.
         self.unsolicited: list[str] = []
+        self.seq = 0
         if dry:
             self.port = "(simulated)"
             self._sim = _Sim()
@@ -158,7 +159,13 @@ class Node:
         )
 
     def send(self, cmd: str, args: dict | None = None, rid: str | None = None) -> dict:
-        req = {"id": rid or cmd, "cmd": cmd, "args": args or {}}
+        # Ids must be unique per request. Defaulting an id to the command name
+        # made two consecutive `gpio_write` calls indistinguishable on the wire,
+        # so a stale or duplicated reply could be matched to the wrong write --
+        # in the one step where "which write did this answer" is the entire
+        # question. The counter makes every request its own.
+        self.seq += 1
+        req = {"id": f"{rid or cmd}#{self.seq}", "cmd": cmd, "args": args or {}}
         line = json.dumps(req)
         if self.dry:
             # The simulator interleaves a telemetry line before its answer, the
@@ -380,7 +387,18 @@ def main() -> int:
     if caps.get("node_id") != NODE_ID:
         print(f"    !! node id is {caps.get('node_id')!r}, not {NODE_ID!r}.")
         print("       The pushed limit will not match and every step below would")
-        print("       be testing the boot policy instead. Fix this first.")
+        print("       be testing the boot policy instead.")
+        print()
+        print("    STOPPING. This used to be a warning and the run carried on,")
+        print("    which on 2026-08-22 produced a full transcript of results")
+        print("    whose meaning depended on an identity the node never gave.")
+        print("    A run that cannot say which node it talked to is not a")
+        print("    weaker run; it is not a run.")
+        print()
+        print("    If the node answered nothing at all, something else may hold")
+        print("    the port (Ctrl+C the espflash monitor), or it may still be")
+        print("    booting -- wait a second and try again.")
+        return 2
     print(f"    The node says it is a {rec['board reported']}, safe pins "
           f"{rec['gpio reported']}, I2C {rec['i2c reported']}.")
     print("    Those came from the node, not from this script. If they disagree")
@@ -488,9 +506,17 @@ def main() -> int:
         print("       wiring before trusting steps 1b-1d.")
 
     print("\n  1b. The refusal. Watch the PIN, not the reply.")
-    r = node.send("gpio_write", {"pin": 8, "value": 1})
+    r = node.send("gpio_write", {"pin": 8, "value": 1}, rid="refusal")
     show("gpio_write pin 8 value 1", r)
     rec["refusal reply refused"] = (r.get("ok") is False)
+    rec["refusal reply refused flag"] = r.get("refused")
+    if r.get("ok") is True:
+        print("    !! THE GATE ALLOWED IT. pin 8 is not in the pushed")
+        print("       allowed_pins, set_limits said applied:true, and the node")
+        print("       took the write anyway. This is the property the safety")
+        print("       case calls load-bearing. Finish the run -- the remaining")
+        print("       steps say how much of the gate is inert -- then stop and")
+        print("       treat this as the result.")
     rd = node.send("gpio_read", {"pin": 8})
     show("gpio_read pin 8", rd)
     rec["refusal gpio_read"] = rd.get("result")
@@ -526,6 +552,19 @@ def main() -> int:
         print("       as evidence.")
     rec["rate limit pin held"] = ask("Did the LED hold steady rather than flicker?")
 
+    if (rec.get("refusal reply refused") is False
+            or rec.get("rate limit refused the second") is False):
+        print()
+        print("  " + "=" * 66)
+        print("  The pushed policy is not being enforced.")
+        print("  " + "=" * 66)
+        print("  set_limits reported the table back and the node then ignored")
+        print("  it. Run `python scripts\\gate_probe.py` for which of the gate's")
+        print("  three rules -- allow-list, value range, rate limit -- still")
+        print("  fire. That is the finding of this run; the sensor sections")
+        print("  below are unaffected but secondary.")
+        print()
+
     print()
     print("=" * 68)
     print("  2. Does the BME280 work on the corrected 5/6 bus?")
@@ -547,21 +586,35 @@ def main() -> int:
 
     print()
     print("=" * 68)
-    print("  3. Addresses and decode")
+    print("  3. Addresses and decode -- NEEDS TWO MORE MODULES")
     print("=" * 68)
-    r = node.send("sensor_read", {"sensor": "max17048", "field": "battery_soc"})
-    show("battery_soc", r)
-    rec["battery_soc"] = r.get("result")
-    rec["battery_soc plausible"] = ask("Is that a plausible state of charge?")
-    r = node.send("sensor_read", {"sensor": "mpu6050", "field": "accel_z"})
-    show("accel_z (flat)", r)
-    rec["accel_z flat"] = r.get("result")
-    print("    Turn the board over, then press Enter.")
-    input("    ")
-    r = node.send("sensor_read", {"sensor": "mpu6050", "field": "accel_z"})
-    show("accel_z (inverted)", r)
-    rec["accel_z inverted"] = r.get("result")
-    rec["accel sign flipped"] = ask("Did the sign flip?")
+    print("  This section is not about the ESP32. It reads two separate I2C")
+    print("  boards that have to be on the bus already:")
+    print("    MAX17048 fuel gauge at 0x36 -- and a LiPo on its battery pads,")
+    print("      or the state of charge it reports is meaningless.")
+    print("    MPU6050 accelerometer at 0x68 -- which you have to be able to")
+    print("      pick up and turn over, so mount it where the wires allow that.")
+    print("  Both share SDA=GPIO5 / SCL=GPIO6 with the BME280.")
+    print()
+    print("  Until 2026-08-22 this section simply began, with no warning that")
+    print("  it needed hardware nobody had been told to fit.")
+    if ask("Are the MAX17048 and MPU6050 both wired?").startswith("n"):
+        rec["addresses and decode"] = "not wired -- not tested"
+        print("    skipped. Nothing here is inferred from their absence.")
+    else:
+        r = node.send("sensor_read", {"sensor": "max17048", "field": "battery_soc"})
+        show("battery_soc", r)
+        rec["battery_soc"] = r.get("result")
+        rec["battery_soc plausible"] = ask("Is that a plausible state of charge?")
+        r = node.send("sensor_read", {"sensor": "mpu6050", "field": "accel_z"})
+        show("accel_z (flat)", r)
+        rec["accel_z flat"] = r.get("result")
+        print("    Turn the board over, then press Enter.")
+        input("    ")
+        r = node.send("sensor_read", {"sensor": "mpu6050", "field": "accel_z"})
+        show("accel_z (inverted)", r)
+        rec["accel_z inverted"] = r.get("result")
+        rec["accel sign flipped"] = ask("Did the sign flip?")
 
     print()
     print("=" * 68)
