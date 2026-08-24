@@ -58,10 +58,14 @@ it. On `meter` it takes a **voltage** and decides what the voltage means, and th
 record carries `0.000 V (low)` instead of `y`. A yes is unfalsifiable a month
 later; a number is not.
 
-**Drop the LEDs. Keep one 330R from each pin to the ground rail.** The resistor
-was always the load-bearing part — it defines the pin when nothing is driving it.
-A bare pin under a high-impedance meter reads the air, and on 2026-08-21 the air
-read HIGH on GPIO 43 off an idle UART TX and was taken for a pin that had moved.
+**Drop the LEDs. Keep one 330R from each pin to the ground rail.** Not for the
+meter's sake — a pin the firmware is actively driving reads fine bare. The
+resistor is insurance against precisely the case this section exists to catch:
+if a refusal leaves the pin in high-Z rather than held low, a bare pin reads the
+air, and on 2026-08-21 the air read HIGH on GPIO 43 off nothing but an idle UART
+TX and was taken for a pin that had moved. With the resistor in, *undriven* and
+*driven low* are both a real 0 V, and the two failures stop looking alike.
+
 Anything the run measures between **0.5 V and 2.0 V** is reported as *neither* —
 not rounded to whichever real state is nearer.
 

@@ -335,10 +335,10 @@ def show(label: str, reply: dict) -> None:
 
 
 # A pin driven high sits at the rail; a pin held low sits at ground. Anything
-# in between is a pin that is not being driven at all, and the meter is reading
-# the air. That third case is the one worth naming, because on 2026-08-21 a
-# jumper on GPIO 43 read HIGH purely because an idle UART TX floats there, and
-# it was taken for a pin that had moved.
+# in between is a pin nothing is driving, and the meter is reading the air.
+# That third case is worth naming rather than rounding to the nearer real one,
+# because on 2026-08-21 a jumper on GPIO 43 read HIGH purely because an idle
+# UART TX floats there, and it was taken for a pin that had moved.
 HIGH_MIN_V = 2.0
 LOW_MAX_V = 0.5
 
@@ -372,10 +372,11 @@ def observe(instrument: str, gpio: int, expect: str) -> tuple[bool, str]:
         else:
             state = "neither"
         if state == "neither":
-            print(f"    !! {v:.2f} V is neither driven high nor held low. If this")
-            print("       pin has no 330R to ground, an undriven pin reads")
-            print("       whatever the air gives it, and that is not a")
-            print("       measurement of anything. Fit the resistor and repeat.")
+            print(f"    !! {v:.2f} V is neither driven high nor held low. That is")
+            print("       what a pin nothing is driving reads. If this pin has no")
+            print("       330R to ground, fit one and repeat -- with it in place,")
+            print("       an undriven pin reads a real 0 V and this band means")
+            print("       something has gone wrong at the die instead.")
         return state == expect, f"{v:.3f} V ({state})"
 
     if instrument.startswith("s"):
@@ -544,11 +545,14 @@ def main() -> int:
         rec["section 1 instrument"] = instrument
         print()
         if instrument.startswith("m"):
-            print("  METER. No LEDs. Each pin needs ONE 330R from the pin to the")
-            print("  ground rail -- the resistor, not the LED, is the part that")
-            print("  matters: it defines the pin when nothing is driving it. A")
-            print("  bare pin with a meter on it reads the air, and the air has")
-            print("  already been mistaken for a signal on this bench once.")
+            print("  METER. No LEDs. Each pin still wants ONE 330R from the pin to")
+            print("  the ground rail. Not for the meter's sake -- a pin the")
+            print("  firmware is actively driving reads fine bare. The resistor is")
+            print("  insurance against the case this section exists to catch: if a")
+            print("  refusal leaves the pin in high-Z rather than held low, a bare")
+            print("  pin reads the air and the air read HIGH on GPIO 43 on")
+            print("  2026-08-21, off nothing but an idle UART TX. With the resistor")
+            print("  in, undriven and driven-low are both a real 0 V.")
             print("    GPIO 3  -- the CONTROL. In the pushed table: must read ~3.3 V.")
             print("    GPIO 8  -- the REFUSAL. NOT in the pushed table: must stay ~0 V")
             print("               while step 1b writes to it.")
