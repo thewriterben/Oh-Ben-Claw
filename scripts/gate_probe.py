@@ -27,17 +27,39 @@ PASS = "gate refused, as the policy requires"
 FAIL = "!! GATE ALLOWED IT -- the policy is not being enforced"
 
 
-def probe(node, label, requires_refusal, **args):
+def probe(node, label, requires_refusal, expect_reason, **args):
+    """One rule, checked by the reason it fired -- not merely that it fired.
+
+    The first version of this script asked only `ok is False`. After the node
+    rebooted mid-run and reverted to deny-all, every probe was refused with
+    `pin 3 not in allow-list` and the script reported that the value-range and
+    rate-limit rules had both fired correctly. They had not run at all. A gate
+    that refuses everything passes a test that only counts refusals, which makes
+    such a test worthless exactly when the node is at its most broken.
+    """
     rid = f"gate-{label}"
     r = node.send("gpio_write", args, rid=rid)
     ok = r.get("ok") is True
     refused = r.get("refused") is True
-    verdict = (FAIL if ok else PASS) if requires_refusal else (
-        "allowed, as the policy requires" if ok else "!! refused an ALLOWED write")
+    reason = r.get("error") or ""
     print(f"  {label:<28} {args}")
-    print(f"      ok={ok} refused={refused} error={r.get('error')!r}")
-    print(f"      {verdict}")
-    return ok
+    print(f"      ok={ok} refused={refused} error={reason!r}")
+
+    if not requires_refusal:
+        verdict = "allowed, as the policy requires" if ok else "!! refused an ALLOWED write"
+        print(f"      {verdict}")
+        return 0 if ok else 1
+
+    if ok:
+        print(f"      {FAIL}")
+        return 1
+    if expect_reason not in reason:
+        print(f"      !! refused, but for the WRONG REASON -- expected "
+              f"{expect_reason!r}. This rule was never exercised; something")
+        print("         else refused first, most likely a reboot back to deny-all.")
+        return 1
+    print(f"      {PASS}")
+    return 0
 
 
 def main() -> int:
@@ -61,19 +83,25 @@ def main() -> int:
     time.sleep(0.8)
 
     failures = 0
-    failures += probe(node, "pin-8-not-in-list", True, pin=8, value=1)
+    failures += probe(node, "pin-8-not-in-list", True, "not in allow-list", pin=8, value=1)
     time.sleep(0.8)
-    failures += probe(node, "pin-99-in-no-list", True, pin=99, value=1)
+    failures += probe(node, "pin-99-in-no-list", True, "not in allow-list", pin=99, value=1)
     time.sleep(0.8)
-    failures += probe(node, "value-5-out-of-range", True, pin=3, value=5)
+    failures += probe(node, "value-5-out-of-range", True, "out of range", pin=3, value=5)
     time.sleep(0.8)
 
-    allowed = probe(node, "pin-3-allowed", False, pin=3, value=1)
+    allowed = probe(node, "pin-3-allowed", False, "", pin=3, value=1) == 0
+    failures += 0 if allowed else 1
     r2 = node.send("gpio_write", {"pin": 3, "value": 0}, rid="gate-rate-2")
     print(f"  {'rate-limit-immediate':<28} {{'pin': 3, 'value': 0}}")
-    print(f"      ok={r2.get('ok')} refused={r2.get('refused')} error={r2.get('error')!r}")
+    reason2 = r2.get("error") or ""
+    print(f"      ok={r2.get('ok')} refused={r2.get('refused')} error={reason2!r}")
     if r2.get("ok") is True:
         print(f"      {FAIL}")
+        failures += 1
+    elif "rate limit" not in reason2:
+        print("      !! refused, but not by the rate limit. This rule was never")
+        print("         exercised.")
         failures += 1
     else:
         print(f"      {PASS}")
@@ -82,11 +110,12 @@ def main() -> int:
 
     print()
     if failures:
-        print(f"  {failures} of the gate's rules did not fire.")
-        print("  The node reported the policy and did not apply it. This is the")
-        print("  property docs/SAFETY-CASE.md calls load-bearing.")
+        print(f"  {failures} of the gate's rules did not do what the policy says.")
+        print("  If several were refused for the wrong reason, suspect a reboot")
+        print("  back to deny-all rather than a broken rule -- scripts/")
+        print("  reboot_amnesia.py distinguishes those two.")
         return 1
-    print("  Every rule fired. The gate enforces what it reported.")
+    print("  Every rule fired, and each for its own reason.")
     return 0 if allowed else 1
 
 

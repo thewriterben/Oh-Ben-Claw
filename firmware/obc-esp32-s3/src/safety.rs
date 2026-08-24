@@ -106,9 +106,53 @@ pub struct SafetyGate {
 }
 
 impl SafetyGate {
-    /// Boot default: allow-list the configured output pins, digital range 0..=1,
-    /// no rate limit. This reproduces the old compile-time `safety_check_gpio_write`
-    /// exactly, so nothing changes until a host pushes a stricter policy.
+    /// Boot posture: **refuse every pin** until a host pushes a policy.
+    ///
+    /// Chosen 2026-08-22 after the bench found the node fails open across a
+    /// reset. The pushed table lives only in RAM, so a crash, watchdog,
+    /// brown-out or nudged cable rebuilt the gate from a boot allow-list that
+    /// was *wider* than anything a host would push -- `[21,3,7,8]` with no rate
+    /// limit, against a pushed `[3,7]` at 500 ms -- and said nothing about it.
+    /// `docs/SAFETY-CASE.md` claims a compromised or absent host cannot talk
+    /// this node round; it did not have to, it only had to reset it.
+    ///
+    /// A default-deny gate whose default is wider than the policy it replaces
+    /// is not default-deny in any sense that survives a power blip. So the
+    /// default is now nothing.
+    ///
+    /// **This disarms the node's own safing until a host is heard from.** The
+    /// built-in safing rules shed load below 10 % battery by driving a pin, and
+    /// they route through this same gate, so after a power cut a node alone
+    /// cannot protect its own battery. That cost was accepted deliberately when
+    /// the posture was chosen. Whether self-protection should keep a narrow,
+    /// hard-coded path of its own -- host-directed actuation and the node
+    /// defending itself are different claims -- is open, and is a decision
+    /// about the safety case rather than a bug to be fixed quietly.
+    pub fn deny_until_told() -> Self {
+        Self {
+            policy: SafetyLimit {
+                node_id: String::new(),
+                tool: "gpio_write".to_string(),
+                // `Some(empty)` and not `None`: `check` treats a missing list as
+                // "no allow-list configured" and permits any pin. An empty list
+                // is the one that denies. The difference is the whole property.
+                allowed_pins: Some(Vec::new()),
+                value_min: Some(0),
+                value_max: Some(1),
+                min_interval_ms: None,
+            },
+            last_fire: HashMap::new(),
+        }
+    }
+
+    /// The pre-2026-08-22 boot policy: allow-list the configured output pins.
+    ///
+    /// Kept because it is exactly what a host *should* push for this board, and
+    /// because the tests that pin the gate's behaviour are written against it.
+    /// It is no longer what the node boots into.
+    #[allow(dead_code)] // unused in the firmware since the boot posture changed;
+    // kept because it is what a host should push for this board, and because
+    // tests/firmware_node_gates.rs pins the gate's behaviour against it.
     pub fn with_output_pins(pins: &[i32]) -> Self {
         Self {
             policy: SafetyLimit {

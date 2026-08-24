@@ -291,7 +291,7 @@ impl AgentState {
             wifi_ssid: String::new(),
             wifi_password: String::new(),
             reflex: reflex::ReflexEngine::default(),
-            safety: safety::SafetyGate::with_output_pins(OUTPUT_PINS),
+            safety: safety::SafetyGate::deny_until_told(),
             sensors: None,
             audio: None,
             dht_last_read_ms: 0,
@@ -489,6 +489,13 @@ fn main() -> anyhow::Result<()> {
 
     info!("Oh-Ben-Claw ESP32-S3 firmware v{} ready", FIRMWARE_VERSION);
     info!("Node ID: {}", NODE_ID);
+    log::warn!(
+        "Track 0 gate: DENY-ALL until a host pushes limits. No pin can be \
+         driven -- including by the built-in safing rules -- until set_limits \
+         arrives. The boot policy used to be the OUTPUT_PINS allow-list, which \
+         was wider than anything a host pushes and was silently restored by \
+         every reset."
+    );
     info!("Serial: native USB-Serial-JTAG (send newline-delimited JSON commands)");
     info!(
         "Commands: gpio_read, gpio_write, camera_capture, audio_sample, sensor_read, \
@@ -800,8 +807,25 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
+/// `Display` for an optional number as JSON: the value, or `null`.
+///
+/// Exists so the `set_limits` reply can be formatted with `write!` instead of
+/// built as a `serde_json::Value` and serialised. That path used more stack than
+/// the main task had; see the comment in the `set_limits` arm.
+struct OptNum(Option<i64>);
+
+impl core::fmt::Display for OptNum {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(v) => write!(f, "{v}"),
+            None => f.write_str("null"),
+        }
+    }
+}
+
 fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response> {
     let req: Request = serde_json::from_str(line.trim())?;
+    let mut req = req;
     let id = req.id.clone();
 
     // Wrap the dispatch in a closure so a `?` inside any arm returns *here* (into
@@ -814,13 +838,32 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
         // board's answer under the ordinary workspace `cargo test` — including
         // the board this build is not. Nothing in CI can compile this crate, so
         // that shim is the only place any of this is checked.
-        "capabilities" | "announce" => Ok(board::describe(
-            &BOARD,
-            cfg!(feature = "camera"),
-            NODE_ID,
-            FIRMWARE_VERSION,
-        )
-        .to_string()),
+        "capabilities" | "announce" => {
+            // Headroom either side of the one reply known to overflow the main
+            // task stack. `capabilities` is ~1170 bytes of JSON built with
+            // `json!` and then serialised, and on 2026-08-22 it killed the node
+            // on roughly every other call -- truncating at ~1088 bytes, printing
+            // the stack-overflow banner, and rebooting. The stack was raised
+            // from 8192 to 16384 earlier the same day by picking a number; that
+            // moved the line without crossing it. These two logs make the next
+            // number a measurement instead.
+            let before = stack_headroom();
+            let body = board::describe_json(
+                &BOARD,
+                cfg!(feature = "camera"),
+                NODE_ID,
+                FIRMWARE_VERSION,
+            );
+            let after = stack_headroom();
+            log::info!(
+                "capabilities: {} bytes, headroom {} -> {} (used {})",
+                body.len(),
+                before,
+                after,
+                before.saturating_sub(after)
+            );
+            Ok(body)
+        }
 
         "gpio_read" => {
             let pin = req.args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
@@ -839,19 +882,60 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
         // the host `[[safety.limits]]` set). Retained on `obc/nodes/{id}/limits`.
         // Tightens the boot default-deny policy in the field with no reflash.
         "set_limits" => {
-            let limits: Vec<safety::SafetyLimit> = serde_json::from_value(
-                req.args.get("limits").cloned().unwrap_or(serde_json::json!([])),
-            )?;
+            // Measured 2026-08-22: this arm crashed the node on 5 of 6 calls,
+            // where `gpio_read` and `gpio_write` never did. Three stack-hungry
+            // steps stacked on a main task with ~2 KB of headroom: cloning the
+            // `limits` Value, deserialising it recursively, and then building
+            // the reply with `json!` and serialising that. `capabilities` had
+            // already been fixed the same way; this is the same bug, and it is
+            // the more damaging one -- crashing *while being told the safety
+            // policy* is what silently reverted the node to deny-all in the
+            // middle of a bench run and made a working gate look broken.
+            //
+            // The clone is gone (the args are owned here), and the reply is
+            // formatted straight into a String.
+            let before = stack_headroom();
+            use core::fmt::Write as _;
+            let limits: Vec<safety::SafetyLimit> = match req.args.get_mut("limits") {
+                Some(v) => serde_json::from_value(v.take())?,
+                None => Vec::new(),
+            };
             let applied = state.safety.apply_pushed(limits, NODE_ID);
             let policy = state.safety.policy();
-            Ok(serde_json::json!({
-                "applied": applied,
-                "allowed_pins": policy.allowed_pins,
-                "value_min": policy.value_min,
-                "value_max": policy.value_max,
-                "min_interval_ms": policy.min_interval_ms,
-            })
-            .to_string())
+
+            let mut out = String::with_capacity(160);
+            out.push_str(if applied {
+                r#"{"applied":true,"allowed_pins":"#
+            } else {
+                r#"{"applied":false,"allowed_pins":"#
+            });
+            match &policy.allowed_pins {
+                Some(pins) => {
+                    out.push('[');
+                    for (i, p) in pins.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        let _ = write!(out, "{p}");
+                    }
+                    out.push(']');
+                }
+                None => out.push_str("null"),
+            }
+            let _ = write!(
+                out,
+                r#","value_min":{},"value_max":{},"min_interval_ms":{}}}"#,
+                OptNum(policy.value_min),
+                OptNum(policy.value_max),
+                OptNum(policy.min_interval_ms.map(|v| v as i64)),
+            );
+            log::info!(
+                "set_limits: headroom {} -> {} (used {})",
+                before,
+                stack_headroom(),
+                before.saturating_sub(stack_headroom())
+            );
+            Ok(out)
         }
 
         // Phase 18: host pushes this node's reflex rule set (mirror of the host

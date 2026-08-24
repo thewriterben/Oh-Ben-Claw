@@ -108,20 +108,40 @@ def main() -> int:
     if rebooted:
         print("  (a reboot happened between the push and this read)")
 
-    widened = pol.get("allowed_pins") != [3, 7]
+    now = pol.get("allowed_pins")
     w, _ = link.send("gpio_write", {"pin": 8, "value": 1})
     link.send("gpio_write", {"pin": 8, "value": 0})
     accepted = w is not None and w.get("ok") is True
 
+    # "Changed" and "widened" are not the same finding, and the first version of
+    # this script treated them as one: it flagged any deviation from [3,7] as a
+    # fail-open, and then reported the deny-all fix -- allowed_pins [] , pin 8
+    # refused -- as FAIL-OPEN CONFIRMED. A checker that cannot tell a lock from a
+    # breach is worse than none, because it is the thing you would believe.
+    held = now == [3, 7]
+    narrowed = isinstance(now, list) and not set(now or []) - {3, 7} and not held
     print()
-    if widened or accepted:
+
+    if accepted or (isinstance(now, list) and set(now or []) - {3, 7}):
         print("  FAIL-OPEN CONFIRMED")
-        print(f"    the pushed table was [3, 7]; the node now reports "
-              f"{pol.get('allowed_pins')}")
+        print(f"    the pushed table was [3, 7]; the node now reports {now}")
         print(f"    a write to pin 8 was {'ACCEPTED' if accepted else 'refused'}")
         print("    the host was told the tighter policy applied and was not told")
         print("    when it stopped applying.")
         return 1
+
+    if narrowed:
+        print("  FAILED CLOSED -- the wire is safe, the host is still lied to.")
+        print(f"    the pushed table was [3, 7]; the node now reports {now}")
+        print("    a write to pin 8 was refused, so a reset can no longer widen")
+        print("    the policy. That is the 2026-08-22 deny-all posture working.")
+        print()
+        print("    But the policy was still LOST, and nothing announced it. The")
+        print("    host believes [3,7] is in force while the node will actuate")
+        print("    nothing at all -- including its own safing. Silent divergence")
+        print("    in the safe direction is still silent divergence, and the")
+        print("    'announce the reset' half of the decision is not built.")
+        return 3
 
     print("  The policy survived and pin 8 was refused.")
     print(f"  Node {NODE_ID} is holding the table it was given.")

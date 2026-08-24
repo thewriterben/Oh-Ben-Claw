@@ -78,6 +78,73 @@ fn an_empty_allow_list_refuses_rather_than_permits() {
     }
 }
 
+/// The boot posture, chosen 2026-08-22: a node that has heard from no host
+/// drives nothing.
+///
+/// This is the fix for the fail-open the bench found. The node used to boot into
+/// `with_output_pins(OUTPUT_PINS)` — `[21,3,7,8]`, no rate limit — which is
+/// *wider* than any policy a host pushes, and every reset silently restored it.
+/// `scripts/reboot_amnesia.py` reproduces the old behaviour against hardware.
+#[test]
+fn a_node_that_has_heard_from_no_host_drives_nothing() {
+    let mut gate = SafetyGate::deny_until_told();
+    for pin in [3i64, 7, 8, 21, 43, 99] {
+        assert!(
+            gate.check(pin, 1, 0).is_err(),
+            "pin {pin} was allowed by a node that has been told nothing"
+        );
+        assert!(gate.check(pin, 0, 0).is_err(), "including writing it low");
+    }
+}
+
+/// Deny-all is a starting posture, not a lock: the host can still open it, and
+/// what it opens is exactly what it asked for and nothing more.
+#[test]
+fn a_host_can_open_the_deny_all_gate_but_only_as_far_as_it_asked() {
+    let mut gate = SafetyGate::deny_until_told();
+    assert!(gate.check(3, 1, 0).is_err(), "closed before the push");
+
+    let pushed: Vec<safety::SafetyLimit> = serde_json::from_str(
+        r#"[{"node_id":"obc-esp32-s3-001","tool":"gpio_write",
+             "allowed_pins":[3,7],"value_min":0,"value_max":1,
+             "min_interval_ms":500}]"#,
+    )
+    .unwrap();
+    assert!(gate.apply_pushed(pushed, "obc-esp32-s3-001"));
+
+    assert!(gate.check(3, 1, 1_000).is_ok(), "3 was asked for");
+    assert!(gate.check(7, 1, 1_000).is_ok(), "7 was asked for");
+    assert!(gate.check(8, 1, 1_000).is_err(), "8 was not");
+    assert!(gate.check(21, 1, 1_000).is_err(), "nor 21, which the old boot policy allowed");
+}
+
+/// The distinction the whole posture rests on: an *absent* allow-list permits
+/// everything, an *empty* one permits nothing. If `deny_until_told` ever ends up
+/// building `None` here, the gate silently becomes wide open and every other
+/// test in this file still passes.
+#[test]
+fn an_absent_allow_list_and_an_empty_one_are_not_the_same_thing() {
+    let mut wide: safety::SafetyLimit = serde_json::from_str(
+        r#"{"node_id":"","tool":"gpio_write","value_min":0,"value_max":1}"#,
+    )
+    .unwrap();
+    assert!(
+        wide.allowed_pins.is_none(),
+        "a limit with no allowed_pins field parses as None"
+    );
+    wide.min_interval_ms = None;
+
+    let mut gate = SafetyGate::deny_until_told();
+    assert!(gate.check(99, 1, 0).is_err(), "empty list denies");
+
+    gate.apply_pushed(vec![wide], "obc-esp32-s3-001");
+    assert!(
+        gate.check(99, 1, 0).is_ok(),
+        "a pushed limit with NO allowed_pins permits any pin -- which is why the \
+         boot posture must build Some(empty) and never None"
+    );
+}
+
 /// The exact sequence the bench performed on 2026-08-22, replayed on the host
 /// from the literal JSON `scripts/bench_run.py` puts on the wire.
 ///
