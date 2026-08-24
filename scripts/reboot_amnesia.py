@@ -97,7 +97,9 @@ def main() -> int:
     if not r:
         print("  the node did not answer the push. Try again.")
         return 2
+    pushed = json.loads(r["result"])
     print(f"  pushed:   {r['result']}")
+    boot_at_push = pushed.get("boot_id")
 
     pol, rebooted = link.policy()
     if pol is None:
@@ -107,6 +109,21 @@ def main() -> int:
           f"min_interval_ms={pol.get('min_interval_ms')}")
     if rebooted:
         print("  (a reboot happened between the push and this read)")
+
+    # boot_id is how a host detects the reset without watching for it. If it
+    # changed, the node is not the one the table was pushed to, whatever the
+    # policy now says.
+    boot_now = pol.get("boot_id")
+    if boot_at_push is None or boot_now is None:
+        print("  !! the node did not report a boot_id. This firmware predates")
+        print("     the announcement, so a host cannot detect a reset at all.")
+    elif boot_now != boot_at_push:
+        print(f"  boot_id changed: {boot_at_push} -> {boot_now}")
+        print("     the node restarted, and it said so. A host holding the old")
+        print("     boot_id can see its table is gone instead of assuming it is")
+        print("     still in force.")
+    else:
+        print(f"  boot_id unchanged ({boot_now}): same node, same power-on.")
 
     now = pol.get("allowed_pins")
     w, _ = link.send("gpio_write", {"pin": 8, "value": 1})
@@ -131,16 +148,22 @@ def main() -> int:
         return 1
 
     if narrowed:
-        print("  FAILED CLOSED -- the wire is safe, the host is still lied to.")
+        print("  FAILED CLOSED -- the wire is safe.")
         print(f"    the pushed table was [3, 7]; the node now reports {now}")
         print("    a write to pin 8 was refused, so a reset can no longer widen")
         print("    the policy. That is the 2026-08-22 deny-all posture working.")
         print()
-        print("    But the policy was still LOST, and nothing announced it. The")
-        print("    host believes [3,7] is in force while the node will actuate")
-        print("    nothing at all -- including its own safing. Silent divergence")
-        print("    in the safe direction is still silent divergence, and the")
-        print("    'announce the reset' half of the decision is not built.")
+        if boot_now is not None and boot_at_push is not None and boot_now != boot_at_push:
+            print("    The policy was lost, and the node SAID SO: boot_id changed,")
+            print("    and it emits a `policy_state` line at startup. A host that")
+            print("    tracks boot_id knows its table is gone rather than assuming")
+            print("    it still applies. Safe and honest, which is the whole of")
+            print("    what was asked for.")
+            return 0
+        print("    The policy was lost and NOTHING announced it. The host believes")
+        print("    [3,7] is in force while the node will actuate nothing at all.")
+        print("    Silent divergence in the safe direction is still silent")
+        print("    divergence.")
         return 3
 
     print("  The policy survived and pin 8 was refused.")

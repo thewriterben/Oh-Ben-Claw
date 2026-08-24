@@ -37,4 +37,30 @@
 # 16384 is kept rather than trimmed to ~12 KB: the agent and camera paths run
 # deeper than boot does, and 6.5 KB of headroom on a 320 KB heap is cheap
 # insurance against finding this out again from a corrupted backtrace.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+# 16384 was not enough either, and the reason took three attempts to see.
+#
+# Measured 2026-08-22 with the probe now in the `set_limits` arm:
+#
+#     set_limits: headroom 20 -> 0 (used 20)
+#     -> STACK OVERFLOW
+#
+# Twenty bytes of headroom *on entry to the arm*. The arm was not the consumer;
+# it was the last straw. The peak is upstream of it, in
+# `serde_json::from_str` parsing the incoming request into a `Value` tree --
+# which recurses with the request's nesting, so a `set_limits` push (an array of
+# objects) costs far more than a `gpio_write` (two scalars). That is exactly the
+# split the bench saw: gpio_read and gpio_write never crashed, set_limits
+# crashed 5 times in 6.
+#
+# Two peaks were shaved before this line was raised again -- `capabilities`
+# (4388 bytes, now 1760) and the `set_limits` reply -- and both were real
+# improvements that are worth keeping. Neither addressed the parser, because
+# nobody had measured the parser.
+#
+# 32768 is chosen against a measurement rather than a feeling: at 16384 the
+# minimum free reached 0, so the deficit is not a small overrun to be trimmed.
+# Verify with the headroom logs after any change to the request shape; if the
+# reported minimum starts approaching zero again, the answer is to stop parsing
+# untrusted-length JSON on the main task, not to double this number a fourth
+# time.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768

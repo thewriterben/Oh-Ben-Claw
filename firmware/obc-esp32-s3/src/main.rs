@@ -506,6 +506,26 @@ fn main() -> anyhow::Result<()> {
 
     let mut agent_state = AgentState::new();
     info!("Stack headroom after AgentState: {} bytes", stack_headroom());
+
+    // Say, on the wire and not only in the log, that this node has no policy.
+    //
+    // A host that pushed a limit table before the reset is still holding it and
+    // has no other way to learn that the node is not. Failing closed without
+    // saying so is still a host and a node disagreeing about what is enforced,
+    // which is the disagreement this whole exercise exists to remove.
+    {
+        let announcement = format!(
+            concat!(
+                r#"{{"type":"policy_state","node_id":"{}","boot_id":{},"#,
+                r#""policy":"deny-all","reason":"boot","#,
+                r#""detail":"no pin can be driven until set_limits arrives"}}"#
+            ),
+            NODE_ID,
+            boot_id()
+        );
+        send_line(&mut usb, &announcement);
+        mirror_spine(&mut spine_uart, &announcement);
+    }
     // Real I2C sensor bus. Default (XIAO): SDA=GPIO5, SCL=GPIO6 — the pads the
     // silkscreen marks SDA and SCL (D4/D5). Waveshare 2.1 build: SDA=GPIO15,
     // SCL=GPIO7 — the board's hardwired I2C connector (shared with the onboard
@@ -807,6 +827,26 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
+/// A value unique to this power-on, so a host can tell "still the node I
+/// configured" from "a node that has restarted since".
+///
+/// The gap this closes, found 2026-08-22: the pushed limit table lives only in
+/// RAM. A reset discards it, and before that day the node came back *wider*
+/// than the host had asked for and said nothing. The boot posture is now
+/// deny-all, so a reset can no longer widen anything — but the policy is still
+/// silently **lost**, and a host that pushed `[3,7]` will happily go on
+/// believing `[3,7]` is in force while the node refuses everything.
+///
+/// Failing closed and failing silently are different failures. This fixes the
+/// second: `boot_id` rides on every `set_limits` reply and on `capabilities`,
+/// and a `policy_state` line is emitted at startup. A host that remembers the
+/// `boot_id` it pushed against can detect the reset without polling for it.
+static BOOT_ID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+
+fn boot_id() -> u32 {
+    *BOOT_ID.get_or_init(|| unsafe { esp_idf_svc::sys::esp_random() })
+}
+
 /// `Display` for an optional number as JSON: the value, or `null`.
 ///
 /// Exists so the `set_limits` reply can be formatted with `write!` instead of
@@ -924,10 +964,11 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
             }
             let _ = write!(
                 out,
-                r#","value_min":{},"value_max":{},"min_interval_ms":{}}}"#,
+                r#","value_min":{},"value_max":{},"min_interval_ms":{},"boot_id":{}}}"#,
                 OptNum(policy.value_min),
                 OptNum(policy.value_max),
                 OptNum(policy.min_interval_ms.map(|v| v as i64)),
+                boot_id(),
             );
             log::info!(
                 "set_limits: headroom {} -> {} (used {})",
