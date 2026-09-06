@@ -2474,6 +2474,108 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     if taint_mode != oh_ben_claw::security::taint::TaintMode::Off {
         info!(mode = ?taint_mode, "Track 0 taint tracking enabled");
     }
+    // Generic MCP → world-memory polls (`[[perception.polls]]`): any server's
+    // tool on a cadence, flattened into `{name}.{path}` facts, changes only.
+    // Each poll owns its connection; a server that cannot be reached at startup
+    // disables that poll with a warning rather than the agent. Load-shedding
+    // follows the ClawCam poll: safing's shed_load skips ticks until charge
+    // recovers.
+    if let Some(world) = &world_mem {
+        for poll in config
+            .perception
+            .polls
+            .iter()
+            .filter(|p| p.enabled)
+            .cloned()
+        {
+            let client = match oh_ben_claw::mcp::client::McpClient::connect(&poll.server).await {
+                Ok(c) => Arc::new(tokio::sync::Mutex::new(c)),
+                Err(e) => {
+                    tracing::warn!(
+                        poll = %poll.name,
+                        tool = %poll.tool,
+                        "could not connect to the MCP server for this poll: {e}; poll disabled"
+                    );
+                    continue;
+                }
+            };
+            let world = Arc::clone(world);
+            let poll_safing = Arc::clone(&safing_state);
+            let interval = std::time::Duration::from_millis(poll.interval_ms.max(250));
+            info!(
+                poll = %poll.name,
+                tool = %poll.tool,
+                interval_ms = poll.interval_ms,
+                "perception poll → world memory spawned"
+            );
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                let mut failures: u32 = 0;
+                loop {
+                    ticker.tick().await;
+                    if poll_safing.shed_load() {
+                        continue;
+                    }
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    match oh_ben_claw::perception_polls::poll_once(
+                        Arc::clone(&client),
+                        &world,
+                        &poll,
+                        now,
+                    )
+                    .await
+                    {
+                        Ok(outcome) => {
+                            if failures > 0 {
+                                info!(
+                                    poll = %poll.name,
+                                    after_failures = failures,
+                                    "perception poll recovered"
+                                );
+                                failures = 0;
+                            }
+                            if outcome.truncated > 0 {
+                                tracing::warn!(
+                                    poll = %poll.name,
+                                    dropped = outcome.truncated,
+                                    max_facts = poll.max_facts,
+                                    "perception poll result wider than max_facts; leaves dropped"
+                                );
+                            }
+                            if !outcome.changed.is_empty() {
+                                tracing::debug!(
+                                    poll = %poll.name,
+                                    changed = outcome.changed.len(),
+                                    unchanged = outcome.unchanged,
+                                    "perception poll observed changes"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            failures += 1;
+                            // First failure loudly, then every 60th, so a server
+                            // that is simply switched off does not fill the log.
+                            if failures == 1 || failures.is_multiple_of(60) {
+                                tracing::warn!(
+                                    poll = %poll.name,
+                                    tool = %poll.tool,
+                                    failures,
+                                    "perception poll failed: {e}"
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    } else if config.perception.polls.iter().any(|p| p.enabled) {
+        tracing::warn!(
+            "[[perception.polls]] configured but [perception] world_memory = false; nothing will be recorded"
+        );
+    }
     // Phase 16 P3: Track 0 staged rollout — clean-run record + auto-demotion.
     let rollout_tracker = Arc::new(oh_ben_claw::skill_forge::rollout::RolloutTracker::load(
         oh_ben_claw::skill_forge::rollout::RolloutTracker::default_path(),

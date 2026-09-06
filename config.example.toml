@@ -119,6 +119,28 @@ max_chars = 2400
 # max_age_ms = 604800000       # 7 days, measured from when it was recorded
 # origins = ["asserted"]       # the agent's own conclusions, never a reading
 
+# Perceive any MCP server: call one tool on a cadence and fold its JSON result
+# into world memory as `{name}.{path}` facts, changes only. This is how a
+# printer, a design engine's ledger or a peer's inventory becomes something the
+# world-state block can say and a reflex rule can watch -- the ClawCam poll
+# minus everything that is about cameras. Requires world_memory = true.
+#
+# Unknown keys under [perception] are an error since 2026-09-06: a block named
+# `printer_poll`, which never existed, was parsed and discarded for two weeks
+# while `doctor` reported 0 errors. The shape that exists is this one:
+#
+# [[perception.polls]]
+# name = "printer"                 # facts: printer.state, printer.temps.nozzle, ...
+# tool = "printer_status"
+# interval_ms = 5000               # default; clamped to >= 250
+# # args = { }                     # tool arguments, default {}
+# # source = "mcp:printer"         # default
+# # max_facts = 64                 # leaves per tick past this are dropped and counted
+# [perception.polls.server]
+# transport = "stdio"
+# command = "python"
+# args = ["-m", "studio_mcp.server", "--base", "http://localhost:8770"]
+
 # ── Edge-native mode ─────────────────────────────────────────────────────────
 # For a small single-board host (NanoPi, Pi) running the brain on the device.
 # The deployment planner emits this section for those boards.

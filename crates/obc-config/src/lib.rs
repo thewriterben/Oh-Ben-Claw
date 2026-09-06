@@ -665,7 +665,14 @@ impl Default for A2AConfig {
 }
 
 /// Phase 18 perception configuration (`[perception]`).
+///
+/// `deny_unknown_fields` since 2026-09-06. A `[perception.printer_poll]` block —
+/// a reasonable guess at a key that did not exist — sat in a live config for two
+/// weeks, parsed and silently discarded, while `doctor` reported 0 errors and
+/// the operator believed a printer was being watched. A perception source that
+/// is not running should fail to load, not fail to matter.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct PerceptionConfig {
     /// Enable the world-memory tool (a temporal model of real-world state).
     #[serde(default)]
@@ -677,6 +684,12 @@ pub struct PerceptionConfig {
     /// are folded into world memory on a cadence (Phase 18 / S1b).
     #[serde(default)]
     pub clawcam_poll: Option<ClawCamPollConfig>,
+    /// Generic MCP polls — `[[perception.polls]]`. Any MCP server's tool, called
+    /// on a cadence, its JSON result flattened into `{name}.{path}` facts. This
+    /// is the shape the ClawCam poll has minus everything ClawCam-specific
+    /// (detections, health, audio, spatial fusion); see [`GenericPollConfig`].
+    #[serde(default)]
+    pub polls: Vec<GenericPollConfig>,
     /// Vision-driven reflex + foresight rules keyed on ClawCam detections.
     #[serde(default)]
     pub vision_rules: VisionRulesConfig,
@@ -768,6 +781,72 @@ pub struct CameraPositionConfig {
 
 fn default_hazard_step_m() -> f64 {
     0.25
+}
+
+/// One generic MCP → world-memory poll (`[[perception.polls]]`).
+///
+/// ```toml
+/// [[perception.polls]]
+/// name = "printer"                 # fact prefix: printer.state, printer.temps.nozzle …
+/// tool = "printer_status"
+/// interval_ms = 5000
+/// [perception.polls.server]
+/// transport = "stdio"
+/// command = "python"
+/// args = ["-m", "studio_mcp.server", "--base", "http://localhost:8770"]
+/// ```
+///
+/// The tool's JSON result is flattened: objects recurse into dotted paths, arrays
+/// and scalars are leaf values. Only *changed* values are observed, so a status
+/// that reads the same every five seconds does not grow the store; supersession
+/// then does what it always does when a value moves. A non-JSON result is one
+/// string fact at `{name}`. Requires `[perception] world_memory = true`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenericPollConfig {
+    /// Fact prefix and log label. Listing a poll is the intent, so unlike the
+    /// ClawCam block this one is on unless you say `enabled = false`.
+    pub name: String,
+    /// Enable the poll loop (default true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// How to reach the MCP server (stdio command or http url).
+    pub server: obc_mcp::McpServerConfig,
+    /// Tool to call each tick.
+    pub tool: String,
+    /// Arguments passed to the tool. Default `{}`.
+    #[serde(default = "default_empty_object")]
+    pub args: serde_json::Value,
+    /// Poll cadence in milliseconds. Default 5000; clamped to ≥ 250 at spawn.
+    #[serde(default = "default_generic_poll_interval_ms")]
+    pub interval_ms: u64,
+    /// World-memory `source` label. Default `mcp:{name}`.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Upper bound on facts one tick may produce. A tool that returns a deep
+    /// object is flattened until this many leaves; the rest are dropped and
+    /// counted, never silently. Default 64.
+    #[serde(default = "default_generic_poll_max_facts")]
+    pub max_facts: usize,
+}
+
+impl GenericPollConfig {
+    /// The `source` label facts carry: the configured one, or `mcp:{name}`.
+    pub fn source_label(&self) -> String {
+        self.source
+            .clone()
+            .unwrap_or_else(|| format!("mcp:{}", self.name))
+    }
+}
+
+fn default_empty_object() -> serde_json::Value {
+    serde_json::Value::Object(Default::default())
+}
+fn default_generic_poll_interval_ms() -> u64 {
+    5_000
+}
+fn default_generic_poll_max_facts() -> usize {
+    64
 }
 
 /// Poll a ClawCam detection MCP tool into world memory (`[perception.clawcam_poll]`).
@@ -2704,5 +2783,70 @@ mod tests {
         let config = Config::default();
         let warnings = config.validate().unwrap();
         assert!(warnings.is_empty(), "Unexpected warnings: {:?}", warnings);
+    }
+}
+
+#[cfg(test)]
+mod perception_polls_config_tests {
+    #[test]
+    fn a_generic_poll_parses_with_its_defaults() {
+        let raw = r#"
+[perception]
+world_memory = true
+
+[[perception.polls]]
+name = "printer"
+tool = "printer_status"
+[perception.polls.server]
+transport = "stdio"
+command = "python"
+args = ["-m", "studio_mcp.server"]
+"#;
+        let cfg: super::Config = toml::from_str(raw).expect("parses");
+        let poll = &cfg.perception.polls[0];
+        assert!(poll.enabled, "listing a poll is the intent");
+        assert_eq!(poll.interval_ms, 5_000);
+        assert_eq!(poll.max_facts, 64);
+        assert_eq!(poll.source_label(), "mcp:printer");
+        assert!(poll.args.is_object());
+    }
+
+    #[test]
+    fn an_unknown_perception_key_is_an_error_not_a_silence() {
+        // The exact block that sat inert in a live config from 2026-08-23 to
+        // 2026-09-05, with `doctor` reporting 0 errors the whole time.
+        let raw = r#"
+[perception]
+world_memory = true
+
+[perception.printer_poll]
+enabled = true
+tool = "printer_status"
+"#;
+        let err = toml::from_str::<super::Config>(raw).expect_err("must not parse");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("printer_poll"),
+            "the error names the key: {msg}"
+        );
+    }
+
+    #[test]
+    fn every_key_the_shipped_configs_use_is_still_a_field() {
+        // deny_unknown_fields would turn a forgotten field into a load failure for
+        // everyone; this pins the keys the reference bodies and examples rely on.
+        let raw = r#"
+[perception]
+world_memory = true
+world_db_path = "x.db"
+[perception.context]
+enabled = true
+[perception.vision_rules]
+enabled = false
+[[perception.expiry]]
+prefix = "incident."
+max_age_ms = 1000
+"#;
+        toml::from_str::<super::Config>(raw).expect("all known keys parse");
     }
 }
