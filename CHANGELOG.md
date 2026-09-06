@@ -5,6 +5,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Perception: generic MCP polls, and `[perception]` refuses keys it does not know (2026-09-06)
+
+### Added
+
+- `[[perception.polls]]` (`obc-config::GenericPollConfig`, `src/perception_polls.rs`):
+  call any MCP server's tool on a cadence and fold the JSON result into world
+  memory as `{name}.{path}` facts. Objects recurse into dotted paths; arrays and
+  scalars are leaves. Only values that differ from the current belief are
+  observed, so a status polled every 5 s does not write a row every 5 s.
+  `max_facts` (default 64) bounds a wide result and drops are counted, not
+  silent. Each poll owns its MCP connection; an unreachable server disables
+  that poll with a warning, not the agent. Documented in `config.example.toml`.
+
+### Changed
+
+- `PerceptionConfig` now carries `#[serde(deny_unknown_fields)]`. A
+  `[perception.printer_poll]` block -- a reasonable guess at a key that never
+  existed -- sat in a live config from 2026-08-23 to 2026-09-05, parsed and
+  discarded, while `doctor` reported 0 errors and the operator believed a
+  printer was being watched. A perception source that is not running now fails
+  to load instead of failing to matter. Every key the shipped configs and
+  reference bodies use is pinned by a test.
+
 ## Unreleased — Hardware registry: 2026-07-06 scout merge (`vpu` + 12 entries) (2026-07-07)
 
 Merged the rubric-passing proposals from `Knowledge Base/hardware-scout-2026-07-06.md`

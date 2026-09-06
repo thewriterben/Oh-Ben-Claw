@@ -159,6 +159,10 @@ pub use obc_telemetry::comms;
 pub use obc_cost as cost;
 pub mod deployment;
 pub mod doctor;
+/// Generic MCP → world-memory polls (`[[perception.polls]]`). Written here, not
+/// vendored: it is wiring between two crates that are, and nothing in it is
+/// ClawCam's.
+pub mod perception_polls;
 /// Multi-node coordination — the node registry, the cost-based task auction and
 /// frontier exploration assignment. Extracted to [`obc_fleet`] on 2026-08-13.
 ///
