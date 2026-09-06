@@ -37,6 +37,49 @@ fn describe(b: &Board, camera: bool) -> serde_json::Value {
     board::describe(b, camera, "obc-esp32-s3-001", "0.4.2")
 }
 
+/// The node stopped putting `describe`'s output on the wire on 2026-08-22.
+///
+/// Serialising it cost 4388 bytes of stack and left zero, so `capabilities`
+/// overflowed the main task and rebooted the node on every call — which is what
+/// silently discarded its pushed safety limits mid-bench and made a working gate
+/// look like one that ignored its own policy. The firmware now formats the reply
+/// directly with `describe_json`.
+///
+/// That leaves two renderings of the same claim, which is exactly the drift this
+/// whole file exists to prevent. This test is the seam: whatever the node says on
+/// the wire must parse to precisely what `describe` defines, for every board and
+/// both camera settings. If someone adds a field to one and not the other, this
+/// fails rather than a host quietly learning something untrue.
+#[test]
+fn the_wire_format_and_the_definition_are_the_same_document() {
+    for (name, board) in [("xiao", &XIAO), ("waveshare", &WAVESHARE)] {
+        for camera in [false, true] {
+            let wire = board::describe_json(board, camera, "obc-esp32-s3-001", "0.4.2");
+            let parsed: serde_json::Value = serde_json::from_str(&wire).unwrap_or_else(|e| {
+                panic!("{name} camera={camera}: describe_json emitted invalid JSON: {e}\n{wire}")
+            });
+            assert_eq!(
+                parsed,
+                describe(board, camera),
+                "{name} camera={camera}: the wire format and the definition disagree"
+            );
+        }
+    }
+}
+
+/// The reply has to fit the buffer it is written into and the stack it is built
+/// on. 1024 bytes measured on hardware; the USB TX buffer is 4096.
+#[test]
+fn the_wire_format_stays_small() {
+    let wire = board::describe_json(&XIAO, false, "obc-esp32-s3-001", "0.4.2");
+    assert!(
+        wire.len() < 2048,
+        "capabilities grew to {} bytes; it is built on a main task with about \
+         4 KB of headroom and travels through a 4096-byte USB buffer",
+        wire.len()
+    );
+}
+
 /// The bug this file exists for. Every one of these was the XIAO's value on a
 /// Waveshare node, announced to a host with no other way to know better.
 #[test]

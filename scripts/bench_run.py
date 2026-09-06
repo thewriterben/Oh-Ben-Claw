@@ -79,6 +79,7 @@ class Node:
         # beacons, link_state, reflex ticks. Kept rather than dropped -- they
         # are the node's own account of what it was doing during the run.
         self.unsolicited: list[str] = []
+        self.seq = 0
         if dry:
             self.port = "(simulated)"
             self._sim = _Sim()
@@ -158,7 +159,13 @@ class Node:
         )
 
     def send(self, cmd: str, args: dict | None = None, rid: str | None = None) -> dict:
-        req = {"id": rid or cmd, "cmd": cmd, "args": args or {}}
+        # Ids must be unique per request. Defaulting an id to the command name
+        # made two consecutive `gpio_write` calls indistinguishable on the wire,
+        # so a stale or duplicated reply could be matched to the wrong write --
+        # in the one step where "which write did this answer" is the entire
+        # question. The counter makes every request its own.
+        self.seq += 1
+        req = {"id": f"{rid or cmd}#{self.seq}", "cmd": cmd, "args": args or {}}
         line = json.dumps(req)
         if self.dry:
             # The simulator interleaves a telemetry line before its answer, the
@@ -327,6 +334,62 @@ def show(label: str, reply: dict) -> None:
     print(f"    -> {label}: {json.dumps(reply)[:150]}")
 
 
+# A pin driven high sits at the rail; a pin held low sits at ground. Anything
+# in between is a pin nothing is driving, and the meter is reading the air.
+# That third case is worth naming rather than rounding to the nearer real one,
+# because on 2026-08-21 a jumper on GPIO 43 read HIGH purely because an idle
+# UART TX floats there, and it was taken for a pin that had moved.
+HIGH_MIN_V = 2.0
+LOW_MAX_V = 0.5
+
+
+def volts(gpio: int) -> float:
+    """A number from the meter. Not a verdict."""
+    while True:
+        raw = input(f"    ?? DC volts on GPIO {gpio} (black lead on GND): ")
+        raw = raw.strip().rstrip("vV").strip()
+        try:
+            return float(raw)
+        except ValueError:
+            print("       A number, e.g. 3.28 or 0.00. mV: type 0.002, not 2.")
+
+
+def observe(instrument: str, gpio: int, expect: str) -> tuple[bool, str]:
+    """What the pin is doing, and whether that is what was expected.
+
+    `expect` is "high" or "low". With a meter the person supplies a reading and
+    this decides what the reading means, which is arithmetic. Asking "did it
+    stay dark?" instead asks the person to do the deciding, and what comes back
+    is a verdict with no measurement under it -- the record then says `y`,
+    which is unfalsifiable a month later. A voltage is not.
+    """
+    if instrument.startswith("m"):
+        v = volts(gpio)
+        if v >= HIGH_MIN_V:
+            state = "high"
+        elif v <= LOW_MAX_V:
+            state = "low"
+        else:
+            state = "neither"
+        if state == "neither":
+            print(f"    !! {v:.2f} V is neither driven high nor held low. That is")
+            print("       what a pin nothing is driving reads. If this pin has no")
+            print("       330R to ground, fit one and repeat -- with it in place,")
+            print("       an undriven pin reads a real 0 V and this band means")
+            print("       something has gone wrong at the die instead.")
+        return state == expect, f"{v:.3f} V ({state})"
+
+    if instrument.startswith("s"):
+        seen = input(f"    ?? Scope on GPIO {gpio} -- what does the trace do? ").strip()
+        agree = ask(f"Is that {expect.upper()} and steady?")
+        return agree.startswith("y"), f"scope: {seen or '(nothing written down)'}"
+
+    want = "lit" if expect == "high" else "dark"
+    got = ask(f"Is the LED on GPIO {gpio} {want}?")
+    ok = got.startswith("y")
+    return ok, f"LED {want if ok else 'NOT ' + want} (by eye)"
+
+
 def firmware_commit() -> str:
     try:
         out = subprocess.run(
@@ -347,8 +410,28 @@ def main() -> int:
              "no prompts, no record. Use it when the boot banner is not "
              "readable -- on a board whose only console is the same "
              "USB-Serial-JTAG the firmware takes over for commands, it is not.")
+    ap.add_argument(
+        "--sections", default="1,2,3",
+        help="which sections to run, comma-separated (default 1,2,3). "
+             "Section 1 needs LEDs and resistors on GPIO 3/7/8; sections 2 "
+             "and 3 need I2C modules on GPIO 5/6. On a 400-point breadboard "
+             "both rigs at once is a crowd, so run them as two passes and "
+             "keep both records. Section 0 -- what the node says it is -- "
+             "always runs: a record that cannot name the node is not a record.")
     ap.add_argument("--out", default="bench-run-record.md")
     a = ap.parse_args()
+
+    try:
+        want = {int(s) for s in a.sections.split(",") if s.strip()}
+    except ValueError:
+        print(f"--sections {a.sections!r}: expected numbers like 1,2,3")
+        return 2
+    if not want <= {1, 2, 3}:
+        print(f"--sections: no such section {sorted(want - {1, 2, 3})}")
+        return 2
+    if not want:
+        print("--sections selected nothing.")
+        return 2
 
     if a.dry_run:
         print("\n*** --dry-run: talking to a simulated node. This exercises the")
@@ -360,6 +443,7 @@ def main() -> int:
         "firmware commit": firmware_commit(),
         "port": node.port,
         "simulated": a.dry_run,
+        "sections run": ",".join(str(s) for s in sorted(want)),
     }
 
     print("=" * 68)
@@ -380,7 +464,18 @@ def main() -> int:
     if caps.get("node_id") != NODE_ID:
         print(f"    !! node id is {caps.get('node_id')!r}, not {NODE_ID!r}.")
         print("       The pushed limit will not match and every step below would")
-        print("       be testing the boot policy instead. Fix this first.")
+        print("       be testing the boot policy instead.")
+        print()
+        print("    STOPPING. This used to be a warning and the run carried on,")
+        print("    which on 2026-08-22 produced a full transcript of results")
+        print("    whose meaning depended on an identity the node never gave.")
+        print("    A run that cannot say which node it talked to is not a")
+        print("    weaker run; it is not a run.")
+        print()
+        print("    If the node answered nothing at all, something else may hold")
+        print("    the port (Ctrl+C the espflash monitor), or it may still be")
+        print("    booting -- wait a second and try again.")
+        return 2
     print(f"    The node says it is a {rec['board reported']}, safe pins "
           f"{rec['gpio reported']}, I2C {rec['i2c reported']}.")
     print("    Those came from the node, not from this script. If they disagree")
@@ -425,112 +520,220 @@ def main() -> int:
         return 0 if (ok and not stale) else 1
 
     print()
-    print("=" * 68)
-    print("  1. Does a refusal stop the wire moving?")
-    print("=" * 68)
-    print("  Wire, each through 330R to ground:")
-    print("    GPIO 3  -- the CONTROL. In the pushed table, so it must light.")
-    print("    GPIO 8  -- the REFUSAL. An output at boot but NOT in the pushed")
-    print("               table, so it must stay dark. Step 1b writes to it, and")
-    print("               a bare pin cannot tell you it stayed dark.")
-    print("    GPIO 7  -- optional second allowed pin.")
-    input("  Press Enter when the LEDs are wired. ")
+    if 1 not in want:
+        print("=" * 68)
+        print("  1. Refusals and the wire -- NOT SELECTED")
+        print("=" * 68)
+        print("  Skipped by --sections. No LEDs or resistors are needed")
+        print("  for this run. Nothing below infers anything from that:")
+        print("  a section that did not run is not a section that passed.")
+        rec["section 1"] = "not run (--sections)"
+    else:
+        print("=" * 68)
+        print("  1. Does a refusal stop the wire moving?")
+        print("=" * 68)
+        # Do not let an unrecognised answer fall through to the LED path. It
+        # would run the whole section asking about lamps that are not on the
+        # board, and the record would name an instrument nobody used.
+        while True:
+            instrument = ask("Watching the pins with?", "meter/led/scope")
+            instrument = {"m": "meter", "l": "led", "e": "led",
+                          "s": "scope"}.get(instrument[0], "")
+            if instrument:
+                break
+            print("       meter, led or scope.")
+        rec["section 1 instrument"] = instrument
+        print()
+        if instrument.startswith("m"):
+            print("  METER. No LEDs. Each pin still wants ONE 330R from the pin to")
+            print("  the ground rail. Not for the meter's sake -- a pin the")
+            print("  firmware is actively driving reads fine bare. The resistor is")
+            print("  insurance against the case this section exists to catch: if a")
+            print("  refusal leaves the pin in high-Z rather than held low, a bare")
+            print("  pin reads the air and the air read HIGH on GPIO 43 on")
+            print("  2026-08-21, off nothing but an idle UART TX. With the resistor")
+            print("  in, undriven and driven-low are both a real 0 V.")
+            print("    GPIO 3  -- the CONTROL. In the pushed table: must read ~3.3 V.")
+            print("    GPIO 8  -- the REFUSAL. NOT in the pushed table: must stay ~0 V")
+            print("               while step 1b writes to it.")
+            print("    GPIO 7  -- optional second allowed pin. Nothing needs it.")
+            print("  Black lead on GND and leave it there; move only the red probe.")
+            print()
+            print("  What a meter cannot see: a pulse shorter than its update rate.")
+            print("  If the gate refuses and the pin twitches for a millisecond,")
+            print("  a steady 0.00 V is what you will read. If your meter has")
+            print("  MIN/MAX or peak-hold, arm it before 1b -- that is the one")
+            print("  setting that turns this into a check for a transient.")
+            input("  Press Enter when the resistors are in. ")
+        else:
+            print("  Wire, each through 330R to ground:")
+            print("    GPIO 3  -- the CONTROL. In the pushed table, so it must light.")
+            print("    GPIO 8  -- the REFUSAL. An output at boot but NOT in the pushed")
+            print("               table, so it must stay dark. Step 1b writes to it,")
+            print("               and a bare pin cannot tell you it stayed dark.")
+            print("    GPIO 7  -- optional second allowed pin.")
+            input("  Press Enter when the LEDs are wired. ")
 
-    # Prove BOTH LEDs before any policy is pushed.
-    #
-    # At boot the node's own allow-list is OUTPUT_PINS = [21, 3, 7, 8], so pin 8
-    # is writable right now. After set_limits it will not be, and step 1b then
-    # asks you to observe that it stayed dark. A dark LED proves a refusal only
-    # if that LED has been seen to light: otherwise a refused write, a wrong
-    # pad, a backwards LED and a broken jumper are the same observation. The
-    # control on pin 3 has always been here; the refusal pin never had one,
-    # which left the load-bearing step resting on an unproven wire.
-    print("\n  1-pre. Prove the wiring while the boot policy still allows it.")
-    for pin, role in ((3, "control"), (8, "refusal")):
-        r = node.send("gpio_write", {"pin": pin, "value": 1}, rid=f"pre-{pin}-on")
-        show(f"gpio_write pin {pin} value 1 (boot policy)", r)
-        if r.get("ok") is not True:
-            print(f"    !! pin {pin} was refused at boot, before any limit was")
-            print("       pushed. That is not the state this test assumes. Stop.")
-        rec[f"pre-check pin {pin} lit"] = ask(
-            f"Did the LED on GPIO {pin} ({role}) light just now?")
-        node.send("gpio_write", {"pin": pin, "value": 0}, rid=f"pre-{pin}-off")
-        if rec[f"pre-check pin {pin} lit"].startswith("n"):
-            print(f"    !! GPIO {pin}'s LED did not light with the write ALLOWED.")
-            print("       Fix the wiring now. Every later observation of this pin")
-            print("       would otherwise be unreadable: a refusal and a dead")
-            print("       wire look identical.")
+        # Prove BOTH LEDs before the restricted policy is pushed.
+        #
+        # This used to lean on the boot policy: OUTPUT_PINS was [21, 3, 7, 8] and a
+        # fresh node would drive any of them. As of 2026-08-22 it will not -- the
+        # node boots DENY-ALL and refuses every pin until a host says otherwise,
+        # because the old boot policy was wider than any pushed table and every
+        # reset silently restored it. So the wiring proof now pushes its own
+        # temporary table that opens 3 and 8, and the real restricted table follows.
+        #
+        # The point of the step is unchanged and is the reason it exists: step 1b
+        # asks you to observe GPIO 8 not moving, and a pin that reads 0 V proves a
+        # refusal only if that same pin has been seen to reach 3.3 V.
+        print("\n  1-pre. Prove the wiring, with a table that deliberately opens pin 8.")
+        warmup = [{
+            "node_id": NODE_ID, "tool": "gpio_write",
+            "allowed_pins": [3, 8], "value_min": 0, "value_max": 1,
+            "min_interval_ms": None,
+        }]
+        w = node.send("set_limits", {"limits": warmup}, rid="pre-open").get("result")
+        show("set_limits (wiring proof: 3 and 8 open)", w)
+        if not (isinstance(w, dict) and w.get("applied")):
+            print("    !! the warm-up table did not apply, so nothing below is wired")
+            print("       proof. Stop and fix that first.")
+        for pin, role in ((3, "control"), (8, "refusal")):
+            r = node.send("gpio_write", {"pin": pin, "value": 1}, rid=f"pre-{pin}-on")
+            show(f"gpio_write pin {pin} value 1", r)
+            if r.get("ok") is not True:
+                print(f"    !! pin {pin} was refused while the warm-up table opened")
+                print("       it. That is not the state this test assumes. Stop.")
+            ok, detail = observe(instrument, pin, "high")
+            rec[f"pre-check pin {pin} ({role}) driven"] = detail
+            node.send("gpio_write", {"pin": pin, "value": 0}, rid=f"pre-{pin}-off")
+            if not ok:
+                print(f"    !! GPIO {pin} did not go high with the write ALLOWED.")
+                print("       Fix the wiring now. Every later observation of this pin")
+                print("       would otherwise be unreadable: a refusal and a dead")
+                print("       wire look identical.")
 
-    # The pre-check just wrote to pin 3. If the gate carries its last-write
-    # timestamps across set_limits, step 1a's write would be refused as
-    # too-fast and would read as a failed control. Wait out the interval rather
-    # than assume the push clears it -- the simulator clears it, which is
-    # exactly the kind of agreement that has already been wrong once today.
-    time.sleep(0.8)
+        # The pre-check just wrote to pin 3. If the gate carries its last-write
+        # timestamps across set_limits, step 1a's write would be refused as
+        # too-fast and would read as a failed control. Wait out the interval rather
+        # than assume the push clears it -- the simulator clears it, which is
+        # exactly the kind of agreement that has already been wrong once today.
+        time.sleep(0.8)
 
-    applied = node.send("set_limits", {"limits": LIMITS}).get("result")
-    if not isinstance(applied, dict):
-        print(f"    !! set_limits `result` is not an object: {applied!r}")
-        applied = {}
-    show("set_limits", applied)
-    rec["set_limits applied"] = applied.get("applied")
-    if not applied.get("applied"):
-        print("    !! applied is not true: no limit matched this node. Stop here.")
+        applied = node.send("set_limits", {"limits": LIMITS}).get("result")
+        if not isinstance(applied, dict):
+            print(f"    !! set_limits `result` is not an object: {applied!r}")
+            applied = {}
+        show("set_limits", applied)
+        rec["set_limits applied"] = applied.get("applied")
+        if not applied.get("applied"):
+            print("    !! applied is not true: no limit matched this node. Stop here.")
 
-    print("\n  1a. The control -- this must pass or nothing below means anything.")
-    r = node.send("gpio_write", {"pin": 3, "value": 1})
-    show("gpio_write pin 3 value 1", r)
-    rec["control reply ok"] = r.get("ok")
-    rec["control LED lit"] = ask("Did the LED on GPIO 3 light?")
-    if rec["control LED lit"].startswith("n"):
-        print("    !! With a dark control LED, a dark LED later proves nothing --")
-        print("       a refusal and a disconnected wire look identical. Fix the")
-        print("       wiring before trusting steps 1b-1d.")
+        print("\n  1a. The control -- this must pass or nothing below means anything.")
+        r = node.send("gpio_write", {"pin": 3, "value": 1})
+        show("gpio_write pin 3 value 1", r)
+        rec["control reply ok"] = r.get("ok")
+        ctrl_ok, detail = observe(instrument, 3, "high")
+        rec["control pin measured"] = detail
+        if not ctrl_ok:
+            print("    !! The control pin did not move with the write ALLOWED. A")
+            print("       pin that reads flat later then proves nothing -- a refusal")
+            print("       and a disconnected wire read identically. Fix the wiring")
+            print("       before trusting steps 1b-1d.")
 
-    print("\n  1b. The refusal. Watch the PIN, not the reply.")
-    r = node.send("gpio_write", {"pin": 8, "value": 1})
-    show("gpio_write pin 8 value 1", r)
-    rec["refusal reply refused"] = (r.get("ok") is False)
-    rd = node.send("gpio_read", {"pin": 8})
-    show("gpio_read pin 8", rd)
-    rec["refusal gpio_read"] = rd.get("result")
-    rec["refusal pin stayed dark"] = ask("Did GPIO 8 stay dark / not move?")
-    rec["refusal measured with"] = ask("Measured with?", "eye/meter/scope")
+        print("\n  1b. The refusal. Watch the PIN, not the reply.")
+        r = node.send("gpio_write", {"pin": 8, "value": 1}, rid="refusal")
+        show("gpio_write pin 8 value 1", r)
+        rec["refusal reply refused"] = (r.get("ok") is False)
+        rec["refusal reply refused flag"] = r.get("refused")
+        if r.get("ok") is True:
+            print("    !! THE GATE ALLOWED IT. pin 8 is not in the pushed")
+            print("       allowed_pins, set_limits said applied:true, and the node")
+            print("       took the write anyway. This is the property the safety")
+            print("       case calls load-bearing. Finish the run -- the remaining")
+            print("       steps say how much of the gate is inert -- then stop and")
+            print("       treat this as the result.")
+        rd = node.send("gpio_read", {"pin": 8})
+        show("gpio_read pin 8", rd)
+        rec["refusal gpio_read"] = rd.get("result")
+        held, detail = observe(instrument, 8, "low")
+        rec["refusal pin measured"] = detail
+        rec["refusal pin stayed put"] = held
+        if instrument.startswith("m"):
+            rec["refusal transient checked"] = ask(
+                "Was the meter in MIN/MAX or peak-hold for that write?")
+            if rec["refusal transient checked"].startswith("n"):
+                print("    !! Then this reading rules out a pin that MOVED AND STAYED.")
+                print("       It does not rule out a pin that pulsed. Say that in the")
+                print("       record rather than letting a steady 0.00 V stand for a")
+                print("       claim it cannot make.")
+        elif instrument.startswith("l"):
+            rec["refusal transient checked"] = "no -- an LED cannot show a short pulse"
 
-    print("\n  1c. Without a host. This script talks straight down the serial")
-    print("      line with no agent mediating, so this step is already the")
-    print("      host-absent case -- provided no agent is running.")
-    rec["agent running"] = ask("Is the OBC agent running against this node?", "y/n")
-    r = node.send("gpio_write", {"pin": 8, "value": 1}, rid="host-absent")
-    show("gpio_write pin 8 (no host)", r)
-    rec["refuses without host"] = (r.get("ok") is False)
+        print("\n  1c. Without a host. This script talks straight down the serial")
+        print("      line with no agent mediating, so this step is already the")
+        print("      host-absent case -- provided no agent is running.")
+        rec["agent running"] = ask("Is the OBC agent running against this node?", "y/n")
+        r = node.send("gpio_write", {"pin": 8, "value": 1}, rid="host-absent")
+        show("gpio_write pin 8 (no host)", r)
+        rec["refuses without host"] = (r.get("ok") is False)
 
-    print("\n  1d. The rate limit: two writes to pin 3 inside 500 ms.")
-    # Wait out the interval first. Step 1a already wrote to pin 3, so without
-    # this the *first* write of the pair gets refused as too-fast and the test
-    # is vacuous -- both refused proves nothing about rate limiting. The dry run
-    # caught exactly that, because piped answers arrive instantly where a person
-    # would have taken several seconds to reply.
-    interval_ms = applied.get("min_interval_ms") or 500
-    print(f"      (waiting {interval_ms} ms so the pair starts clean)")
-    time.sleep(interval_ms / 1000 + 0.2)
-    r1 = node.send("gpio_write", {"pin": 3, "value": 0}, rid="rate-1")
-    r2 = node.send("gpio_write", {"pin": 3, "value": 1}, rid="rate-2")
-    show("first (after the interval)", r1)
-    show("second (immediate)", r2)
-    rec["rate limit first allowed"] = (r1.get("ok") is True)
-    rec["rate limit refused the second"] = (r2.get("ok") is False)
-    if r1.get("ok") is not True:
-        print("    !! the first write was refused too, so this step tested")
-        print("       nothing. Note it rather than reading the second refusal")
-        print("       as evidence.")
-    rec["rate limit pin held"] = ask("Did the LED hold steady rather than flicker?")
+        print("\n  1d. The rate limit: two writes to pin 3 inside 500 ms.")
+        # Wait out the interval first. Step 1a already wrote to pin 3, so without
+        # this the *first* write of the pair gets refused as too-fast and the test
+        # is vacuous -- both refused proves nothing about rate limiting. The dry run
+        # caught exactly that, because piped answers arrive instantly where a person
+        # would have taken several seconds to reply.
+        interval_ms = applied.get("min_interval_ms") or 500
+        print(f"      (waiting {interval_ms} ms so the pair starts clean)")
+        time.sleep(interval_ms / 1000 + 0.2)
+        r1 = node.send("gpio_write", {"pin": 3, "value": 0}, rid="rate-1")
+        r2 = node.send("gpio_write", {"pin": 3, "value": 1}, rid="rate-2")
+        show("first (after the interval)", r1)
+        show("second (immediate)", r2)
+        rec["rate limit first allowed"] = (r1.get("ok") is True)
+        rec["rate limit refused the second"] = (r2.get("ok") is False)
+        if r1.get("ok") is not True:
+            print("    !! the first write was refused too, so this step tested")
+            print("       nothing. Note it rather than reading the second refusal")
+            print("       as evidence.")
+        # The pair writes 0 and then 1. If the rate limit refused the second,
+        # pin 3 is sitting LOW; if it let it through, pin 3 is HIGH. So the pin
+        # settles into whichever state the gate actually decided, and reading it
+        # is a check on the replies rather than a second opinion about them.
+        #
+        # Not a check for a glitch: neither an LED nor a meter can see a 500 ms
+        # write that was immediately overwritten. This asks the smaller question
+        # it can actually answer -- does the wire agree with what the node said?
+        expect = "high" if r2.get("ok") is True else "low"
+        agrees, detail = observe(instrument, 3, expect)
+        rec["rate limit pin settled at"] = detail
+        rec["rate limit pin agrees with the replies"] = agrees
+        if not agrees:
+            print(f"    !! The replies say pin 3 should be {expect.upper()} and it is")
+            print("       not. One of the two is wrong, and the wire is the one")
+            print("       that cannot lie about itself. This is the finding.")
+
+        if (rec.get("refusal reply refused") is False
+                or rec.get("rate limit refused the second") is False):
+            print()
+            print("  " + "=" * 66)
+            print("  The pushed policy is not being enforced.")
+            print("  " + "=" * 66)
+            print("  set_limits reported the table back and the node then ignored")
+            print("  it. Run `python scripts\\gate_probe.py` for which of the gate's")
+            print("  three rules -- allow-list, value range, rate limit -- still")
+            print("  fire. That is the finding of this run; the sensor sections")
+            print("  below are unaffected but secondary.")
+            print()
 
     print()
     print("=" * 68)
     print("  2. Does the BME280 work on the corrected 5/6 bus?")
     print("=" * 68)
-    if ask("Is a BME280 wired to SDA=GPIO5, SCL=GPIO6?") .startswith("n"):
+    if 2 not in want:
+        rec["bme280"] = "not run (--sections)"
+        print("    Not selected by --sections. Skipped.")
+    elif ask("Is a BME280 wired to SDA=GPIO5, SCL=GPIO6?").startswith("n"):
         rec["bme280"] = "not wired -- not tested"
         print("    skipped.")
     else:
@@ -547,22 +750,53 @@ def main() -> int:
 
     print()
     print("=" * 68)
-    print("  3. Addresses and decode")
+    print("  3. Addresses and decode -- NEEDS TWO MORE MODULES")
     print("=" * 68)
-    r = node.send("sensor_read", {"sensor": "max17048", "field": "battery_soc"})
-    show("battery_soc", r)
-    rec["battery_soc"] = r.get("result")
-    rec["battery_soc plausible"] = ask("Is that a plausible state of charge?")
-    r = node.send("sensor_read", {"sensor": "mpu6050", "field": "accel_z"})
-    show("accel_z (flat)", r)
-    rec["accel_z flat"] = r.get("result")
-    print("    Turn the board over, then press Enter.")
-    input("    ")
-    r = node.send("sensor_read", {"sensor": "mpu6050", "field": "accel_z"})
-    show("accel_z (inverted)", r)
-    rec["accel_z inverted"] = r.get("result")
-    rec["accel sign flipped"] = ask("Did the sign flip?")
+    if 3 not in want:
+        rec["addresses and decode"] = "not run (--sections)"
+        print("  Not selected by --sections. Skipped.")
+        print()
+        return _write_record(node, rec, a)
+    print("  This section is not about the ESP32. It reads two separate I2C")
+    print("  boards that have to be on the bus already:")
+    print("    MAX17048 fuel gauge at 0x36 -- and a LiPo on its battery pads,")
+    print("      or the state of charge it reports is meaningless.")
+    print("    MPU6050 accelerometer at 0x68 -- which you have to be able to")
+    print("      pick up and turn over, so mount it where the wires allow that.")
+    print("  Both share SDA=GPIO5 / SCL=GPIO6 with the BME280.")
+    print()
+    print("  Until 2026-08-22 this section simply began, with no warning that")
+    print("  it needed hardware nobody had been told to fit.")
+    if ask("Are the MAX17048 and MPU6050 both wired?").startswith("n"):
+        rec["addresses and decode"] = "not wired -- not tested"
+        print("    skipped. Nothing here is inferred from their absence.")
+    else:
+        r = node.send("sensor_read", {"sensor": "max17048", "field": "battery_soc"})
+        show("battery_soc", r)
+        rec["battery_soc"] = r.get("result")
+        rec["battery_soc plausible"] = ask("Is that a plausible state of charge?")
+        r = node.send("sensor_read", {"sensor": "mpu6050", "field": "accel_z"})
+        show("accel_z (flat)", r)
+        rec["accel_z flat"] = r.get("result")
+        print("    Turn the board over, then press Enter.")
+        input("    ")
+        r = node.send("sensor_read", {"sensor": "mpu6050", "field": "accel_z"})
+        show("accel_z (inverted)", r)
+        rec["accel_z inverted"] = r.get("result")
+        rec["accel sign flipped"] = ask("Did the sign flip?")
 
+    return _write_record(node, rec, a)
+
+
+def _write_record(node: "Node", rec: dict, a) -> int:
+    """Section 4 and the record file. Reached from every exit that ran at all.
+
+    A run that stops early because a section was not selected still has to
+    write what it did observe, and still has to carry section 4's settled
+    fact. The alternative -- returning straight out of section 3 -- silently
+    drops both, and a missing record reads exactly like a run that was never
+    made.
+    """
     print()
     print("=" * 68)
     print("  4. Waveshare camera connector -- SETTLED 2026-08-21, not asked")
