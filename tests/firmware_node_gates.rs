@@ -115,7 +115,10 @@ fn a_host_can_open_the_deny_all_gate_but_only_as_far_as_it_asked() {
     assert!(gate.check(3, 1, 1_000).is_ok(), "3 was asked for");
     assert!(gate.check(7, 1, 1_000).is_ok(), "7 was asked for");
     assert!(gate.check(8, 1, 1_000).is_err(), "8 was not");
-    assert!(gate.check(21, 1, 1_000).is_err(), "nor 21, which the old boot policy allowed");
+    assert!(
+        gate.check(21, 1, 1_000).is_err(),
+        "nor 21, which the old boot policy allowed"
+    );
 }
 
 /// The distinction the whole posture rests on: an *absent* allow-list permits
@@ -124,10 +127,9 @@ fn a_host_can_open_the_deny_all_gate_but_only_as_far_as_it_asked() {
 /// test in this file still passes.
 #[test]
 fn an_absent_allow_list_and_an_empty_one_are_not_the_same_thing() {
-    let mut wide: safety::SafetyLimit = serde_json::from_str(
-        r#"{"node_id":"","tool":"gpio_write","value_min":0,"value_max":1}"#,
-    )
-    .unwrap();
+    let mut wide: safety::SafetyLimit =
+        serde_json::from_str(r#"{"node_id":"","tool":"gpio_write","value_min":0,"value_max":1}"#)
+            .unwrap();
     assert!(
         wide.allowed_pins.is_none(),
         "a limit with no allowed_pins field parses as None"
@@ -207,7 +209,10 @@ fn the_bench_limit_table_refuses_what_the_bench_asked_it_to_refuse() {
     assert!(gate.check(3, 5, 1_000).is_err());
 
     // §1d: two writes to an allowed pin inside min_interval_ms.
-    assert!(gate.check(3, 1, 2_000).is_ok(), "first write, interval clear");
+    assert!(
+        gate.check(3, 1, 2_000).is_ok(),
+        "first write, interval clear"
+    );
     assert!(
         gate.check(3, 0, 2_100).is_err(),
         "second write 100 ms later must be rate-limited; the board allowed it"
