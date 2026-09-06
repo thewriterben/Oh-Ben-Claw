@@ -150,9 +150,7 @@ impl SafetyGate {
     /// Kept because it is exactly what a host *should* push for this board, and
     /// because the tests that pin the gate's behaviour are written against it.
     /// It is no longer what the node boots into.
-    #[allow(dead_code)] // unused in the firmware since the boot posture changed;
-    // kept because it is what a host should push for this board, and because
-    // tests/firmware_node_gates.rs pins the gate's behaviour against it.
+    #[allow(dead_code)] // unused in the firmware since the boot posture changed (see above)
     pub fn with_output_pins(pins: &[i32]) -> Self {
         Self {
             policy: SafetyLimit {
