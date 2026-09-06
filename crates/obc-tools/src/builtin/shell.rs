@@ -95,6 +95,13 @@ impl Tool for ShellTool {
             p
         };
 
+        // No stdin. A model that runs a bare `date` under `cmd /C` (or
+        // anything else that prompts) would otherwise sit waiting on an
+        // inherited handle nobody writes to until the timeout — 30 s of
+        // silence that looks like a slow command. With a closed stdin the
+        // prompt reads EOF and the command returns at once.
+        process.stdin(std::process::Stdio::null());
+
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
             process.output(),
@@ -161,5 +168,31 @@ mod tests {
         let tool = ShellTool::new();
         let result = tool.execute(json!({"command": "exit 1"})).await.unwrap();
         assert!(!result.success);
+    }
+
+    /// A command that reads stdin must return immediately on EOF, not wait
+    /// for input that is never coming. Before stdin was closed, a bare
+    /// `date` on Windows hung for the full timeout (found 2026-09-05).
+    #[tokio::test]
+    async fn shell_command_reading_stdin_returns_at_once() {
+        let tool = ShellTool::new();
+        // `set /p` on cmd and `read` on sh both block on stdin when it is open.
+        #[cfg(windows)]
+        let command = "set /p x=prompt";
+        #[cfg(not(windows))]
+        let command = "read x; echo done";
+
+        let started = std::time::Instant::now();
+        let result = tool
+            .execute(json!({"command": command, "timeout_secs": 10}))
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "command blocked on stdin for {:?}: {:?}",
+            started.elapsed(),
+            result
+        );
+        assert!(result.error.as_deref() != Some("Command timed out after 10s"));
     }
 }

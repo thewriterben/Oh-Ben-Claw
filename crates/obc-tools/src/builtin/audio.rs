@@ -297,7 +297,7 @@ impl Tool for TextToSpeechTool {
                 },
                 "output_path": {
                     "type": "string",
-                    "description": "Path to save the audio file (default: /tmp/obc_tts_<timestamp>.mp3)"
+                    "description": "Path to save the audio file (default: <system temp dir>/obc_tts_<timestamp>.mp3)"
                 },
                 "format": {
                     "type": "string",
@@ -337,11 +337,18 @@ impl Tool for TextToSpeechTool {
             .unwrap_or_default()
             .as_secs();
 
+        // The platform temp dir, not `/tmp`: on Windows `/tmp` does not exist
+        // and the save failed unless the model passed `output_path` itself.
         let output_path = args
             .get("output_path")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("/tmp/obc_tts_{timestamp}.{format}"));
+            .unwrap_or_else(|| {
+                std::env::temp_dir()
+                    .join(format!("obc_tts_{timestamp}.{format}"))
+                    .to_string_lossy()
+                    .into_owned()
+            });
 
         let client = match reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
