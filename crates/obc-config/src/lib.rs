@@ -842,6 +842,78 @@ impl GenericPollConfig {
 fn default_empty_object() -> serde_json::Value {
     serde_json::Value::Object(Default::default())
 }
+
+/// `[mcp]` — MCP servers whose *tools* the agent imports (`[[mcp.servers]]`).
+///
+/// The other half of the seam `[[perception.polls]]` opened: a poll folds a
+/// server's answers into world memory; an import puts a server's tools in the
+/// model's hands. Until 2026-09-06 exactly one server's tools could be reached,
+/// ClawCam's, through code that knows what ClawCam is. This is the generic half.
+///
+/// `deny_unknown_fields` from day one, for the reason `[perception]` learned the
+/// hard way.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct McpConfig {
+    #[serde(default)]
+    pub servers: Vec<McpServerImportConfig>,
+}
+
+/// One MCP server whose tools are imported — `[[mcp.servers]]`.
+///
+/// The allowlist is required and non-empty on purpose. Every tool schema goes
+/// into every prompt, and the deployment this was written on already spends
+/// ~7k of an 8k-token context on twenty-four of them; "import everything the
+/// server announces" would be the default that quietly costs the most.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServerImportConfig {
+    /// Logical server name: the conscience reach host, the log label, and (with
+    /// `prefix = true`) the first half of every imported tool's name.
+    pub name: String,
+    /// Listing a server is the intent, so this is on unless you say otherwise.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// How to reach it (stdio command or http url).
+    pub server: obc_mcp::McpServerConfig,
+    /// The tools to import, by the names the server announces. Required.
+    /// A name the server does not announce is a load-time error, not a silent
+    /// no-op: a typo here would otherwise import nothing and look configured.
+    pub tools: Vec<String>,
+    /// Register as `{name}_{tool}` (default) rather than the bare name, so two
+    /// servers that both announce `get_provenance` cannot shadow each other.
+    #[serde(default = "default_true")]
+    pub prefix: bool,
+    /// A sentence appended to every imported tool's description — the place
+    /// for a rule the tool's own schema cannot express. Measured 2026-09-06
+    /// against OpenDesignCore: without "if the exact part is not offered, stop
+    /// and say so", 3 of 3 local models substituted a different part; with it,
+    /// 2 of 2 refused. The engine can check an id and a voxel size; it cannot
+    /// check intent, so intent is stated where the model reads it.
+    #[serde(default)]
+    pub guidance: Option<String>,
+}
+
+impl McpServerImportConfig {
+    /// The registered name of an imported tool.
+    pub fn tool_name(&self, announced: &str) -> String {
+        if self.prefix {
+            format!("{}_{}", self.name, announced)
+        } else {
+            announced.to_string()
+        }
+    }
+
+    /// The description the model sees: the server's, plus `guidance` if set.
+    pub fn describe(&self, announced_description: &str) -> String {
+        match &self.guidance {
+            Some(g) if !g.trim().is_empty() => {
+                format!("{} {}", announced_description.trim_end(), g.trim())
+            }
+            _ => announced_description.to_string(),
+        }
+    }
+}
 fn default_generic_poll_interval_ms() -> u64 {
     5_000
 }
@@ -1651,6 +1723,9 @@ pub struct Config {
     /// Phase 18 perception (world memory).
     #[serde(default)]
     pub perception: PerceptionConfig,
+    /// MCP servers whose tools are imported (`[[mcp.servers]]`).
+    #[serde(default)]
+    pub mcp: McpConfig,
     /// Phase 18 dual-system reflexes (System 1).
     #[serde(default)]
     pub reflex: ReflexConfig,
@@ -1898,6 +1973,34 @@ impl Config {
         // Validate agent
         if self.agent.max_tool_iterations == 0 {
             anyhow::bail!("agent.max_tool_iterations must be > 0");
+        }
+
+        // Validate [[mcp.servers]]: an empty allowlist would import nothing and
+        // look configured; a duplicate name would let one server shadow another
+        // in the reach gate and the tool namespace.
+        {
+            let mut seen = std::collections::HashSet::new();
+            for s in &self.mcp.servers {
+                if s.name.trim().is_empty() {
+                    anyhow::bail!("[[mcp.servers]]: a server has no name");
+                }
+                if !seen.insert(s.name.as_str()) {
+                    anyhow::bail!("[[mcp.servers]]: server name '{}' is listed twice", s.name);
+                }
+                if s.enabled && s.tools.is_empty() {
+                    anyhow::bail!(
+                        "[[mcp.servers]] '{}': `tools` is empty. Name the tools to import; \
+                         an empty allowlist imports nothing and would look configured",
+                        s.name
+                    );
+                }
+                if s.tools.iter().any(|t| t.trim().is_empty()) {
+                    anyhow::bail!(
+                        "[[mcp.servers]] '{}': `tools` contains an empty name",
+                        s.name
+                    );
+                }
+            }
         }
         if self.agent.max_tool_iterations > 100 {
             warnings.push(format!(
@@ -2848,5 +2951,125 @@ prefix = "incident."
 max_age_ms = 1000
 "#;
         toml::from_str::<super::Config>(raw).expect("all known keys parse");
+    }
+}
+
+#[cfg(test)]
+mod mcp_servers_config_tests {
+    fn parse(raw: &str) -> super::Config {
+        toml::from_str(raw).expect("parses")
+    }
+
+    const ODC: &str = r#"
+[[mcp.servers]]
+name = "odc"
+tools = ["list_parts", "run_enclosure", "handoff_to_studio"]
+guidance = "If the registry does not offer the exact part asked for, stop and say so; never substitute."
+[mcp.servers.server]
+transport = "stdio"
+command = "opendesigncore-mcp.exe"
+"#;
+
+    #[test]
+    fn an_import_parses_with_its_defaults_and_names_its_tools() {
+        let cfg = parse(ODC);
+        let s = &cfg.mcp.servers[0];
+        assert!(s.enabled, "listing a server is the intent");
+        assert!(
+            s.prefix,
+            "prefixed by default so two servers cannot shadow each other"
+        );
+        assert_eq!(s.tool_name("run_enclosure"), "odc_run_enclosure");
+        assert_eq!(
+            s.describe("Run the enclosure model."),
+            "Run the enclosure model. If the registry does not offer the exact part asked for, stop and say so; never substitute."
+        );
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn no_prefix_and_no_guidance_leave_the_announced_tool_alone() {
+        let cfg = parse(
+            r#"
+[[mcp.servers]]
+name = "x"
+tools = ["a"]
+prefix = false
+[mcp.servers.server]
+transport = "http"
+url = "http://127.0.0.1:1/mcp"
+"#,
+        );
+        let s = &cfg.mcp.servers[0];
+        assert_eq!(s.tool_name("a"), "a");
+        assert_eq!(s.describe("d"), "d");
+    }
+
+    #[test]
+    fn an_empty_allowlist_is_refused_at_validation() {
+        let cfg = parse(
+            r#"
+[[mcp.servers]]
+name = "odc"
+tools = []
+[mcp.servers.server]
+transport = "stdio"
+command = "x"
+"#,
+        );
+        let err = cfg
+            .validate()
+            .expect_err("empty allowlist must not validate");
+        assert!(err.to_string().contains("odc"), "names the server: {err}");
+        assert!(err.to_string().contains("tools"), "names the field: {err}");
+    }
+
+    #[test]
+    fn a_disabled_server_may_have_an_empty_allowlist() {
+        let cfg = parse(
+            r#"
+[[mcp.servers]]
+name = "odc"
+enabled = false
+tools = []
+[mcp.servers.server]
+transport = "stdio"
+command = "x"
+"#,
+        );
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn a_duplicate_server_name_is_refused() {
+        let cfg = parse(&format!("{ODC}\n{ODC}"));
+        let err = cfg
+            .validate()
+            .expect_err("duplicate names must not validate");
+        assert!(err.to_string().contains("twice"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_key_is_an_error_not_a_silence() {
+        let raw = r#"
+[[mcp.servers]]
+name = "odc"
+tools = ["list_parts"]
+allowlist = ["list_parts"]
+[mcp.servers.server]
+transport = "stdio"
+command = "x"
+"#;
+        let err = toml::from_str::<super::Config>(raw).expect_err("must not parse");
+        assert!(
+            err.to_string().contains("allowlist"),
+            "names the key: {err}"
+        );
+    }
+
+    #[test]
+    fn a_config_without_the_section_still_loads() {
+        let cfg = parse("[agent]\nname = \"x\"\n");
+        assert!(cfg.mcp.servers.is_empty());
     }
 }

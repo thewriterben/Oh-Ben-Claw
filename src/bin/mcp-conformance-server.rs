@@ -15,7 +15,14 @@
 //! mcp-conformance-server stateless   # refuses initialize; answers server/discover
 //! mcp-conformance-server quiet-2026  # 2026, but no server/discover (spec-legal)
 //! mcp-conformance-server hostile     # answers nothing; both lifecycles fail
+//! mcp-conformance-server chatty      # stateless, but prints prose to stdout before every reply
 //! ```
+//!
+//! `chatty` reproduces what OpenDesignCore's server did on 2026-09-06: its
+//! geometry kernel wrote "Disposing Library" to stdout between two frames. The
+//! spec says logs go to stderr, so that is a server bug — but a client that
+//! drops the connection over it loses every later reply too, and the fix is on
+//! the client as well as the server.
 //!
 //! JSON-RPC over stdio, one message per line, synchronous. Errors use -32601
 //! (method not found) and -32600 (invalid request), which is what a real server
@@ -31,6 +38,7 @@ enum Role {
     Stateless,
     Quiet2026,
     Hostile,
+    Chatty,
 }
 
 fn main() {
@@ -39,8 +47,11 @@ fn main() {
         Some("stateless") => Role::Stateless,
         Some("quiet-2026") => Role::Quiet2026,
         Some("hostile") => Role::Hostile,
+        Some("chatty") => Role::Chatty,
         other => {
-            eprintln!("unknown role {other:?}; expected legacy|stateless|quiet-2026|hostile");
+            eprintln!(
+                "unknown role {other:?}; expected legacy|stateless|quiet-2026|hostile|chatty"
+            );
             std::process::exit(2);
         }
     };
@@ -106,10 +117,10 @@ fn main() {
             (Role::Legacy, "tools/call") => ok(&id, call_result("legacy")),
 
             // ── The stateless server ─────────────────────────────────────────
-            (Role::Stateless | Role::Quiet2026, "initialize") => {
+            (Role::Stateless | Role::Quiet2026 | Role::Chatty, "initialize") => {
                 err(&id, -32601, "initialize was removed in 2026-07-28")
             }
-            (Role::Stateless, "server/discover") => ok(
+            (Role::Stateless | Role::Chatty, "server/discover") => ok(
                 &id,
                 json!({"serverInfo": {"name": "stateless-only", "version": "2.0.0"}}),
             ),
@@ -121,7 +132,7 @@ fn main() {
             (Role::Quiet2026, "server/discover") => {
                 err(&id, -32601, "server/discover: not implemented")
             }
-            (Role::Stateless | Role::Quiet2026, "tools/list") => {
+            (Role::Stateless | Role::Quiet2026 | Role::Chatty, "tools/list") => {
                 // A 2026 client must send clientInfo in `_meta` on every request.
                 // Refusing when it is absent turns "did the client really switch
                 // lifecycles" into something the test can observe.
@@ -131,7 +142,9 @@ fn main() {
                     ok(&id, json!({"tools": tools(), "ttlMs": 60000}))
                 }
             }
-            (Role::Stateless | Role::Quiet2026, "tools/call") => ok(&id, call_result("stateless")),
+            (Role::Stateless | Role::Quiet2026 | Role::Chatty, "tools/call") => {
+                ok(&id, call_result("stateless"))
+            }
 
             // ── The server that answers nothing ──────────────────────────────
             (Role::Hostile, _) => err(&id, -32601, "no"),
@@ -139,7 +152,13 @@ fn main() {
             (_, other) => err(&id, -32601, &format!("no such method: {other}")),
         };
 
-        let mut line = serde_json::to_string(&response).unwrap();
+        let mut line = String::new();
+        if role == Role::Chatty {
+            // Two lines of prose on the protocol channel, one of them blank-ish,
+            // before the frame -- the shape of a kernel's Dispose chatter.
+            line.push_str("Disposing Library\nDone Disposing Library\n");
+        }
+        line.push_str(&serde_json::to_string(&response).unwrap());
         line.push('\n');
         if out.write_all(line.as_bytes()).is_err() || out.flush().is_err() {
             break;

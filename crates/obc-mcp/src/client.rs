@@ -476,7 +476,34 @@ impl McpClient {
                     }
                     let resp: JsonRpcResponse = match serde_json::from_str(line) {
                         Ok(r) => r,
-                        Err(e) => anyhow::bail!("unparseable MCP frame: {e}: {line}"),
+                        Err(e) => {
+                            // A line that is not JSON-RPC is a server writing
+                            // to its own stdout — OpenDesignCore's kernel printed
+                            // "Disposing Library" between two frames on
+                            // 2026-09-06 and this arm was `bail!`, which lost
+                            // not just that call but the connection: every
+                            // later call read the stale reply. The spec puts
+                            // logging on stderr, so the line is a server bug
+                            // and is reported as one, but a reply that is
+                            // still coming should not be thrown away for it.
+                            // Counted against the same bound as unsolicited
+                            // frames so a server that only ever prints prose
+                            // still fails, and loudly.
+                            skipped += 1;
+                            tracing::warn!(
+                                method = %method,
+                                error = %e,
+                                line = %line.chars().take(200).collect::<String>(),
+                                "MCP: non-JSON-RPC line on the server's stdout; skipped \
+                                 (servers must log to stderr)"
+                            );
+                            if skipped > 64 {
+                                anyhow::bail!(
+                                    "no reply to {method} after {skipped} unrelated or unparseable frames"
+                                );
+                            }
+                            continue;
+                        }
                     };
                     // A notification has no id; a reply to an earlier, abandoned
                     // request has the wrong one. Neither is ours.

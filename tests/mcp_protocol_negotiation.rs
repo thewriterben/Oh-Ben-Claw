@@ -183,3 +183,29 @@ async fn a_server_that_answers_nothing_reports_both_failures() {
         "the failure should name both lifecycles it tried, got: {msg}"
     );
 }
+
+/// A server that writes prose to stdout between frames is breaking the spec,
+/// and until 2026-09-06 the client answered by breaking the connection: the
+/// first non-JSON line was a hard error, and because the real reply was still
+/// in the pipe, every later call read the stale one. OpenDesignCore's geometry
+/// kernel does exactly this on Dispose. The line is skipped and warned about;
+/// the reply behind it is delivered.
+#[tokio::test]
+async fn prose_on_the_servers_stdout_is_skipped_not_fatal() {
+    let mut client = McpClient::connect(&server("chatty", None))
+        .await
+        .expect("connect to a server that chatters before every reply");
+
+    let out = client
+        .call_tool("echo", json!({"text": "hi"}))
+        .await
+        .expect("the reply behind the prose is still delivered");
+    assert_eq!(out, "served over stateless");
+
+    // And the one after it: the stream is not desynchronised.
+    let again = client
+        .call_tool("echo", json!({"text": "again"}))
+        .await
+        .expect("second call still answered");
+    assert_eq!(again, "served over stateless");
+}

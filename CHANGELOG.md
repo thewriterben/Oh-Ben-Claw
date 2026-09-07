@@ -5,6 +5,69 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — `[[mcp.servers]]`: import any MCP server's tools, allowlisted (2026-09-06)
+
+### Added
+
+- `[[mcp.servers]]` (`obc-config::McpServerImportConfig`): connect an MCP
+  server at startup and register an explicit subset of its tools as
+  `McpRemoteTool`s. `tools` is required and non-empty — an empty allowlist
+  would import nothing and look configured, and the live deployment already
+  spends ~7k of an 8k-token context on tool schemas. `prefix` (default true)
+  registers `{name}_{tool}` so two servers announcing `get_provenance` cannot
+  shadow each other; `guidance` appends one sentence to every imported tool's
+  description. Gated like every other egress tool: conscience reach on the
+  server name, credential injection, Track 0 audit (`McpRemoteTool` is
+  physical). `#[serde(deny_unknown_fields)]` from day one.
+- `McpRegistry::build_tools_filtered` and the pure `plan_import` it rests on.
+  An allowlisted tool the server does not announce is an **error** that names
+  what was asked and what exists, not a silent omission. `McpRemoteTool` gained
+  `remote_name`: a prefixed import must forward the announced name in
+  `tools/call`, not the prefixed one.
+- `McpRegistry` is now reachable from the binary. It had been in `obc-mcp`
+  with nothing in `src/` calling it.
+
+### Why the guidance field exists
+
+Measured 2026-09-06 against OpenDesignCore with three local models (see the
+Local LLM Deployment notes, `OPTION5-LOCAL-MODEL-DRIVES-ODC.md`): on the happy
+path 4 of 4 called `list_parts` then `run_enclosure` with an offered id and a
+sane voxel size. Asked for a part the registry lists as *not offered*, 3 of 3
+ran the model around a different, offered part instead — one without saying so.
+The engine can verify an id and a voxel size; it cannot verify intent. One
+sentence in the tool description flipped that to 2 of 2 refusals. So the field
+is where the rule lives, and the example config carries the sentence.
+
+### Verified
+
+- obc-config 68 tests (7 new: defaults, prefix/guidance, empty allowlist
+  refused, disabled server exempt, duplicate name refused, unknown key refused,
+  section optional); obc-mcp 42 tests (4 new on `plan_import`).
+- Live, debug build, through the gateway on a scratch data dir, OpenDesignCore
+  imported with `["list_parts", "run_enclosure", "handoff_to_studio"]` and the
+  guidance sentence; `tool_count=27` (24 + 3). Turn 1, "a tray around the
+  FireBeetle 2": `odc_list_parts` → `odc_run_enclosure` → ledger run 50, hash
+  reported verbatim, 20 s. Turn 3, "the same for a generic ESP32-S3 DevKitC":
+  the model tried `odc_run_enclosure` with an unoffered id, the engine refused,
+  it listed parts and answered without substituting — no run 52 in the ledger.
+
+### Fixed
+
+- `McpClient` no longer drops the connection on a non-JSON-RPC line from the
+  server's stdout. OpenDesignCore's geometry kernel prints "Disposing Library"
+  on Dispose; the first live `odc_run_enclosure` hit that line, the client
+  bailed, and every later call read the stale reply. The line is now skipped
+  with a warning (servers must log to stderr) and counted against the same
+  64-frame bound as unsolicited notifications. Fixture role `chatty` in
+  `mcp-conformance-server` reproduces it; one test pins the fix. ODC fixed its
+  side too (`Console.SetOut(Console.Error)` in its MCP host).
+- `list_parts`' answer was ~4.9k tokens for a 104-entry registry (every
+  not-offered entry with its reason, every citation in full). Fine for a
+  three-tool harness; inside the 27-tool prompt it pushed the context past
+  8k and the model stopped after that call. ODC made reasons and full
+  citations opt-in; the count and ids stay. Recorded here because it is the
+  first thing anyone importing a tool into an 8k-context agent will hit.
+
 ## Unreleased — Perception: generic MCP polls, and `[perception]` refuses keys it does not know (2026-09-06)
 
 ### Added
