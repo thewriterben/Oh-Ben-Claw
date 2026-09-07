@@ -5,6 +5,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — An MCP server's stderr reaches our log (2026-09-07)
+
+### Fixed
+
+- `McpClient` used to spawn stdio servers with `stderr(Stdio::null())`. The
+  spec makes stderr the server's log channel, so everything a server says
+  about *why* — OpenDesignCore's "verify_artifact not offered: ODC_BLENDER is
+  '(unset)'", a Python server's traceback — was discarded. It cost an hour on
+  2026-09-07 debugging a tool that the server had explained at startup. stderr
+  is now piped and drained by a task for the life of the child, each line a
+  `tracing` info event under target `mcp_server_stderr` with `server=<command
+  stem>`; lines are capped at 4 KiB and non-UTF-8 lines are skipped without
+  stopping the drain.
+- The drain is the load-bearing half. Piping without reading is a deadlock on a
+  delay: once the child has written more than the pipe holds it blocks in
+  `write`, and the frame after that never arrives. Fixture role `loud` in
+  `mcp-conformance-server` writes 96 KiB to stderr before every reply; the new
+  test runs four calls through it under a timeout and fails if the drain task
+  is ever removed — checked by removing it: `Elapsed` after 30 s.
+- Stdio servers are spawned with `kill_on_drop(true)`: a server lives exactly
+  as long as its client, so a dropped client no longer leaves an orphan holding
+  OpenDesignCore's ledger. Found while proving the point above — on Windows
+  tokio reads child pipes on a blocking thread and runtime shutdown waits for
+  that read, so a stuck server turned a *failed* test into a *hung* one until
+  the child was killed with the client.
+
 ## Unreleased — `[[mcp.servers]]`: import any MCP server's tools, allowlisted (2026-09-06)
 
 ### Added

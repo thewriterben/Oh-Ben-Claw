@@ -16,6 +16,7 @@
 //! mcp-conformance-server quiet-2026  # 2026, but no server/discover (spec-legal)
 //! mcp-conformance-server hostile     # answers nothing; both lifecycles fail
 //! mcp-conformance-server chatty      # stateless, but prints prose to stdout before every reply
+//! mcp-conformance-server loud        # stateless, but writes >64 KiB to stderr before every reply
 //! ```
 //!
 //! `chatty` reproduces what OpenDesignCore's server did on 2026-09-06: its
@@ -23,6 +24,13 @@
 //! spec says logs go to stderr, so that is a server bug — but a client that
 //! drops the connection over it loses every later reply too, and the fix is on
 //! the client as well as the server.
+//!
+//! `loud` is the other half of that lesson (2026-09-07). Once the client
+//! captures stderr instead of discarding it, a server that logs more than the
+//! pipe holds — 64 KiB on Linux, 4 KiB on some Windows configurations — blocks
+//! on `write(2)` unless someone drains the pipe, and then every reply after
+//! that is a hang. This role logs a full buffer's worth before each frame so
+//! the test fails if the drain ever goes missing.
 //!
 //! JSON-RPC over stdio, one message per line, synchronous. Errors use -32601
 //! (method not found) and -32600 (invalid request), which is what a real server
@@ -39,6 +47,7 @@ enum Role {
     Quiet2026,
     Hostile,
     Chatty,
+    Loud,
 }
 
 fn main() {
@@ -48,9 +57,10 @@ fn main() {
         Some("quiet-2026") => Role::Quiet2026,
         Some("hostile") => Role::Hostile,
         Some("chatty") => Role::Chatty,
+        Some("loud") => Role::Loud,
         other => {
             eprintln!(
-                "unknown role {other:?}; expected legacy|stateless|quiet-2026|hostile|chatty"
+                "unknown role {other:?}; expected legacy|stateless|quiet-2026|hostile|chatty|loud"
             );
             std::process::exit(2);
         }
@@ -117,10 +127,10 @@ fn main() {
             (Role::Legacy, "tools/call") => ok(&id, call_result("legacy")),
 
             // ── The stateless server ─────────────────────────────────────────
-            (Role::Stateless | Role::Quiet2026 | Role::Chatty, "initialize") => {
+            (Role::Stateless | Role::Quiet2026 | Role::Chatty | Role::Loud, "initialize") => {
                 err(&id, -32601, "initialize was removed in 2026-07-28")
             }
-            (Role::Stateless | Role::Chatty, "server/discover") => ok(
+            (Role::Stateless | Role::Chatty | Role::Loud, "server/discover") => ok(
                 &id,
                 json!({"serverInfo": {"name": "stateless-only", "version": "2.0.0"}}),
             ),
@@ -132,7 +142,7 @@ fn main() {
             (Role::Quiet2026, "server/discover") => {
                 err(&id, -32601, "server/discover: not implemented")
             }
-            (Role::Stateless | Role::Quiet2026 | Role::Chatty, "tools/list") => {
+            (Role::Stateless | Role::Quiet2026 | Role::Chatty | Role::Loud, "tools/list") => {
                 // A 2026 client must send clientInfo in `_meta` on every request.
                 // Refusing when it is absent turns "did the client really switch
                 // lifecycles" into something the test can observe.
@@ -142,7 +152,7 @@ fn main() {
                     ok(&id, json!({"tools": tools(), "ttlMs": 60000}))
                 }
             }
-            (Role::Stateless | Role::Quiet2026 | Role::Chatty, "tools/call") => {
+            (Role::Stateless | Role::Quiet2026 | Role::Chatty | Role::Loud, "tools/call") => {
                 ok(&id, call_result("stateless"))
             }
 
@@ -152,6 +162,25 @@ fn main() {
             (_, other) => err(&id, -32601, &format!("no such method: {other}")),
         };
 
+        if role == Role::Loud {
+            // More than any stdio pipe buffers, in one burst, before the reply.
+            // A client that pipes stderr and does not drain it never sees the
+            // frame that follows.
+            let err = io::stderr();
+            let mut err = err.lock();
+            let row = format!(
+                "{} loud server log line, padding to make it long enough\n",
+                method
+            );
+            let mut written = 0usize;
+            while written < 96 * 1024 {
+                if err.write_all(row.as_bytes()).is_err() {
+                    break;
+                }
+                written += row.len();
+            }
+            let _ = err.flush();
+        }
         let mut line = String::new();
         if role == Role::Chatty {
             // Two lines of prose on the protocol channel, one of them blank-ish,

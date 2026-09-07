@@ -37,6 +37,58 @@ struct HttpTransport {
     token: Option<String>,
 }
 
+/// The label a server's stderr lines carry in our log: the command's file
+/// stem, since [`McpServerConfig`] has no name of its own.
+fn stderr_label(command: &str) -> String {
+    std::path::Path::new(command)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(command)
+        .to_string()
+}
+
+/// Longest stderr line we will put in our own log, in bytes. A stack trace
+/// survives; a server dumping a binary blob does not take the log with it.
+const STDERR_LINE_CAP: usize = 4096;
+
+/// Drain a server's stderr into `tracing`, one line per event, until EOF.
+///
+/// Runs for the life of the child. It must never stop reading while the child
+/// is alive, whatever the content: the read is the only thing keeping the pipe
+/// from filling.
+async fn forward_stderr(stderr: tokio::process::ChildStderr, label: String) {
+    let mut lines = BufReader::new(stderr).lines();
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                let line = line.trim_end();
+                if line.is_empty() {
+                    continue;
+                }
+                let shown: &str = if line.len() > STDERR_LINE_CAP {
+                    let mut end = STDERR_LINE_CAP;
+                    while !line.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    &line[..end]
+                } else {
+                    line
+                };
+                tracing::info!(target: "mcp_server_stderr", server = %label, "{shown}");
+            }
+            Ok(None) => break,
+            // A non-UTF-8 line: the bytes were consumed, keep draining. Dropping
+            // the reader here would re-create the hang this task exists to
+            // prevent. Any other error means the pipe itself is gone.
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                tracing::debug!(target: "mcp_server_stderr", server = %label, "non-UTF-8 stderr line skipped");
+            }
+            Err(_) => break,
+        }
+    }
+}
+
 // ── MCP Client ────────────────────────────────────────────────────────────────
 
 /// A client for communicating with an MCP server.
@@ -82,7 +134,20 @@ impl McpClient {
         cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            // stderr is the server's log channel per the spec, and until
+            // 2026-09-07 it went to /dev/null. That is how OpenDesignCore's
+            // "verify_artifact not offered: ODC_BLENDER is '(unset)'" line was
+            // invisible for an hour of debugging. It is piped and drained below;
+            // piping without draining would be worse than null, because a
+            // server that logs more than the pipe holds blocks on write and
+            // every later reply is a hang (see the conformance server's `loud`).
+            .stderr(Stdio::piped())
+            // The server lives exactly as long as its client. Without this a
+            // dropped client leaves an orphan holding ODC's ledger open — and,
+            // found while proving the stderr drain: on Windows tokio reads child
+            // pipes on a blocking thread, and runtime shutdown waits for that
+            // read, so a stuck server turned a failed test into a hung one.
+            .kill_on_drop(true);
 
         if let Some(env) = &config.env {
             for (k, v) in env {
@@ -99,6 +164,9 @@ impl McpClient {
             .stdout
             .take()
             .ok_or_else(|| anyhow::anyhow!("No stdout"))?;
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(forward_stderr(stderr, stderr_label(command)));
+        }
 
         let mut client = Self {
             transport: Transport::Stdio(Box::new(StdioTransport {

@@ -209,3 +209,31 @@ async fn prose_on_the_servers_stdout_is_skipped_not_fatal() {
         .expect("second call still answered");
     assert_eq!(again, "served over stateless");
 }
+
+/// A server that logs more to stderr than the pipe holds, before every reply.
+///
+/// The client captures stderr (2026-09-07) so a server's own reasons reach our
+/// log. Capturing without draining is a deadlock with a delay: the child blocks
+/// on `write(2)` once the buffer fills and the frame after it never arrives.
+/// `loud` writes 96 KiB per request — past Linux's 64 KiB default and far past
+/// Windows' — so this test hangs, and the harness's timeout fails it, if the
+/// drain task is ever removed. Four requests to be sure it is not a one-buffer
+/// fluke.
+#[tokio::test]
+async fn a_server_flooding_stderr_is_drained_not_deadlocked() {
+    let cfg = server("loud", None);
+    let connect = McpClient::connect(&cfg);
+    let mut client = tokio::time::timeout(std::time::Duration::from_secs(30), connect)
+        .await
+        .expect("connect finished: stderr was drained during negotiation")
+        .expect("connect to a server that floods stderr");
+
+    for i in 0..4 {
+        let call = client.call_tool("echo", json!({"text": i.to_string()}));
+        let out = tokio::time::timeout(std::time::Duration::from_secs(30), call)
+            .await
+            .expect("call finished: the pipe was drained while the server wrote")
+            .expect("reply delivered behind 96 KiB of stderr");
+        assert_eq!(out, "served over stateless");
+    }
+}
