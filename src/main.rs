@@ -2612,6 +2612,72 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             None
         };
 
+    // `[[mcp.servers]]`: import other servers' tools, allowlisted (2026-09-06).
+    //
+    // The other half of the seam `[[perception.polls]]` opened. Until now the
+    // only MCP tools a model could call were ClawCam's, through code that
+    // knows what ClawCam is. This connects any server the operator names,
+    // takes its `tools/list`, and registers exactly the allowlisted subset —
+    // prefixed, carrying the operator's guidance sentence, and gated by the
+    // conscience reach rules and Track 0 like every other egress tool
+    // (`McpRemoteTool` declares itself physical for that reason).
+    //
+    // An unreachable server is a warning and a skipped import, not a dead
+    // agent — the ClawCam and poll precedent. An allowlisted tool the server
+    // does not announce is an error for that server and is logged in full,
+    // because a typo that imported nothing would look exactly like success.
+    for import in config.mcp.servers.iter().filter(|s| s.enabled) {
+        let mut registry = oh_ben_claw::mcp::McpRegistry::new();
+        let connected = if conscience.enabled {
+            registry
+                .connect_with_conscience(
+                    &import.name,
+                    &import.server,
+                    Some(&conscience.reach),
+                    credential_resolver.as_deref(),
+                )
+                .await
+        } else {
+            registry.connect(&import.name, &import.server).await
+        };
+        if let Err(e) = connected {
+            tracing::warn!(
+                server = %import.name,
+                error = %e,
+                "mcp import: could not connect; this server's tools are not available"
+            );
+            continue;
+        }
+        let reach = conscience.enabled.then(|| conscience.reach.clone());
+        match registry.build_tools_filtered(
+            &import.name,
+            &import.tools,
+            import.prefix,
+            import.guidance.as_deref(),
+            reach,
+            action_auditor.clone(),
+        ) {
+            Ok(tools) => {
+                let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+                info!(
+                    server = %import.name,
+                    imported = tools.len(),
+                    announced = registry.list_tools().len(),
+                    tools = ?names,
+                    "mcp import: tools registered"
+                );
+                all_tools.extend(tools);
+            }
+            Err(e) => {
+                tracing::error!(
+                    server = %import.name,
+                    error = %e,
+                    "mcp import: allowlist does not match what the server announces; nothing imported"
+                );
+            }
+        }
+    }
+
     // Build the plain reasoning agent, attaching Track 0 + Phase 16 when configured.
     let mut agent = Agent::new(
         config.agent.clone(),

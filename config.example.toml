@@ -141,6 +141,30 @@ max_chars = 2400
 # command = "python"
 # args = ["-m", "studio_mcp.server", "--base", "http://localhost:8770"]
 
+# ── MCP tool import ──────────────────────────────────────────────────────────
+# The other half of `[[perception.polls]]`: a poll folds a server's answers into
+# world memory; an import puts a server's *tools* in the model's hands. Any MCP
+# server, an explicit allowlist (required — every schema goes into every prompt
+# and this deployment already spends ~7k of 8k tokens on twenty-four of them),
+# prefixed names so two servers cannot shadow each other, and a `guidance`
+# sentence appended to each tool's description.
+#
+# The guidance line below is not decoration. Measured 2026-09-06 against
+# OpenDesignCore with three local models: without it, 3 of 3 substituted a
+# different part when the one asked for was not in the registry; with it, 2 of 2
+# refused and said why. The engine checks ids and voxel sizes; it cannot check
+# intent, so intent is stated where the model reads it.
+#
+# [[mcp.servers]]
+# name = "odc"
+# tools = ["list_parts", "run_enclosure", "handoff_to_studio"]
+# guidance = "If the registry does not offer the exact part asked for, stop and say it is not offered and why; never substitute a different part."
+# # prefix = true                  # registers odc_list_parts, odc_run_enclosure, ...
+# [mcp.servers.server]
+# transport = "stdio"
+# command = "F:/Documents/GitHub/OpenDesignCore/src/OpenDesignCore.Mcp/bin/Release/net9.0/opendesigncore-mcp.exe"
+# env = { ODC_ROOT = "F:/Documents/GitHub/OpenDesignCore", ODC_OPENPARTSCORE = "F:/Documents/GitHub/OpenPartsCore" }
+
 # ── Edge-native mode ─────────────────────────────────────────────────────────
 # For a small single-board host (NanoPi, Pi) running the brain on the device.
 # The deployment planner emits this section for those boards.

@@ -232,7 +232,13 @@ pub struct McpContent {
 /// lesson: don't rely on the model's own refusals), applied to the MCP-client
 /// surface.
 pub struct McpRemoteTool {
+    /// The name the agent registers — with `[[mcp.servers]] prefix = true`,
+    /// `{server}_{tool}`.
     pub name: String,
+    /// The name the server announced, which is what `tools/call` must carry.
+    /// Equal to `name` unless the import prefixed it; forwarding the prefixed
+    /// name would have the server refuse every call from a prefixed import.
+    pub remote_name: String,
     pub description: String,
     pub schema: Value,
     /// Logical name of the server this tool lives on — the reach host key.
@@ -333,11 +339,72 @@ impl Tool for McpRemoteTool {
             return Ok(ToolResult::err(format!("conscience: {reason}")));
         }
         let mut client = self.client.lock().await;
-        match client.call_tool(&self.name, args).await {
+        match client.call_tool(&self.remote_name, args).await {
             Ok(result) => Ok(ToolResult::ok(result)),
             Err(e) => Ok(ToolResult::err(format!("MCP tool call failed: {e}"))),
         }
     }
+}
+
+/// What one allowlisted tool becomes once imported. Pure data, so the
+/// allowlist / prefix / guidance decisions are unit-testable without a live
+/// server — the same reason `reach_decision` is a free function.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedToolSpec {
+    pub name: String,
+    pub remote_name: String,
+    pub description: String,
+    pub schema: Value,
+}
+
+/// Decide the imported tools for one server (see
+/// [`McpRegistry::build_tools_filtered`] for the rules). Errors name both what
+/// was asked for and what the server announces, so a typo is diagnosable from
+/// the log line alone.
+pub fn plan_import(
+    server_name: &str,
+    announced: &[&McpToolDef],
+    allow: &[String],
+    prefix: bool,
+    guidance: Option<&str>,
+) -> Result<Vec<ImportedToolSpec>> {
+    let by_name: HashMap<&str, &McpToolDef> =
+        announced.iter().map(|d| (d.name.as_str(), *d)).collect();
+
+    let missing: Vec<&str> = allow
+        .iter()
+        .map(String::as_str)
+        .filter(|t| !by_name.contains_key(t))
+        .collect();
+    if !missing.is_empty() {
+        let mut have: Vec<&str> = by_name.keys().copied().collect();
+        have.sort_unstable();
+        anyhow::bail!(
+            "MCP server '{server_name}' does not announce {missing:?}; it announces {have:?}"
+        );
+    }
+
+    Ok(allow
+        .iter()
+        .map(|t| {
+            let def = by_name[t.as_str()];
+            ImportedToolSpec {
+                name: if prefix {
+                    format!("{server_name}_{t}")
+                } else {
+                    t.clone()
+                },
+                remote_name: t.clone(),
+                description: match guidance {
+                    Some(g) if !g.trim().is_empty() => {
+                        format!("{} {}", def.description.trim_end(), g.trim())
+                    }
+                    _ => def.description.clone(),
+                },
+                schema: def.input_schema.clone(),
+            }
+        })
+        .collect())
 }
 
 // ── MCP Tool Registry ─────────────────────────────────────────────────────────
@@ -464,6 +531,7 @@ impl McpRegistry {
                 self.clients.get(server_name).map(|client| {
                     Box::new(McpRemoteTool {
                         name: tool_name.clone(),
+                        remote_name: tool_name.clone(),
                         description: tool_def.description.clone(),
                         schema: tool_def.input_schema.clone(),
                         server: server_name.clone(),
@@ -474,6 +542,66 @@ impl McpRegistry {
                 })
             })
             .collect()
+    }
+
+    /// Build tools for **one** server, restricted to an allowlist, optionally
+    /// prefixed with the server name and carrying an extra sentence of
+    /// description.
+    ///
+    /// This is the `[[mcp.servers]]` import path. `build_tools_with_reach`
+    /// hands the model everything every server announced; that was the right
+    /// shape for a registry nothing called, and the wrong one for a prompt that
+    /// already spends most of an 8k context on tool schemas. So:
+    ///
+    /// - `allow` names the tools to import, by announced name. **A name the
+    ///   server did not announce is an error**, not a silent omission — a typo
+    ///   in an allowlist would otherwise import nothing and look configured.
+    /// - `prefix` registers each as `{server}_{tool}`, so two servers that both
+    ///   announce `get_provenance` cannot shadow each other.
+    /// - `guidance` is appended to each tool's description. It is where a rule
+    ///   the schema cannot express goes; the reason it exists is in
+    ///   `McpServerImportConfig::guidance` upstream in obc-config.
+    ///
+    /// Reach gating and the auditor are attached exactly as in
+    /// `build_tools_with_reach`; the reach host is the server name, prefixed or
+    /// not.
+    pub fn build_tools_filtered(
+        &self,
+        server_name: &str,
+        allow: &[String],
+        prefix: bool,
+        guidance: Option<&str>,
+        reach: Option<obc_conscience::ReachGate>,
+        auditor: Option<Arc<std::sync::Mutex<obc_safety::ActionAuditor>>>,
+    ) -> Result<Vec<Box<dyn Tool>>> {
+        let client = self
+            .clients
+            .get(server_name)
+            .ok_or_else(|| anyhow::anyhow!("MCP server '{server_name}' is not connected"))?;
+
+        let announced: Vec<&McpToolDef> = self
+            .tools
+            .iter()
+            .filter(|(_, (server, _))| server == server_name)
+            .map(|(_, (_, def))| def)
+            .collect();
+
+        let specs = plan_import(server_name, &announced, allow, prefix, guidance)?;
+        Ok(specs
+            .into_iter()
+            .map(|spec| {
+                Box::new(McpRemoteTool {
+                    name: spec.name,
+                    remote_name: spec.remote_name,
+                    description: spec.description,
+                    schema: spec.schema,
+                    server: server_name.to_string(),
+                    client: client.clone(),
+                    reach: reach.clone(),
+                    auditor: auditor.clone(),
+                }) as Box<dyn Tool>
+            })
+            .collect())
     }
 
     /// Return a shared handle to a connected server's client, if present.
@@ -557,6 +685,80 @@ mod tests {
         assert!(resp.result.is_none());
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32600);
+    }
+
+    fn def(name: &str, desc: &str) -> McpToolDef {
+        McpToolDef {
+            name: name.into(),
+            description: desc.into(),
+            input_schema: json!({"type": "object", "properties": {"partId": {"type": "string"}}}),
+        }
+    }
+
+    #[test]
+    fn plan_import_prefixes_and_keeps_the_remote_name() {
+        let a = def("list_parts", "List parts.");
+        let b = def("run_enclosure", "Run the enclosure model.");
+        let c = def("run_cradle", "Not asked for.");
+        let specs = plan_import(
+            "odc",
+            &[&a, &b, &c],
+            &["list_parts".into(), "run_enclosure".into()],
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(specs.len(), 2, "only the allowlist is imported");
+        assert_eq!(specs[0].name, "odc_list_parts");
+        assert_eq!(specs[0].remote_name, "list_parts");
+        assert_eq!(specs[1].name, "odc_run_enclosure");
+        assert_eq!(specs[1].remote_name, "run_enclosure");
+        assert_eq!(specs[1].description, "Run the enclosure model.");
+        assert_eq!(specs[1].schema, b.input_schema);
+    }
+
+    #[test]
+    fn plan_import_appends_guidance_to_every_tool() {
+        let a = def("list_parts", "List parts.");
+        let specs = plan_import(
+            "odc",
+            &[&a],
+            &["list_parts".into()],
+            false,
+            Some("  If the exact part is not offered, stop and say so.  "),
+        )
+        .unwrap();
+        assert_eq!(specs[0].name, "list_parts", "no prefix when asked");
+        assert_eq!(
+            specs[0].description,
+            "List parts. If the exact part is not offered, stop and say so."
+        );
+    }
+
+    #[test]
+    fn plan_import_refuses_a_tool_the_server_did_not_announce() {
+        // A typo in an allowlist must not import nothing and look configured.
+        let a = def("list_parts", "List parts.");
+        let err = plan_import("odc", &[&a], &["list_part".into()], true, None).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("'odc'"), "{msg}");
+        assert!(msg.contains("list_part"), "names what was asked: {msg}");
+        assert!(msg.contains("list_parts"), "names what exists: {msg}");
+    }
+
+    #[test]
+    fn a_prefixed_remote_tool_forwards_the_announced_name() {
+        // The field exists so a prefixed import does not send `odc_run_enclosure`
+        // to a server that only knows `run_enclosure`.
+        let specs = plan_import(
+            "odc",
+            &[&def("run_enclosure", "d")],
+            &["run_enclosure".into()],
+            true,
+            None,
+        )
+        .unwrap();
+        assert_ne!(specs[0].name, specs[0].remote_name);
     }
 
     #[test]
