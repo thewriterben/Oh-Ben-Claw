@@ -80,6 +80,11 @@ is where the rule lives, and the example config carries the sentence.
   `max_facts` (default 64) bounds a wide result and drops are counted, not
   silent. Each poll owns its MCP connection; an unreachable server disables
   that poll with a warning, not the agent. Documented in `config.example.toml`.
+- Poll results are recorded with `Origin::Observed`, decided at the ingest
+  boundary in `src/perception_polls.rs` rather than inherited from
+  `WorldMemory::observe()`'s deliberately conservative `Derived` default. The
+  content arrives off a tool call to an external server: it is a reading, not a
+  framework rollup, and the store should say so.
 
 ### Changed
 
