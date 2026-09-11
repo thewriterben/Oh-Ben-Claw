@@ -5,27 +5,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## Unreleased — A dead MCP server is respawned, and the model is told (2026-09-11)
 
-### Fixed
-
-- An imported MCP server that exited — killed by an operator, crashed, OOM —
-  used to take its tools down with it for the life of the agent: every later
-  call returned "The pipe is being closed (os error 232)" until someone
-  restarted the process. OpenDesignCore's server was killed under the live
-  agent twice this week (freeing the exe for a build). Now `McpClient` keeps
-  its `McpServerConfig` and can `reconnect()`; transport death is a typed
-  `ServerGone` error carrying whether the request had been sent; and
-  `McpRemoteTool::execute` respawns the server once and returns a **readable
-  refusal** — "server '…' had exited (your request was not delivered / was sent
-  but never replied); restarted; call `<tool>` again" — instead of retrying.
-  Not retrying is deliberate: `tools/call` is not idempotent and every imported
-  tool is declared physical, so whether to run it again is the model's decision
-  with the facts in front of it. A respawn that fails says so and names the
-  operator.
-- Fixture role `mortal` (answers one `tools/call`, flushes, exits); the test
-  runs three calls through `McpRemoteTool`: served, refused-with-respawn,
-  served by the new process. The refusal must not contain the raw OS error.
 
 ## Unreleased — An MCP server's stderr reaches our log (2026-09-07)
 
