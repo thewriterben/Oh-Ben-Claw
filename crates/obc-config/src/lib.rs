@@ -1367,6 +1367,20 @@ pub struct SelfImprovementConfig {
     /// once then inference is fully offline. Default false.
     #[serde(default)]
     pub semantic: bool,
+    /// Run the skill curator after each improvement pass: disable learned
+    /// skills that duplicate another's recipe, have gone unused for
+    /// `archive_after_days`, or exceed `max_enabled_learned`; write a
+    /// `SKILL.md` beside every learned skill. Default true.
+    #[serde(default)]
+    pub curate: Option<bool>,
+    /// Days a learned skill may go unused before the curator disables it.
+    /// 0 = never. Default 30.
+    #[serde(default)]
+    pub archive_after_days: Option<u64>,
+    /// Learned skills kept enabled at most; the least used go first.
+    /// 0 = no cap. Default 40.
+    #[serde(default)]
+    pub max_enabled_learned: Option<usize>,
 }
 
 /// One `[[self_improvement.verification]]` entry: a check that synthesized
@@ -3131,5 +3145,23 @@ api_key = "sk-not-really"
             inline_secret_providers(&cfg),
             vec!["provider.routing.cloud (anthropic)".to_string()]
         );
+    }
+}
+
+#[cfg(test)]
+mod curator_config_tests {
+    use super::*;
+
+    #[test]
+    fn curator_knobs_parse_and_default_to_unset() {
+        let cfg: Config = toml::from_str("[self_improvement]\nenabled = true\n").unwrap();
+        assert!(cfg.self_improvement.curate.is_none());
+        let cfg: Config = toml::from_str(
+            "[self_improvement]\ncurate = false\narchive_after_days = 7\nmax_enabled_learned = 12\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.self_improvement.curate, Some(false));
+        assert_eq!(cfg.self_improvement.archive_after_days, Some(7));
+        assert_eq!(cfg.self_improvement.max_enabled_learned, Some(12));
     }
 }
