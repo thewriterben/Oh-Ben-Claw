@@ -93,6 +93,7 @@ mod skill_replay;
 // as `AgentEvent::Token`, with `Thinking`, `ToolCall` and `ToolResult` emitted
 // from inside the loop as they happen rather than reconstructed afterwards.
 pub mod context;
+pub mod routing;
 pub mod system2;
 pub mod world_context;
 pub use edge::{EdgeAgent, EdgeAgentBuilder};
@@ -177,6 +178,9 @@ pub struct Agent {
     /// similar past successful episodes — so the model prefers a verified
     /// recipe over reasoning from scratch.
     experience_k: Option<usize>,
+    /// Parity item 3: a second, cloud brain chosen per turn. `None` means
+    /// every turn uses `provider`, as before 2026-09-11.
+    routing: Option<Routing>,
     /// Phase 15/9: token cost tracking — `(tracker, in_price/M, out_price/M)`.
     /// Each run records an estimated `TokenUsage` (chars/4 heuristic, same as
     /// episode metrics) so the gateway can show a live cost summary.
@@ -199,6 +203,60 @@ pub struct Agent {
     /// be documented, generated into every NanoPi config by the deployment planner,
     /// and have no effect whatsoever.
     max_history: usize,
+}
+
+/// The router's runtime state: the cloud brain, its back-off, today's spend.
+struct Routing {
+    cfg: obc_providers::RoutingConfig,
+    cloud: Arc<dyn Provider>,
+    cloud_down_until: Mutex<Option<std::time::Instant>>,
+    /// `(day number since the epoch, estimated USD spent on cloud turns that day)`.
+    cloud_spend: Mutex<(u64, f64)>,
+}
+
+impl Routing {
+    fn cooling(&self) -> bool {
+        self.cloud_down_until
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some_and(|until| until > std::time::Instant::now())
+    }
+
+    fn mark_down(&self) {
+        *self
+            .cloud_down_until
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(
+            std::time::Instant::now()
+                + std::time::Duration::from_secs(self.cfg.offline_backoff_secs),
+        );
+    }
+
+    fn today() -> u64 {
+        now_ms() / 86_400_000
+    }
+
+    fn spent_today(&self) -> f64 {
+        let g = self.cloud_spend.lock().unwrap_or_else(|p| p.into_inner());
+        if g.0 == Self::today() {
+            g.1
+        } else {
+            0.0
+        }
+    }
+
+    fn add_spend(&self, usd: f64) {
+        let mut g = self.cloud_spend.lock().unwrap_or_else(|p| p.into_inner());
+        let today = Self::today();
+        if g.0 != today {
+            *g = (today, 0.0);
+        }
+        g.1 += usd;
+    }
+
+    fn budget_exceeded(&self) -> bool {
+        self.cfg.daily_budget_usd > 0.0 && self.spent_today() >= self.cfg.daily_budget_usd
+    }
 }
 
 impl Agent {
@@ -230,6 +288,7 @@ impl Agent {
             trust: None,
             approval: None,
             experience_k: None,
+            routing: None,
             cost: None,
             rollout: None,
             forge_dir: None,
@@ -316,6 +375,156 @@ impl Agent {
     ) -> Self {
         self.cost = Some((tracker, input_price_per_million, output_price_per_million));
         self
+    }
+
+    /// Attach the per-turn router (`[provider.routing]`). Builds the cloud
+    /// provider from its config. Without a key for it, nothing is attached
+    /// and one warning says so: every turn stays local until the key exists
+    /// and the agent restarts.
+    pub fn with_routing(self, cfg: obc_providers::RoutingConfig) -> Result<Self> {
+        if !cfg.enabled {
+            tracing::info!("routing: disabled in config; every turn stays local");
+            return Ok(self);
+        }
+        if !obc_providers::key_present(&cfg.cloud) {
+            tracing::warn!(
+                provider = %cfg.cloud.name,
+                model = %cfg.cloud.model,
+                var = obc_providers::key_env_var(&cfg.cloud.name).unwrap_or("its API key"),
+                "routing: the cloud brain has no API key; every turn stays local until it is set and OBC restarts"
+            );
+            return Ok(self);
+        }
+        let cloud = obc_providers::from_config(&cfg.cloud)?;
+        Ok(self.with_routing_provider(cfg, cloud))
+    }
+
+    /// [`with_routing`](Self::with_routing) with the cloud provider supplied.
+    pub fn with_routing_provider(
+        mut self,
+        cfg: obc_providers::RoutingConfig,
+        cloud: Arc<dyn Provider>,
+    ) -> Self {
+        tracing::info!(
+            cloud = %format!("{}/{}", cfg.cloud.name, cfg.cloud.model),
+            local = "[provider]",
+            console_to_cloud = cfg.console_to_cloud,
+            daily_budget_usd = cfg.daily_budget_usd,
+            "routing: two brains, chosen per turn"
+        );
+        self.routing = Some(Routing {
+            cfg,
+            cloud,
+            cloud_down_until: Mutex::new(None),
+            cloud_spend: Mutex::new((0, 0.0)),
+        });
+        self
+    }
+
+    /// Decide which brain answers this turn. See [`routing::decide`].
+    pub fn route_turn(
+        &self,
+        session_id: &str,
+        tool_count: usize,
+    ) -> (routing::Route, &'static str) {
+        let Some(r) = &self.routing else {
+            return (routing::Route::Local, "no router");
+        };
+        let private = self
+            .world
+            .as_ref()
+            .and_then(|w| world_context::context_facts(w, &self.world_context, now_ms()))
+            .map(|(facts, withdrawn)| {
+                routing::private_facts(
+                    facts
+                        .iter()
+                        .take(self.world_context.max_facts)
+                        .chain(withdrawn.iter().take(self.world_context.max_withdrawals)),
+                    &r.cfg,
+                )
+            })
+            .unwrap_or(false);
+        routing::decide(
+            &r.cfg,
+            &routing::TurnFacts {
+                session_id,
+                tool_count,
+                private_facts: private,
+                cloud_cooling: r.cooling(),
+                budget_exceeded: r.budget_exceeded(),
+            },
+        )
+    }
+
+    /// One model call on the chosen brain. A cloud failure is answered locally
+    /// in the same call — the client is told to discard what it rendered — and
+    /// starts the back-off, so the rest of the turn and the next
+    /// `offline_backoff_secs` stay local. Returns the completion and whether
+    /// the cloud produced it.
+    async fn complete_routed(
+        &self,
+        route: routing::Route,
+        messages: &[ChatMessage],
+        tools: &[Box<dyn Tool>],
+        local_config: &obc_providers::ProviderConfig,
+        sink: obc_providers::DeltaSink<'_>,
+    ) -> Result<(obc_providers::ChatCompletion, bool)> {
+        if let (routing::Route::Cloud, Some(r)) = (route, &self.routing) {
+            if !r.cooling() {
+                match r
+                    .cloud
+                    .chat_completion_streaming(messages, tools, &r.cfg.cloud, sink)
+                    .await
+                {
+                    Ok(c) => return Ok((c, true)),
+                    Err(e) => {
+                        r.mark_down();
+                        tracing::warn!(
+                            error = %e,
+                            backoff_secs = r.cfg.offline_backoff_secs,
+                            "routing: cloud turn failed; answering locally and backing off"
+                        );
+                        if let Some(obs) = &self.obs {
+                            obs.metrics.counter("routing_cloud_failures_total").inc();
+                        }
+                        sink(obc_providers::StreamDelta::Restart);
+                    }
+                }
+            }
+        }
+        let c = self
+            .provider
+            .chat_completion_streaming(messages, tools, local_config, sink)
+            .await?;
+        Ok((c, false))
+    }
+
+    /// Write the decision to world memory as `agent.brain` when it changed, so
+    /// the world-state block says which brain is answering and why.
+    fn record_brain(&self, route: routing::Route, reason: &str, provider: &str, model: &str) {
+        let Some(world) = &self.world else { return };
+        let value = serde_json::json!({
+            "route": route.as_str(), "provider": provider, "model": model, "reason": reason,
+        });
+        let unchanged = world
+            .current("agent.brain")
+            .ok()
+            .flatten()
+            .is_some_and(|f| f.value == value);
+        if unchanged {
+            return;
+        }
+        let now = now_ms();
+        if let Err(e) = world.observe_as(
+            "agent.brain",
+            value,
+            now,
+            now,
+            "router",
+            obc_memory::world::Origin::Derived,
+        ) {
+            tracing::debug!(error = %e, "routing: could not record agent.brain");
+        }
     }
 
     /// Attach the Track 0 staged-rollout tracker: simulated and supervised
@@ -503,6 +712,15 @@ impl Agent {
         // Stable tool set for this run (hot-added skills apply from the next run).
         let tool_list = self.tools_snapshot();
 
+        // Which brain answers this turn (parity item 3). Decided once per turn;
+        // a cloud failure mid-turn falls back to local inside `complete_routed`.
+        let (route, route_reason) = self.route_turn(session_id, tool_list.len());
+        if self.routing.is_some() {
+            tracing::info!(session_id = %session_id, route = route.as_str(), reason = route_reason, "routing");
+        }
+        let mut used_cloud = false;
+        let mut brain: Option<(String, String)> = None;
+
         // 3–6. Agent loop
         for iteration in 0..max_iterations {
             tracing::debug!(
@@ -536,10 +754,11 @@ impl Agent {
                     reset,
                 });
             };
-            let completion = self
-                .provider
-                .chat_completion_streaming(&messages, &tool_list, provider_config, &sink)
+            let (completion, from_cloud) = self
+                .complete_routed(route, &messages, &tool_list, provider_config, &sink)
                 .await?;
+            used_cloud |= from_cloud;
+            brain = Some((completion.provider.clone(), completion.model.clone()));
 
             if completion.tool_calls.is_empty() {
                 // Final text response — we're done
@@ -682,10 +901,14 @@ impl Agent {
                         reset,
                     });
                 };
-                let final_completion = self
-                    .provider
-                    .chat_completion_streaming(&messages, &[], provider_config, &sink)
+                let (final_completion, from_cloud) = self
+                    .complete_routed(route, &messages, &[], provider_config, &sink)
                     .await?;
+                used_cloud |= from_cloud;
+                brain = Some((
+                    final_completion.provider.clone(),
+                    final_completion.model.clone(),
+                ));
                 final_response = final_completion.message;
             }
         }
@@ -728,14 +951,44 @@ impl Agent {
             (chars / 4) as u64
         };
 
-        // Phase 15/9: record estimated usage against the cost budget.
-        if let Some((tracker, in_price, out_price)) = &self.cost {
-            tracker.record_usage(obc_cost::TokenUsage::new(
+        // Parity item 3: say which brain answered, and charge the cloud budget.
+        if let Some((provider_name, model)) = &brain {
+            if self.routing.is_some() {
+                // What actually answered, not what was decided: a cloud turn
+                // that failed over mid-way was answered locally.
+                let (answered, why) = match (route, used_cloud) {
+                    (routing::Route::Cloud, false) => {
+                        (routing::Route::Local, "cloud unreachable, backing off")
+                    }
+                    _ => (route, route_reason),
+                };
+                self.record_brain(answered, why, provider_name, model);
+            }
+        }
+        let (model_used, in_price, out_price) = match (&self.routing, used_cloud) {
+            (Some(r), true) => (
+                r.cfg.cloud.model.clone(),
+                r.cfg.cloud_input_price_per_million,
+                r.cfg.cloud_output_price_per_million,
+            ),
+            _ => (
                 provider_config.model.clone(),
-                input_est,
-                output_est,
-                *in_price,
-                *out_price,
+                self.cost.as_ref().map(|c| c.1).unwrap_or(0.0),
+                self.cost.as_ref().map(|c| c.2).unwrap_or(0.0),
+            ),
+        };
+        if used_cloud {
+            if let Some(r) = &self.routing {
+                r.add_spend(
+                    input_est as f64 * in_price / 1e6 + output_est as f64 * out_price / 1e6,
+                );
+            }
+        }
+
+        // Phase 15/9: record estimated usage against the cost budget.
+        if let Some((tracker, _, _)) = &self.cost {
+            tracker.record_usage(obc_cost::TokenUsage::new(
+                model_used, input_est, output_est, in_price, out_price,
             ));
         }
 
@@ -1935,5 +2188,167 @@ mod context_order_and_compaction_tests {
         let agent = Agent::new(cfg, Arc::new(Fixed("never")), memory, vec![]);
         let pc = obc_providers::ProviderConfig::default();
         assert!(!agent.compact_if_needed(&session, &pc).await.unwrap());
+    }
+}
+
+#[cfg(test)]
+mod routing_agent_tests {
+    use super::*;
+
+    struct Named(&'static str, &'static str);
+
+    #[async_trait::async_trait]
+    impl obc_providers::Provider for Named {
+        fn name(&self) -> &str {
+            self.0
+        }
+        async fn chat_completion(
+            &self,
+            _m: &[obc_providers::ChatMessage],
+            _t: &[Box<dyn Tool>],
+            c: &obc_providers::ProviderConfig,
+        ) -> Result<obc_providers::ChatCompletion> {
+            if self.1 == "FAIL" {
+                anyhow::bail!("503 upstream unavailable");
+            }
+            Ok(obc_providers::ChatCompletion {
+                message: self.1.to_string(),
+                tool_calls: vec![],
+                provider: self.0.into(),
+                model: c.model.clone(),
+            })
+        }
+    }
+
+    fn routing_cfg() -> obc_providers::RoutingConfig {
+        obc_providers::RoutingConfig::default_with_cloud(obc_providers::ProviderConfig {
+            name: "anthropic".into(),
+            model: "claude-sonnet-5".into(),
+            ..Default::default()
+        })
+    }
+
+    fn routed_agent(
+        cloud: Named,
+    ) -> (
+        Agent,
+        Arc<obc_memory::MemoryStore>,
+        Arc<obc_memory::world::WorldMemory>,
+    ) {
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
+        let world = Arc::new(obc_memory::world::WorldMemory::open_in_memory().unwrap());
+        let agent = Agent::new(
+            AgentConfig::default(),
+            Arc::new(Named("ollama", "from local")),
+            Arc::clone(&memory),
+            vec![],
+        )
+        .with_world_context(
+            Arc::clone(&world),
+            world_context::WorldContextConfig::default(),
+        )
+        .with_routing_provider(routing_cfg(), Arc::new(cloud));
+        (agent, memory, world)
+    }
+
+    #[tokio::test]
+    async fn an_operator_turn_is_answered_by_the_cloud_and_recorded() {
+        let (agent, memory, world) = routed_agent(Named("anthropic", "from cloud"));
+        let session = memory.create_session("console").unwrap();
+        let local_cfg = obc_providers::ProviderConfig::default();
+        let r = agent.process(&session, "hello", &local_cfg).await.unwrap();
+        assert_eq!(r.message, "from cloud");
+        let brain = world
+            .current("agent.brain")
+            .unwrap()
+            .expect("agent.brain fact");
+        assert_eq!(brain.value["route"], "cloud");
+        assert_eq!(brain.value["model"], "claude-sonnet-5");
+        assert_eq!(brain.value["reason"], "operator turn");
+        assert_eq!(brain.source, "router");
+    }
+
+    #[tokio::test]
+    async fn a_background_session_stays_local() {
+        let (agent, memory, world) = routed_agent(Named("anthropic", "from cloud"));
+        memory.create_session_with_id("system2").unwrap();
+        let r = agent
+            .process("system2", "wake", &obc_providers::ProviderConfig::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, "from local");
+        assert_eq!(
+            world.current("agent.brain").unwrap().unwrap().value["reason"],
+            "background session"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_cloud_turn_is_answered_locally_and_starts_the_backoff() {
+        let (agent, memory, world) = routed_agent(Named("anthropic", "FAIL"));
+        let session = memory.create_session("console").unwrap();
+        let mut events = agent.subscribe();
+        let r = agent
+            .process(&session, "hello", &obc_providers::ProviderConfig::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, "from local");
+        // The client was told to discard the (empty) cloud attempt.
+        let mut saw_reset = false;
+        while let Ok(ev) = events.try_recv() {
+            if let AgentEvent::Token { reset: true, .. } = ev {
+                saw_reset = true;
+            }
+        }
+        assert!(saw_reset, "a Restart token precedes the local answer");
+        assert_eq!(
+            agent.route_turn(&session, 0),
+            (routing::Route::Local, "cloud unreachable, backing off")
+        );
+        assert_eq!(
+            world.current("agent.brain").unwrap().unwrap().value["route"],
+            "local"
+        );
+    }
+
+    #[tokio::test]
+    async fn private_facts_in_the_context_keep_the_turn_local() {
+        let (agent, memory, world) = routed_agent(Named("anthropic", "from cloud"));
+        world
+            .observe_as(
+                "vision.subject.person-1",
+                serde_json::json!({"label": "person"}),
+                now_ms(),
+                now_ms(),
+                "clawcam",
+                obc_memory::world::Origin::Derived,
+            )
+            .unwrap();
+        let session = memory.create_session("console").unwrap();
+        assert_eq!(
+            agent.route_turn(&session, 5),
+            (routing::Route::Local, "private facts in context")
+        );
+    }
+
+    #[test]
+    fn the_daily_budget_stops_cloud_turns() {
+        let (agent, memory, _) = routed_agent(Named("anthropic", "from cloud"));
+        let session = memory.create_session("console").unwrap();
+        let r = agent.routing.as_ref().unwrap();
+        assert_eq!(agent.route_turn(&session, 0).0, routing::Route::Cloud);
+        r.add_spend(0.5);
+        assert_eq!(
+            agent.route_turn(&session, 0).0,
+            routing::Route::Cloud,
+            "no cap by default"
+        );
+        let (mut agent2, _, _) = routed_agent(Named("anthropic", "from cloud"));
+        agent2.routing.as_mut().unwrap().cfg.daily_budget_usd = 0.25;
+        agent2.routing.as_ref().unwrap().add_spend(0.5);
+        assert_eq!(
+            agent2.route_turn(&session, 0),
+            (routing::Route::Local, "daily cloud budget spent")
+        );
     }
 }

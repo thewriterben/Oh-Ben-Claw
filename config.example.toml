@@ -104,8 +104,34 @@ temperature = 0.7
 # base_url = "http://localhost:11434/api/chat"
 
 [provider.retry]
-max_attempts = 3
+max_retries = 3          # was documented as max_attempts, which the parser ignored
 initial_backoff_ms = 500
+
+# Per-turn routing (2026-09-11): two brains, chosen per turn. [provider] above
+# is the local, routine brain; [provider.routing.cloud] answers the turns that
+# deserve it. Rules, first match wins: cloud failed recently (backing off) →
+# local; daily cloud budget spent → local; private facts (camera detections,
+# people) in the world-state block → local; background sessions (System 2,
+# harness, edge) → local; operator turns (console, channels, gateway) → cloud
+# when console_to_cloud; otherwise cloud when ≥ tool_threshold tools are
+# registered. The decision is written to world memory as `agent.brain`, so
+# the world-state block says which brain is answering and why. Without the
+# cloud provider's key (ANTHROPIC_API_KEY etc.) the router logs once at
+# startup and every turn stays local.
+# [provider.routing]
+# enabled = true
+# console_to_cloud = true
+# tool_threshold = 8
+# local_session_prefixes = ["system2", "harness-", "edge-"]
+# private_sources = ["clawcam"]
+# private_entity_prefixes = ["vision.subject."]
+# offline_backoff_secs = 300
+# daily_budget_usd = 5.0                 # 0 = no cap; estimated from chars/4
+# cloud_input_price_per_million = 2.0    # Sonnet 5 list prices, 2026-09-11
+# cloud_output_price_per_million = 10.0
+# [provider.routing.cloud]
+# name = "anthropic"
+# model = "claude-sonnet-5"
 
 # ── Perception ───────────────────────────────────────────────────────────────
 [perception]

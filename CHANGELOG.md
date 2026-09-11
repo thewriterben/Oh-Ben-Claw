@@ -5,6 +5,45 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Two brains, chosen per turn (2026-09-11)
+
+Parity item 3. The hybrid posture decided on 2026-09-11 — Claude for the turns
+that deserve it, the local model for everything routine and everything
+private — needed a place to be decided. `[provider.routing]` is that place.
+
+### Added
+
+- `[provider.routing]` (`obc_providers::RoutingConfig`, `deny_unknown_fields`):
+  `[provider]` stays the local brain; `[provider.routing.cloud]` is the second.
+  `obc_agent::routing::decide` is the policy, first match wins: cloud failed
+  within `offline_backoff_secs` → local; `daily_budget_usd` spent → local;
+  private facts in this turn's world-state block (`private_sources`,
+  `private_entity_prefixes`; defaults `clawcam`, `vision.subject.`) → local;
+  `local_session_prefixes` (`system2`, `harness-`, `edge-`) → local; operator
+  turns → cloud when `console_to_cloud`; else cloud at `tool_threshold` tools.
+- `Agent::with_routing` / `with_routing_provider`, `Agent::route_turn`. A cloud
+  failure mid-turn is answered locally in the same call (the client gets a
+  `Restart` token first) and starts the back-off. Each turn's decision is
+  logged and written to world memory as `agent.brain`
+  (`{route, provider, model, reason}`, source `router`) when it changes, so the
+  world-state block says which brain answered. Cloud turns are charged against
+  the daily budget at the configured prices (chars/4 estimate) and recorded
+  under the cloud model in the cost tracker.
+- `world_context::context_facts`: the fact selection behind the world-state
+  block, shared with the router so privacy is decided from `Fact.source` and
+  the entity, not from rendered text.
+- `obc_providers::key_present` / `key_env_var`. Without a key for the cloud
+  brain the router is not attached and one startup warning says so.
+
+### Fixed
+
+- **`[[provider.fallbacks]]` and `[provider.retry]` never took effect.**
+  `from_config_full`, the wrapper that applies them, had no caller; the binary
+  built its provider with the bare `from_config`. `run_start` now uses the
+  full one, so the bench's 30B fallback and its retry policy are real.
+- `config.example.toml` documented `[provider.retry] max_attempts`; the field
+  is `max_retries`, and the parser ignored the misspelling silently.
+
 ## Unreleased — Ollama: the prefix actually caches, and Qwen3 stops thinking on request (2026-09-11)
 
 The follow-up #143 needed, found by reading the runner's log after the deploy.

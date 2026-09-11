@@ -131,7 +131,15 @@ fn included(entity: &str, include: &[String]) -> bool {
 /// between a radio reading and the agent's own earlier claim is the difference between
 /// evidence and a memory of having guessed, and a model that cannot see which is which
 /// will treat them alike.
-pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Option<String> {
+/// The facts the block draws on this turn: current beliefs newest first (all of
+/// them — the caller applies `max_facts`), and the recent withdrawals. Shared
+/// with the turn router, which decides privacy from these rather than from the
+/// rendered text. `None` when the block is disabled.
+pub fn context_facts(
+    world: &WorldMemory,
+    cfg: &WorldContextConfig,
+    now_ms: u64,
+) -> Option<(Vec<Fact>, Vec<Fact>)> {
     if !cfg.enabled {
         return None;
     }
@@ -147,8 +155,6 @@ pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Opt
         }
     }
     facts.sort_by(|a, b| b.valid_from.cmp(&a.valid_from).then(b.id.cmp(&a.id)));
-    let total_facts = facts.len();
-    let shown: Vec<&Fact> = facts.iter().take(cfg.max_facts).collect();
 
     // Recent withdrawals — not supersessions. An entity changing value is ordinary and
     // would bury the signal; a belief we stopped holding is the thing worth saying.
@@ -163,6 +169,13 @@ pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Opt
         .into_iter()
         .filter(|f| included(&f.entity, &cfg.include))
         .collect();
+    Some((facts, withdrawn))
+}
+
+pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Option<String> {
+    let (facts, withdrawn) = context_facts(world, cfg, now_ms)?;
+    let total_facts = facts.len();
+    let shown: Vec<&Fact> = facts.iter().take(cfg.max_facts).collect();
     let total_withdrawn = withdrawn.len();
 
     if shown.is_empty() && withdrawn.is_empty() {

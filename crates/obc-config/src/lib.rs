@@ -35,6 +35,9 @@ pub fn inline_secret_providers(config: &Config) -> Vec<String> {
             // looked at again, which is exactly how a key outlives the person who set it.
             walk(fb, format!("{path}.fallbacks[{i}]"), out);
         }
+        if let Some(r) = &p.routing {
+            walk(&r.cloud, format!("{path}.routing.cloud"), out);
+        }
     }
     let mut out = Vec::new();
     walk(&config.provider, "provider".to_string(), &mut out);
@@ -3071,5 +3074,62 @@ command = "x"
     fn a_config_without_the_section_still_loads() {
         let cfg = parse("[agent]\nname = \"x\"\n");
         assert!(cfg.mcp.servers.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod routing_config_tests {
+    use super::*;
+
+    #[test]
+    fn provider_routing_parses_with_defaults_and_rejects_unknown_keys() {
+        let cfg: Config = toml::from_str(
+            r#"
+[provider]
+name = "ollama"
+model = "qwen3-14b-16k"
+[provider.routing]
+daily_budget_usd = 5.0
+[provider.routing.cloud]
+name = "anthropic"
+model = "claude-sonnet-5"
+"#,
+        )
+        .unwrap();
+        let r = *cfg.provider.routing.expect("routing block");
+        assert!(r.enabled && r.console_to_cloud);
+        assert_eq!(r.cloud.model, "claude-sonnet-5");
+        assert_eq!(r.tool_threshold, 8);
+        assert_eq!(r.local_session_prefixes, ["system2", "harness-", "edge-"]);
+        assert_eq!(r.private_sources, ["clawcam"]);
+        assert_eq!(r.daily_budget_usd, 5.0);
+
+        let err = toml::from_str::<Config>(
+            r#"
+[provider.routing]
+consle_to_cloud = false
+[provider.routing.cloud]
+name = "anthropic"
+"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("consle_to_cloud"), "{err}");
+    }
+
+    #[test]
+    fn an_inline_key_on_the_cloud_brain_is_reported() {
+        let cfg: Config = toml::from_str(
+            r#"
+[provider.routing.cloud]
+name = "anthropic"
+api_key = "sk-not-really"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            inline_secret_providers(&cfg),
+            vec!["provider.routing.cloud (anthropic)".to_string()]
+        );
     }
 }
