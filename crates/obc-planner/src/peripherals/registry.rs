@@ -1073,6 +1073,34 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         ecosystem: "T-Deck",
         connectors: &[Connector::Bare],
     },
+    // ── LILYGO T-CameraPlus-S3 ────────────────────────────────────────────────
+    // ESP32-S3 (16 MB flash / 8 MB PSRAM) camera node: OV2640 with an AP1511B
+    // IR-cut switch (OV5640 examples exist too), 1.3" ST7789V 240x240 TFT with
+    // CST816S touch, PDM microphone (MP34DT05-A on V1.2; I2S MSM261S4030H0R on
+    // V1.0-V1.1), MAX98357A speaker amp, microSD on the LCD's SPI bus, SY6970
+    // charger/PMIC, one user button (KEY1, IO17). Two hardware revisions with
+    // different pin maps and microphones: V1.0-V1.1 (2023-10) and V1.2 (2025-04,
+    // "improve WiFi performance, modify the microphone model, modify the pin
+    // number"); the same firmware does not fit both. USB is the ESP32-S3's own
+    // ("Hardware CDC and JTAG" in LILYGO's Arduino settings), hence the shared
+    // Espressif id. Facts from Xinyuan-LilyGO/T-CameraPlus-S3 README and pin
+    // tables, retrieved 2026-09-11; no board of ours has been plugged in yet.
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "lilygo-t-camera-plus-s3",
+        architecture: Some(
+            "ESP32-S3 LX7 dual-core @ 240 MHz, OV2640 camera, 1.3\" ST7789V 240x240 touch TFT, mic + speaker, microSD, 16 MB flash / 8 MB PSRAM (native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "i2c", "spi", "wifi", "ble", "camera_capture", "display", "touch",
+            "microsd", "psram", "battery", "audio_sample", "audio_output",
+        ],
+        vendor: "LILYGO",
+        ecosystem: "T-Camera",
+        connectors: &[Connector::Bare],
+    },
     // ── Hardware-scout 2026-06-29: AI-accelerator boards ──────────────────────
     // Edge-inference nodes (System 1 tier). These run local inference on a
     // dedicated accelerator and expose it as a tool over the spine via EdgeAgent;
