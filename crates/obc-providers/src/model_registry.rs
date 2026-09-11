@@ -225,6 +225,7 @@ mod tests {
             retry: None,
             response_format: None,
             prompt_caching: true,
+            think: None,
         }
     }
 
