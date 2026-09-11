@@ -181,6 +181,9 @@ pub struct Agent {
     /// Parity item 3: a second, cloud brain chosen per turn. `None` means
     /// every turn uses `provider`, as before 2026-09-11.
     routing: Option<Routing>,
+    /// Parity item 4: the agent's two bounded note files, appended to the
+    /// system prompt (so they sit in the cached prefix and change rarely).
+    notes: Option<Arc<obc_memory::notes::Notes>>,
     /// Phase 15/9: token cost tracking — `(tracker, in_price/M, out_price/M)`.
     /// Each run records an estimated `TokenUsage` (chars/4 heuristic, same as
     /// episode metrics) so the gateway can show a live cost summary.
@@ -289,6 +292,7 @@ impl Agent {
             approval: None,
             experience_k: None,
             routing: None,
+            notes: None,
             cost: None,
             rollout: None,
             forge_dir: None,
@@ -374,6 +378,14 @@ impl Agent {
         output_price_per_million: f64,
     ) -> Self {
         self.cost = Some((tracker, input_price_per_million, output_price_per_million));
+        self
+    }
+
+    /// Attach the note files. Their text follows the system prompt in the same
+    /// system message: part of the cached prefix, invalidated only when a note
+    /// changes.
+    pub fn with_notes(mut self, notes: Arc<obc_memory::notes::Notes>) -> Self {
+        self.notes = Some(notes);
         self
     }
 
@@ -1133,9 +1145,13 @@ impl Agent {
         session_id: &str,
         objective: Option<&str>,
     ) -> Result<Vec<ChatMessage>> {
+        let system = match self.notes.as_ref().and_then(|n| n.render()) {
+            Some(notes) => format!("{}\n\n{notes}", self.config.system_prompt.trim_end()),
+            None => self.config.system_prompt.clone(),
+        };
         let mut messages = vec![ChatMessage {
             role: ChatRole::System,
-            content: self.config.system_prompt.clone(),
+            content: system,
         }];
 
         let stored = self
@@ -2349,6 +2365,70 @@ mod routing_agent_tests {
         assert_eq!(
             agent2.route_turn(&session, 0),
             (routing::Route::Local, "daily cloud budget spent")
+        );
+    }
+}
+
+#[cfg(test)]
+mod notes_context_tests {
+    use super::*;
+
+    struct Silent;
+    #[async_trait::async_trait]
+    impl obc_providers::Provider for Silent {
+        fn name(&self) -> &str {
+            "silent"
+        }
+        async fn chat_completion(
+            &self,
+            _m: &[obc_providers::ChatMessage],
+            _t: &[Box<dyn Tool>],
+            c: &obc_providers::ProviderConfig,
+        ) -> Result<obc_providers::ChatCompletion> {
+            Ok(obc_providers::ChatCompletion {
+                message: String::new(),
+                tool_calls: vec![],
+                provider: "silent".into(),
+                model: c.model.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn notes_follow_the_system_prompt_in_the_first_message() {
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
+        let session = memory.create_session("n").unwrap();
+        memory
+            .append_message(&session, ChatRole::User, "hi")
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("obc-agent-notes-{}", uuid::Uuid::new_v4()));
+        let notes = Arc::new(obc_memory::notes::Notes::open(dir).unwrap());
+        let agent = Agent::new(AgentConfig::default(), Arc::new(Silent), memory, vec![])
+            .with_notes(Arc::clone(&notes));
+
+        let ctx = agent.build_context(&session).unwrap();
+        assert_eq!(
+            ctx[0].content,
+            AgentConfig::default().system_prompt,
+            "empty notes add nothing"
+        );
+
+        notes
+            .add(
+                obc_memory::notes::Target::User,
+                "Prefers evidence before conclusions.",
+            )
+            .unwrap();
+        let ctx = agent.build_context(&session).unwrap();
+        assert!(ctx[0]
+            .content
+            .starts_with(AgentConfig::default().system_prompt.trim_end()));
+        assert!(ctx[0]
+            .content
+            .contains("### About the operator\n- Prefers evidence"));
+        assert_eq!(
+            ctx[1].content, "hi",
+            "still one system message before the history"
         );
     }
 }

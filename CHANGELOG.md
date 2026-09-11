@@ -5,7 +5,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## Unreleased — Two brains, chosen per turn (2026-09-11)
+## Unreleased — Notes the agent keeps, and search over everything it said (2026-09-11)
+
+Parity item 4. Two things Hermes-class agents have that OBC lacked: a small
+curated memory the model reads before anything else, and a way to find what
+was said weeks ago without replaying it into the window.
+
+### Added
+
+- **Bounded notes** (`obc_memory::notes`): `MEMORY.md` (working notes,
+  2,200 characters) and `USER.md` (the operator, 1,375 characters) under
+  `<data dir>/notes/`. One line per entry; `add` refuses past the limit and
+  says the numbers, so the agent curates instead of accumulating. Writes are
+  atomic. `Agent::with_notes` appends them to the system prompt — the same
+  message, so they live in the cached prefix and cost a re-evaluation only
+  when a note changes. Wired in `run_start`.
+- **`memory` tool, now real.** It was a process-local `HashMap` whose
+  description promised persistence; every restart forgot everything. It now
+  fronts the note files: `list`, `add`, `replace`, `remove` over targets
+  `memory` / `user`. `RiskClass` is non-reversible (a replayed `add`
+  duplicates), so the self-improvement loop quarantines skills that use it;
+  `[autonomy] always_ask = ["memory"]` makes each write wait for the operator.
+- **Full-text search over `memory.db`**: an external-content FTS5 table
+  `messages_fts` kept in step by triggers (insert, delete, update — cascaded
+  deletes included), built over existing rows the first time an older
+  database is opened. `MemoryStore::search_messages(query, limit)` returns
+  BM25-ranked hits with a snippet and the session title; words are quoted so
+  FTS syntax in a query is inert. Exposed as the `search_sessions` tool and
+  `GET /api/v1/sessions/search?q=…&limit=…` (read-only: API token, no operate
+  token). `MemoryStore::open_at(path)` for callers and tests.
+
+### Fixed
+
+- `PRAGMA foreign_keys=ON` was never set, so `delete_session`'s "messages are
+  deleted via ON DELETE CASCADE" was not true: sessions went, their messages
+  stayed. It is set at open now; the search test asserts the cascade.
+
+ Unreleased — Two brains, chosen per turn (2026-09-11)
 
 Parity item 3. The hybrid posture decided on 2026-09-11 — Claude for the turns
 that deserve it, the local model for everything routine and everything

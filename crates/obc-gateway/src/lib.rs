@@ -261,6 +261,7 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .route("/metrics", get(routes::get_metrics))
         .route("/sessions", get(routes::list_sessions))
         .route("/sessions", post(routes::create_session))
+        .route("/sessions/search", get(routes::search_sessions))
         .route("/sessions/{id}/messages", get(routes::get_messages))
         .route("/sessions/{id}", delete(routes::delete_session))
         .route("/chat", post(routes::chat))
