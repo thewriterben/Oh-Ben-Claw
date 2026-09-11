@@ -5,8 +5,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-<<<<<<< HEAD
-=======
+## Unreleased — Context: a cacheable prefix, compaction, and stubbed tool outputs (2026-09-11)
+
+Parity item 2. On the bench a warm turn spent ~17 s before its first token
+even after streaming landed, and nearly all of it was prompt processing: every
+turn's prompt differed from the last one two messages in, because the
+world-state block — regenerated each turn — sat right after the system prompt.
+Neither Ollama's prompt cache nor Anthropic's prompt caching could reuse
+anything past the prompt.
+
+### Changed
+
+- **Prompt order** (`Agent::build_context_for`): system prompt, history, then
+  the ephemeral blocks (experience for this objective, world state), then the
+  user's latest message. Only the tail changes turn to turn. The world state
+  is still its own system message, not spliced into the prompt.
+- **History is bounded in tokens, not just rows.** `[agent]` gains
+  `context_tokens` (8192), `compaction_threshold` (0.5), `compaction_keep_tail`
+  (8) and `compaction` (true). Past the threshold, `Agent::compact_if_needed`
+  has the model summarise everything but the tail into one persisted
+  `[Conversation summary through #<id>]` system message; `context::assemble_history`
+  then shows the summary first and only the rows after its cursor. Nothing is
+  deleted. A failed summary costs a log line, not the turn.
+- **Older tool outputs are stubbed within a turn** once they are behind the
+  last two (`[Old tool output cleared to save context space]`), keeping the
+  `[Tool result for …]` header so the loop's bookkeeping still reads.
+- **Anthropic `cache_control`** (`ProviderConfig::prompt_caching`, default on):
+  breakpoints on the system prompt, the last tool definition, and the last
+  history message before the ephemeral blocks. Cache hits bill at 10% of
+  input; the tool schemas alone are ~5k tokens per turn.
+
+### Added
+
+- `crates/obc-agent/src/context.rs`: the pure functions behind all of the
+  above, each with tests — assembly with cursors, the compaction range, the
+  summariser input, tool-output stubbing, the ephemeral tail, the token estimate.
+
+---
+
 ## Unreleased — Streaming, end to end (2026-09-11)
 
 The first of the parity items from the 2026-09-11 desktop-agent survey: until
@@ -44,8 +80,22 @@ completed reply. A 19-second local turn looked like a 19-second hang.
 ---
 
 ## Unreleased — Registry: LILYGO T-CameraPlus-S3 (2026-09-11)
->>>>>>> 117522d (Streaming, end to end: providers, agent events, gateway SSE)
 
+### Added
+
+- `lilygo-t-camera-plus-s3` in the board registry: ESP32-S3 (16 MB flash /
+  8 MB PSRAM) camera node with OV2640 + AP1511B IR-cut, 1.3" ST7789V 240×240
+  TFT with CST816S touch, PDM mic (MP34DT05-A on V1.2; I2S MSM261S4030H0R on
+  V1.0–V1.1), MAX98357A speaker amp, microSD, SY6970 charger, one user button.
+  Native-USB Espressif id (0x303a:0x1001, shared). Two hardware revisions with
+  different pin maps, noted in the row's comment; facts from LILYGO's README
+  and pin tables, retrieved 2026-09-11. `registry.json` and
+  `firmware-templates/templates.json` regenerated (one template per flashable
+  board, so the template count moves with it). Motivation: OpenPartsCore
+  ingests `boards/` from this registry and can only carry an envelope for a
+  board that exists here; the envelope from LILYGO's V1.2 STEP follows there.
+
+---
 
 ## Unreleased — An MCP server's stderr reaches our log (2026-09-07)
 

@@ -126,6 +126,7 @@ fn make_agent(provider: Arc<dyn Provider>, tools: Vec<Box<dyn Tool>>) -> (Agent,
         name: "eval-agent".to_string(),
         system_prompt: "You are an eval agent.".to_string(),
         max_tool_iterations: 4,
+        ..AgentConfig::default()
     };
     let memory = Arc::new(MemoryStore::open_in_memory().expect("in-memory store"));
     let session_id = memory.create_session("eval").expect("create session");

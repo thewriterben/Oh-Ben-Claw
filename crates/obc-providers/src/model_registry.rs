@@ -224,6 +224,7 @@ mod tests {
             fallbacks: vec![],
             retry: None,
             response_format: None,
+            prompt_caching: true,
         }
     }
 

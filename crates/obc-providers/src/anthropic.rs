@@ -6,6 +6,14 @@
 //! fragments into one arguments string, and `message_stop` closes the
 //! completion. The fold is a pure function over decoded events
 //! ([`fold_event`]) so the wire format is tested without a network.
+//!
+//! Prompt caching since 2026-09-11 (`ProviderConfig::prompt_caching`): three
+//! `cache_control` breakpoints — the system prompt, the last tool definition,
+//! and the last history message before the agent's ephemeral blocks. The
+//! agent marks that boundary by convention: the first `System`-role message
+//! after the leading one is ephemeral (world state, experience), so the
+//! message before it is the end of the stable prefix. Cache hits bill at 10%
+//! of input; the stable prefix here is ~5k tokens of tool schemas.
 
 use crate::ProviderConfig;
 use crate::{
@@ -43,7 +51,7 @@ impl AnthropicProvider {
     }
 
     /// The request body both paths send; only `stream` differs.
-    fn build_request(
+    pub(crate) fn build_request(
         messages: &[ChatMessage],
         tools: &[Box<dyn Tool>],
         config: &ProviderConfig,
@@ -65,16 +73,44 @@ impl AnthropicProvider {
             (None, messages)
         };
 
+        // The end of the stable prefix: the message before the first ephemeral
+        // (System-role, non-leading) block. `None` when the prompt has no
+        // ephemeral tail, in which case the whole message list is stable and
+        // the rolling breakpoint is the last message.
+        let boundary = conversation
+            .iter()
+            .position(|m| m.role == ChatRole::System)
+            .and_then(|i| i.checked_sub(1));
+        let caching = config.prompt_caching;
+
         let anth_messages: Vec<AnthropicMessage> = conversation
             .iter()
-            .filter(|m| m.role != ChatRole::System)
-            .map(|m| AnthropicMessage {
-                role: match m.role {
-                    ChatRole::User => "user".into(),
-                    ChatRole::Assistant => "assistant".into(),
-                    ChatRole::System => "user".into(),
-                },
-                content: m.content.clone(),
+            .enumerate()
+            .map(|(i, m)| {
+                let role = match m.role {
+                    ChatRole::User => "user",
+                    ChatRole::Assistant => "assistant",
+                    // Ephemeral blocks ride as user content; Anthropic has one
+                    // system slot and it is spent on the stable prompt.
+                    ChatRole::System => "user",
+                };
+                let mark = caching
+                    && match boundary {
+                        Some(b) => i == b,
+                        None => i + 1 == conversation.len(),
+                    };
+                AnthropicMessage {
+                    role: role.into(),
+                    content: if mark {
+                        serde_json::json!([{
+                            "type": "text",
+                            "text": m.content,
+                            "cache_control": {"type": "ephemeral"}
+                        }])
+                    } else {
+                        Value::String(m.content.clone())
+                    },
+                }
             })
             .collect();
 
@@ -106,6 +142,9 @@ impl AnthropicProvider {
         if let Some(sys) = system_prompt {
             body["system"] = Value::String(sys);
         }
+        // Caching breakpoint 1: the system prompt as a block. The JSON-mode
+        // suffixes below append to a string, so they run against the string
+        // form and the block form is produced last.
 
         // Anthropic does not have a native `response_format` field. We emulate
         // JSON mode by appending an instruction to the system prompt and, for
@@ -144,8 +183,29 @@ impl AnthropicProvider {
         }
 
         if let Some(t) = anth_tools {
-            body["tools"] = serde_json::to_value(t)?;
+            let mut tools = serde_json::to_value(t)?;
+            if caching {
+                // Breakpoint 2: the last tool definition, so every schema before
+                // it is in the cached prefix.
+                if let Some(last) = tools.as_array_mut().and_then(|a| a.last_mut()) {
+                    last["cache_control"] = serde_json::json!({"type": "ephemeral"});
+                }
+            }
+            body["tools"] = tools;
             body["tool_choice"] = serde_json::json!({"type": "auto"});
+        }
+        if caching {
+            if let Some(sys) = body
+                .get("system")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+            {
+                body["system"] = serde_json::json!([{
+                    "type": "text",
+                    "text": sys,
+                    "cache_control": {"type": "ephemeral"}
+                }]);
+            }
         }
         Ok((url, body))
     }
@@ -356,7 +416,9 @@ pub fn fold_event(data: &str, fold: &mut StreamFold, sink: DeltaSink<'_>) -> Res
 #[derive(Debug, Serialize)]
 struct AnthropicMessage {
     role: String,
-    content: String,
+    /// A plain string, or an array of content blocks when the message carries
+    /// a `cache_control` breakpoint.
+    content: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -484,6 +546,89 @@ mod tests {
                 StreamDelta::Text(" the clock.".into())
             ]
         );
+    }
+
+    #[test]
+    fn cache_breakpoints_land_on_system_last_tool_and_the_prefix_boundary() {
+        struct Noop;
+        #[async_trait]
+        impl Tool for Noop {
+            fn name(&self) -> &str {
+                "noop"
+            }
+            fn description(&self) -> &str {
+                "does nothing"
+            }
+            fn parameters_schema(&self) -> Value {
+                serde_json::json!({"type":"object","properties":{}})
+            }
+            async fn execute(&self, _args: Value) -> anyhow::Result<obc_tool_api::ToolResult> {
+                Ok(obc_tool_api::ToolResult::ok(""))
+            }
+        }
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(Noop), Box::new(Noop)];
+        let msgs = vec![
+            ChatMessage {
+                role: ChatRole::System,
+                content: "who I am".into(),
+            },
+            ChatMessage {
+                role: ChatRole::User,
+                content: "earlier".into(),
+            },
+            ChatMessage {
+                role: ChatRole::Assistant,
+                content: "reply".into(),
+            },
+            ChatMessage {
+                role: ChatRole::System,
+                content: "## World state".into(),
+            },
+            ChatMessage {
+                role: ChatRole::User,
+                content: "the ask".into(),
+            },
+        ];
+        let cfg = ProviderConfig {
+            name: "anthropic".into(),
+            model: "claude-sonnet-5".into(),
+            ..Default::default()
+        };
+        let (_, body) = AnthropicProvider::build_request(&msgs, &tools, &cfg, false).unwrap();
+
+        assert_eq!(body["system"][0]["text"], "who I am");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert!(body["tools"][0].get("cache_control").is_none());
+        assert_eq!(body["tools"][1]["cache_control"]["type"], "ephemeral");
+        let m = body["messages"].as_array().unwrap();
+        assert_eq!(m.len(), 4);
+        assert_eq!(
+            m[0]["content"], "earlier",
+            "plain string before the boundary"
+        );
+        assert_eq!(
+            m[1]["content"][0]["text"], "reply",
+            "the last stable message is the breakpoint"
+        );
+        assert_eq!(m[1]["content"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(
+            m[2]["role"], "user",
+            "the ephemeral block rides as user content"
+        );
+        assert_eq!(m[2]["content"], "## World state");
+        assert_eq!(m[3]["content"], "the ask");
+
+        let off = ProviderConfig {
+            prompt_caching: false,
+            ..cfg.clone()
+        };
+        let (_, body) = AnthropicProvider::build_request(&msgs, &tools, &off, false).unwrap();
+        assert_eq!(
+            body["system"], "who I am",
+            "a plain string when caching is off"
+        );
+        assert!(body["tools"][1].get("cache_control").is_none());
+        assert_eq!(body["messages"][1]["content"], "reply");
     }
 
     #[test]

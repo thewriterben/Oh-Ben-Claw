@@ -19,6 +19,17 @@
 # this file when you want to pin a choice rather than have one inferred.
 
 [agent]
+# Context management (2026-09-11). The agent assumes the model's window is
+# context_tokens; OBC's Ollama adapter sends no num_ctx, so make this match the
+# Modelfile of the model you run (8192 is Ollama's global default). Past
+# compaction_threshold × context_tokens of history, older messages are folded
+# by the model into one persisted "[Conversation summary through #<id>]"
+# message that leads the context; the last compaction_keep_tail messages are
+# never folded. Nothing is deleted from memory.db.
+# context_tokens = 8192
+# compaction_threshold = 0.5
+# compaction_keep_tail = 8
+# compaction = true
 name = "obc"
 
 # The one string that says what this agent is for. With no purpose here, the
