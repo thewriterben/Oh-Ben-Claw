@@ -17,6 +17,7 @@
 //! mcp-conformance-server hostile     # answers nothing; both lifecycles fail
 //! mcp-conformance-server chatty      # stateless, but prints prose to stdout before every reply
 //! mcp-conformance-server loud        # stateless, but writes >64 KiB to stderr before every reply
+//! mcp-conformance-server mortal      # stateless, but exits after answering its first tools/call
 //! ```
 //!
 //! `chatty` reproduces what OpenDesignCore's server did on 2026-09-06: its
@@ -31,6 +32,11 @@
 //! on `write(2)` unless someone drains the pipe, and then every reply after
 //! that is a hang. This role logs a full buffer's worth before each frame so
 //! the test fails if the drain ever goes missing.
+//!
+//! `mortal` reproduces 2026-09-11: OpenDesignCore's server was killed under a
+//! live agent and every later `odc_*` call failed with "The pipe is being
+//! closed" until the agent restarted. It answers one `tools/call` correctly,
+//! flushes, and exits, so the client's next call finds a dead server.
 //!
 //! JSON-RPC over stdio, one message per line, synchronous. Errors use -32601
 //! (method not found) and -32600 (invalid request), which is what a real server
@@ -48,6 +54,7 @@ enum Role {
     Hostile,
     Chatty,
     Loud,
+    Mortal,
 }
 
 fn main() {
@@ -58,9 +65,10 @@ fn main() {
         Some("hostile") => Role::Hostile,
         Some("chatty") => Role::Chatty,
         Some("loud") => Role::Loud,
+        Some("mortal") => Role::Mortal,
         other => {
             eprintln!(
-                "unknown role {other:?}; expected legacy|stateless|quiet-2026|hostile|chatty|loud"
+                "unknown role {other:?}; expected legacy|stateless|quiet-2026|hostile|chatty|loud|mortal"
             );
             std::process::exit(2);
         }
@@ -127,10 +135,11 @@ fn main() {
             (Role::Legacy, "tools/call") => ok(&id, call_result("legacy")),
 
             // ── The stateless server ─────────────────────────────────────────
-            (Role::Stateless | Role::Quiet2026 | Role::Chatty | Role::Loud, "initialize") => {
-                err(&id, -32601, "initialize was removed in 2026-07-28")
-            }
-            (Role::Stateless | Role::Chatty | Role::Loud, "server/discover") => ok(
+            (
+                Role::Stateless | Role::Quiet2026 | Role::Chatty | Role::Loud | Role::Mortal,
+                "initialize",
+            ) => err(&id, -32601, "initialize was removed in 2026-07-28"),
+            (Role::Stateless | Role::Chatty | Role::Loud | Role::Mortal, "server/discover") => ok(
                 &id,
                 json!({"serverInfo": {"name": "stateless-only", "version": "2.0.0"}}),
             ),
@@ -142,7 +151,10 @@ fn main() {
             (Role::Quiet2026, "server/discover") => {
                 err(&id, -32601, "server/discover: not implemented")
             }
-            (Role::Stateless | Role::Quiet2026 | Role::Chatty | Role::Loud, "tools/list") => {
+            (
+                Role::Stateless | Role::Quiet2026 | Role::Chatty | Role::Loud | Role::Mortal,
+                "tools/list",
+            ) => {
                 // A 2026 client must send clientInfo in `_meta` on every request.
                 // Refusing when it is absent turns "did the client really switch
                 // lifecycles" into something the test can observe.
@@ -152,9 +164,10 @@ fn main() {
                     ok(&id, json!({"tools": tools(), "ttlMs": 60000}))
                 }
             }
-            (Role::Stateless | Role::Quiet2026 | Role::Chatty | Role::Loud, "tools/call") => {
-                ok(&id, call_result("stateless"))
-            }
+            (
+                Role::Stateless | Role::Quiet2026 | Role::Chatty | Role::Loud | Role::Mortal,
+                "tools/call",
+            ) => ok(&id, call_result("stateless")),
 
             // ── The server that answers nothing ──────────────────────────────
             (Role::Hostile, _) => err(&id, -32601, "no"),
@@ -191,6 +204,12 @@ fn main() {
         line.push('\n');
         if out.write_all(line.as_bytes()).is_err() || out.flush().is_err() {
             break;
+        }
+        if role == Role::Mortal && method == "tools/call" {
+            // The reply is on the wire; now die, as a crashed server would
+            // after doing its work. exit(0) so the test is about the
+            // client's reaction to absence, not to a non-zero status.
+            std::process::exit(0);
         }
     }
 }
