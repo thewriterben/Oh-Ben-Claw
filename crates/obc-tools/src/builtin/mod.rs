@@ -22,6 +22,7 @@ pub mod movement;
 pub mod navigation;
 pub mod ota;
 pub mod power;
+pub mod search;
 pub mod sensing;
 pub mod shell;
 pub mod site_anchor;

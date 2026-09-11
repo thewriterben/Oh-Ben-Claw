@@ -479,6 +479,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     all_tools.push(Box::new(
         oh_ben_claw::skill_forge::SkillForgeTool::default_dir(),
     ));
+    // Parity item 4: full-text search over every past conversation.
+    all_tools.push(Box::new(
+        oh_ben_claw::tools::builtin::search::SearchSessionsTool::new(Arc::clone(&memory)),
+    ));
     let mut node_count = 0usize;
 
     // Build the security context before anything that needs to enforce with it.
@@ -2738,6 +2742,15 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             config.cost.input_price_per_million,
             config.cost.output_price_per_million,
         );
+    }
+    // Parity item 4: the agent's two bounded note files join the system prompt.
+    match oh_ben_claw::memory::notes::Notes::open(oh_ben_claw::memory::notes::Notes::default_dir())
+    {
+        Ok(notes) => {
+            info!(dir = %notes.dir().display(), "Notes (MEMORY.md, USER.md) join the system prompt");
+            agent = agent.with_notes(Arc::new(notes));
+        }
+        Err(e) => tracing::warn!(error = %e, "notes directory unavailable; the model has no notes"),
     }
     // Parity item 3: a second, cloud brain chosen per turn (`[provider.routing]`).
     if let Some(routing) = &config.provider.routing {

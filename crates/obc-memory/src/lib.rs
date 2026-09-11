@@ -22,6 +22,7 @@ pub mod expiry;
 pub mod heartbeat;
 pub mod journal;
 pub mod liveness;
+pub mod notes;
 pub mod trajectory;
 pub mod vector;
 pub mod world;
@@ -109,18 +110,35 @@ pub struct Session {
 /// The memory store — a SQLite-backed conversation history.
 pub struct MemoryStore {
     conn: Mutex<Connection>,
+    /// `messages_fts` exists (FTS5 compiled in). Without it `search_messages`
+    /// returns nothing and says so once at open.
+    fts: bool,
+}
+
+/// One `search_messages` hit.
+#[derive(Debug, Clone)]
+pub struct SearchHit {
+    pub message: StoredMessage,
+    pub session_title: String,
+    /// The matching passage with the matched words in `[…]`.
+    pub snippet: String,
 }
 
 impl MemoryStore {
     /// Open (or create) the memory store at the default location.
     pub fn open() -> Result<Self> {
-        let path = Self::default_db_path()?;
+        Self::open_at(&Self::default_db_path()?)
+    }
+
+    /// Open (or create) the memory store at `path`.
+    pub fn open_at(path: &std::path::Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(&path)?;
-        let store = Self {
+        let conn = Connection::open(path)?;
+        let mut store = Self {
             conn: Mutex::new(conn),
+            fts: false,
         };
         store.migrate()?;
         tracing::info!("Memory store opened at {:?}", path);
@@ -130,8 +148,9 @@ impl MemoryStore {
     /// Open an in-memory store (for testing).
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        let store = Self {
+        let mut store = Self {
             conn: Mutex::new(conn),
+            fts: false,
         };
         store.migrate()?;
         Ok(store)
@@ -143,12 +162,13 @@ impl MemoryStore {
     }
 
     /// Run database migrations to create the schema.
-    fn migrate(&self) -> Result<()> {
+    fn migrate(&mut self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(
             "
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
+            PRAGMA foreign_keys=ON;
 
             CREATE TABLE IF NOT EXISTS sessions (
                 id         TEXT PRIMARY KEY,
@@ -169,7 +189,101 @@ impl MemoryStore {
                 ON messages (session_id, id);
             ",
         )?;
+
+        // Full-text search over messages (2026-09-11): an external-content
+        // FTS5 table indexed by `messages.id`, kept in step by triggers so
+        // every writer — including a cascaded delete — is covered. Created
+        // for the first time on an existing database, it is rebuilt from the
+        // rows already there.
+        let fresh = !conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'")?
+            .exists([])?;
+        let fts = conn
+            .execute_batch(
+                "
+                CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
+                    USING fts5(content, content='messages', content_rowid='id');
+                CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+                    INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+                END;
+                CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, content)
+                        VALUES ('delete', old.id, old.content);
+                END;
+                CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE OF content ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, content)
+                        VALUES ('delete', old.id, old.content);
+                    INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+                END;
+                ",
+            )
+            .is_ok();
+        if fts && fresh {
+            conn.execute(
+                "INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')",
+                [],
+            )?;
+            let n: i64 = conn.query_row("SELECT count(*) FROM messages", [], |r| r.get(0))?;
+            if n > 0 {
+                tracing::info!(messages = n, "search index built over existing messages");
+            }
+        }
+        if !fts {
+            tracing::warn!("SQLite FTS5 unavailable — search_sessions will find nothing");
+        }
+        drop(conn);
+        self.fts = fts;
         Ok(())
+    }
+
+    /// Full-text search across every session: any of the query's words,
+    /// ranked by BM25, `limit` hits at most. FTS5 syntax in the query cannot
+    /// break it — each word is quoted — and an empty query finds nothing.
+    pub fn search_messages(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
+        if !self.fts {
+            return Ok(Vec::new());
+        }
+        let words: Vec<String> = {
+            let mut seen = std::collections::HashSet::new();
+            query
+                .split(|c: char| !c.is_alphanumeric())
+                .map(|w| w.to_lowercase())
+                .filter(|w| w.chars().count() >= 2 && seen.insert(w.clone()))
+                .map(|w| format!("\"{w}\""))
+                .collect()
+        };
+        if words.is_empty() {
+            return Ok(Vec::new());
+        }
+        let match_expr = words.join(" OR ");
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT m.id, m.session_id, m.role, m.content, m.created_at, s.title,
+                    snippet(messages_fts, 0, '[', ']', '…', 14)
+             FROM messages_fts
+             JOIN messages m ON m.id = messages_fts.rowid
+             JOIN sessions s ON s.id = m.session_id
+             WHERE messages_fts MATCH ?1
+             ORDER BY bm25(messages_fts)
+             LIMIT ?2",
+        )?;
+        let hits = stmt
+            .query_map(params![match_expr, limit.max(1) as i64], |row| {
+                Ok(SearchHit {
+                    message: StoredMessage {
+                        id: row.get(0)?,
+                        session_id: row.get(1)?,
+                        role: row.get(2)?,
+                        content: row.get(3)?,
+                        created_at: parse_sqlite_datetime(&row.get::<_, String>(4)?)
+                            .unwrap_or_else(Utc::now),
+                    },
+                    session_title: row.get(5)?,
+                    snippet: row.get(6)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(hits)
     }
 
     // ── Session Management ────────────────────────────────────────────────────
@@ -534,5 +648,84 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].content, "m3");
         assert_eq!(rows[1].content, "m4");
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    #[test]
+    fn search_ranks_across_sessions_and_follows_deletes() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        let a = store.create_session("bench day").unwrap();
+        let b = store.create_session("mesh").unwrap();
+        store
+            .append_message(
+                &a,
+                ChatRole::User,
+                "set the printer nozzle to 203C for PETG",
+            )
+            .unwrap();
+        store
+            .append_message(
+                &a,
+                ChatRole::Assistant,
+                "Nozzle set; the nozzle heater reports 203C.",
+            )
+            .unwrap();
+        store
+            .append_message(&b, ChatRole::User, "the LoRa gateway lives on COM3")
+            .unwrap();
+
+        let hits = store.search_messages("nozzle", 10).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|h| h.session_title == "bench day"));
+        assert!(hits[0].snippet.contains("[nozzle]"), "{}", hits[0].snippet);
+
+        // Any word matches; FTS operators and quotes in the query are inert.
+        assert_eq!(
+            store.search_messages("COM3 OR nozzle", 10).unwrap().len(),
+            3
+        );
+        assert_eq!(
+            store
+                .search_messages("\"unterminated AND (", 10)
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(store.search_messages("   ", 10).unwrap().len(), 0);
+        assert_eq!(store.search_messages("nozzle", 1).unwrap().len(), 1);
+
+        // Deleting the session removes its rows and its index entries.
+        assert!(store.delete_session(&a).unwrap());
+        assert_eq!(store.message_count(&a).unwrap(), 0, "cascade is on");
+        assert!(store.search_messages("nozzle", 10).unwrap().is_empty());
+        assert_eq!(store.search_messages("COM3", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_existing_database_gets_its_index_built_on_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("memory.db");
+        {
+            let store = MemoryStore::open_at(&path).unwrap();
+            let s = store.create_session("old").unwrap();
+            store
+                .append_message(&s, ChatRole::User, "remember the spectrometer calibration")
+                .unwrap();
+            // Simulate a database from before the index existed.
+            let conn = store.conn.lock().unwrap();
+            conn.execute_batch(
+                "DROP TRIGGER messages_fts_ai; DROP TRIGGER messages_fts_ad;
+                 DROP TRIGGER messages_fts_au; DROP TABLE messages_fts;",
+            )
+            .unwrap();
+        }
+        let store = MemoryStore::open_at(&path).unwrap();
+        let hits = store.search_messages("spectrometer", 5).unwrap();
+        assert_eq!(hits.len(), 1, "rebuilt from existing rows");
+        assert_eq!(hits[0].session_title, "old");
     }
 }

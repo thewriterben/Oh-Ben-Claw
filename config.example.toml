@@ -133,6 +133,16 @@ initial_backoff_ms = 500
 # name = "anthropic"
 # model = "claude-sonnet-5"
 
+# ── Autonomy ─────────────────────────────────────────────────────────────────
+# Which tool calls wait for the operator. Level "full" (default) runs every
+# tool the risk gate allows; "supervised"/"manual" ask. `always_ask` names
+# tools that ask regardless. The `memory` tool writes the agent's two note
+# files (MEMORY.md, USER.md under <data dir>/notes/) that open every prompt;
+# list it here if you want to see each note before it lands.
+# [autonomy]
+# level = "full"
+# always_ask = ["memory"]
+
 # ── Perception ───────────────────────────────────────────────────────────────
 [perception]
 # The temporal world model: bitemporal facts with provenance, a support graph,

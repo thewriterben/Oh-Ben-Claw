@@ -82,7 +82,6 @@ pub fn default_tools_with_reach(
         Box::new(ShellTool::new()),
         Box::new(FileTool::new()),
         Box::new(http_tool),
-        Box::new(MemoryTool::new()),
         Box::new(AudioTranscribeTool::default()),
         Box::new(TextToSpeechTool::default()),
         Box::new(OtaUpdateTool),
@@ -91,6 +90,15 @@ pub fn default_tools_with_reach(
         Box::new(builtin::aerial::AerialStatusTool::new()),
         Box::new(builtin::gnss::GnssFixTool::new()),
     ];
+
+    // The agent's two note files (parity item 4). Only missing when the data
+    // directory cannot be created, which nothing else here would survive either.
+    match MemoryTool::in_default_dir() {
+        Ok(t) => tools.push(Box::new(t)),
+        Err(e) => {
+            tracing::warn!(error = %e, "memory tool unavailable: notes directory could not be created")
+        }
+    }
 
     // Vision tool requires an API key; only add if one is available
     if !api_key.is_empty() {

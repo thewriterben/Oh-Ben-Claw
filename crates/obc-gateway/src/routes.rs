@@ -3,7 +3,7 @@
 
 use super::{GatewayEvent, GatewayState};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -139,6 +139,58 @@ pub async fn list_sessions(State(state): State<Arc<GatewayState>>) -> impl IntoR
         "sessions": sessions,
         "count": sessions.len()
     }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchParams {
+    pub q: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// `GET /api/v1/sessions/search?q=…&limit=…` — full-text search over every
+/// session's messages (parity item 4). Read-only, so the operate token is not
+/// required; the API token is, like every other route here.
+pub async fn search_sessions(
+    State(state): State<Arc<GatewayState>>,
+    Query(params): Query<SearchParams>,
+) -> impl IntoResponse {
+    let Some(mem) = &state.memory else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "Memory store not available"})),
+        );
+    };
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
+    match mem.search_messages(&params.q, limit) {
+        Ok(hits) => {
+            let hits: Vec<Value> = hits
+                .into_iter()
+                .map(|h| {
+                    json!({
+                        "id": h.message.id,
+                        "session_id": h.message.session_id,
+                        "session_title": h.session_title,
+                        "role": h.message.role,
+                        "created_at": h.message.created_at.to_rfc3339(),
+                        "snippet": h.snippet,
+                        "content": h.message.content,
+                    })
+                })
+                .collect();
+            (
+                StatusCode::OK,
+                Json(json!({"query": params.q, "hits": hits, "count": hits.len()})),
+            )
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "session search failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        }
+    }
 }
 
 /// `POST /api/v1/sessions` — Create a new session.
