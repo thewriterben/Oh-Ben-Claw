@@ -5,6 +5,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+<<<<<<< HEAD
+=======
+## Unreleased — Streaming, end to end (2026-09-11)
+
+The first of the parity items from the 2026-09-11 desktop-agent survey: until
+today no provider streamed, the gateway's `/chat` returned when generation
+finished, and the GUI's `assistant-token` events were a word-splitter over the
+completed reply. A 19-second local turn looked like a 19-second hang.
+
+### Added
+
+- `Provider::chat_completion_streaming(messages, tools, config, sink)` on the
+  provider trait, returning the same complete `ChatCompletion` as
+  `chat_completion` so the agent loop's tool handling is unchanged. The
+  default does not stream (one delta, then done); **Ollama** (NDJSON) and
+  **Anthropic** (SSE, including fragmented `tool_use` input) override it.
+  `StreamDelta::Restart` tells a client to discard partial text when
+  `RetryProvider` or `FailoverProvider` start the request over after a stream
+  failed part-way. Folds are pure functions with wire-format tests.
+- `AgentEvent::Token { session_id, iteration, delta, reset }`, emitted from
+  inside `Agent::process` for every delta. The event bus now belongs to the
+  `Agent` (`subscribe()` / `event_sender()`); `AgentHandle` shares it and adds
+  only the turn boundaries.
+- `POST /api/v1/chat/stream`: the same request as `/chat`, answered as
+  `text/event-stream` with this session's `thinking`, `token`, `tool_call`,
+  `tool_result` and finally `response` or `error`. `GET /events` carries
+  `token` events too.
+
+### Changed
+
+- `Thinking`, `ToolCall` and `ToolResult` are emitted **live** from the loop.
+  Until now `AgentHandle` reconstructed `ToolCall`/`ToolResult` after the turn
+  from the response record, so the SSE stream showed every tool call only once
+  the whole turn was over. It also emitted `Thinking` once, for iteration 0;
+  now every iteration says so.
+
+---
+
+## Unreleased — Registry: LILYGO T-CameraPlus-S3 (2026-09-11)
+>>>>>>> 117522d (Streaming, end to end: providers, agent events, gateway SSE)
 
 
 ## Unreleased — An MCP server's stderr reaches our log (2026-09-07)

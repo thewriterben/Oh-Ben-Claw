@@ -35,6 +35,7 @@ description = "Open Body Control's model providers: Anthropic, OpenAI, OpenRoute
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
+futures-util = { version = "0.3", default-features = false }
 obc-memory = { path = "../obc-memory" }
 obc-safety = { path = "../obc-safety" }
 obc-tool-api = { path = "../obc-tool-api" }

@@ -72,6 +72,7 @@ fn event_stream(
                     GatewayEvent::Message { .. } => "message",
                     GatewayEvent::Started { .. } => "started",
                     GatewayEvent::Thinking { .. } => "thinking",
+                    GatewayEvent::Token { .. } => "token",
                     GatewayEvent::ToolCall { .. } => "tool_call",
                     GatewayEvent::ToolResult { .. } => "tool_result",
                     GatewayEvent::NodeConnected { .. } => "node_connected",

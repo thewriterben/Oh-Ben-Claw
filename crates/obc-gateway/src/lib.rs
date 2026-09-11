@@ -64,6 +64,15 @@ pub enum GatewayEvent {
     },
     /// The agent is thinking (waiting for LLM).
     Thinking { session_id: String, iteration: u32 },
+    /// A piece of assistant text as the model produced it (see
+    /// `AgentEvent::Token`); `reset` asks the client to discard this
+    /// iteration's text so far.
+    Token {
+        session_id: String,
+        iteration: u32,
+        delta: String,
+        reset: bool,
+    },
     /// A tool call was dispatched.
     ToolCall {
         session_id: String,
@@ -255,6 +264,7 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .route("/sessions/{id}/messages", get(routes::get_messages))
         .route("/sessions/{id}", delete(routes::delete_session))
         .route("/chat", post(routes::chat))
+        .route("/chat/stream", post(routes::chat_stream))
         .route("/tools", get(routes::list_tools))
         .route("/tools/{name}", post(routes::execute_tool))
         .route("/skills", get(routes::list_skills))

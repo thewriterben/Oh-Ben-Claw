@@ -93,6 +93,47 @@ impl Provider for FailoverProvider {
 
         Err(last_err)
     }
+
+    async fn chat_completion_streaming(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[Box<dyn Tool>],
+        _config: &ProviderConfig,
+        sink: crate::DeltaSink<'_>,
+    ) -> Result<ChatCompletion> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mut last_err: anyhow::Error = anyhow::anyhow!("No providers configured");
+        // If a provider streamed part of an answer and then failed, the next
+        // one must start the operator's view over, not append to it.
+        let emitted = AtomicBool::new(false);
+
+        for (provider, cfg) in &self.providers {
+            if emitted.swap(false, Ordering::SeqCst) {
+                sink(crate::StreamDelta::Restart);
+            }
+            let tracking = |d: crate::StreamDelta| {
+                emitted.store(true, Ordering::SeqCst);
+                sink(d)
+            };
+            match provider
+                .chat_completion_streaming(messages, tools, cfg, &tracking)
+                .await
+            {
+                Ok(completion) => return Ok(completion),
+                Err(e) => {
+                    tracing::warn!(
+                        provider = provider.name(),
+                        model = cfg.model,
+                        error = %e,
+                        "Provider failed mid-stream — trying next fallback"
+                    );
+                    last_err = e;
+                }
+            }
+        }
+
+        Err(last_err)
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

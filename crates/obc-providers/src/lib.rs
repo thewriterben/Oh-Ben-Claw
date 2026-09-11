@@ -77,6 +77,23 @@ pub struct ChatCompletion {
     pub model: String,
 }
 
+/// A piece of a streamed completion, handed to a [`DeltaSink`] as it arrives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamDelta {
+    /// More assistant text. Concatenating every `Text` in order reproduces
+    /// the final [`ChatCompletion::message`].
+    Text(String),
+    /// Discard everything received so far for this completion: a wrapper
+    /// (retry, failover) is starting the request over after a partial stream
+    /// failed. A client that has already rendered text clears it.
+    Restart,
+}
+
+/// Where streamed deltas go. A plain `&dyn Fn` rather than a channel or a
+/// trait object with state, so a caller can capture whatever it likes
+/// (an event bus, a `String`, a test's `Vec`) and nothing here has to know.
+pub type DeltaSink<'a> = &'a (dyn Fn(StreamDelta) + Send + Sync);
+
 /// A provider that can generate chat completions.
 #[async_trait]
 pub trait Provider: Send + Sync {
@@ -90,6 +107,31 @@ pub trait Provider: Send + Sync {
         tools: &[Box<dyn Tool>],
         config: &ProviderConfig,
     ) -> Result<ChatCompletion>;
+
+    /// Generate a chat completion, delivering text to `sink` as it is produced.
+    ///
+    /// The returned [`ChatCompletion`] is complete and identical in shape to
+    /// what [`Provider::chat_completion`] returns, so the agent loop's tool
+    /// handling does not change; only the operator sees words earlier.
+    ///
+    /// The default does not stream: it runs `chat_completion` and hands the
+    /// whole message to the sink once. Every provider therefore "streams" in
+    /// the sense the agent needs (one delta, then done), and only the ones
+    /// that override this — Ollama and Anthropic since 2026-09-11 — stream in
+    /// the sense the operator wants.
+    async fn chat_completion_streaming(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[Box<dyn Tool>],
+        config: &ProviderConfig,
+        sink: DeltaSink<'_>,
+    ) -> Result<ChatCompletion> {
+        let completion = self.chat_completion(messages, tools, config).await?;
+        if !completion.message.is_empty() {
+            sink(StreamDelta::Text(completion.message.clone()));
+        }
+        Ok(completion)
+    }
 }
 
 // ── Provider Factory ─────────────────────────────────────────────────────────
@@ -339,5 +381,49 @@ impl Default for ProviderConfig {
             retry: None,
             response_format: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod streaming_default_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct OneShot;
+
+    #[async_trait]
+    impl Provider for OneShot {
+        fn name(&self) -> &str {
+            "oneshot"
+        }
+        async fn chat_completion(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: &[Box<dyn Tool>],
+            config: &ProviderConfig,
+        ) -> Result<ChatCompletion> {
+            Ok(ChatCompletion {
+                message: "whole answer".into(),
+                tool_calls: vec![],
+                provider: "oneshot".into(),
+                model: config.model.clone(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_provider_that_does_not_stream_still_delivers_one_delta() {
+        let seen = Mutex::new(Vec::new());
+        let sink = |d: StreamDelta| seen.lock().unwrap().push(d);
+        let cfg = ProviderConfig::default();
+        let c = OneShot
+            .chat_completion_streaming(&[], &[], &cfg, &sink)
+            .await
+            .unwrap();
+        assert_eq!(c.message, "whole answer");
+        assert_eq!(
+            seen.into_inner().unwrap(),
+            vec![StreamDelta::Text("whole answer".into())]
+        );
     }
 }

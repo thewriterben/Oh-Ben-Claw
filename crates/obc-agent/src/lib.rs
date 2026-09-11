@@ -88,8 +88,10 @@ mod skill_replay;
 // lines sitting in the source tree.
 //
 // `docs/architecture/ARCHITECTURE.md` ticked "Streaming tool calls" as shipped
-// until 2026-08-21. No provider streams; `Provider::chat_completion` is the
-// only path a turn takes.
+// until 2026-08-21. No provider streamed until 2026-09-11; since then the loop
+// calls `Provider::chat_completion_streaming` and broadcasts each text delta
+// as `AgentEvent::Token`, with `Thinking`, `ToolCall` and `ToolResult` emitted
+// from inside the loop as they happen rather than reconstructed afterwards.
 pub mod system2;
 pub mod world_context;
 pub use edge::{EdgeAgent, EdgeAgentBuilder};
@@ -124,7 +126,14 @@ pub const MAX_HISTORY_MESSAGES: usize = 50;
 // ── Agent ─────────────────────────────────────────────────────────────────────
 
 /// The core Oh-Ben-Claw agent.
+/// Capacity of the agent event broadcast channel. A slow subscriber lags
+/// (and is told so) rather than stalling the loop.
+pub const EVENT_CHANNEL_CAPACITY: usize = 512;
+
 pub struct Agent {
+    /// Live events from inside `process()`: tokens as they stream, tool calls
+    /// as they dispatch. `AgentHandle` and the gateway subscribe here.
+    events: tokio::sync::broadcast::Sender<AgentEvent>,
     config: AgentConfig,
     provider: Arc<dyn Provider>,
     memory: Arc<MemoryStore>,
@@ -199,7 +208,9 @@ impl Agent {
         memory: Arc<MemoryStore>,
         tools: Vec<Box<dyn Tool>>,
     ) -> Self {
+        let (events, _) = tokio::sync::broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Self {
+            events,
             config,
             provider,
             memory,
@@ -425,6 +436,22 @@ impl Agent {
         (added, removed, shadowed)
     }
 
+    /// Subscribe to live events (`Token`, `Thinking`, `ToolCall`, `ToolResult`).
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<AgentEvent> {
+        self.events.subscribe()
+    }
+
+    /// The sender behind [`Agent::subscribe`], for a handle that wants to emit
+    /// `Started` / `Response` / `Error` on the same bus.
+    pub fn event_sender(&self) -> tokio::sync::broadcast::Sender<AgentEvent> {
+        self.events.clone()
+    }
+
+    fn emit(&self, event: AgentEvent) {
+        // No subscribers is the normal state for a CLI-only agent; not an error.
+        let _ = self.events.send(event);
+    }
+
     /// Process a user message and return the assistant's final response.
     ///
     /// This method:
@@ -498,9 +525,25 @@ impl Agent {
                 "Agent loop iteration"
             );
 
+            self.emit(AgentEvent::Thinking {
+                session_id: session_id.to_string(),
+                iteration: iteration as u32,
+            });
+            let sink = |delta: obc_providers::StreamDelta| {
+                let (delta, reset) = match delta {
+                    obc_providers::StreamDelta::Text(t) => (t, false),
+                    obc_providers::StreamDelta::Restart => (String::new(), true),
+                };
+                self.emit(AgentEvent::Token {
+                    session_id: session_id.to_string(),
+                    iteration: iteration as u32,
+                    delta,
+                    reset,
+                });
+            };
             let completion = self
                 .provider
-                .chat_completion(&messages, &tool_list, provider_config)
+                .chat_completion_streaming(&messages, &tool_list, provider_config, &sink)
                 .await?;
 
             if completion.tool_calls.is_empty() {
@@ -531,6 +574,12 @@ impl Agent {
                     span
                 });
 
+                self.emit(AgentEvent::ToolCall {
+                    session_id: session_id.to_string(),
+                    call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    args: serde_json::from_str(&call.args).unwrap_or(serde_json::Value::Null),
+                });
                 let t0 = std::time::Instant::now();
                 let result = self
                     .execute_tool(&call.name, &call.args, taint_pool.as_ref())
@@ -572,6 +621,14 @@ impl Agent {
                     Err(e) => format!("Tool execution failed: {}", e),
                 };
 
+                self.emit(AgentEvent::ToolResult {
+                    session_id: session_id.to_string(),
+                    call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    success: matches!(&result, Ok(r) if r.success),
+                    output: result_str.clone(),
+                    duration_ms,
+                });
                 tool_calls_made.push(ToolCallRecord {
                     name: call.name.clone(),
                     args: call.args.clone(),
@@ -618,9 +675,21 @@ impl Agent {
                     content: "Please provide your final response based on the tool results above."
                         .to_string(),
                 });
+                let sink = |delta: obc_providers::StreamDelta| {
+                    let (delta, reset) = match delta {
+                        obc_providers::StreamDelta::Text(t) => (t, false),
+                        obc_providers::StreamDelta::Restart => (String::new(), true),
+                    };
+                    self.emit(AgentEvent::Token {
+                        session_id: session_id.to_string(),
+                        iteration: max_iterations as u32,
+                        delta,
+                        reset,
+                    });
+                };
                 let final_completion = self
                     .provider
-                    .chat_completion(&messages, &[], provider_config)
+                    .chat_completion_streaming(&messages, &[], provider_config, &sink)
                     .await?;
                 final_response = final_completion.message;
             }
@@ -1517,5 +1586,81 @@ impl Default for EdgeConfig {
             max_tool_iterations: default_edge_max_tool_iterations(),
             p2p_enabled: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod streaming_events_tests {
+    use super::*;
+
+    /// Streams two deltas and finishes with no tool calls.
+    struct TwoDeltas;
+
+    #[async_trait::async_trait]
+    impl obc_providers::Provider for TwoDeltas {
+        fn name(&self) -> &str {
+            "two"
+        }
+        async fn chat_completion(
+            &self,
+            _m: &[obc_providers::ChatMessage],
+            _t: &[Box<dyn Tool>],
+            c: &obc_providers::ProviderConfig,
+        ) -> Result<obc_providers::ChatCompletion> {
+            Ok(obc_providers::ChatCompletion {
+                message: "hello world".into(),
+                tool_calls: vec![],
+                provider: "two".into(),
+                model: c.model.clone(),
+            })
+        }
+        async fn chat_completion_streaming(
+            &self,
+            _m: &[obc_providers::ChatMessage],
+            _t: &[Box<dyn Tool>],
+            c: &obc_providers::ProviderConfig,
+            sink: obc_providers::DeltaSink<'_>,
+        ) -> Result<obc_providers::ChatCompletion> {
+            sink(obc_providers::StreamDelta::Text("hello ".into()));
+            sink(obc_providers::StreamDelta::Text("world".into()));
+            Ok(obc_providers::ChatCompletion {
+                message: "hello world".into(),
+                tool_calls: vec![],
+                provider: "two".into(),
+                model: c.model.clone(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_turn_broadcasts_thinking_then_each_token_as_it_arrives() {
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
+        let session = memory.create_session("stream").unwrap();
+        let agent = Agent::new(AgentConfig::default(), Arc::new(TwoDeltas), memory, vec![]);
+        let mut rx = agent.subscribe();
+        let cfg = obc_providers::ProviderConfig::default();
+        let response = agent.process(&session, "hi", &cfg).await.unwrap();
+        assert_eq!(response.message, "hello world");
+
+        let mut kinds = Vec::new();
+        let mut text = String::new();
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                AgentEvent::Thinking { iteration, .. } => {
+                    kinds.push(format!("thinking{iteration}"))
+                }
+                AgentEvent::Token { delta, reset, .. } => {
+                    assert!(!reset);
+                    text.push_str(&delta);
+                    kinds.push("token".into());
+                }
+                other => kinds.push(format!("{other:?}")),
+            }
+        }
+        assert_eq!(kinds, vec!["thinking0", "token", "token"]);
+        assert_eq!(
+            text, "hello world",
+            "the deltas concatenate to the final message"
+        );
     }
 }

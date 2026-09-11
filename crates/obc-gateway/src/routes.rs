@@ -257,6 +257,130 @@ pub struct ChatResponse {
     pub agent_available: bool,
 }
 
+/// `POST /api/v1/chat/stream` — Send a message and receive the turn as SSE.
+///
+/// Same request body as `/chat`. The response is `text/event-stream` carrying
+/// this session's events in order: `thinking`, `token` (one per delta;
+/// `reset: true` means discard the iteration's text so far), `tool_call`,
+/// `tool_result`, and finally exactly one of `response` (with the full
+/// message and `tool_calls_made`) or `error`. Other sessions' events are
+/// filtered out; the global `/events` stream still carries everything.
+pub async fn chat_stream(
+    State(state): State<Arc<GatewayState>>,
+    Json(req): Json<ChatRequest>,
+) -> axum::response::Response {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use tokio_stream::wrappers::ReceiverStream;
+
+    let session_id = req
+        .session_id
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let Some(handle) = &state.agent else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "Agent not available. Start the agent with `oh-ben-claw start --gateway`.",
+                "session_id": session_id
+            })),
+        )
+            .into_response();
+    };
+
+    if let Some(obs) = &state.obs {
+        obs.record_request();
+    }
+    state.broadcast(GatewayEvent::Message {
+        session_id: session_id.clone(),
+        role: "user".to_string(),
+        content: req.message.clone(),
+    });
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(256);
+    // Subscribe before process() so the first token cannot be missed.
+    let mut agent_events = handle.subscribe();
+    let handle = handle.clone();
+    let state_for_task = state.clone();
+    let message = req.message.clone();
+    let sid = session_id.clone();
+
+    tokio::spawn(async move {
+        let forward_tx = tx.clone();
+        let forward_sid = sid.clone();
+        let forwarder = tokio::spawn(async move {
+            loop {
+                match agent_events.recv().await {
+                    Ok(ev) => {
+                        if ev.session_id() != forward_sid {
+                            continue;
+                        }
+                        let terminal = ev.is_terminal();
+                        let name = match &ev {
+                            obc_agent::AgentEvent::Started { .. } => "started",
+                            obc_agent::AgentEvent::Thinking { .. } => "thinking",
+                            obc_agent::AgentEvent::Token { .. } => "token",
+                            obc_agent::AgentEvent::ToolCall { .. } => "tool_call",
+                            obc_agent::AgentEvent::ToolResult { .. } => "tool_result",
+                            obc_agent::AgentEvent::Response { .. } => "response",
+                            obc_agent::AgentEvent::Error { .. } => "error",
+                        };
+                        let json = serde_json::to_string(&ev).unwrap_or_default();
+                        if forward_tx
+                            .send(Ok(Event::default().event(name).data(json)))
+                            .await
+                            .is_err()
+                        {
+                            break; // client went away
+                        }
+                        if terminal {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        let json = serde_json::json!({
+                            "type": "error",
+                            "session_id": forward_sid,
+                            "message": format!("stream lagged: {n} events dropped"),
+                        })
+                        .to_string();
+                        let _ = forward_tx
+                            .send(Ok(Event::default().event("lagged").data(json)))
+                            .await;
+                    }
+                }
+            }
+        });
+
+        match handle.process(&sid, &message).await {
+            Ok(response) => {
+                if let Some(obs) = &state_for_task.obs {
+                    obs.record_agent_turn(response.tool_calls.len());
+                }
+                state_for_task.broadcast(GatewayEvent::Message {
+                    session_id: sid.clone(),
+                    role: "assistant".to_string(),
+                    content: response.message.clone(),
+                });
+            }
+            Err(e) => {
+                tracing::error!(session_id = %sid, error = %e, "Agent processing failed");
+            }
+        }
+        // The handle emitted Response/Error last; the forwarder ends on it.
+        let _ = forwarder.await;
+        drop(tx);
+    });
+
+    Sse::new(ReceiverStream::new(rx))
+        .keep_alive(
+            KeepAlive::new()
+                .interval(std::time::Duration::from_secs(15))
+                .text("ping"),
+        )
+        .into_response()
+}
+
 /// `POST /api/v1/chat` — Send a message to the agent and get a response.
 pub async fn chat(
     State(state): State<Arc<GatewayState>>,
@@ -314,6 +438,17 @@ pub async fn chat(
                         } => Some(GatewayEvent::Thinking {
                             session_id,
                             iteration,
+                        }),
+                        AgentEvent::Token {
+                            session_id,
+                            iteration,
+                            delta,
+                            reset,
+                        } => Some(GatewayEvent::Token {
+                            session_id,
+                            iteration,
+                            delta,
+                            reset,
                         }),
                         AgentEvent::ToolCall {
                             session_id,

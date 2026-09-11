@@ -1,9 +1,21 @@
 //! Ollama provider adapter.
+//!
+//! Streams since 2026-09-11. `chat_completion` still sends `"stream": false`
+//! and reads one JSON object; `chat_completion_streaming` sends
+//! `"stream": true` and folds Ollama's NDJSON chunks as they arrive — each
+//! `message.content` fragment goes to the sink the moment it is read, tool
+//! calls are collected from whichever chunks carry them, and the final chunk
+//! (`"done": true`) closes the completion. The fold is a pure function over
+//! lines ([`fold_chunk`]) so it is tested without a server.
 
 use crate::ProviderConfig;
-use crate::{ChatCompletion, ChatMessage, ChatRole, Provider, ResponseFormat, ToolCall};
+use crate::{
+    ChatCompletion, ChatMessage, ChatRole, DeltaSink, Provider, ResponseFormat, StreamDelta,
+    ToolCall,
+};
 use anyhow::Result;
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use obc_tools::Tool;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -21,20 +33,14 @@ impl OllamaProvider {
             client: Client::new(),
         }
     }
-}
 
-#[async_trait]
-impl Provider for OllamaProvider {
-    fn name(&self) -> &str {
-        "ollama"
-    }
-
-    async fn chat_completion(
-        &self,
+    /// The request body both paths send; only `stream` differs.
+    fn build_request(
         messages: &[ChatMessage],
         tools: &[Box<dyn Tool>],
         config: &ProviderConfig,
-    ) -> Result<ChatCompletion> {
+        stream: bool,
+    ) -> (String, Value) {
         let url = config
             .base_url
             .clone()
@@ -70,16 +76,15 @@ impl Provider for OllamaProvider {
             )
         };
 
-        let request = serde_json::json!({
+        let mut request = serde_json::json!({
             "model": config.model,
             "messages": ollama_messages,
             "tools": ollama_tools,
-            "stream": false,
+            "stream": stream,
         });
 
         // Ollama supports a `format` field: `"json"` for free-form JSON or an
         // inline JSON schema object for structured output.
-        let mut request = request;
         if let Some(ref fmt) = config.response_format {
             match fmt {
                 ResponseFormat::Text => {}
@@ -91,6 +96,23 @@ impl Provider for OllamaProvider {
                 }
             }
         }
+        (url, request)
+    }
+}
+
+#[async_trait]
+impl Provider for OllamaProvider {
+    fn name(&self) -> &str {
+        "ollama"
+    }
+
+    async fn chat_completion(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[Box<dyn Tool>],
+        config: &ProviderConfig,
+    ) -> Result<ChatCompletion> {
+        let (url, request) = Self::build_request(messages, tools, config, false);
 
         // Surface API errors instead of force-parsing them (see openai.rs; an
         // uninstalled model's error JSON showed as "error decoding response").
@@ -120,6 +142,91 @@ impl Provider for OllamaProvider {
             model: config.model.clone(),
         })
     }
+
+    async fn chat_completion_streaming(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[Box<dyn Tool>],
+        config: &ProviderConfig,
+        sink: DeltaSink<'_>,
+    ) -> Result<ChatCompletion> {
+        let (url, request) = Self::build_request(messages, tools, config, true);
+
+        let http_response = self.client.post(&url).json(&request).send().await?;
+        let status = http_response.status();
+        if !status.is_success() {
+            let body = http_response.text().await.unwrap_or_default();
+            anyhow::bail!("Ollama API error ({status}): {body}");
+        }
+
+        let mut fold = StreamFold::default();
+        let mut buf = String::new();
+        let mut body = http_response.bytes_stream();
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk?;
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            // NDJSON: one object per line. Keep any trailing partial line.
+            while let Some(nl) = buf.find('\n') {
+                let line = buf[..nl].trim().to_string();
+                buf.drain(..=nl);
+                if line.is_empty() {
+                    continue;
+                }
+                if fold_chunk(&line, &mut fold, sink)? {
+                    return Ok(fold.finish(self.name(), &config.model));
+                }
+            }
+        }
+        // The server closed without a `done: true` line. What was folded is
+        // still a completion; say so rather than fail a turn that produced text.
+        if !buf.trim().is_empty() {
+            fold_chunk(buf.trim(), &mut fold, sink)?;
+        }
+        tracing::warn!("Ollama stream ended without a done chunk; using what arrived");
+        Ok(fold.finish(self.name(), &config.model))
+    }
+}
+
+/// Accumulated state of one streamed completion.
+#[derive(Debug, Default)]
+pub struct StreamFold {
+    pub message: String,
+    pub tool_calls: Vec<ToolCall>,
+}
+
+impl StreamFold {
+    fn finish(self, provider: &str, model: &str) -> ChatCompletion {
+        ChatCompletion {
+            message: self.message,
+            tool_calls: self.tool_calls,
+            provider: provider.to_string(),
+            model: model.to_string(),
+        }
+    }
+}
+
+/// Fold one NDJSON line into the accumulator, forwarding text to the sink.
+/// Returns `Ok(true)` when the line was the final (`done: true`) chunk.
+pub fn fold_chunk(line: &str, fold: &mut StreamFold, sink: DeltaSink<'_>) -> Result<bool> {
+    let chunk: OllamaChunk = serde_json::from_str(line).map_err(|e| {
+        anyhow::anyhow!(
+            "unexpected Ollama stream chunk ({e}): {}",
+            line.chars().take(300).collect::<String>()
+        )
+    })?;
+    if let Some(err) = chunk.error {
+        anyhow::bail!("Ollama API error (stream): {err}");
+    }
+    if let Some(message) = chunk.message {
+        if !message.content.is_empty() {
+            fold.message.push_str(&message.content);
+            sink(StreamDelta::Text(message.content));
+        }
+        if let Some(calls) = message.tool_calls {
+            fold.tool_calls.extend(calls.into_iter().map(Into::into));
+        }
+    }
+    Ok(chunk.done)
 }
 
 // ── Ollama API Data Structures ───────────────────────────────────────────────
@@ -148,8 +255,21 @@ struct OllamaResponse {
     message: OllamaResponseMessage,
 }
 
+/// One line of a streamed response. `message` is absent on error lines;
+/// `content` is empty on the tool-call and final chunks.
+#[derive(Debug, Deserialize)]
+struct OllamaChunk {
+    #[serde(default)]
+    message: Option<OllamaResponseMessage>,
+    #[serde(default)]
+    done: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct OllamaResponseMessage {
+    #[serde(default)]
     content: String,
     tool_calls: Option<Vec<OllamaToolCall>>,
 }
@@ -172,5 +292,58 @@ impl From<OllamaToolCall> for ToolCall {
             name: call.function.name,
             args: call.function.arguments.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[test]
+    fn folds_text_chunks_then_tool_calls_then_done() {
+        let seen = Mutex::new(Vec::new());
+        let sink = |d: StreamDelta| seen.lock().unwrap().push(d);
+        let mut fold = StreamFold::default();
+        let lines = [
+            r#"{"model":"m","message":{"role":"assistant","content":"The "},"done":false}"#,
+            r#"{"model":"m","message":{"role":"assistant","content":"time"},"done":false}"#,
+            r#"{"model":"m","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"shell","arguments":{"command":"time /T"}}}]},"done":false}"#,
+            r#"{"model":"m","message":{"role":"assistant","content":""},"done":true,"eval_count":9}"#,
+        ];
+        let mut done = false;
+        for l in lines {
+            done = fold_chunk(l, &mut fold, &sink).unwrap();
+        }
+        assert!(done);
+        assert_eq!(fold.message, "The time");
+        assert_eq!(fold.tool_calls.len(), 1);
+        assert_eq!(fold.tool_calls[0].name, "shell");
+        assert_eq!(fold.tool_calls[0].args, r#"{"command":"time /T"}"#);
+        assert_eq!(
+            seen.into_inner().unwrap(),
+            vec![
+                StreamDelta::Text("The ".into()),
+                StreamDelta::Text("time".into())
+            ],
+            "empty content chunks (tool call, done) emit nothing"
+        );
+    }
+
+    #[test]
+    fn an_error_line_fails_the_stream_with_the_servers_message() {
+        let sink = |_d: StreamDelta| {};
+        let mut fold = StreamFold::default();
+        let err =
+            fold_chunk(r#"{"error":"model 'nope' not found"}"#, &mut fold, &sink).unwrap_err();
+        assert!(err.to_string().contains("model 'nope' not found"));
+    }
+
+    #[test]
+    fn a_non_json_line_is_reported_not_swallowed() {
+        let sink = |_d: StreamDelta| {};
+        let mut fold = StreamFold::default();
+        let err = fold_chunk("<html>proxy said no</html>", &mut fold, &sink).unwrap_err();
+        assert!(err.to_string().contains("unexpected Ollama stream chunk"));
     }
 }
