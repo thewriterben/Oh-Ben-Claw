@@ -341,7 +341,56 @@ impl Tool for McpRemoteTool {
         let mut client = self.client.lock().await;
         match client.call_tool(&self.remote_name, args).await {
             Ok(result) => Ok(ToolResult::ok(result)),
-            Err(e) => Ok(ToolResult::err(format!("MCP tool call failed: {e}"))),
+            Err(e) => match e.downcast_ref::<client::ServerGone>() {
+                // The process on the other end is dead. Until 2026-09-11 this
+                // was reported as "The pipe is being closed" and every later
+                // call failed the same way until the agent was restarted —
+                // OpenDesignCore's server was killed under a live agent twice
+                // that week. Respawn it here, once, and tell the model what
+                // happened. The call is NOT retried: `tools/call` is not
+                // idempotent and this tool is declared physical, so "run it
+                // again" is the model's decision with the facts in front of it
+                // — including whether the request had been sent, which is the
+                // difference between "never ran" and "may have run".
+                Some(gone) => {
+                    let sent = gone.request_sent;
+                    tracing::warn!(server = %self.server, tool = %self.name, error = %gone,
+                        "mcp: server gone; respawning");
+                    match client.reconnect().await {
+                        Ok(()) => {
+                            tracing::info!(server = %self.server, label = %client.label(),
+                                "mcp: server respawned");
+                            Ok(ToolResult::err(format!(
+                                "MCP server '{}' had exited ({}). It has been restarted and is \
+                                 ready; call {} again{}.",
+                                self.server,
+                                if sent {
+                                    "your request was sent but it never replied"
+                                } else {
+                                    "your request was not delivered"
+                                },
+                                self.name,
+                                if sent {
+                                    " — check first whether the earlier call took effect, \
+                                     since it may have run before the server died"
+                                } else {
+                                    ""
+                                }
+                            )))
+                        }
+                        Err(re) => {
+                            tracing::error!(server = %self.server, error = %re,
+                                "mcp: server gone and respawn failed");
+                            Ok(ToolResult::err(format!(
+                                "MCP server '{}' has exited and could not be restarted: {re}. \
+                                 Its tools are unavailable until an operator fixes the server.",
+                                self.server
+                            )))
+                        }
+                    }
+                }
+                None => Ok(ToolResult::err(format!("MCP tool call failed: {e}"))),
+            },
         }
     }
 }

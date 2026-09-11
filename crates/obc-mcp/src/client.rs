@@ -110,7 +110,40 @@ pub struct McpClient {
     /// normal, because a cached list that never expires is how a tool catalog
     /// goes stale.
     probed_tools: Option<Vec<McpToolDef>>,
+    /// What this connection was opened with, kept so it can be opened again.
+    config: McpServerConfig,
 }
+
+/// The transport under a request is gone: the pipe broke on write, or the
+/// server closed its end before answering. Distinct from a server that
+/// *answered* with an error, which is a conversation; this is the absence of
+/// one. Carries whether the request was sent, because that is the difference
+/// between "the server never saw it" and "it may have run and never replied",
+/// and a caller deciding whether to retry a non-idempotent call needs it.
+#[derive(Debug)]
+pub struct ServerGone {
+    pub method: String,
+    pub request_sent: bool,
+    pub detail: String,
+}
+
+impl std::fmt::Display for ServerGone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "MCP server gone during {} ({}): {}",
+            self.method,
+            if self.request_sent {
+                "request was sent, no reply"
+            } else {
+                "request was not sent"
+            },
+            self.detail
+        )
+    }
+}
+
+impl std::error::Error for ServerGone {}
 
 impl McpClient {
     /// Connect to an MCP server using the given configuration.
@@ -120,6 +153,31 @@ impl McpClient {
             "http" => Self::connect_http(config).await,
             t => anyhow::bail!("Unknown MCP transport: {t}"),
         }
+    }
+
+    /// Open the connection again from the same configuration: a fresh process
+    /// (or HTTP client), a fresh handshake, a fresh id counter. The old child,
+    /// if any, is dropped and therefore killed. Nothing is retried here — what
+    /// to do about the call that found the server gone is the caller's
+    /// decision, because only the caller knows whether the call is safe to
+    /// repeat.
+    pub async fn reconnect(&mut self) -> Result<()> {
+        let fresh = Self::connect(&self.config).await?;
+        *self = fresh;
+        Ok(())
+    }
+
+    /// The logical name to log for this connection: the announced server name
+    /// if the handshake yielded one, else the command's file stem.
+    pub fn label(&self) -> String {
+        if !self.server_name.is_empty() && self.server_name != "unknown" {
+            return self.server_name.clone();
+        }
+        self.config
+            .command
+            .as_deref()
+            .map(stderr_label)
+            .unwrap_or_else(|| self.config.url.clone().unwrap_or_default())
     }
 
     async fn connect_stdio(config: &McpServerConfig) -> Result<Self> {
@@ -181,6 +239,7 @@ impl McpClient {
             server_version: String::new(),
             tools_ttl_ms: None,
             probed_tools: None,
+            config: config.clone(),
         };
 
         client.establish(config.protocol_mode).await?;
@@ -206,6 +265,7 @@ impl McpClient {
             server_version: String::new(),
             tools_ttl_ms: None,
             probed_tools: None,
+            config: config.clone(),
         };
 
         client.establish(config.protocol_mode).await?;
@@ -505,8 +565,22 @@ impl McpClient {
             Transport::Stdio(t) => {
                 let mut line = serde_json::to_string(&req)?;
                 line.push('\n');
-                t.stdin.write_all(line.as_bytes()).await?;
-                t.stdin.flush().await?;
+                // A write that fails is a dead server, not a bad request: the
+                // pipe's other end is closed. Reported as `ServerGone` with
+                // `request_sent: false` — the server never saw this call.
+                let sent = async {
+                    t.stdin.write_all(line.as_bytes()).await?;
+                    t.stdin.flush().await
+                }
+                .await;
+                if let Err(e) = sent {
+                    return Err(ServerGone {
+                        method: method.to_string(),
+                        request_sent: false,
+                        detail: e.to_string(),
+                    }
+                    .into());
+                }
 
                 let stdout = t.stdout.clone();
                 let mut guard = stdout.lock().await;
@@ -532,11 +606,27 @@ impl McpClient {
                 let mut skipped = 0usize;
                 loop {
                     let mut line = String::new();
-                    let n = guard.read_line(&mut line).await?;
+                    let n = match guard.read_line(&mut line).await {
+                        Ok(n) => n,
+                        Err(e) => {
+                            return Err(ServerGone {
+                                method: method.to_string(),
+                                request_sent: true,
+                                detail: format!("read failed: {e}"),
+                            }
+                            .into());
+                        }
+                    };
                     if n == 0 {
-                        anyhow::bail!(
-                            "MCP server closed the connection while awaiting a reply to {method}"
-                        );
+                        // EOF with the request already written: the server may
+                        // have run it and died, or died first. `request_sent`
+                        // is true so a caller does not assume the former.
+                        return Err(ServerGone {
+                            method: method.to_string(),
+                            request_sent: true,
+                            detail: "server closed its stdout before replying".to_string(),
+                        }
+                        .into());
                     }
                     let line = line.trim();
                     if line.is_empty() {

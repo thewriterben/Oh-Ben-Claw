@@ -237,3 +237,62 @@ async fn a_server_flooding_stderr_is_drained_not_deadlocked() {
         assert_eq!(out, "served over stateless");
     }
 }
+
+/// A server that dies after its first call.
+///
+/// Reproduces 2026-09-11: OpenDesignCore's server was killed under a live agent
+/// and every later `odc_*` call failed with "The pipe is being closed" until the
+/// agent restarted. Through `McpRemoteTool` — where the respawn lives — the
+/// sequence must be: first call served; second call finds the server gone, the
+/// tool respawns it and returns a *readable refusal* that says so (never a
+/// silent retry: `tools/call` is not idempotent and the tool is physical); third
+/// call is served by the new process.
+#[tokio::test]
+async fn a_dead_server_is_respawned_and_the_model_is_told() {
+    use obc_tool_api::Tool;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let cfg = server("mortal", None);
+    let client = McpClient::connect(&cfg).await.expect("connect to mortal");
+    let tool = oh_ben_claw::mcp::McpRemoteTool {
+        name: "mortal_echo".to_string(),
+        remote_name: "echo".to_string(),
+        description: String::new(),
+        schema: json!({"type": "object"}),
+        server: "mortal".to_string(),
+        client: Arc::new(Mutex::new(client)),
+        reach: None,
+        auditor: None,
+    };
+
+    let first = tool.execute(json!({"text": "1"})).await.unwrap();
+    assert!(first.success, "first call served: {:?}", first.error);
+    assert_eq!(first.output, "served over stateless");
+
+    // The server exited right after replying. Give the OS a moment to close
+    // the pipes; the client must cope either way (write error or EOF).
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let second = tool.execute(json!({"text": "2"})).await.unwrap();
+    assert!(!second.success, "second call must not pretend to succeed");
+    let msg = second.error.clone().unwrap_or_default();
+    assert!(msg.contains("had exited"), "names the death: {msg}");
+    assert!(msg.contains("restarted"), "names the respawn: {msg}");
+    assert!(
+        msg.contains("call mortal_echo again"),
+        "tells the model what to do: {msg}"
+    );
+    assert!(
+        !msg.contains("pipe is being closed") && !msg.contains("os error"),
+        "not the raw OS error: {msg}"
+    );
+
+    let third = tool.execute(json!({"text": "3"})).await.unwrap();
+    assert!(
+        third.success,
+        "served by the respawned process: {:?}",
+        third.error
+    );
+    assert_eq!(third.output, "served over stateless");
+}
