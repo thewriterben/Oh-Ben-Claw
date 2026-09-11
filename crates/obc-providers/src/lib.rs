@@ -367,6 +367,123 @@ pub struct ProviderConfig {
     /// for models without the thinking capability; Ollama rejects the field.
     #[serde(default)]
     pub think: Option<bool>,
+    /// Per-turn routing to a second, cloud brain (`[provider.routing]`). This
+    /// block is the local/routine brain; see [`RoutingConfig`].
+    #[serde(default)]
+    pub routing: Option<Box<RoutingConfig>>,
+}
+
+/// `[provider.routing]`: two brains, chosen per turn. The rules live in
+/// `obc_agent::routing`; this is the policy's knobs. `deny_unknown_fields`
+/// because a misspelt knob here silently routes everything one way.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingConfig {
+    #[serde(default = "default_prompt_caching")]
+    pub enabled: bool,
+    /// The cloud brain. Its key comes from the provider's environment variable
+    /// like any other; without one the router logs once at startup and every
+    /// turn stays local.
+    pub cloud: ProviderConfig,
+    /// Operator turns (console, channels, gateway) go to the cloud. Default true.
+    #[serde(default = "default_prompt_caching")]
+    pub console_to_cloud: bool,
+    /// With `console_to_cloud = false`: a turn with at least this many tools
+    /// registered goes to the cloud. 0 disables the rule. Default 8.
+    #[serde(default = "default_tool_threshold")]
+    pub tool_threshold: usize,
+    /// Sessions whose id starts with one of these stay local: System 2 wakes,
+    /// the long-horizon harness, edge nodes. Default `["system2", "harness-", "edge-"]`.
+    #[serde(default = "default_local_session_prefixes")]
+    pub local_session_prefixes: Vec<String>,
+    /// Facts from these sources (exactly, or `source:qualifier`) make a turn
+    /// private, which keeps it local. Default `["clawcam"]`.
+    #[serde(default = "default_private_sources")]
+    pub private_sources: Vec<String>,
+    /// Facts whose entity starts with one of these are private. Default
+    /// `["vision.subject."]` (ClawCam detections of people and animals).
+    #[serde(default = "default_private_entity_prefixes")]
+    pub private_entity_prefixes: Vec<String>,
+    /// After a cloud failure, route local for this long. Default 300.
+    #[serde(default = "default_offline_backoff_secs")]
+    pub offline_backoff_secs: u64,
+    /// Estimated USD of cloud turns per day before the router stops sending
+    /// them. 0 = no cap. Default 0.
+    #[serde(default)]
+    pub daily_budget_usd: f64,
+    /// Prices used for that estimate (chars/4 tokens). Defaults are Claude
+    /// Sonnet 5 list prices on 2026-09-11.
+    #[serde(default = "default_cloud_input_price")]
+    pub cloud_input_price_per_million: f64,
+    #[serde(default = "default_cloud_output_price")]
+    pub cloud_output_price_per_million: f64,
+}
+
+fn default_tool_threshold() -> usize {
+    8
+}
+fn default_local_session_prefixes() -> Vec<String> {
+    ["system2", "harness-", "edge-"]
+        .into_iter()
+        .map(String::from)
+        .collect()
+}
+fn default_private_sources() -> Vec<String> {
+    vec!["clawcam".to_string()]
+}
+fn default_private_entity_prefixes() -> Vec<String> {
+    vec!["vision.subject.".to_string()]
+}
+fn default_offline_backoff_secs() -> u64 {
+    300
+}
+fn default_cloud_input_price() -> f64 {
+    2.0
+}
+fn default_cloud_output_price() -> f64 {
+    10.0
+}
+
+impl RoutingConfig {
+    /// Every knob at its default, with this cloud brain.
+    pub fn default_with_cloud(cloud: ProviderConfig) -> Self {
+        Self {
+            enabled: true,
+            cloud,
+            console_to_cloud: true,
+            tool_threshold: default_tool_threshold(),
+            local_session_prefixes: default_local_session_prefixes(),
+            private_sources: default_private_sources(),
+            private_entity_prefixes: default_private_entity_prefixes(),
+            offline_backoff_secs: default_offline_backoff_secs(),
+            daily_budget_usd: 0.0,
+            cloud_input_price_per_million: default_cloud_input_price(),
+            cloud_output_price_per_million: default_cloud_output_price(),
+        }
+    }
+}
+
+/// The environment variable a provider reads its key from, if it needs one.
+pub fn key_env_var(provider_name: &str) -> Option<&'static str> {
+    match provider_name {
+        "anthropic" => Some("ANTHROPIC_API_KEY"),
+        "openai" => Some("OPENAI_API_KEY"),
+        "openrouter" => Some("OPENROUTER_API_KEY"),
+        _ => None,
+    }
+}
+
+/// Whether a provider that needs a key has one: inline, or in its environment
+/// variable. Providers without a known key variable (Ollama, compatible
+/// endpoints) count as ready.
+pub fn key_present(config: &ProviderConfig) -> bool {
+    if config.api_key.as_ref().is_some_and(|k| !k.is_empty()) {
+        return true;
+    }
+    match key_env_var(&config.name) {
+        Some(var) => std::env::var(var).is_ok_and(|v| !v.trim().is_empty()),
+        None => true,
+    }
 }
 
 fn default_prompt_caching() -> bool {
@@ -398,6 +515,7 @@ impl Default for ProviderConfig {
             response_format: None,
             prompt_caching: default_prompt_caching(),
             think: None,
+            routing: None,
         }
     }
 }

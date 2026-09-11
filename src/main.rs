@@ -375,11 +375,15 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     };
 
-    // Build LLM provider
-    let provider = providers::from_config(&config.provider)?;
+    // Build LLM provider. `from_config_full` — the wrapper that applies
+    // `[[provider.fallbacks]]` and `[provider.retry]` — had no caller until
+    // 2026-09-11: both blocks were parsed and documented and did nothing.
+    let provider = providers::from_config_full(&config.provider)?;
     info!(
         provider = %config.provider.name,
         model = %config.provider.model,
+        fallbacks = config.provider.fallbacks.len(),
+        retry = config.provider.retry.is_some(),
         "LLM provider ready"
     );
 
@@ -2734,6 +2738,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             config.cost.input_price_per_million,
             config.cost.output_price_per_million,
         );
+    }
+    // Parity item 3: a second, cloud brain chosen per turn (`[provider.routing]`).
+    if let Some(routing) = &config.provider.routing {
+        agent = agent.with_routing((**routing).clone())?;
     }
     agent = agent
         .with_rollout(Arc::clone(&rollout_tracker))
