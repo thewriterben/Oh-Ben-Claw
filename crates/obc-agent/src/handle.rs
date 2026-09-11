@@ -22,15 +22,14 @@
 //! └─────────────────────────────────────────────────────────┘
 //! ```
 
+#[allow(unused_imports)]
+use crate::EVENT_CHANNEL_CAPACITY;
 use crate::{Agent, AgentResponse};
 use anyhow::Result;
 use obc_providers::ProviderConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
-
-/// Capacity of the agent event broadcast channel.
-const EVENT_CHANNEL_CAPACITY: usize = 512;
 
 /// Events emitted by the agent during a `process()` call.
 ///
@@ -46,6 +45,15 @@ pub enum AgentEvent {
     },
     /// The agent is thinking (waiting for LLM response).
     Thinking { session_id: String, iteration: u32 },
+    /// A piece of assistant text, as the model produced it. `reset` means a
+    /// wrapper started the request over after a partial stream failed:
+    /// discard what was shown for this iteration before appending `delta`.
+    Token {
+        session_id: String,
+        iteration: u32,
+        delta: String,
+        reset: bool,
+    },
     /// The agent dispatched a tool call.
     ToolCall {
         session_id: String,
@@ -72,6 +80,26 @@ pub enum AgentEvent {
     Error { session_id: String, message: String },
 }
 
+impl AgentEvent {
+    /// The session this event belongs to.
+    pub fn session_id(&self) -> &str {
+        match self {
+            AgentEvent::Started { session_id, .. }
+            | AgentEvent::Thinking { session_id, .. }
+            | AgentEvent::Token { session_id, .. }
+            | AgentEvent::ToolCall { session_id, .. }
+            | AgentEvent::ToolResult { session_id, .. }
+            | AgentEvent::Response { session_id, .. }
+            | AgentEvent::Error { session_id, .. } => session_id,
+        }
+    }
+
+    /// True for the two events that end a turn.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, AgentEvent::Response { .. } | AgentEvent::Error { .. })
+    }
+}
+
 /// A thread-safe, cloneable handle to the running agent.
 ///
 /// Cheap to clone — all clones share the same underlying `Arc<Agent>`
@@ -92,7 +120,10 @@ pub struct AgentHandle {
 impl AgentHandle {
     /// Create a new `AgentHandle` wrapping the given agent.
     pub fn new(agent: Arc<Agent>, provider_config: ProviderConfig) -> Self {
-        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        // One bus: the agent emits from inside its loop (tokens, tool calls),
+        // the handle adds the turn boundaries. Since 2026-09-11 the channel is
+        // the agent's own, so subscribers see both without racing.
+        let event_tx = agent.event_sender();
         Self {
             agent,
             provider_config,
@@ -129,13 +160,8 @@ impl AgentHandle {
             user_message: user_message.to_string(),
         });
 
-        // Run the agent — it handles its own tool-call loop internally.
-        // We wrap it to broadcast events around the call.
-        let _ = self.event_tx.send(AgentEvent::Thinking {
-            session_id: session_id.to_string(),
-            iteration: 0,
-        });
-
+        // Run the agent — it handles its own tool-call loop internally and
+        // emits Thinking / Token / ToolCall / ToolResult live from inside it.
         let result = self
             .agent
             .process(session_id, user_message, &self.provider_config)
@@ -149,26 +175,9 @@ impl AgentHandle {
 
         match &result {
             Ok(response) => {
-                // Broadcast tool call records
-                for (i, record) in response.tool_calls.iter().enumerate() {
-                    let args_value: serde_json::Value = serde_json::from_str(&record.args)
-                        .unwrap_or_else(|_| serde_json::json!({}));
-                    let _ = self.event_tx.send(AgentEvent::ToolCall {
-                        session_id: session_id.to_string(),
-                        call_id: format!("{}-{}", session_id, i),
-                        tool_name: record.name.clone(),
-                        args: args_value,
-                    });
-                    let _ = self.event_tx.send(AgentEvent::ToolResult {
-                        session_id: session_id.to_string(),
-                        call_id: format!("{}-{}", session_id, i),
-                        tool_name: record.name.clone(),
-                        success: !record.result.starts_with("Tool error:")
-                            && !record.result.starts_with("Tool execution failed:"),
-                        output: record.result.clone(),
-                        duration_ms: record.duration_ms,
-                    });
-                }
+                // Tool calls were broadcast as they happened (from the loop);
+                // repeating them here would double every tool on the SSE
+                // stream, which is what this handle did until 2026-09-11.
 
                 // Broadcast final response
                 let _ = self.event_tx.send(AgentEvent::Response {

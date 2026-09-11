@@ -125,6 +125,137 @@ impl Provider for RetryProvider {
         }
         Err(last_err)
     }
+
+    async fn chat_completion_streaming(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[Box<dyn Tool>],
+        config: &ProviderConfig,
+        sink: crate::DeltaSink<'_>,
+    ) -> Result<ChatCompletion> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mut backoff_ms = self.config.initial_backoff_ms;
+        let mut last_err: anyhow::Error = anyhow::anyhow!("No attempts made");
+        let emitted = AtomicBool::new(false);
+
+        for attempt in 0..=self.config.max_retries {
+            if emitted.swap(false, Ordering::SeqCst) {
+                sink(crate::StreamDelta::Restart);
+            }
+            let tracking = |d: crate::StreamDelta| {
+                emitted.store(true, Ordering::SeqCst);
+                sink(d)
+            };
+            match self
+                .inner
+                .chat_completion_streaming(messages, tools, config, &tracking)
+                .await
+            {
+                Ok(completion) => return Ok(completion),
+                Err(e) => {
+                    if attempt == self.config.max_retries || !Self::is_transient(&e) {
+                        return Err(e);
+                    }
+                    tracing::warn!(
+                        provider = self.inner.name(),
+                        attempt,
+                        backoff_ms,
+                        error = %e,
+                        "Transient provider error mid-stream — retrying after back-off"
+                    );
+                    last_err = e;
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                    backoff_ms = (backoff_ms as f64 * self.config.backoff_multiplier) as u64;
+                    if backoff_ms > self.config.max_backoff_ms {
+                        backoff_ms = self.config.max_backoff_ms;
+                    }
+                }
+            }
+        }
+
+        Err(last_err)
+    }
+}
+
+#[cfg(test)]
+mod streaming_restart_tests {
+    use super::*;
+    use crate::{ChatCompletion, DeltaSink, ProviderConfig, StreamDelta};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
+
+    /// Streams "par" then fails with a transient error on the first attempt,
+    /// streams "whole" and succeeds on the second.
+    struct FlakyStreamer {
+        attempts: AtomicU32,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::Provider for FlakyStreamer {
+        fn name(&self) -> &str {
+            "flaky"
+        }
+        async fn chat_completion(
+            &self,
+            _m: &[ChatMessage],
+            _t: &[Box<dyn Tool>],
+            _c: &ProviderConfig,
+        ) -> Result<ChatCompletion> {
+            unreachable!("streaming path only")
+        }
+        async fn chat_completion_streaming(
+            &self,
+            _m: &[ChatMessage],
+            _t: &[Box<dyn Tool>],
+            c: &ProviderConfig,
+            sink: DeltaSink<'_>,
+        ) -> Result<ChatCompletion> {
+            let n = self.attempts.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                sink(StreamDelta::Text("par".into()));
+                anyhow::bail!("connection reset mid-stream");
+            }
+            sink(StreamDelta::Text("whole".into()));
+            Ok(ChatCompletion {
+                message: "whole".into(),
+                tool_calls: vec![],
+                provider: "flaky".into(),
+                model: c.model.clone(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_partial_stream_before_a_retry_is_restarted_not_appended() {
+        let inner = Arc::new(FlakyStreamer {
+            attempts: AtomicU32::new(0),
+        });
+        let retry = RetryProvider::new(
+            inner,
+            RetryConfig {
+                max_retries: 2,
+                initial_backoff_ms: 1,
+                max_backoff_ms: 2,
+                backoff_multiplier: 1.0,
+            },
+        );
+        let seen = Mutex::new(Vec::new());
+        let sink = |d: StreamDelta| seen.lock().unwrap().push(d);
+        let cfg = ProviderConfig::default();
+        let c = retry
+            .chat_completion_streaming(&[], &[], &cfg, &sink)
+            .await
+            .unwrap();
+        assert_eq!(c.message, "whole");
+        assert_eq!(
+            seen.into_inner().unwrap(),
+            vec![
+                StreamDelta::Text("par".into()),
+                StreamDelta::Restart,
+                StreamDelta::Text("whole".into()),
+            ]
+        );
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
