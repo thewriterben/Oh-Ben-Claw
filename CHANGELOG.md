@@ -5,6 +5,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Ollama: the prefix actually caches, and Qwen3 stops thinking on request (2026-09-11)
+
+The follow-up #143 needed, found by reading the runner's log after the deploy.
+Every turn still showed `lcp = 240`: the longest cached prefix was the system
+prompt and nothing else, because **Ollama hoists every `system`-role message
+into the template's `.System`**, ahead of the tools and the history, wherever
+it sat in the list. The reorder was undone on the wire.
+
+### Fixed
+
+- `OllamaProvider::build_request` sends only the *leading* system message as
+  `system`; any later one (world state, experience) rides as `user` content,
+  in place. Same rule as the Anthropic adapter.
+
+### Added
+
+- `ProviderConfig::think` (`Option<bool>`, Ollama only, default unset). Qwen3's
+  template appends `/no_think` to the last user turn only when the request
+  sets `think`; the `/no_think` in the bench's system prompt did nothing, and
+  the model thought for 228 tokens (5.9 s) before every one-line answer.
+  `think = false` under `[provider]` ends that. Unset by default because
+  Ollama rejects the field for models without the thinking capability.
+
 ## Unreleased — Context: a cacheable prefix, compaction, and stubbed tool outputs (2026-09-11)
 
 Parity item 2. On the bench a warm turn spent ~17 s before its first token

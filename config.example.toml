@@ -30,6 +30,11 @@
 # compaction_threshold = 0.5
 # compaction_keep_tail = 8
 # compaction = true
+#
+# Ollama + a thinking model (Qwen3): set think = false under [provider] to
+# answer directly. "/no_think" in the prompt is ignored by the template; on
+# the bench the model thought for 228 tokens (5.9 s) before a one-line reply.
+# Do not set it for models without the thinking capability (Ollama rejects it).
 name = "obc"
 
 # The one string that says what this agent is for. With no purpose here, the

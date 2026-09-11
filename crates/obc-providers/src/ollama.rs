@@ -7,6 +7,24 @@
 //! calls are collected from whichever chunks carry them, and the final chunk
 //! (`"done": true`) closes the completion. The fold is a pure function over
 //! lines ([`fold_chunk`]) so it is tested without a server.
+//!
+//! Two things learned on the bench on 2026-09-11 after the agent moved its
+//! ephemeral blocks (world state, experience) behind the history so the prompt
+//! prefix would cache:
+//!
+//! - **Ollama hoists every `system`-role message into the template's
+//!   `.System`**, ahead of the tools and the history, wherever it sat in the
+//!   list. The reorder was undone on the wire and the runner's longest cached
+//!   prefix stayed at ~240 tokens — the system prompt and nothing else — so
+//!   every turn re-evaluated ~7k tokens. Only the *leading* system message is
+//!   sent as `system` now; any later one rides as `user` content, in place,
+//!   which is where the agent put it. Same rule the Anthropic adapter follows.
+//! - **`/no_think` in the system prompt is not read by Qwen3's template.**
+//!   The template appends `/no_think` to the last user turn only when the
+//!   request sets `think`; without it the model thought for 228 tokens
+//!   (5.9 s) before a 23-character answer. `ProviderConfig::think`, when
+//!   set, goes on the wire as `"think"`; it is `None` by default because
+//!   Ollama rejects the field for models without the thinking capability.
 
 use crate::ProviderConfig;
 use crate::{
@@ -48,9 +66,13 @@ impl OllamaProvider {
 
         let ollama_messages: Vec<OllamaMessage> = messages
             .iter()
-            .map(|m| OllamaMessage {
+            .enumerate()
+            .map(|(i, m)| OllamaMessage {
                 role: match m.role {
-                    ChatRole::System => "system".into(),
+                    ChatRole::System if i == 0 => "system".into(),
+                    // A later system message is ephemeral context the agent
+                    // placed deliberately; `user` keeps it there (see module doc).
+                    ChatRole::System => "user".into(),
                     ChatRole::User => "user".into(),
                     ChatRole::Assistant => "assistant".into(),
                 },
@@ -82,6 +104,9 @@ impl OllamaProvider {
             "tools": ollama_tools,
             "stream": stream,
         });
+        if let Some(think) = config.think {
+            request["think"] = Value::Bool(think);
+        }
 
         // Ollama supports a `format` field: `"json"` for free-form JSON or an
         // inline JSON schema object for structured output.
@@ -299,6 +324,55 @@ impl From<OllamaToolCall> for ToolCall {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn only_the_leading_system_message_is_sent_as_system() {
+        let msgs = vec![
+            ChatMessage {
+                role: ChatRole::System,
+                content: "who I am".into(),
+            },
+            ChatMessage {
+                role: ChatRole::User,
+                content: "earlier".into(),
+            },
+            ChatMessage {
+                role: ChatRole::Assistant,
+                content: "reply".into(),
+            },
+            ChatMessage {
+                role: ChatRole::System,
+                content: "## World state".into(),
+            },
+            ChatMessage {
+                role: ChatRole::User,
+                content: "the ask".into(),
+            },
+        ];
+        let cfg = ProviderConfig {
+            name: "ollama".into(),
+            model: "qwen3".into(),
+            ..Default::default()
+        };
+        let (_, body) = OllamaProvider::build_request(&msgs, &[], &cfg, false);
+        let roles: Vec<&str> = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["role"].as_str().unwrap())
+            .collect();
+        assert_eq!(roles, ["system", "user", "assistant", "user", "user"]);
+        assert_eq!(body["messages"][3]["content"], "## World state");
+        assert!(body.get("think").is_none(), "absent unless configured");
+
+        let cfg = ProviderConfig {
+            think: Some(false),
+            ..cfg
+        };
+        let (_, body) = OllamaProvider::build_request(&msgs, &[], &cfg, true);
+        assert_eq!(body["think"], false);
+        assert_eq!(body["stream"], true);
+    }
 
     #[test]
     fn folds_text_chunks_then_tool_calls_then_done() {

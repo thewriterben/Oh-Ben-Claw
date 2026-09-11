@@ -361,6 +361,12 @@ pub struct ProviderConfig {
     /// default since 2026-09-11.
     #[serde(default = "default_prompt_caching")]
     pub prompt_caching: bool,
+    /// Ollama only: the request's `think` field. `Some(false)` switches a
+    /// thinking model (Qwen3) to answering directly — the `/no_think` soft
+    /// switch in a system prompt is not honoured by the template. Leave unset
+    /// for models without the thinking capability; Ollama rejects the field.
+    #[serde(default)]
+    pub think: Option<bool>,
 }
 
 fn default_prompt_caching() -> bool {
@@ -391,6 +397,7 @@ impl Default for ProviderConfig {
             retry: None,
             response_format: None,
             prompt_caching: default_prompt_caching(),
+            think: None,
         }
     }
 }
