@@ -5,6 +5,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Registry: LILYGO T-CameraPlus-S3 (2026-09-11)
+
+### Added
+
+- `lilygo-t-camera-plus-s3` in the board registry: ESP32-S3 (16 MB flash /
+  8 MB PSRAM) camera node with OV2640 + AP1511B IR-cut, 1.3" ST7789V 240×240
+  TFT with CST816S touch, PDM mic (MP34DT05-A on V1.2; I2S MSM261S4030H0R on
+  V1.0–V1.1), MAX98357A speaker amp, microSD, SY6970 charger, one user button.
+  Native-USB Espressif id (0x303a:0x1001, shared). Two hardware revisions with
+  different pin maps, noted in the row's comment; facts from LILYGO's README
+  and pin tables, retrieved 2026-09-11. `registry.json` and
+  `firmware-templates/templates.json` regenerated (one template per flashable
+  board, so the template count moves with it). Motivation: OpenPartsCore
+  ingests `boards/` from this registry and can only carry an envelope for a
+  board that exists here; the envelope from LILYGO's V1.2 STEP follows there.
+
 ## Unreleased — An MCP server's stderr reaches our log (2026-09-07)
 
 ### Fixed
