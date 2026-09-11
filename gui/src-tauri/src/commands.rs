@@ -126,12 +126,17 @@ pub async fn start_agent(
     }
 
     // Build built-in tools
-    let tools: Vec<Box<dyn oh_ben_claw::tools::traits::Tool>> = vec![
+    let mut tools: Vec<Box<dyn oh_ben_claw::tools::traits::Tool>> = vec![
         Box::new(ShellTool::new()),
         Box::new(FileTool::new()),
         Box::new(HttpTool::new()),
-        Box::new(MemoryTool::new()),
     ];
+    // The agent's note files (MEMORY.md, USER.md); absent only when the data
+    // directory cannot be created.
+    match MemoryTool::in_default_dir() {
+        Ok(t) => tools.push(Box::new(t)),
+        Err(e) => tracing::warn!(error = %e, "memory tool unavailable"),
+    }
 
     // Build agent
     let session_id = uuid();
