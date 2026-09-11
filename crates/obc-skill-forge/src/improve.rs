@@ -13,10 +13,12 @@
 //! - Only non-physical skills are verified-by-replay and auto-enabled, and only
 //!   up to `max_learned`.
 
+use super::curator::{self, CuratorPolicy};
 use super::synthesis::{
     approve, chain_signature, parameterize, synthesize, tag_physical, touches_actuator,
     VerificationCheck,
 };
+use super::usage::UsageLedger;
 use super::{SkillForge, SkillManifest};
 use obc_memory::trajectory::{Episode, Outcome, TrajectoryStore};
 use obc_tool_api::{BlastRadius, RiskClass};
@@ -122,6 +124,9 @@ pub struct ImproveReport {
     pub rejected: Vec<String>,
     /// Candidates skipped because a skill of that name already exists.
     pub skipped_existing: usize,
+    /// Candidates skipped because an installed skill already does exactly
+    /// this (same kind, tool and arguments) under another name.
+    pub skipped_duplicate_recipe: usize,
 }
 
 /// Drives the scan → synthesize → verify → install cycle.
@@ -136,6 +141,8 @@ pub struct SkillImprover {
     obs: Option<Arc<obc_observability::ObsContext>>,
     /// Configured verification requirements (`[[self_improvement.verification]]`).
     rules: Vec<VerificationRule>,
+    /// The curator, run after each pass: dedupe, archive, cap, SKILL.md.
+    curator: Option<(CuratorPolicy, Arc<UsageLedger>)>,
 }
 
 impl SkillImprover {
@@ -153,7 +160,17 @@ impl SkillImprover {
             max_learned,
             obs: None,
             rules: Vec::new(),
+            curator: None,
         }
+    }
+
+    /// Attach the curator. Runs after every improvement pass with the usage
+    /// ledger the agent writes, so learned skills that are duplicates, stale
+    /// or over the cap are disabled (never deleted) and every learned skill
+    /// has a `SKILL.md`.
+    pub fn with_curator(mut self, policy: CuratorPolicy, usage: Arc<UsageLedger>) -> Self {
+        self.curator = Some((policy, usage));
+        self
     }
 
     /// Attach an observability context: each pass increments
@@ -205,13 +222,14 @@ impl SkillImprover {
         let episodes = self.trajectory.successful_since(since_ts_ms)?;
         report.episodes_scanned = episodes.len();
 
-        let existing: HashSet<String> = self
-            .forge
-            .list_manifests()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|m| m.name)
+        let installed_manifests = self.forge.list_manifests().unwrap_or_default();
+        // Same recipe under another name is the same skill: the bench grew
+        // three `time /T` skills from three phrasings of one question.
+        let existing_recipes: HashSet<String> = installed_manifests
+            .iter()
+            .map(|m| curator::recipe_key(&m.kind))
             .collect();
+        let existing: HashSet<String> = installed_manifests.into_iter().map(|m| m.name).collect();
         let mut learned_installed = existing
             .iter()
             .filter(|n| n.starts_with("learned_"))
@@ -249,6 +267,10 @@ impl SkillImprover {
 
             if existing.contains(&candidate.name) || !seen.insert(candidate.name.clone()) {
                 report.skipped_existing += 1;
+                continue;
+            }
+            if existing_recipes.contains(&curator::recipe_key(&candidate.kind)) {
+                report.skipped_duplicate_recipe += 1;
                 continue;
             }
 
@@ -419,6 +441,17 @@ impl SkillImprover {
                     }
                 }
                 Err(e) => tracing::warn!(error = %e, "Phase 16 self-improvement pass failed"),
+            }
+            // The curator: what this pass and every earlier one left behind.
+            if let Some((policy, usage)) = &self.curator {
+                match curator::curate(&self.forge, usage, policy, now_ms()) {
+                    Ok(rep) => {
+                        if rep.changed_registry() {
+                            executor.on_skills_changed(&self.forge);
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "skill curator pass failed"),
+                }
             }
             // Next pass scans episodes recorded from this pass onward.
             since = pass_start;

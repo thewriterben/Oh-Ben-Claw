@@ -5,6 +5,48 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Learned skills earn their context rent (2026-09-11)
+
+Parity item 4, second half. Every enabled skill is a tool schema in every
+prompt, and the self-improvement loop only ever added: the bench had grown
+three skills for one `time /T` recipe from three phrasings of one question,
+each with a 100-character name, and a fourth that replays an OpenDesignCore
+enclosure run a System 2 wake had made on its own.
+
+### Added
+
+- **`obc_skill_forge::usage::UsageLedger`** (`<data dir>/skill_usage.json`):
+  count, first seen, last used per skill. The agent records every invocation
+  of a forge-managed skill (`Agent::with_skill_usage`) — until now the only
+  count was one in-memory aggregate, and staged runs only.
+- **`obc_skill_forge::curator`**, run after each improvement pass
+  (`SkillImprover::with_curator`; `[self_improvement] curate` (true),
+  `archive_after_days` (30), `max_enabled_learned` (40)): enabled learned
+  skills with the same recipe keep the most-used one and the rest are
+  disabled (`curated:duplicate-of:<kept>`); a learned skill unused for
+  `archive_after_days` — from its last use, else its install — is disabled
+  (`curated:stale`); beyond the cap the least used and oldest go
+  (`curated:over-cap`). Nothing is deleted; operator skills and
+  `curated:pinned` are never touched; a change resyncs the tool registry.
+- **`SKILL.md` in the agentskills.io layout** beside every learned skill's
+  manifest (YAML front matter `name`/`description`, then how it runs, stage,
+  tags, parameters), rewritten whenever the manifest is (promote, demote,
+  evolve, curate) and removed with it. The JSON manifest stays the executable
+  source of truth. `SkillForge::write_skill_md`, `manifest_path`,
+  `skill_md_path`.
+- The improvement pass skips a candidate whose recipe an installed skill
+  already has (`ImproveReport::skipped_duplicate_recipe`), so the duplicates
+  do not come back.
+- Learned-skill names are cut at 48 characters on a word boundary
+  (`synthesis::MAX_SLUG_LEN`).
+
+### Fixed
+
+- `SkillForge::default_dir()` read `HOME` and fell back to
+  `/etc/oh-ben-claw/skills`; on Windows, where `HOME` is unset, that is
+  `C:\etc\oh-ben-claw\skills`, which is where the bench's learned skills had
+  been going. Without `HOME` the forge now lives at `<data dir>/skills`.
+
 ## Unreleased — Notes the agent keeps, and search over everything it said (2026-09-11)
 
 Parity item 4. Two things Hermes-class agents have that OBC lacked: a small

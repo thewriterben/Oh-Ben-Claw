@@ -45,11 +45,22 @@ fn slugify(objective: &str) -> String {
     }
     let trimmed = out.trim_matches('_');
     if trimmed.is_empty() {
-        "skill".to_string()
-    } else {
-        trimmed.to_string()
+        return "skill".to_string();
     }
+    // A name is a tool schema in every prompt, and a 200-character name
+    // (seen on the bench) is rent without meaning. Cut at a word boundary.
+    if trimmed.len() <= MAX_SLUG_LEN {
+        return trimmed.to_string();
+    }
+    let cut = trimmed[..MAX_SLUG_LEN]
+        .rfind('_')
+        .filter(|&i| i >= MAX_SLUG_LEN / 2)
+        .unwrap_or(MAX_SLUG_LEN);
+    trimmed[..cut].trim_matches('_').to_string()
 }
+
+/// Longest slug a learned skill's name carries after `learned_`.
+pub const MAX_SLUG_LEN: usize = 48;
 
 /// Synthesize a reusable, quarantined skill from a successful episode.
 ///
@@ -315,6 +326,12 @@ mod tests {
         );
         assert_eq!(slugify("  turn ON — fan  "), "turn_on_fan");
         assert_eq!(slugify("???"), "skill");
+        let long = slugify("in one sentence what time is it on this machine right now use a tool to check then answer");
+        assert!(long.len() <= MAX_SLUG_LEN, "{long}");
+        assert_eq!(
+            long, "in_one_sentence_what_time_is_it_on_this_machine",
+            "cut at a word boundary"
+        );
     }
 
     #[test]

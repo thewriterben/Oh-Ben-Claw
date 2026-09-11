@@ -46,10 +46,12 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub mod curator;
 pub mod evolve;
 pub mod improve;
 pub mod rollout;
 pub mod synthesis;
+pub mod usage;
 
 // ── Skill Manifest ────────────────────────────────────────────────────────────
 
@@ -485,16 +487,43 @@ impl SkillForge {
         }
     }
 
-    /// The default skill directory (`~/.config/oh-ben-claw/skills`).
+    /// The default skill directory: `~/.config/oh-ben-claw/skills` where
+    /// `HOME` is set (Linux, macOS, the NanoPi), otherwise `<data dir>/skills`.
+    ///
+    /// Until 2026-09-11 the fallback was `/etc/oh-ben-claw/skills`, which on
+    /// Windows (no `HOME`) resolves against the current drive: the bench's
+    /// learned skills were being written to `C:\etc\oh-ben-claw\skills`.
     pub fn default_dir() -> PathBuf {
-        std::env::var("HOME")
-            .map(|h| {
-                PathBuf::from(h)
-                    .join(".config")
-                    .join("oh-ben-claw")
-                    .join("skills")
-            })
-            .unwrap_or_else(|_| PathBuf::from("/etc/oh-ben-claw/skills"))
+        match std::env::var("HOME") {
+            Ok(h) if !h.trim().is_empty() => PathBuf::from(h)
+                .join(".config")
+                .join("oh-ben-claw")
+                .join("skills"),
+            _ => obc_paths::in_data_dir("skills"),
+        }
+    }
+
+    /// Where `name`'s manifest lives (whether or not it exists).
+    pub fn manifest_path(&self, name: &str) -> PathBuf {
+        self.skill_dir.join(format!("{name}.skill.json"))
+    }
+
+    /// Where `name`'s `SKILL.md` lives.
+    pub fn skill_md_path(&self, name: &str) -> PathBuf {
+        self.skill_dir.join(format!("{name}.SKILL.md"))
+    }
+
+    /// Write the agentskills.io `SKILL.md` for a manifest when it is missing
+    /// or out of date. Returns whether a file was written.
+    pub fn write_skill_md(&self, manifest: &SkillManifest) -> anyhow::Result<bool> {
+        let path = self.skill_md_path(&manifest.name);
+        let body = curator::render_skill_md(manifest);
+        if std::fs::read_to_string(&path).is_ok_and(|cur| cur == body) {
+            return Ok(false);
+        }
+        std::fs::create_dir_all(&self.skill_dir)?;
+        std::fs::write(&path, body)?;
+        Ok(true)
     }
 
     /// Load all enabled skills from the skill directory.
@@ -567,19 +596,28 @@ impl SkillForge {
     pub fn install_skill(&self, manifest: &SkillManifest) -> anyhow::Result<PathBuf> {
         manifest.validate()?;
         std::fs::create_dir_all(&self.skill_dir)?;
-        let path = self.skill_dir.join(format!("{}.skill.json", manifest.name));
+        let path = self.manifest_path(&manifest.name);
         let json = serde_json::to_string_pretty(manifest)?;
         std::fs::write(&path, json)?;
+        // The human-readable twin follows every rewrite (promote, demote,
+        // evolve, curate) so it never describes a stale state.
+        if let Err(e) = self.write_skill_md(manifest) {
+            tracing::debug!(name = %manifest.name, error = %e, "SKILL.md not written");
+        }
         tracing::info!(name = %manifest.name, path = ?path, "Installed skill");
         Ok(path)
     }
 
-    /// Remove a skill manifest from the skill directory.
+    /// Remove a skill manifest (and its `SKILL.md`) from the skill directory.
     pub fn remove_skill(&self, name: &str) -> anyhow::Result<()> {
-        let path = self.skill_dir.join(format!("{name}.skill.json"));
+        let path = self.manifest_path(name);
         if path.exists() {
             std::fs::remove_file(&path)?;
             tracing::info!(name = %name, "Removed skill");
+        }
+        let md = self.skill_md_path(name);
+        if md.exists() {
+            let _ = std::fs::remove_file(md);
         }
         Ok(())
     }

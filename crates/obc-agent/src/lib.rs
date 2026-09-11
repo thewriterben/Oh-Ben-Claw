@@ -184,6 +184,9 @@ pub struct Agent {
     /// Parity item 4: the agent's two bounded note files, appended to the
     /// system prompt (so they sit in the cached prefix and change rarely).
     notes: Option<Arc<obc_memory::notes::Notes>>,
+    /// Parity item 4: every invocation of a forge-managed skill is recorded
+    /// here so the curator knows which skills earn their context rent.
+    skill_usage: Option<Arc<obc_skill_forge::usage::UsageLedger>>,
     /// Phase 15/9: token cost tracking — `(tracker, in_price/M, out_price/M)`.
     /// Each run records an estimated `TokenUsage` (chars/4 heuristic, same as
     /// episode metrics) so the gateway can show a live cost summary.
@@ -293,6 +296,7 @@ impl Agent {
             experience_k: None,
             routing: None,
             notes: None,
+            skill_usage: None,
             cost: None,
             rollout: None,
             forge_dir: None,
@@ -378,6 +382,12 @@ impl Agent {
         output_price_per_million: f64,
     ) -> Self {
         self.cost = Some((tracker, input_price_per_million, output_price_per_million));
+        self
+    }
+
+    /// Attach the skill usage ledger (see `obc_skill_forge::curator`).
+    pub fn with_skill_usage(mut self, ledger: Arc<obc_skill_forge::usage::UsageLedger>) -> Self {
+        self.skill_usage = Some(ledger);
         self
     }
 
@@ -786,6 +796,16 @@ impl Agent {
                     call_id = %call.id,
                     "Executing tool call"
                 );
+                if let Some(ledger) = &self.skill_usage {
+                    let is_skill = self
+                        .skill_names
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .contains(&call.name);
+                    if is_skill {
+                        ledger.record(&call.name);
+                    }
+                }
 
                 // WS5: per-tool-call span + counters.
                 let mut tool_span = self.obs.as_ref().map(|obs| {

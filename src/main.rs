@@ -2588,6 +2588,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     let rollout_tracker = Arc::new(oh_ben_claw::skill_forge::rollout::RolloutTracker::load(
         oh_ben_claw::skill_forge::rollout::RolloutTracker::default_path(),
     ));
+    // Parity item 4: per-skill usage, for the curator.
+    let skill_usage = Arc::new(oh_ben_claw::skill_forge::usage::UsageLedger::load(
+        oh_ben_claw::skill_forge::usage::UsageLedger::default_path(),
+    ));
     // Phase 15/9: token cost tracking (estimated usage; USD when the operator
     // configures [cost] prices). Persisted so daily/monthly budgets survive
     // restarts; falls back to session-only on DB failure.
@@ -2758,6 +2762,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     }
     agent = agent
         .with_rollout(Arc::clone(&rollout_tracker))
+        .with_skill_usage(Arc::clone(&skill_usage))
         .with_forge_dir(oh_ben_claw::skill_forge::SkillForge::default_dir())
         .with_taint_mode(taint_mode);
     // Phase 16: load enabled skills (authored + learned) from the forge into the
@@ -2942,6 +2947,20 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     })
                     .collect(),
             );
+            let improver = if config.self_improvement.curate.unwrap_or(true) {
+                let policy = oh_ben_claw::skill_forge::curator::CuratorPolicy {
+                    archive_after_days: config.self_improvement.archive_after_days.unwrap_or(30),
+                    max_enabled_learned: config.self_improvement.max_enabled_learned.unwrap_or(40),
+                };
+                info!(
+                    archive_after_days = policy.archive_after_days,
+                    max_enabled_learned = policy.max_enabled_learned,
+                    "Skill curator runs after each self-improvement pass"
+                );
+                improver.with_curator(policy, Arc::clone(&skill_usage))
+            } else {
+                improver
+            };
             let executor: Arc<dyn oh_ben_claw::skill_forge::improve::ReplayExecutor> =
                 handle.agent_arc();
             let interval = std::time::Duration::from_secs(

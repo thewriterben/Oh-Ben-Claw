@@ -143,6 +143,27 @@ initial_backoff_ms = 500
 # level = "full"
 # always_ask = ["memory"]
 
+# ── Self-improvement ─────────────────────────────────────────────────────────
+# Phase 16: every run is captured as a trajectory; an hourly loop synthesises
+# skills from successful ones, verifies them, and retrieval injects the most
+# similar past successes into the prompt each run.
+# [self_improvement]
+# enabled = true
+# interval_secs = 3600
+# retrieval_k = 3
+#
+# The curator (2026-09-11) runs after each pass so learned skills earn their
+# context rent: a learned skill whose recipe (kind, tool, arguments) matches
+# another's is disabled in favour of the more-used one; one unused for
+# archive_after_days is disabled; at most max_enabled_learned stay enabled.
+# Disabled means enabled = false plus a `curated:…` tag saying why — nothing
+# is deleted, and `skill_forge install` or the CLI re-enables. Tag a skill
+# `curated:pinned` to exempt it. Every learned skill also gets a SKILL.md
+# (agentskills.io layout) beside its manifest.
+# curate = true
+# archive_after_days = 30
+# max_enabled_learned = 40
+
 # ── Perception ───────────────────────────────────────────────────────────────
 [perception]
 # The temporal world model: bitemporal facts with provenance, a support graph,
