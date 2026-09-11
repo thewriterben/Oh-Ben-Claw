@@ -150,6 +150,7 @@ impl Fixture {
                 name: "harness-eval".to_string(),
                 system_prompt: "worker".to_string(),
                 max_tool_iterations: 4,
+                ..AgentConfig::default()
             },
             Arc::new(WorkerProvider),
             Arc::clone(&self.memory),

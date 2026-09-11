@@ -355,6 +355,16 @@ pub struct ProviderConfig {
     /// Optional response format (structured output / JSON mode).
     #[serde(default)]
     pub response_format: Option<ResponseFormat>,
+    /// Ask the provider to cache the stable prefix (system prompt, tool
+    /// schemas, history up to the ephemeral blocks). Anthropic honours it via
+    /// `cache_control` breakpoints; Ollama caches the prefix on its own. On by
+    /// default since 2026-09-11.
+    #[serde(default = "default_prompt_caching")]
+    pub prompt_caching: bool,
+}
+
+fn default_prompt_caching() -> bool {
+    true
 }
 
 fn default_provider_name() -> String {
@@ -380,6 +390,7 @@ impl Default for ProviderConfig {
             fallbacks: vec![],
             retry: None,
             response_format: None,
+            prompt_caching: default_prompt_caching(),
         }
     }
 }

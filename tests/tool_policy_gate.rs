@@ -92,6 +92,7 @@ fn agent_with(tools: Vec<Box<dyn Tool>>, policies: Vec<ToolPolicy>) -> Agent {
         name: "policy-gate-test".to_string(),
         system_prompt: "test".to_string(),
         max_tool_iterations: 2,
+        ..AgentConfig::default()
     };
     let memory = Arc::new(MemoryStore::open_in_memory().expect("in-memory store"));
     Agent::new(config, Arc::new(UnusedProvider), memory, tools)

@@ -92,6 +92,7 @@ mod skill_replay;
 // calls `Provider::chat_completion_streaming` and broadcasts each text delta
 // as `AgentEvent::Token`, with `Thinking`, `ToolCall` and `ToolResult` emitted
 // from inside the loop as they happen rather than reconstructed afterwards.
+pub mod context;
 pub mod system2;
 pub mod world_context;
 pub use edge::{EdgeAgent, EdgeAgentBuilder};
@@ -487,27 +488,13 @@ impl Agent {
         self.memory
             .append_message(session_id, ChatRole::User, user_message)?;
 
-        // 2. Build conversation context
-        let mut messages = self.build_context(session_id)?;
-
-        // Phase 16 P1: surface verified experience (learned skills + similar
-        // past successes) as a system block right after the system prompt.
-        if let Some(k) = self.experience_k {
-            if let Some(block) = self.experience_block(user_message, k) {
-                if let Some(obs) = &self.obs {
-                    obs.metrics
-                        .counter("experience_blocks_injected_total")
-                        .inc();
-                }
-                messages.insert(
-                    1.min(messages.len()),
-                    ChatMessage {
-                        role: ChatRole::System,
-                        content: block,
-                    },
-                );
-            }
+        // 2. Fold old history if the window is filling, then build the context
+        //    in cache-stable order (system, history, ephemeral blocks, the ask).
+        if let Err(e) = self.compact_if_needed(session_id, provider_config).await {
+            // A failed summary must not cost the turn; the raw window still works.
+            tracing::warn!(session_id = %session_id, error = %e, "compaction failed; using raw history");
         }
+        let mut messages = self.build_context_for(session_id, Some(user_message))?;
 
         let max_iterations = self.config.max_tool_iterations.min(MAX_TOOL_ITERATIONS);
         let mut tool_calls_made = Vec::new();
@@ -525,6 +512,14 @@ impl Agent {
                 "Agent loop iteration"
             );
 
+            if iteration > 0 {
+                // The model has acted on older tool results; what it needs now
+                // is that they happened, not their bytes.
+                let stubbed = context::stub_old_tool_outputs(&mut messages, 2);
+                if stubbed > 0 {
+                    tracing::debug!(session_id = %session_id, stubbed, "old tool outputs stubbed");
+                }
+            }
             self.emit(AgentEvent::Thinking {
                 session_id: session_id.to_string(),
                 iteration: iteration as u32,
@@ -858,43 +853,141 @@ impl Agent {
     }
 
     /// Build the conversation context for an LLM call.
+    /// The context with no objective (no experience block); what the tests
+    /// exercise directly.
+    #[cfg(test)]
     fn build_context(&self, session_id: &str) -> Result<Vec<ChatMessage>> {
-        let mut messages = Vec::new();
+        self.build_context_for(session_id, None)
+    }
 
-        // System prompt
-        messages.push(ChatMessage {
+    /// The prompt for one turn, in cache-stable order:
+    ///
+    /// 1. the system prompt (never changes);
+    /// 2. the history — the latest persisted summary, if any, then every message
+    ///    after it, up to `max_history` rows (only grows at the end);
+    /// 3. the ephemeral blocks — experience for this objective, then what the
+    ///    agent currently believes about the world — regenerated every turn;
+    /// 4. the user's latest message.
+    ///
+    /// Until 2026-09-11 the world state came second, so every turn's prompt
+    /// differed from the last one two messages in, and neither Ollama's prompt
+    /// cache nor Anthropic's prompt caching could reuse anything past the
+    /// system prompt. The world state is still its own system message, not
+    /// spliced into the prompt: the prompt is who the agent is; this is what is
+    /// true right now, and the boundary stays visible in a transcript.
+    fn build_context_for(
+        &self,
+        session_id: &str,
+        objective: Option<&str>,
+    ) -> Result<Vec<ChatMessage>> {
+        let mut messages = vec![ChatMessage {
             role: ChatRole::System,
             content: self.config.system_prompt.clone(),
-        });
+        }];
 
-        // What it currently believes about the world — a separate system message, not
-        // appended to the prompt. Two reasons. The prompt is who the agent is and is
-        // stable; this is what is true right now and changes every turn, and splicing
-        // them makes the standing instruction look as perishable as a sensor reading.
-        // It also keeps the boundary visible to anyone reading a transcript.
+        let stored = self
+            .memory
+            .load_recent_stored(session_id, self.max_history)?;
+        messages.extend(context::assemble_history(&stored));
+
+        let mut ephemeral = Vec::new();
+        // Phase 16 P1: verified experience (learned skills + similar past
+        // successes) for this objective.
+        if let (Some(k), Some(objective)) = (self.experience_k, objective) {
+            if let Some(block) = self.experience_block(objective, k) {
+                if let Some(obs) = &self.obs {
+                    obs.metrics
+                        .counter("experience_blocks_injected_total")
+                        .inc();
+                }
+                ephemeral.push(ChatMessage {
+                    role: ChatRole::System,
+                    content: block,
+                });
+            }
+        }
         if let Some(world) = &self.world {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
             if let Some(state) = world_context::render(world, &self.world_context, now) {
-                messages.push(ChatMessage {
+                ephemeral.push(ChatMessage {
                     role: ChatRole::System,
                     content: state,
                 });
             }
         }
 
-        // Recent conversation history
-        let history = self
+        Ok(context::with_ephemeral_tail(messages, ephemeral))
+    }
+
+    /// Fold older history into a persisted summary when the history has grown
+    /// past `compaction_threshold × context_tokens`. Returns whether it did.
+    ///
+    /// One model call (no tools, non-streaming) per compaction, so at most one
+    /// every `keep_tail`-plus messages; the summary is appended to the session
+    /// as a system message carrying the id it covers through, and
+    /// [`context::assemble_history`] puts it first. Nothing is deleted: the
+    /// rows it summarises stay in `memory.db` for search and export.
+    pub async fn compact_if_needed(
+        &self,
+        session_id: &str,
+        provider_config: &obc_providers::ProviderConfig,
+    ) -> Result<bool> {
+        if !self.config.compaction {
+            return Ok(false);
+        }
+        let stored = self
             .memory
-            .load_recent_messages(session_id, self.max_history)?;
-
-        // Skip the last user message since we'll add it fresh from memory
-        // (it was already appended before this call)
-        messages.extend(history);
-
-        Ok(messages)
+            .load_recent_stored(session_id, self.max_history)?;
+        let history = context::assemble_history(&stored);
+        let budget =
+            (self.config.context_tokens as f64 * self.config.compaction_threshold) as usize;
+        let used = context::estimate_tokens(&history) + self.config.system_prompt.len() / 4;
+        if used <= budget {
+            return Ok(false);
+        }
+        let Some((a, b)) = context::compaction_range(&stored, self.config.compaction_keep_tail)
+        else {
+            return Ok(false);
+        };
+        let previous = stored
+            .iter()
+            .rev()
+            .find(|m| m.role == "system" && context::summary_cursor(&m.content).is_some())
+            .and_then(|s| s.content.split_once('\n').map(|(_, rest)| rest.to_string()));
+        let span: Vec<&obc_memory::StoredMessage> = stored[a..=b]
+            .iter()
+            .filter(|m| !(m.role == "system" && context::summary_cursor(&m.content).is_some()))
+            .collect();
+        let through = stored[b].id;
+        let prompt = context::summarizer_input(previous.as_deref(), &span);
+        let completion = self
+            .provider
+            .chat_completion(&prompt, &[], provider_config)
+            .await?;
+        if completion.message.trim().is_empty() {
+            tracing::warn!(session_id = %session_id, "compaction: summariser returned nothing; keeping raw history");
+            return Ok(false);
+        }
+        self.memory.append_message(
+            session_id,
+            ChatRole::System,
+            &context::summary_message(through, &completion.message),
+        )?;
+        if let Some(obs) = &self.obs {
+            obs.metrics.counter("context_compactions_total").inc();
+        }
+        tracing::info!(
+            session_id = %session_id,
+            folded = span.len(),
+            through_id = through,
+            used_tokens = used,
+            budget_tokens = budget,
+            "context compacted into a summary"
+        );
+        Ok(true)
     }
 
     /// Execute a tool by name with the given JSON arguments string.
@@ -1547,6 +1640,36 @@ pub struct AgentConfig {
     /// Maximum number of tool-use iterations per user message.
     #[serde(default = "default_max_tool_iterations")]
     pub max_tool_iterations: usize,
+    /// The model's context window in tokens, as far as this agent should
+    /// assume. OBC's Ollama adapter sends no `num_ctx`, so the number the
+    /// model actually has is whatever its Modelfile says; tell the agent the
+    /// same number here. Default 8192, Ollama's global default on the bench.
+    #[serde(default = "default_context_tokens")]
+    pub context_tokens: usize,
+    /// Fold older history into a summary once the estimated history exceeds
+    /// this fraction of `context_tokens`. Default 0.5 (Hermes's in-loop figure).
+    #[serde(default = "default_compaction_threshold")]
+    pub compaction_threshold: f64,
+    /// How many of the most recent messages are never folded. Default 8.
+    #[serde(default = "default_compaction_keep_tail")]
+    pub compaction_keep_tail: usize,
+    /// Master switch for compaction. Off means the history is the raw last
+    /// `max_history` messages, as before 2026-09-11.
+    #[serde(default = "default_true")]
+    pub compaction: bool,
+}
+
+fn default_context_tokens() -> usize {
+    8192
+}
+fn default_compaction_threshold() -> f64 {
+    0.5
+}
+fn default_compaction_keep_tail() -> usize {
+    8
+}
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AgentConfig {
@@ -1555,6 +1678,10 @@ impl Default for AgentConfig {
             name: default_agent_name(),
             system_prompt: default_system_prompt(),
             max_tool_iterations: default_max_tool_iterations(),
+            context_tokens: default_context_tokens(),
+            compaction_threshold: default_compaction_threshold(),
+            compaction_keep_tail: default_compaction_keep_tail(),
+            compaction: default_true(),
         }
     }
 }
@@ -1662,5 +1789,151 @@ mod streaming_events_tests {
             text, "hello world",
             "the deltas concatenate to the final message"
         );
+    }
+}
+
+#[cfg(test)]
+mod context_order_and_compaction_tests {
+    use super::*;
+
+    /// Answers every call with a fixed string: as the brain it is the "final
+    /// response", as the summariser it is the summary.
+    struct Fixed(&'static str);
+
+    #[async_trait::async_trait]
+    impl obc_providers::Provider for Fixed {
+        fn name(&self) -> &str {
+            "fixed"
+        }
+        async fn chat_completion(
+            &self,
+            _m: &[obc_providers::ChatMessage],
+            _t: &[Box<dyn Tool>],
+            c: &obc_providers::ProviderConfig,
+        ) -> Result<obc_providers::ChatCompletion> {
+            Ok(obc_providers::ChatCompletion {
+                message: self.0.to_string(),
+                tool_calls: vec![],
+                provider: "fixed".into(),
+                model: c.model.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn the_world_state_is_after_the_history_and_before_the_ask() {
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
+        let session = memory.create_session("order").unwrap();
+        memory
+            .append_message(&session, ChatRole::User, "earlier")
+            .unwrap();
+        memory
+            .append_message(&session, ChatRole::Assistant, "reply")
+            .unwrap();
+        memory
+            .append_message(&session, ChatRole::User, "the ask")
+            .unwrap();
+        let world = Arc::new(obc_memory::world::WorldMemory::open_in_memory().unwrap());
+        world
+            .observe(
+                "printer.state",
+                serde_json::json!("idle"),
+                1_000,
+                1_000,
+                "test",
+            )
+            .unwrap();
+        let agent = Agent::new(
+            AgentConfig::default(),
+            Arc::new(Fixed("ok")),
+            memory,
+            vec![],
+        )
+        .with_world_context(world, world_context::WorldContextConfig::default());
+        let ctx = agent.build_context_for(&session, Some("the ask")).unwrap();
+        let contents: Vec<&str> = ctx.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(contents[0], AgentConfig::default().system_prompt);
+        assert_eq!(&contents[1..3], &["earlier", "reply"]);
+        assert!(
+            contents[3].starts_with("## World state"),
+            "the ephemeral block sits after the stable history: {:?}",
+            contents[3]
+        );
+        assert_eq!(contents[4], "the ask", "the user's message is last");
+    }
+
+    #[tokio::test]
+    async fn a_long_history_is_folded_into_a_summary_that_leads_the_context() {
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
+        let session = memory.create_session("compact").unwrap();
+        for i in 0..20 {
+            let role = if i % 2 == 0 {
+                ChatRole::User
+            } else {
+                ChatRole::Assistant
+            };
+            memory
+                .append_message(&session, role, &format!("message {i} {}", "x".repeat(200)))
+                .unwrap();
+        }
+        let cfg = AgentConfig {
+            context_tokens: 800, // 20 × ~54 tokens ≈ 1,080 > 400 budget
+            compaction_keep_tail: 4,
+            ..AgentConfig::default()
+        };
+        let agent = Agent::new(
+            cfg,
+            Arc::new(Fixed("SUMMARY of the first sixteen")),
+            memory.clone(),
+            vec![],
+        );
+        let pc = obc_providers::ProviderConfig::default();
+
+        assert!(agent.compact_if_needed(&session, &pc).await.unwrap());
+        let ctx = agent.build_context(&session).unwrap();
+        // system prompt, the summary, then the kept tail of 4
+        assert_eq!(
+            ctx.len(),
+            1 + 1 + 4,
+            "{:?}",
+            ctx.iter()
+                .map(|m| &m.content[..20.min(m.content.len())])
+                .collect::<Vec<_>>()
+        );
+        assert!(ctx[1].content.starts_with(context::SUMMARY_MARKER));
+        assert!(ctx[1].content.contains("SUMMARY of the first sixteen"));
+        assert!(ctx[2].content.starts_with("message 16"));
+        assert!(ctx[5].content.starts_with("message 19"));
+
+        // Under budget now: a second call is a no-op, and the rows still exist.
+        assert!(!agent.compact_if_needed(&session, &pc).await.unwrap());
+        assert_eq!(
+            memory.message_count(&session).unwrap(),
+            21,
+            "nothing was deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_can_be_switched_off() {
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
+        let session = memory.create_session("raw").unwrap();
+        for i in 0..20 {
+            memory
+                .append_message(
+                    &session,
+                    ChatRole::User,
+                    &format!("m{i} {}", "x".repeat(200)),
+                )
+                .unwrap();
+        }
+        let cfg = AgentConfig {
+            context_tokens: 800,
+            compaction: false,
+            ..AgentConfig::default()
+        };
+        let agent = Agent::new(cfg, Arc::new(Fixed("never")), memory, vec![]);
+        let pc = obc_providers::ProviderConfig::default();
+        assert!(!agent.compact_if_needed(&session, &pc).await.unwrap());
     }
 }

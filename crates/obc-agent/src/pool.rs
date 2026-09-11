@@ -229,6 +229,7 @@ impl AgentPool {
             name: spec.name.clone(),
             system_prompt: spec.system_prompt.clone(),
             max_tool_iterations: spec.max_iterations,
+            ..AgentConfig::default()
         };
 
         // Build the agent
