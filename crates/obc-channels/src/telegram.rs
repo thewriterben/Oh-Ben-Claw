@@ -70,6 +70,39 @@ struct TgMessage {
     /// An audio file (mp3/m4a…) — treated like a voice note.
     #[serde(default)]
     audio: Option<TgFile>,
+    /// Every other field Telegram sent (`photo`, `video_note`, `sticker`,
+    /// `document`, …). Only the *names* are ever logged, so an ignored message
+    /// says what it was instead of vanishing (bench, 2026-09-12: two voice
+    /// notes left no trace at all).
+    #[serde(flatten)]
+    other: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+impl TgMessage {
+    /// The kind of content, for logs: `text`, `voice`, `audio`, or the other
+    /// field names Telegram sent (`date`, `chat`, `from` are not content).
+    fn kind(&self) -> String {
+        if self.text.is_some() {
+            return "text".into();
+        }
+        if self.voice.is_some() {
+            return "voice".into();
+        }
+        if self.audio.is_some() {
+            return "audio".into();
+        }
+        let names: Vec<&str> = self
+            .other
+            .keys()
+            .map(String::as_str)
+            .filter(|k| !matches!(*k, "date" | "message_id" | "chat" | "from" | "edit_date"))
+            .collect();
+        if names.is_empty() {
+            "empty".into()
+        } else {
+            names.join(",")
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -189,6 +222,7 @@ impl TelegramChannel {
             .http
             .get(format!("{}/getFile", self.api_base))
             .query(&[("file_id", file_id)])
+            .timeout(std::time::Duration::from_secs(30))
             .send()
             .await
             .context("Telegram getFile HTTP error")?
@@ -205,6 +239,7 @@ impl TelegramChannel {
                 "https://api.telegram.org/file/bot{}/{}",
                 self.token, path
             ))
+            .timeout(std::time::Duration::from_secs(120))
             .send()
             .await
             .context("Telegram file download HTTP error")?
@@ -317,10 +352,23 @@ impl TelegramChannel {
 
             for update in updates {
                 offset = offset.max(update.update_id + 1);
-                if let Some(msg) = update.message {
-                    if let Err(e) = self.handle_message(msg).await {
-                        tracing::error!(error = %e, "Failed to handle Telegram message");
+                match update.message {
+                    Some(msg) => {
+                        tracing::info!(
+                            update_id = update.update_id,
+                            chat_id = msg.chat.id,
+                            user_id = ?msg.from.as_ref().map(|u| u.id),
+                            kind = %msg.kind(),
+                            "Telegram update received"
+                        );
+                        if let Err(e) = self.handle_message(msg).await {
+                            tracing::error!(error = %e, "Failed to handle Telegram message");
+                        }
                     }
+                    None => tracing::info!(
+                        update_id = update.update_id,
+                        "Telegram update received without a message; ignored"
+                    ),
                 }
             }
         }
@@ -338,6 +386,7 @@ impl TelegramChannel {
                 ("timeout", "30".into()),
                 ("allowed_updates", "[\"message\"]".into()),
             ])
+            .timeout(std::time::Duration::from_secs(45))
             .send()
             .await
             .context("Telegram getUpdates HTTP error")?
@@ -422,6 +471,11 @@ impl TelegramChannel {
             (None, Some(file)) if self.speech_base.is_some() => {
                 let user_id = msg.from.as_ref().map(|u| u.id);
                 if !allowed(&self.allowed_user_ids, user_id) {
+                    tracing::warn!(
+                        user_id = ?user_id,
+                        chat_id = msg.chat.id,
+                        "Telegram: voice note from an unlisted user refused"
+                    );
                     return self
                         .send_text(msg.chat.id, "This bot is private.", Some(msg.message_id))
                         .await;
@@ -450,7 +504,22 @@ impl TelegramChannel {
                 was_voice = true;
                 transcript
             }
-            _ => return Ok(()),
+            (None, Some(_)) => {
+                tracing::warn!(
+                    chat_id = msg.chat.id,
+                    "Telegram voice note ignored: transcription is off (set \
+                     [channels.telegram] transcribe_voice = true and OPENAI_API_BASE)"
+                );
+                return Ok(());
+            }
+            (None, None) => {
+                tracing::info!(
+                    chat_id = msg.chat.id,
+                    kind = %msg.kind(),
+                    "Telegram message ignored: not text, voice or audio"
+                );
+                return Ok(());
+            }
         };
 
         tracing::debug!(
@@ -725,6 +794,25 @@ mod allowlist_tests {
             serde_json::to_string(&body).unwrap(),
             r#"{"chat_id":42,"text":"hi","reply_to_message_id":7}"#
         );
+    }
+
+    #[test]
+    fn a_voice_update_parses_and_names_its_kind() {
+        let raw = r#"{"ok":true,"result":[{"update_id":7,"message":{"message_id":9,
+            "from":{"id":42,"is_bot":false,"first_name":"B","username":"b"},
+            "chat":{"id":42,"first_name":"B","type":"private"},"date":1789000000,
+            "voice":{"duration":3,"mime_type":"audio/ogg","file_id":"AwAC","file_unique_id":"x","file_size":12000}}}]}"#;
+        let resp: TgResponse<Vec<TgUpdate>> = serde_json::from_str(raw).unwrap();
+        let msg = resp.result.unwrap().remove(0).message.unwrap();
+        assert_eq!(msg.kind(), "voice");
+        assert_eq!(msg.voice.as_ref().unwrap().duration, Some(3));
+        let raw = r#"{"message_id":9,"chat":{"id":42,"type":"private"},"date":1,
+            "video_note":{"duration":3,"length":240,"file_id":"v","file_unique_id":"y"}}"#;
+        let msg: TgMessage = serde_json::from_str(raw).unwrap();
+        assert_eq!(msg.kind(), "video_note");
+        let raw = r#"{"message_id":9,"chat":{"id":42,"type":"private"},"date":1,"text":"hi"}"#;
+        let msg: TgMessage = serde_json::from_str(raw).unwrap();
+        assert_eq!(msg.kind(), "text");
     }
 
     #[test]
