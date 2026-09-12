@@ -32,6 +32,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `-published`, `-second`); same class, different crate, not changed here.
 
 ---
+## Unreleased — The browser block does something, and mcp-serve keeps stdout clean (2026-09-11)
+
+Parity plan Stage 3, item 8 (browser first) and the first step of item 9
+(computer use by composition, through Claude Desktop's MCP client).
+
+### Fixed
+
+- **`[browser]` was parsed and ignored.** `enabled = false` in the bench
+  config, and seven `browser_*` tools registered anyway, every one falling
+  back to a plain HTTP fetch because nothing listened on 9222. Now
+  `enabled = false` removes them from the registry (and their schemas from
+  every prompt), and `cdp_url` seeds `OBC_BROWSER_CDP_URL` when the variable
+  is unset, so the config alone points the tools at a dedicated headless
+  Chrome on its own port and profile.
+- **`mcp-serve` over stdio logged to stdout.** The first two lines a client
+  read were `Loaded config …` and `MCP server running on stdio`, which no
+  JSON-RPC parser survives. Logs go to stderr for that command, as the MCP
+  rule says; the http transport is unchanged.
+
 ## Unreleased — The bill comes from the provider, not from chars/4 (2026-09-11)
 
 The router had been reaching Claude for an hour and nothing could say what a

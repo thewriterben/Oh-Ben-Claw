@@ -267,15 +267,29 @@ async fn main() -> Result<()> {
     // Honor RUST_LOG (e.g. `RUST_LOG=debug` for the LoRa gateway's raw-line
     // view); default to INFO when unset. The old hardcoded INFO level silently
     // ignored RUST_LOG — bench-caught 2026-07-17.
-    let subscriber = FmtSubscriber::builder()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)?;
-
     let cli = Cli::parse();
+    // `mcp-serve` over stdio owns stdout for JSON-RPC; a log line there is a
+    // parse error in the client (Claude Desktop showed exactly that on
+    // 2026-09-11: the first two "lines" it read were `Loaded config …` and
+    // `MCP server running on stdio`). Logs go to stderr for that command.
+    let logs_to_stderr = matches!(
+        &cli.command,
+        Commands::McpServe { transport, .. } if transport == "stdio"
+    );
+    let filter = || {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+    };
+    if logs_to_stderr {
+        let subscriber = FmtSubscriber::builder()
+            .with_env_filter(filter())
+            .with_writer(std::io::stderr)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)?;
+    } else {
+        let subscriber = FmtSubscriber::builder().with_env_filter(filter()).finish();
+        tracing::subscriber::set_global_default(subscriber)?;
+    }
     // `--config` wins over OBC_CONFIG, which wins over the default path —
     // Config::load() reads OBC_CONFIG, so surface the flag through it.
     if let Some(path) = &cli.config {
@@ -466,6 +480,18 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     } else {
         None
     };
+    // `[browser]` was parsed and ignored until 2026-09-11 (`enabled = false`
+    // in the bench config, seven browser_* tools registered regardless, all
+    // falling back to plain HTTP because nothing listened on 9222). The tool
+    // set reads the CDP endpoint from OBC_BROWSER_CDP_URL; the config's
+    // `cdp_url` seeds it when the variable is unset, and `enabled = false`
+    // drops the seven tools from the registry (and their schemas from every
+    // prompt).
+    if let Some(url) = &config.browser.cdp_url {
+        if std::env::var_os("OBC_BROWSER_CDP_URL").is_none() {
+            std::env::set_var("OBC_BROWSER_CDP_URL", url);
+        }
+    }
     let mut all_tools = if conscience.enabled {
         oh_ben_claw::tools::default_tools_with_reach(
             Some(conscience.reach.clone()),
@@ -475,6 +501,20 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     } else {
         default_tools()
     };
+    if config.browser.enabled {
+        info!(
+            cdp = %std::env::var("OBC_BROWSER_CDP_URL").unwrap_or_else(|_| "http://localhost:9222".into()),
+            profile = %config.browser.profile,
+            "Browser tools active (CDP; plain-HTTP fallback when the endpoint is down)"
+        );
+    } else {
+        let before = all_tools.len();
+        all_tools.retain(|t| !t.name().starts_with("browser_"));
+        info!(
+            removed = before - all_tools.len(),
+            "Browser tools disabled ([browser] enabled = false)"
+        );
+    }
     // Skill forge management tool (list/install/remove skills at runtime).
     all_tools.push(Box::new(
         oh_ben_claw::skill_forge::SkillForgeTool::default_dir(),
