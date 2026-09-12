@@ -15,19 +15,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `microsd`, because all three live on the Sense's B2B expansion board rather
   than on this PCB. A test asserts their absence: a planner that read them off
   the bare module would propose a vision node on hardware that cannot see.
-- **The USB id is sourced this time.** `0x2886:0x0056`, from arduino-esp32's own
-  board definition — `XIAO_ESP32S3.vid.0`/`pid.0` in `boards.txt`, and
-  `USB_VID`/`USB_PID` in `variants/XIAO_ESP32S3/pins_arduino.h`
-  (espressif/arduino-esp32 #7971). The definition's second pair, `0x8056`, is
-  this board in UF2 bootloader mode rather than a second board, so it is not
-  listed.
+- **Two USB ids, because a USB id is a fact about firmware.** `0x2886:0x0056`
+  from arduino-esp32's board definition (`XIAO_ESP32S3.vid.0`/`pid.0` in
+  `boards.txt`, `USB_VID`/`USB_PID` in `variants/XIAO_ESP32S3/pins_arduino.h`,
+  espressif/arduino-esp32 #7971), **and** Espressif's native `0x303a:0x1001`,
+  measured on a real board. The definition's `0x8056` is UF2 bootloader mode
+  rather than a third board, so it is not listed.
 - `registry/registry.json` and `firmware-templates/templates.json` regenerated
   from their emit binaries. The scaffold's capability-conditioned includes do the
   right thing unprompted: the generated sketch carries `WiFi.h`, `BLEDevice.h`,
   `Wire.h` and `SPI.h` and **not** `esp_camera.h`. The drift guard
   `committed_templates_json_is_current` is what caught the stale templates —
   adding a board makes them stale, which is worth knowing for the next one.
-  1,693 tests (two new).
+  `templates.json` is **unchanged** by the second USB row — templates dedupe by
+  board name, which the multi-identity convention already relied on. 1,695 tests
+  (four new).
+
+### Changed
+
+- **The registry says what a USB id means.** New section at the top of
+  `registry.rs`: a VID/PID identifies the *firmware's USB configuration*, not the
+  board. Measured rather than argued — the plain XIAO running our own ESP-IDF
+  firmware v0.1.0 (node `obc-esp32-s3-001`, MAC 64:E8:33:7E:BB:98) enumerates as
+  `0x303a:0x1001`, descriptor *"USB JTAG/serial debug unit"*, because that
+  firmware uses the chip's built-in USB-Serial-JTAG and says so in its own boot
+  log. The same PCB built against arduino-esp32 runs TinyUSB and presents
+  `0x2886:0x0056`. **A build-menu option decides which.**
+- Three consequences are now stated rather than left to look like bugs:
+  `lookup_board` returning the first of eighteen boards sharing `0x303a:0x1001`
+  is a choice no function of the id could improve on; a board may legitimately
+  appear more than once, which is why OpenPartsCore's `candidates_for_usb`
+  returns an iterator; and an id with no firmware named beside it is not
+  evidence. Two tests pin it — that the XIAO keeps both identities, and that the
+  shared id does **not** resolve to the XIAO, so a later change to the lookup
+  contract trips a test rather than a deployment.
+- **This caught a live defect in this PR before it merged.** The first draft
+  carried only `0x2886:0x0056`, which our own node does not present — so the
+  entry would have failed to identify the very board it was added for.
 
 ### Known conflict, recorded not resolved
 
@@ -37,8 +61,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `0x0058` from a comment with nothing behind it, pinned by a test. On a
   native-USB ESP32-S3 the PID comes from the firmware and not the silicon, so
   both ids can be true of different firmware and neither is a fact about the
-  board. The Sense entry and its test are untouched; the registry now carries one
-  sourced id and one unsourced one that disagree, which is the honest state.
+  board — now demonstrated rather than asserted, by the measurement above. A
+  third source since found, CircuitPython's `seeed_xiao_esp32_s3_sense`, gives
+  `0x8056`; still nothing gives `0x0058`. The Sense entry and its test are
+  untouched.
   Settling it needs a device on a wire, and the answer only means anything
   alongside which firmware was on it.
 

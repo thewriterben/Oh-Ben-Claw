@@ -4,6 +4,36 @@
 //! capability lists. Used by the peripheral subsystem to auto-identify boards
 //! when they are plugged in via USB.
 //!
+//! # What a USB id means here
+//!
+//! **A VID/PID identifies the firmware's USB configuration, not the board.** It
+//! is a runtime fact about what is flashed, which is why one board can hold
+//! several and why several boards share one.
+//!
+//! Measured, rather than argued (2026-09-12, issue #150). A plain Seeed XIAO
+//! ESP32S3 running our own ESP-IDF firmware enumerates as Espressif's
+//! `0x303a:0x1001` with the descriptor *"USB JTAG/serial debug unit"* — the
+//! ESP32-S3's built-in USB-Serial-JTAG peripheral, whose id is fixed in silicon.
+//! The same board built against arduino-esp32's `XIAO_ESP32S3` definition runs
+//! TinyUSB instead and presents Seeed's `0x2886:0x0056` from `pins_arduino.h`.
+//! Same PCB, two ids, and a build-menu option decides which. `xiao-esp32s3`
+//! therefore has two rows; so does `esp32-s3`, with three.
+//!
+//! Three consequences worth stating out loud, because each looks like a bug:
+//!
+//! - **[`lookup_board`] returns the first VID/PID match**, and eighteen boards
+//!   share `0x303a:0x1001`. That is a choice, not an oversight: no function of
+//!   the USB id can do better, because the information is not in the id.
+//!   Deployment config selects by `name`.
+//! - **A board may appear more than once.** Consumers that key on VID/PID must
+//!   expect a set; OpenPartsCore's ingest merges same-name rows into one model
+//!   with a `usb_ids` list, and its `candidates_for_usb` returns an iterator
+//!   rather than an `Option` for exactly this reason (its ADR-0004).
+//! - **An id with no firmware named beside it is not evidence.** `0x2886:0x0058`
+//!   sits on `xiao-esp32s3-sense` from a comment with no source, and the two
+//!   primary sources that exist (arduino-esp32, CircuitPython) give `0x0056` and
+//!   `0x8056`. Unresolved on purpose; see #150.
+//!
 //! # Capability Tokens
 //! | Token | Description |
 //! |---|---|
@@ -770,16 +800,60 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
     //
     // That same single Arduino definition also serves the Sense — Seeed's wiki
     // tells you to select `XIAO_ESP32S3` for either — while the Sense entry above
-    // claims 0x0058 from a comment with nothing behind it. Recorded, not
-    // resolved, in #150: on a native-USB ESP32-S3 the PID comes from the firmware
-    // rather than the silicon, so the two can both be true of different firmware
-    // and neither is a fact about the board. Settling it needs a device on a wire.
+    // claims 0x0058 from a comment with nothing behind it (#150).
+    //
+    // The id below is what this board presents **under the Arduino board
+    // definition**, which builds with TinyUSB (`usb_mode=0`) and applies
+    // USB_VID/USB_PID from the descriptor. It is not the only id the board has:
+    // see the second row, measured on a device running our own firmware.
     BoardInfo {
         vid: 0x2886,
         pid: 0x0056,
         name: "xiao-esp32s3",
         architecture: Some(
             "ESP32-S3R8 Xtensa LX7 dual-core @ 240 MHz, 8 MB PSRAM / 8 MB flash, Wi-Fi + BLE 5.0 (native USB)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio",
+            "analog_read",
+            "i2c",
+            "spi",
+            "wifi",
+            "ble",
+            "sensor_read",
+        ],
+        vendor: "Seeed Studio",
+        ecosystem: "XIAO",
+        connectors: &[Connector::Bare],
+    },
+    // The same board, second identity — the one it actually has in this fleet.
+    //
+    // Measured 2026-09-12 on the plain XIAO ESP32S3 running Oh-Ben-Claw's own
+    // ESP-IDF firmware v0.1.0 (`libespidf`, ESP-IDF v5.3.2, built 2026-08-24),
+    // node `obc-esp32-s3-001`, MAC 64:E8:33:7E:BB:98. Windows enumerated it as
+    // `USB\VID_303A&PID_1001`, a composite of a CDC port and a WinUSB interface,
+    // bus-reported description "USB JTAG/serial debug unit".
+    //
+    // The firmware says why in its own boot log: *"Serial: native USB-Serial-JTAG
+    // (send newline-delimited JSON commands)"*. That peripheral's descriptor is
+    // fixed in the silicon at Espressif's 0x303a:0x1001; TinyUSB never runs, so
+    // no Seeed id can appear. **The USB id identifies the firmware's USB mode,
+    // not the board** — which is why this board needs two rows and why neither
+    // alone would have found our own node.
+    //
+    // `lookup_board` returns the first VID/PID match, and eighteen boards now sit
+    // at 0x303a:0x1001, so this row does not win that lookup and is not meant to:
+    // it exists so `candidates_for_usb` downstream (OpenPartsCore ADR-0004, an
+    // iterator precisely because this mapping is many-to-many) can offer the XIAO
+    // as a candidate at all. Selection among ESP32-S3 boards is by `name`, as the
+    // note above the Accelerapp-sourced block already says.
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "xiao-esp32s3",
+        architecture: Some(
+            "ESP32-S3R8 Xtensa LX7 dual-core @ 240 MHz, 8 MB PSRAM / 8 MB flash, Wi-Fi + BLE 5.0 (native USB-Serial-JTAG; shared VID/PID)",
         ),
         transport: "serial",
         capabilities: &[
@@ -2232,6 +2306,40 @@ mod tests {
         assert!(b.capabilities.contains(&"wifi"));
         assert!(b.capabilities.contains(&"ble"));
         assert_eq!(b.transport, "serial");
+    }
+
+    #[test]
+    fn the_xiao_carries_both_of_its_usb_identities() {
+        // The id depends on how the firmware was built, not on the board:
+        // 0x2886:0x0056 under the Arduino definition (TinyUSB), and Espressif's
+        // native 0x303a:0x1001 when the firmware uses the chip's USB-Serial-JTAG,
+        // which ours does. Measured on obc-esp32-s3-001, 2026-09-12. Dropping
+        // either row would make one real device unidentifiable.
+        let ids: Vec<(u16, u16)> = known_boards()
+            .iter()
+            .filter(|b| b.name == "xiao-esp32s3")
+            .map(|b| (b.vid, b.pid))
+            .collect();
+        assert!(
+            ids.contains(&(0x2886, 0x0056)) && ids.contains(&(0x303a, 0x1001)),
+            "xiao-esp32s3 must keep both identities, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn the_shared_esp32s3_id_does_not_resolve_to_the_xiao() {
+        // Documenting the consequence rather than pretending it away: eighteen
+        // boards share 0x303a:0x1001 and `lookup_board` returns the first match.
+        // The XIAO row at that id exists for `candidates_for_usb` downstream, not
+        // to win this lookup. If this ever starts returning the XIAO, the lookup
+        // contract changed and the comment above that row is stale.
+        let b = lookup_board(0x303a, 0x1001).unwrap();
+        assert_ne!(b.name, "xiao-esp32s3");
+        let sharing = known_boards()
+            .iter()
+            .filter(|b| (b.vid, b.pid) == (0x303a, 0x1001))
+            .count();
+        assert!(sharing > 1, "the id is shared, so first-match is a choice");
     }
 
     #[test]
