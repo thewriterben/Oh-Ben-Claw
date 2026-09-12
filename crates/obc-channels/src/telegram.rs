@@ -43,6 +43,25 @@ pub fn allowed(allowed_user_ids: &[i64], user_id: Option<i64>) -> bool {
     }
 }
 
+/// The words out of a transcription response. `response_format = text` is
+/// asked for, but not every OpenAI-compatible server honours it: the bench's
+/// obc-stt.py answered `{"text": "...", "duration_s": 10.4, "language": "en"}`
+/// and the agent was handed that JSON as the operator's words (2026-09-12).
+/// A JSON object with a string `text` yields that string; anything else is
+/// taken as the plain text it claims to be.
+fn transcript_text(body: &str) -> String {
+    let body = body.trim();
+    if body.starts_with('{') {
+        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(body)
+        {
+            if let Some(serde_json::Value::String(t)) = map.get("text") {
+                return t.trim().to_string();
+            }
+        }
+    }
+    body.to_string()
+}
+
 // ── Telegram API types ────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -279,7 +298,7 @@ impl TelegramChannel {
         if !resp.status().is_success() {
             anyhow::bail!("transcription returned {}", resp.status());
         }
-        Ok(resp.text().await.unwrap_or_default().trim().to_string())
+        Ok(transcript_text(&resp.text().await.unwrap_or_default()))
     }
 
     /// Render `text` to mp3 through the speech endpoint and send it as audio.
@@ -794,6 +813,22 @@ mod allowlist_tests {
             serde_json::to_string(&body).unwrap(),
             r#"{"chat_id":42,"text":"hi","reply_to_message_id":7}"#
         );
+    }
+
+    #[test]
+    fn a_transcript_is_the_words_whether_the_server_sent_text_or_json() {
+        assert_eq!(transcript_text("  What time is it?\n"), "What time is it?");
+        assert_eq!(
+            transcript_text(
+                r#"{"text": "What time is it in Shanghai?", "duration_s": 10.4, "language": "en"}"#
+            ),
+            "What time is it in Shanghai?"
+        );
+        // A JSON object without `text`, or a body that merely starts with a
+        // brace, is passed through rather than swallowed.
+        assert_eq!(transcript_text(r#"{"error": "x"}"#), r#"{"error": "x"}"#);
+        assert_eq!(transcript_text("{not json"), "{not json");
+        assert_eq!(transcript_text(""), "");
     }
 
     #[test]
