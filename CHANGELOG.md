@@ -5,6 +5,47 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Scheduled tasks fire, and are set in plain words (2026-09-11)
+
+Parity plan Stage 2, item 6. `obc_scheduler::run_scheduler_loop` was written
+with the crate and never called: a task could be created over the gateway,
+listed, disabled — and would never run. Cron was read in UTC with no way to say
+otherwise, a bad expression was stored with `next_run = NULL` and silently
+never ran, and the agent had no tool to set a timer at all.
+
+### Added
+
+- **`schedule` tool.** `create` / `list` / `pause` / `resume` / `remove`. The
+  schedule goes in `when`, in words — `obc_scheduler::nl::parse_when` turns
+  "every weekday at 8", "every 5 minutes", "in 20 minutes", "tomorrow at 9:30",
+  "every monday and thursday at 7pm", "every month on the 1st at 9" into a
+  `TaskKind` deterministically, no second model call; a phrase outside the
+  grammar comes back with the accepted forms, and a 6-field `cron` or
+  `every_secs` is taken instead. A task carries a `prompt` (an instruction the
+  agent gives itself) and/or a `tool` (any registered tool, learned skills
+  included) with `tool_args`.
+- **The loop runs.** `[scheduler]` (`enabled`, `tick_interval_secs` 30,
+  `timezone` `"local"`|`"utc"`). Each due task runs its tool, then its prompt as
+  a turn in its own `scheduled-<name>` session (routed as routine — `scheduled-`
+  joins the router's local prefixes), and the result is delivered through the
+  escalation notifier (world-memory log, webhook, speech) when notifications
+  are on. `obc_agent::scheduled::run_scheduled`.
+- **Zones.** `ScheduledTask.tz` (`Tz::Local` | `Tz::Utc`);
+  `TaskKind::next_run_after_in`. New tasks use the configured zone; rows from
+  before stay UTC. `TaskKind::validate` rejects a cron expression the `cron`
+  crate cannot parse, a zero interval and a past one-shot — at the tool and at
+  `POST /scheduler/tasks` (400), instead of storing a task that never fires.
+- **Gateway.** `POST /api/v1/scheduler/tasks` accepts `when`, `tool`,
+  `tool_args` (kind/value still work); listings carry `schedule` (human text),
+  `phrase`, `tz`, `tool`, `next_run_text`.
+- **Schema.** `scheduler.db` gains `tz`, `tool`, `tool_args`, `phrase` in place;
+  existing rows are kept. `Scheduler::find_task` looks up by id or name.
+
+### Changed
+
+- The loop marks a task run *before* dispatching it, so a slow or failing run
+  cannot be picked up again by the next tick.
+
 ## Unreleased — An escalation's prompt is not its log line (2026-09-11)
 
 An escalation `reason` does double duty: it is the prompt System 2 is woken

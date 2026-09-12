@@ -125,6 +125,8 @@ pub struct GatewayState {
     pub obs: Option<Arc<ObsContext>>,
     /// Task scheduler — `None` if not initialized.
     pub scheduler: Option<Arc<Scheduler>>,
+    /// Zone the scheduler reads phrases and cron expressions in (2026-09-11).
+    pub scheduler_tz: obc_scheduler::Tz,
     /// Multi-agent pool — `None` if orchestration is disabled.
     pub agent_pool: Option<AgentPool>,
     /// Skill-forge operations (Phase 16 P3 staged rollout) — `None` if not wired.
@@ -174,6 +176,7 @@ impl GatewayState {
             memory: None,
             obs: None,
             scheduler: None,
+            scheduler_tz: obc_scheduler::Tz::Utc,
             agent_pool: None,
             skills: None,
             cost: None,
@@ -204,6 +207,12 @@ impl GatewayState {
     /// Attach a `Scheduler`.
     pub fn with_scheduler(mut self, scheduler: Arc<Scheduler>) -> Self {
         self.scheduler = Some(scheduler);
+        self
+    }
+
+    /// Zone for `when` phrases and cron expressions on the scheduler routes.
+    pub fn with_scheduler_tz(mut self, tz: obc_scheduler::Tz) -> Self {
+        self.scheduler_tz = tz;
         self
     }
 

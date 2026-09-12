@@ -94,6 +94,7 @@ mod skill_replay;
 // from inside the loop as they happen rather than reconstructed afterwards.
 pub mod context;
 pub mod routing;
+pub mod scheduled;
 pub mod system2;
 pub mod world_context;
 pub use edge::{EdgeAgent, EdgeAgentBuilder};

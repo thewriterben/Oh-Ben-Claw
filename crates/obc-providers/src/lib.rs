@@ -393,7 +393,8 @@ pub struct RoutingConfig {
     #[serde(default = "default_tool_threshold")]
     pub tool_threshold: usize,
     /// Sessions whose id starts with one of these stay local: System 2 wakes,
-    /// the long-horizon harness, edge nodes. Default `["system2", "harness-", "edge-"]`.
+    /// the long-horizon harness, edge nodes, scheduled tasks. Default
+    /// `["system2", "harness-", "edge-", "scheduled-"]`.
     #[serde(default = "default_local_session_prefixes")]
     pub local_session_prefixes: Vec<String>,
     /// Facts from these sources (exactly, or `source:qualifier`) make a turn
@@ -423,7 +424,7 @@ fn default_tool_threshold() -> usize {
     8
 }
 fn default_local_session_prefixes() -> Vec<String> {
-    ["system2", "harness-", "edge-"]
+    ["system2", "harness-", "edge-", "scheduled-"]
         .into_iter()
         .map(String::from)
         .collect()

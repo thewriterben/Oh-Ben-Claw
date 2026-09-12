@@ -836,10 +836,45 @@ pub async fn get_mesh_status(State(state): State<Arc<GatewayState>>) -> impl Int
 pub struct CreateTaskRequest {
     pub id: Option<String>,
     pub name: String,
+    /// What the agent does when the task fires. May be empty when `tool` is set.
+    #[serde(default)]
     pub prompt: String,
     pub session_id: Option<String>,
-    pub kind: String,
-    pub value: String,
+    /// `cron` | `interval` | `oneshot` with `value` — or leave both out and give `when`.
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
+    /// The schedule in words ("every weekday at 8", "in 20 minutes"), read in the
+    /// scheduler's zone. 2026-09-11.
+    #[serde(default)]
+    pub when: Option<String>,
+    /// A tool or learned skill to run first, with fixed arguments.
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub tool_args: Option<Value>,
+}
+
+fn task_json(t: &ScheduledTask, tz: obc_scheduler::Tz) -> Value {
+    json!({
+        "id": t.id,
+        "name": t.name,
+        "prompt": t.prompt,
+        "session_id": t.session_id,
+        "kind": t.kind.to_storage_string(),
+        "schedule": obc_scheduler::nl::describe(&t.kind, t.tz),
+        "phrase": t.phrase,
+        "tz": t.tz.as_str(),
+        "tool": t.tool,
+        "tool_args": t.tool_args,
+        "enabled": t.enabled,
+        "last_run": t.last_run,
+        "next_run": t.next_run,
+        "next_run_text": t.next_run.map(|ts| tz.render(ts)),
+        "run_count": t.run_count,
+        "created_at": t.created_at,
+    })
 }
 
 /// `GET /api/v1/scheduler/tasks` — List all scheduled tasks.
@@ -855,24 +890,12 @@ pub async fn list_tasks(State(state): State<Arc<GatewayState>>) -> impl IntoResp
     match sched.list_tasks() {
         Ok(tasks) => {
             let items: Vec<Value> = tasks
-                .into_iter()
-                .map(|t| {
-                    json!({
-                        "id": t.id,
-                        "name": t.name,
-                        "prompt": t.prompt,
-                        "session_id": t.session_id,
-                        "kind": t.kind.to_storage_string(),
-                        "enabled": t.enabled,
-                        "last_run": t.last_run,
-                        "next_run": t.next_run,
-                        "run_count": t.run_count,
-                        "created_at": t.created_at,
-                    })
-                })
+                .iter()
+                .map(|t| task_json(t, state.scheduler_tz))
                 .collect();
             let count = items.len();
-            Json(json!({ "tasks": items, "count": count })).into_response()
+            Json(json!({ "tasks": items, "count": count, "tz": state.scheduler_tz.as_str() }))
+                .into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -896,49 +919,64 @@ pub async fn create_task(
     };
 
     let id = req.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let session_id = req.session_id.unwrap_or_else(|| "default".to_string());
+    // Scheduled turns get their own session so the router treats them as
+    // routine and the Command Center shows them apart from the console.
+    let session_id = req
+        .session_id
+        .unwrap_or_else(|| format!("scheduled-{}", id.chars().take(8).collect::<String>()));
+    let tz = state.scheduler_tz;
+    let bad =
+        |msg: String| (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response();
 
-    let task = match req.kind.as_str() {
-        "cron" => ScheduledTask::cron(&id, &req.name, &req.prompt, &session_id, &req.value),
-        "interval" => {
-            let secs: u64 = match req.value.parse() {
-                Ok(s) => s,
-                Err(_) => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(json!({ "error": "interval value must be a number of seconds" })),
-                    )
-                        .into_response();
-                }
-            };
-            ScheduledTask::interval(&id, &req.name, &req.prompt, &session_id, secs)
+    if req.prompt.trim().is_empty() && req.tool.is_none() {
+        return bad("give a prompt and/or a tool".to_string());
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let kind = if let Some(when) = req.when.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
+        match obc_scheduler::nl::parse_when(when, now, tz) {
+            Ok(p) => p.kind,
+            Err(e) => return bad(e),
         }
-        "oneshot" => {
-            let ts: u64 = match req.value.parse() {
-                Ok(t) => t,
-                Err(_) => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(json!({ "error": "oneshot value must be a Unix timestamp" })),
-                    )
-                        .into_response();
-                }
-            };
-            ScheduledTask::one_shot(&id, &req.name, &req.prompt, &session_id, ts)
-        }
-        other => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": format!("Unknown task kind: {other}. Use cron, interval, or oneshot.") })),
-            )
-                .into_response();
+    } else {
+        let value = req.value.clone().unwrap_or_default();
+        match req.kind.as_deref().unwrap_or("") {
+            "cron" => obc_scheduler::TaskKind::Cron(value),
+            "interval" => match value.parse::<u64>() {
+                Ok(s) => obc_scheduler::TaskKind::Interval(s),
+                Err(_) => return bad("interval value must be a number of seconds".to_string()),
+            },
+            "oneshot" => match value.parse::<u64>() {
+                Ok(t) => obc_scheduler::TaskKind::OneShot(t),
+                Err(_) => return bad("oneshot value must be a Unix timestamp".to_string()),
+            },
+            other => {
+                return bad(format!(
+                    "say when: \"when\" in words, or kind cron|interval|oneshot with value (got kind '{other}')"
+                ))
+            }
         }
     };
+    if let Err(e) = kind.validate() {
+        return bad(e);
+    }
+
+    let mut task = ScheduledTask::from_kind(&id, &req.name, &req.prompt, &session_id, kind, tz);
+    if let Some(tool) = req.tool.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        task = task.with_tool(tool, req.tool_args.clone());
+    }
+    if let Some(when) = &req.when {
+        task = task.with_phrase(when.trim());
+    }
+    let created = task_json(&task, tz);
 
     match sched.add_task(task) {
         Ok(()) => (
             StatusCode::CREATED,
-            Json(json!({ "task_id": id, "created": true })),
+            Json(json!({ "task_id": id, "created": true, "task": created })),
         )
             .into_response(),
         Err(e) => (
@@ -1145,10 +1183,40 @@ mod tests {
         }"#;
         let req: CreateTaskRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.name, "Daily Briefing");
-        assert_eq!(req.kind, "cron");
-        assert_eq!(req.value, "0 0 8 * * *");
+        assert_eq!(req.kind.as_deref(), Some("cron"));
+        assert_eq!(req.value.as_deref(), Some("0 0 8 * * *"));
         assert!(req.id.is_none());
         assert!(req.session_id.is_none());
+        assert!(req.when.is_none() && req.tool.is_none());
+
+        // 2026-09-11: the phrase form, with a tool and no prompt.
+        let json = r#"{"name": "Printer", "when": "every weekday at 8",
+                       "tool": "device_health", "tool_args": {"node": "printer"}}"#;
+        let req: CreateTaskRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.when.as_deref(), Some("every weekday at 8"));
+        assert_eq!(req.tool.as_deref(), Some("device_health"));
+        assert_eq!(req.tool_args, Some(json!({"node": "printer"})));
+        assert!(req.prompt.is_empty() && req.kind.is_none());
+    }
+
+    #[test]
+    fn task_json_carries_schedule_text_and_zone() {
+        let t = ScheduledTask::from_kind(
+            "printer",
+            "Printer",
+            "",
+            "scheduled-printer",
+            obc_scheduler::TaskKind::Cron("0 0 8 * * Mon-Fri".into()),
+            obc_scheduler::Tz::Utc,
+        )
+        .with_phrase("every weekday at 8")
+        .with_tool("device_health", None);
+        let v = task_json(&t, obc_scheduler::Tz::Utc);
+        assert_eq!(v["schedule"], "cron `0 0 8 * * Mon-Fri` (utc)");
+        assert_eq!(v["phrase"], "every weekday at 8");
+        assert_eq!(v["tz"], "utc");
+        assert_eq!(v["tool"], "device_health");
+        assert!(v["next_run_text"].as_str().unwrap().ends_with("08:00 utc"));
     }
 }
 

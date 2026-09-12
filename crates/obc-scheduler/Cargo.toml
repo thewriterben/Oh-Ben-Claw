@@ -30,5 +30,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 cron = "0.12"
 rusqlite = { version = "0.38", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 tokio = { version = "1.42", default-features = false, features = ["time"] }
 tracing = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1.42", default-features = false, features = ["macros", "rt", "sync", "time"] }
