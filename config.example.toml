@@ -283,6 +283,21 @@ enabled = true
 novelty_window_ms = 600000
 max_wakes_per_hour = 6
 
+# ── Shell sandbox ────────────────────────────────────────────────────────────
+# Where the `shell` tool runs. "local" is the host shell. "docker" runs every
+# command in one long-lived Linux container: no network unless you say so,
+# only the mounts you list, memory and CPU capped. The lesson from the Hermes
+# and OpenClaw CVE lists: a model-driven shell on the host is the breach. The
+# hardware tools are unaffected; they go through the Track 0 gate instead.
+[shell]
+backend = "docker"              # "local" | "docker"
+image = "alpine:3.20"           # pull it once: docker pull alpine:3.20
+container = "obc-shell"         # created on first use, kept, restarted if stopped
+network = "none"                # "bridge" to allow egress (then pair with [conscience])
+memory = "512m"
+cpus = 1.0
+# mounts = [ { host = "C:/Users/you/.oh-ben-claw/workspace", guest = "/workspace" } ]
+
 # ── Scheduler ────────────────────────────────────────────────────────────────
 # Timers the agent sets for itself: "every weekday at 8 check the printer and
 # message me" → the `schedule` tool turns the phrase into a cron/interval/one-shot
