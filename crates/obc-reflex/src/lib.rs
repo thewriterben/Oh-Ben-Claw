@@ -188,6 +188,11 @@ pub enum Action {
     /// Publish a payload to a spine topic.
     Publish { topic: String, payload: Value },
     /// Hand control up to System 2 (wake the LLM agent) with a reason.
+    ///
+    /// The reason is the woken agent's *prompt*, so it is long on purpose — the
+    /// safing playbooks in [`safing`] run to a thousand characters of triage.
+    /// Log [`escalation_label`] of it, never the whole thing; see that function
+    /// for what a full-text log cost us.
     Escalate { reason: String },
     /// Apply a typed, safety-bounded movement (Movement subsystem). Still bounded
     /// by the Track 0 gate inside the `MovementController` before it actuates.
@@ -464,6 +469,41 @@ pub async fn dispatch(actions: &[FiredReflex], sink: &dyn ActionSink) -> anyhow:
     Ok(())
 }
 
+/// The part of an escalation reason worth putting on a log line: its first
+/// sentence, or the whole string when there is no sentence break.
+///
+/// An escalation reason does double duty. It is the prompt System 2 is woken
+/// with (`build_objective` interpolates it verbatim), so the safing playbooks
+/// are written as full triage directives — [`safing::MESH_LOST_PLAYBOOK`] is
+/// about 1,060 characters. It was also the log message at four sites, which is
+/// why on the night of 2026-07-28 a phantom mesh node (see the module comment
+/// on `mesh_supervisor::snapshot`) wrote 2,367 lines carrying the same
+/// paragraph — 2.5 MB, 41 % of a 46-day log file, in about nine hours at
+/// twelve lines a minute. The reasoner still gets every word; the log gets the
+/// sentence a human reads.
+///
+/// The break is `". "` or a trailing `"."` — deliberately not any `'.'`, so
+/// `mesh_status` calls and `docs/playbooks/x.md` paths inside a sentence do not
+/// split it. A reason with no break is returned whole, which is the old
+/// behaviour and is right for the short ones (`"person detected (verified) on
+/// a camera"`). Capped at [`LABEL_MAX`] so a reason written as one long
+/// sentence still cannot flood a line.
+pub fn escalation_label(reason: &str) -> &str {
+    let end = reason
+        .find(". ")
+        .map(|i| i + 1)
+        .or_else(|| reason.strip_suffix('.').map(str::len).map(|n| n + 1))
+        .unwrap_or(reason.len());
+    let label = &reason[..end];
+    match label.char_indices().nth(LABEL_MAX) {
+        Some((cut, _)) => &label[..cut],
+        None => label,
+    }
+}
+
+/// Character cap on an [`escalation_label`].
+pub const LABEL_MAX: usize = 160;
+
 /// A safe default sink that only *logs* intended actions without executing them
 /// — useful for dry-run / supervised rollout before wiring the real spine sink.
 pub struct LoggingActionSink;
@@ -479,7 +519,10 @@ impl ActionSink for LoggingActionSink {
         Ok(())
     }
     async fn escalate(&self, reason: &str) -> anyhow::Result<()> {
-        tracing::info!(reason, "reflex: escalate to System 2 (dry-run)");
+        tracing::info!(
+            escalation = escalation_label(reason),
+            "reflex: escalate to System 2 (dry-run)"
+        );
         Ok(())
     }
     async fn move_actuator(&self, command: &MovementCommand) -> anyhow::Result<()> {
@@ -687,6 +730,55 @@ mod tests {
     use super::*;
     use obc_memory::world::WorldMemory;
     use serde_json::json;
+
+    #[test]
+    fn escalation_label_is_the_first_sentence() {
+        // The real playbook. Its first sentence is what a reader needs; the
+        // remaining ~1,000 characters are triage instructions for the LLM.
+        let full = safing::MESH_LOST_PLAYBOOK;
+        assert!(full.len() > 900, "playbook shrank: {}", full.len());
+        assert_eq!(
+            escalation_label(full),
+            "A mesh node is presumed lost (LoRa escalation)."
+        );
+    }
+
+    #[test]
+    fn a_reason_with_no_sentence_break_is_kept_whole() {
+        // The short reasons were never the problem and must not be truncated.
+        let short = "person detected (verified) on a camera";
+        assert_eq!(escalation_label(short), short);
+        assert_eq!(escalation_label(""), "");
+    }
+
+    #[test]
+    fn only_a_sentence_break_splits_it() {
+        // A bare '.' split would cut at `mesh_status` calls and at
+        // `docs/playbooks/x.md`, producing a label that reads as a fragment.
+        assert_eq!(
+            escalation_label("call `a.b` then stop. And more."),
+            "call `a.b` then stop."
+        );
+        assert_eq!(
+            escalation_label("see docs/playbooks/mesh-node-lost.md"),
+            "see docs/playbooks/mesh-node-lost.md"
+        );
+        // A trailing period is a break; a one-sentence reason keeps it.
+        assert_eq!(escalation_label("all quiet."), "all quiet.");
+    }
+
+    #[test]
+    fn one_long_sentence_still_cannot_flood_a_line() {
+        let long = "x".repeat(LABEL_MAX * 3);
+        assert_eq!(escalation_label(&long).chars().count(), LABEL_MAX);
+    }
+
+    #[test]
+    fn the_cap_cuts_on_a_character_not_a_byte() {
+        // Slicing mid-codepoint would panic, and a reason can carry an em dash.
+        let long = "é".repeat(LABEL_MAX * 2);
+        assert_eq!(escalation_label(&long).chars().count(), LABEL_MAX);
+    }
 
     #[test]
     fn fact_value_extraction() {

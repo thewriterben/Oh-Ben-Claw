@@ -5,6 +5,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — An escalation's prompt is not its log line (2026-09-11)
+
+An escalation `reason` does double duty: it is the prompt System 2 is woken
+with, so the safing playbooks are written as full triage directives —
+`MESH_LOST_PLAYBOOK` is about 1,060 characters — and it was also the log
+message at four sites. Measured on the live agent log (6,119 lines, 6.38 MB,
+2026-07-27 → 2026-09-11): **2,499 lines carry a playbook, 2,643,306 bytes,
+41.4 % of the file.** 2,376 of them are one night — 2026-07-28, twelve lines a
+minute for about nine hours — the phantom-node loop the `mesh_supervisor`
+module comment describes, back when a two-part fact under `mesh.*` could be
+mis-parsed as a node that never transmits.
+
+### Changed
+
+- **Escalations log a label, not the playbook.** New `obc_reflex::escalation_label`
+  returns a reason's first sentence — split on `". "` or a trailing `"."`, never
+  on any `'.'`, so `mesh_status` and `docs/playbooks/x.md` inside a sentence do
+  not cut it — capped at `LABEL_MAX` (160 chars) on a character boundary. Applied
+  at the reflex dry-run sink and System 2's three gate arms (repeat, wake budget,
+  waking). `build_objective` and the `system2.last_wake` world-memory record are
+  **untouched**: the reasoner still gets every word and the audit trail still
+  holds it, so nothing is lost that anything reads. A reason with no sentence
+  break is returned whole, which keeps the short ones (`"person detected
+  (verified) on a camera"`) exactly as they were.
+- **This is insurance, not a cleanup.** Steady state today is 3–21 escalations a
+  day; at that rate the change saves little. It pays during a burst — and a burst
+  is the one time you need to read the log, which at twelve 1,100-character
+  paragraphs a minute you cannot. 49 tests in `obc-reflex` (five new).
+
+### Not changed, and why
+
+- **`mesh.escalated_count` needed no fix: it already clears.** Checked against the
+  live `world.db` rather than assumed. The entity has 48 rows, all
+  2026-07-17 → 2026-07-28, `origin=derived`, `source=mesh-supervisor`, flapping
+  0↔1↔2; the last row was **closed** at 2026-07-28 05:35:23 and nothing has
+  written it since. There is no open `mesh.*` fact at all. The final mesh log
+  line is 05:34:10 — seventy seconds before the fact closed — and the loop has
+  not recurred in the 45 days since. Sourcing node discovery at the radio
+  (`Origin::Observed`) closed it at the root, as intended, and the withdrawal is
+  `liveness.rs` doing its job.
 ## Unreleased — The XIAO without its expansion board (2026-09-11)
 
 ### Added
