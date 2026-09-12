@@ -134,6 +134,19 @@ initial_backoff_ms = 500
 # model = "claude-sonnet-5"
 # think = false                        # no thinking blocks on the cloud brain: the agent does not replay them between tool calls; unset = the model default
 
+# ── Browser ──────────────────────────────────────────────────────────────────
+# The seven browser_* tools drive a Chrome over the DevTools Protocol. Run a
+# dedicated one — its own profile directory and port — so the agent never
+# touches the browser you use:
+#   chrome --headless=new --remote-debugging-port=9333 --remote-debugging-address=127.0.0.1 --user-data-dir=<dir>
+# `enabled = false` removes the tools (and their schemas from every prompt).
+# With the endpoint down the tools fall back to a plain HTTP fetch.
+[browser]
+enabled = true
+cdp_url = "http://127.0.0.1:9333"
+profile = "headless"            # "user" to attach to a signed-in browser instead
+timeout_secs = 30
+
 # ── Autonomy ─────────────────────────────────────────────────────────────────
 # Which tool calls wait for the operator. Level "full" (default) runs every
 # tool the risk gate allows; "supervised"/"manual" ask. `always_ask` names
