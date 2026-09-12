@@ -713,6 +713,10 @@ mod current_models_tests {
         fn parameters_schema(&self) -> Value {
             serde_json::json!({"type": "object", "properties": {}})
         }
+        // Named at runtime, so the Track 0 audit wants the risk said out loud.
+        fn risk_class(&self) -> obc_tool_api::RiskClass {
+            obc_tool_api::RiskClass::safe()
+        }
         async fn execute(&self, _args: Value) -> anyhow::Result<obc_tool_api::ToolResult> {
             Ok(obc_tool_api::ToolResult::ok("ok"))
         }
