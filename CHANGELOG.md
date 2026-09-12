@@ -32,7 +32,7 @@ mis-parsed as a node that never transmits.
 - **This is insurance, not a cleanup.** Steady state today is 3–21 escalations a
   day; at that rate the change saves little. It pays during a burst — and a burst
   is the one time you need to read the log, which at twelve 1,100-character
-  paragraphs a minute you cannot. 1,046 tests (five new).
+  paragraphs a minute you cannot. 49 tests in `obc-reflex` (five new).
 
 ### Not changed, and why
 
