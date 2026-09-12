@@ -59,6 +59,22 @@ Parity plan Stage 3, item 8 (browser first) and the first step of item 9
   improvement pass cannot learn a skill from a timer firing — which is exactly
   what it did on the bench (`learned_scheduled_task_…_fired_do`). Add `"tg-"`
   to keep phone chats out too.
+## Unreleased — The phone surface: voice notes, quiet hours, a clock in the sandbox (2026-09-12)
+
+### Added
+
+- **Telegram voice notes.** A voice or audio message from an allowlisted user
+  is downloaded (`getFile`), transcribed through the speech endpoint at
+  `OPENAI_API_BASE` (`/audio/transcriptions`, Whisper-style — on the bench the
+  local `obc-stt.py`), and answered like text (`transcribe_voice`, default
+  true). With `voice_replies = true` the answer is also rendered through
+  `/audio/speech` and sent as audio (`tts_voice`).
+- **Telegram quiet hours.** `quiet_hours = "HH:MM-HH:MM"` (local, may cross
+  midnight) holds routine (`info`) notifications; warnings and critical still
+  go out. Held ones are logged.
+- **`[shell] env`.** Environment for the sandbox container, e.g.
+  `TZ = "MST7MDT,M3.2.0,M11.1.0"` — busybox reads a POSIX TZ string without
+  tzdata, so `date` in the sandbox answers in local time.
 
 ## Unreleased — The file tool has a fence, and the fences apply over MCP too (2026-09-12)
 

@@ -35,6 +35,8 @@ pub struct DockerSandbox {
     pub mounts: Vec<(String, String, bool)>,
     pub memory: String,
     pub cpus: f64,
+    /// `(name, value)` pairs passed as `-e` at creation (e.g. `TZ`).
+    pub env: Vec<(String, String)>,
 }
 
 impl DockerSandbox {
@@ -62,6 +64,10 @@ impl DockerSandbox {
             "-w".into(),
             self.workdir().to_string(),
         ];
+        for (k, v) in &self.env {
+            a.push("-e".into());
+            a.push(format!("{k}={v}"));
+        }
         for (host, guest, ro) in &self.mounts {
             a.push("-v".into());
             a.push(if *ro {
@@ -421,7 +427,14 @@ mod sandbox_tests {
             )],
             memory: "512m".into(),
             cpus: 1.0,
+            env: vec![("TZ".into(), "MST7MDT,M3.2.0,M11.1.0".into())],
         }
+    }
+
+    #[test]
+    fn env_rides_along_as_dash_e() {
+        let a = sandbox().run_args().join(" ");
+        assert!(a.contains(" -e TZ=MST7MDT,M3.2.0,M11.1.0 -v "), "{a}");
     }
 
     #[test]

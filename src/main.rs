@@ -3807,6 +3807,12 @@ fn apply_tool_fences(config: &Config, all_tools: &mut Vec<Box<dyn oh_ben_claw::t
                 .collect(),
             memory: config.shell.memory.clone(),
             cpus: config.shell.cpus,
+            env: config
+                .shell
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         };
         info!(
             image = %sandbox.image,

@@ -64,6 +64,26 @@ struct TgMessage {
     chat: TgChat,
     from: Option<TgUser>,
     text: Option<String>,
+    /// A voice note (ogg/opus) — transcribed when `transcribe_voice` is on.
+    #[serde(default)]
+    voice: Option<TgFile>,
+    /// An audio file (mp3/m4a…) — treated like a voice note.
+    #[serde(default)]
+    audio: Option<TgFile>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct TgFile {
+    file_id: String,
+    #[serde(default)]
+    duration: Option<u64>,
+    #[serde(default)]
+    mime_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TgFilePath {
+    file_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -104,6 +124,11 @@ pub struct TelegramChannel {
     api_base: String,
     http: reqwest::Client,
     allowed_user_ids: Vec<i64>,
+    /// `OPENAI_API_BASE` when `transcribe_voice` is on — the speech endpoint
+    /// (transcriptions in, optionally speech out).
+    speech_base: Option<String>,
+    voice_replies: bool,
+    tts_voice: String,
     /// Whether to send "typing…" indicators while the agent processes.
     typing_indicators: bool,
 }
@@ -147,8 +172,130 @@ impl TelegramChannel {
             token,
             http: reqwest::Client::new(),
             allowed_user_ids: config.allowed_user_ids.clone(),
+            speech_base: config
+                .transcribe_voice
+                .then(|| std::env::var("OPENAI_API_BASE").ok())
+                .flatten()
+                .map(|b| b.trim_end_matches('/').to_string()),
+            voice_replies: config.voice_replies,
+            tts_voice: config.tts_voice.clone(),
             typing_indicators,
         })
+    }
+
+    /// Fetch a Telegram file's bytes (`getFile`, then the file endpoint).
+    async fn download(&self, file_id: &str) -> Result<(Vec<u8>, String)> {
+        let meta: TgResponse<TgFilePath> = self
+            .http
+            .get(format!("{}/getFile", self.api_base))
+            .query(&[("file_id", file_id)])
+            .send()
+            .await
+            .context("Telegram getFile HTTP error")?
+            .json()
+            .await
+            .context("Telegram getFile JSON parse error")?;
+        let path = meta
+            .result
+            .and_then(|r| r.file_path)
+            .ok_or_else(|| anyhow::anyhow!("Telegram getFile returned no file_path"))?;
+        let bytes = self
+            .http
+            .get(format!(
+                "https://api.telegram.org/file/bot{}/{}",
+                self.token, path
+            ))
+            .send()
+            .await
+            .context("Telegram file download HTTP error")?
+            .bytes()
+            .await
+            .context("Telegram file download read error")?
+            .to_vec();
+        let name = path.rsplit('/').next().unwrap_or("voice.ogg").to_string();
+        Ok((bytes, name))
+    }
+
+    /// Transcribe audio bytes through the speech endpoint (Whisper-style).
+    async fn transcribe(&self, bytes: Vec<u8>, file_name: &str, mime: &str) -> Result<String> {
+        let base = self
+            .speech_base
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("no speech endpoint (OPENAI_API_BASE unset)"))?;
+        let form = reqwest::multipart::Form::new()
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(bytes)
+                    .file_name(file_name.to_string())
+                    .mime_str(mime)
+                    .unwrap_or_else(|_| reqwest::multipart::Part::bytes(Vec::new())),
+            )
+            .text("model", "whisper-1")
+            .text("response_format", "text");
+        let resp = self
+            .http
+            .post(format!("{base}/audio/transcriptions"))
+            .bearer_auth(std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "local".into()))
+            .multipart(form)
+            .timeout(std::time::Duration::from_secs(120))
+            .send()
+            .await
+            .context("transcription HTTP error")?;
+        if !resp.status().is_success() {
+            anyhow::bail!("transcription returned {}", resp.status());
+        }
+        Ok(resp.text().await.unwrap_or_default().trim().to_string())
+    }
+
+    /// Render `text` to mp3 through the speech endpoint and send it as audio.
+    async fn send_voice_reply(&self, chat_id: i64, text: &str, reply_to: i64) -> Result<()> {
+        let base = self
+            .speech_base
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("no speech endpoint (OPENAI_API_BASE unset)"))?;
+        let spoken: String = text.chars().take(1500).collect();
+        let resp = self
+            .http
+            .post(format!("{base}/audio/speech"))
+            .bearer_auth(std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "local".into()))
+            .json(&serde_json::json!({
+                "model": "kokoro", "input": spoken, "voice": self.tts_voice, "response_format": "mp3"
+            }))
+            .timeout(std::time::Duration::from_secs(120))
+            .send()
+            .await
+            .context("speech HTTP error")?;
+        if !resp.status().is_success() {
+            anyhow::bail!("speech returned {}", resp.status());
+        }
+        let mp3 = resp.bytes().await?.to_vec();
+        let form = reqwest::multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .text("reply_to_message_id", reply_to.to_string())
+            .part(
+                "audio",
+                reqwest::multipart::Part::bytes(mp3)
+                    .file_name("reply.mp3")
+                    .mime_str("audio/mpeg")
+                    .unwrap_or_else(|_| reqwest::multipart::Part::bytes(Vec::new())),
+            );
+        let resp: TgResponse<serde_json::Value> = self
+            .http
+            .post(format!("{}/sendAudio", self.api_base))
+            .multipart(form)
+            .send()
+            .await
+            .context("Telegram sendAudio HTTP error")?
+            .json()
+            .await
+            .context("Telegram sendAudio JSON parse error")?;
+        if !resp.ok {
+            anyhow::bail!(
+                "Telegram sendAudio refused: {}",
+                resp.description.as_deref().unwrap_or("unknown")
+            );
+        }
+        Ok(())
     }
 
     /// Start the long-polling loop.
@@ -265,9 +412,45 @@ impl TelegramChannel {
     }
 
     async fn handle_message(&self, msg: TgMessage) -> Result<()> {
-        let text = match &msg.text {
-            Some(t) => t.trim().to_string(),
-            None => return Ok(()), // ignore non-text messages
+        // Text, or a voice note / audio message transcribed into text. Anything
+        // else (stickers, photos) is ignored. The allowlist check below still
+        // comes before any work on an unlisted sender's media.
+        let spoken = msg.voice.as_ref().or(msg.audio.as_ref()).cloned();
+        let mut was_voice = false;
+        let text = match (&msg.text, spoken) {
+            (Some(t), _) => t.trim().to_string(),
+            (None, Some(file)) if self.speech_base.is_some() => {
+                let user_id = msg.from.as_ref().map(|u| u.id);
+                if !allowed(&self.allowed_user_ids, user_id) {
+                    return self
+                        .send_text(msg.chat.id, "This bot is private.", Some(msg.message_id))
+                        .await;
+                }
+                let (bytes, name) = self.download(&file.file_id).await?;
+                let mime = file
+                    .mime_type
+                    .clone()
+                    .unwrap_or_else(|| "audio/ogg".to_string());
+                let transcript = self.transcribe(bytes, &name, &mime).await?;
+                tracing::info!(
+                    chat_id = msg.chat.id,
+                    seconds = ?file.duration,
+                    chars = transcript.len(),
+                    "Telegram voice note transcribed"
+                );
+                if transcript.is_empty() {
+                    return self
+                        .send_text(
+                            msg.chat.id,
+                            "I couldn't make out any words in that.",
+                            Some(msg.message_id),
+                        )
+                        .await;
+                }
+                was_voice = true;
+                transcript
+            }
+            _ => return Ok(()),
         };
 
         tracing::debug!(
@@ -356,7 +539,16 @@ impl TelegramChannel {
             .context("Agent processing error")?;
 
         self.send_text(msg.chat.id, &response.message, Some(msg.message_id))
-            .await
+            .await?;
+        if was_voice && self.voice_replies {
+            if let Err(e) = self
+                .send_voice_reply(msg.chat.id, &response.message, msg.message_id)
+                .await
+            {
+                tracing::warn!(error = %e, "Telegram voice reply failed; the text reply was sent");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -371,6 +563,32 @@ pub struct TelegramNotifyChannel {
     api_base: String,
     chat_ids: Vec<i64>,
     http: reqwest::Client,
+    /// `(start, end)` in minutes since local midnight; may wrap past midnight.
+    quiet: Option<(u32, u32)>,
+}
+
+/// Parse `"HH:MM-HH:MM"` into minutes since midnight.
+pub fn parse_quiet_hours(s: &str) -> Option<(u32, u32)> {
+    let (a, b) = s.trim().split_once('-')?;
+    let hm = |t: &str| -> Option<u32> {
+        let (h, m) = t.trim().split_once(':')?;
+        let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+        (h < 24 && m < 60).then_some(h * 60 + m)
+    };
+    Some((hm(a)?, hm(b)?))
+}
+
+/// Whether `now` (minutes since local midnight) falls in the window; a window
+/// whose end is before its start wraps past midnight (`23:00-07:00`).
+pub fn in_quiet_hours(now: u32, window: (u32, u32)) -> bool {
+    let (start, end) = window;
+    if start == end {
+        false
+    } else if start < end {
+        now >= start && now < end
+    } else {
+        now >= start || now < end
+    }
 }
 
 impl TelegramNotifyChannel {
@@ -382,11 +600,31 @@ impl TelegramNotifyChannel {
             .token
             .clone()
             .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())?;
+        let quiet = config.quiet_hours.as_deref().and_then(|q| {
+            let parsed = parse_quiet_hours(q);
+            if parsed.is_none() {
+                tracing::warn!(
+                    quiet_hours = q,
+                    "Telegram: quiet_hours must be HH:MM-HH:MM; ignored"
+                );
+            }
+            parsed
+        });
         Some(Self {
             api_base: format!("https://api.telegram.org/bot{token}"),
             chat_ids: config.allowed_user_ids.clone(),
             http: reqwest::Client::new(),
+            quiet,
         })
+    }
+
+    fn quiet_now(&self) -> bool {
+        use chrono::Timelike;
+        let Some(window) = self.quiet else {
+            return false;
+        };
+        let now = chrono::Local::now();
+        in_quiet_hours(now.hour() * 60 + now.minute(), window)
     }
 
     pub fn chat_count(&self) -> usize {
@@ -440,6 +678,14 @@ impl NotificationChannel for TelegramNotifyChannel {
         "telegram"
     }
     async fn deliver(&self, esc: &Escalation) -> Result<()> {
+        // Quiet hours hold back the routine; warnings and critical still ring.
+        if esc.severity < obc_reflex::Severity::Warning && self.quiet_now() {
+            tracing::info!(
+                reason = %esc.reason.chars().take(80).collect::<String>(),
+                "Telegram: routine notification held (quiet hours)"
+            );
+            return Ok(());
+        }
         let text = Self::text_for(esc);
         let mut first_err = None;
         for chat_id in &self.chat_ids {
@@ -496,6 +742,10 @@ mod allowlist_tests {
             allowed_user_ids: vec![42],
             notify: true,
             notify_min_severity: None,
+            quiet_hours: Some("23:00-07:00".into()),
+            transcribe_voice: true,
+            voice_replies: false,
+            tts_voice: "af_bella".into(),
         };
         assert_eq!(
             TelegramNotifyChannel::from_config(&cfg)
@@ -508,6 +758,35 @@ mod allowlist_tests {
         cfg.notify = true;
         cfg.allowed_user_ids.clear();
         assert!(TelegramNotifyChannel::from_config(&cfg).is_none());
+    }
+
+    #[test]
+    fn quiet_hours_parse_and_wrap_past_midnight() {
+        assert_eq!(parse_quiet_hours("23:00-07:00"), Some((23 * 60, 7 * 60)));
+        assert_eq!(
+            parse_quiet_hours(" 22:30 - 06:15 "),
+            Some((22 * 60 + 30, 6 * 60 + 15))
+        );
+        assert_eq!(parse_quiet_hours("25:00-07:00"), None);
+        assert_eq!(parse_quiet_hours("nope"), None);
+        let w = (23 * 60, 7 * 60);
+        assert!(in_quiet_hours(23 * 60 + 30, w));
+        assert!(in_quiet_hours(2 * 60, w));
+        assert!(!in_quiet_hours(7 * 60, w));
+        assert!(!in_quiet_hours(12 * 60, w));
+        assert!(in_quiet_hours(13 * 60, (12 * 60, 14 * 60)));
+        assert!(!in_quiet_hours(13 * 60, (14 * 60, 14 * 60)));
+    }
+
+    #[test]
+    fn voice_notes_parse_out_of_an_update() {
+        let raw = r#"{"message_id": 7, "chat": {"id": 42, "type": "private"},
+            "from": {"id": 42, "first_name": "B"},
+            "voice": {"file_id": "AwAC", "duration": 3, "mime_type": "audio/ogg"}}"#;
+        let m: TgMessage = serde_json::from_str(raw).unwrap();
+        assert!(m.text.is_none());
+        assert_eq!(m.voice.as_ref().unwrap().file_id, "AwAC");
+        assert_eq!(m.voice.as_ref().unwrap().duration, Some(3));
     }
 
     #[test]
