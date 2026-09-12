@@ -50,6 +50,31 @@ Parity plan Stage 3, item 8 (browser first) and the first step of item 9
   read were `Loaded config …` and `MCP server running on stdio`, which no
   JSON-RPC parser survives. Logs go to stderr for that command, as the MCP
   rule says; the http transport is unchanged.
+## Unreleased — Telegram, verified, allowlisted, and talking back (2026-09-12)
+
+Parity plan Stage 2, item 7: the channels were claimed, none verified. Telegram
+first, because it is the one on the operator's phone. Three things were wrong
+before a message ever flowed.
+
+### Fixed
+
+- **Anyone could talk to the agent.** The adapter accepted every sender; a bot
+  token is public the moment someone finds the bot, and this agent has a
+  shell. `[channels.telegram] allowed_user_ids` is now the access control and
+  **empty admits nobody**; an unlisted sender gets "This bot is private." and a
+  warning naming their id so the operator can add it.
+- **Replies were sent as `parse_mode = Markdown`.** Any reply with an
+  unbalanced `_` or `*` — a path, a snake_case tool name — came back 400
+  "can't parse entities" and was dropped with a log line. Replies are plain
+  text now, and a refused send is an error, not a warning.
+
+### Added
+
+- **`TelegramNotifyChannel`** — the agent's outbound voice: escalations and
+  scheduled-task results (`⏰ …`) are delivered to every allowlisted user's
+  private chat (`notify`, `notify_min_severity`). Wired into the escalation
+  notifier next to the world-memory log, webhook and speech channels.
+
 ## Unreleased — The browser tools drive a browser (2026-09-12)
 
 Parity plan Stage 3, item 8, second half. Pointing the tools at a real Chrome

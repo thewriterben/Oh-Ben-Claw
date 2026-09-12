@@ -40,6 +40,6 @@ pub use matrix::MatrixChannel;
 pub use mattermost::MattermostChannel;
 pub use signal::SignalChannel;
 pub use slack::SlackChannel;
-pub use telegram::TelegramChannel;
+pub use telegram::{TelegramChannel, TelegramNotifyChannel};
 pub use typing::TypingTask;
 pub use whatsapp::WhatsAppChannel;
