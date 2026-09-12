@@ -50,6 +50,23 @@ Parity plan Stage 3, item 8 (browser first) and the first step of item 9
   read were `Loaded config …` and `MCP server running on stdio`, which no
   JSON-RPC parser survives. Logs go to stderr for that command, as the MCP
   rule says; the http transport is unchanged.
+## Unreleased — The shell tool can live in a container (2026-09-11)
+
+Parity plan Stage 3, item 10. Every desktop-agent CVE list of 2026 has the
+same entry near the top: a model-driven shell on the host. OBC's `shell` tool
+ran `cmd /C` on the bench with a host-side policy allowlist and nothing else.
+
+### Added
+
+- **`[shell] backend = "docker"`.** The `shell` tool execs into one long-lived
+  Linux container (`alpine:3.20` by default; `--network none`, `--memory`,
+  `--cpus`, `--pids-limit 256`; only the listed `mounts`, e.g. the OBC
+  workspace at `/workspace`). The container is created on first use and
+  restarted if Docker stopped it; each command runs under busybox `timeout`
+  inside it, so a runaway is killed there (exit 124 → "timed out … killed in
+  the sandbox"). The tool's description tells the model it is not on the host.
+  `backend = "local"` (default) is the host shell as before.
+  (`obc_tools::builtin::shell::{ShellBackend, DockerSandbox}`.)
 
 ## Unreleased — The bill comes from the provider, not from chars/4 (2026-09-11)
 

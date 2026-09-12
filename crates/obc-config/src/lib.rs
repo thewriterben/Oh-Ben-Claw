@@ -1643,6 +1643,81 @@ impl Default for SchedulerConfig {
     }
 }
 
+/// Where the `shell` tool runs its commands (`[shell]`, parity Stage 3 item 10,
+/// 2026-09-11). `local` is the host shell as before; `docker` is one long-lived
+/// Linux container — no network unless asked, only the listed mounts — which
+/// is the lesson the Hermes and OpenClaw CVE lists teach: a model-driven shell
+/// on the host is the breach. The hardware tools are unaffected; they cannot
+/// live in a container and go through the Track 0 gate instead.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShellConfig {
+    /// `"local"` (default) or `"docker"`.
+    #[serde(default = "default_shell_backend")]
+    pub backend: String,
+    /// Image for the sandbox container. Small and busybox-based by default.
+    #[serde(default = "default_shell_image")]
+    pub image: String,
+    /// Name of the long-lived container the commands `docker exec` into.
+    #[serde(default = "default_shell_container")]
+    pub container: String,
+    /// Docker network for the container: `"none"` (default), `"bridge"`, or a
+    /// named network.
+    #[serde(default = "default_shell_network")]
+    pub network: String,
+    /// Host directories the sandbox may see, e.g. the OBC workspace at
+    /// `/workspace`. Nothing is mounted by default.
+    #[serde(default)]
+    pub mounts: Vec<ShellMount>,
+    /// Memory limit passed to `docker run --memory`.
+    #[serde(default = "default_shell_memory")]
+    pub memory: String,
+    /// CPU limit passed to `docker run --cpus`.
+    #[serde(default = "default_shell_cpus")]
+    pub cpus: f64,
+}
+
+/// One bind mount for the shell sandbox.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShellMount {
+    pub host: String,
+    pub guest: String,
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+fn default_shell_backend() -> String {
+    "local".to_string()
+}
+fn default_shell_image() -> String {
+    "alpine:3.20".to_string()
+}
+fn default_shell_container() -> String {
+    "obc-shell".to_string()
+}
+fn default_shell_network() -> String {
+    "none".to_string()
+}
+fn default_shell_memory() -> String {
+    "512m".to_string()
+}
+fn default_shell_cpus() -> f64 {
+    1.0
+}
+
+impl Default for ShellConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_shell_backend(),
+            image: default_shell_image(),
+            container: default_shell_container(),
+            network: default_shell_network(),
+            mounts: Vec::new(),
+            memory: default_shell_memory(),
+            cpus: default_shell_cpus(),
+        }
+    }
+}
+
 /// Escalation notifications (`[notifications]`): wire reflex escalations (mesh node
 /// lost, battery critical, alarm heard, …) to operator-facing channels — a durable
 /// log-of-record in world memory and/or a webhook (Slack/Discord/generic).
@@ -1729,6 +1804,8 @@ pub struct Config {
     pub notifications: NotificationsConfig,
     #[serde(default)]
     pub scheduler: SchedulerConfig,
+    #[serde(default)]
+    pub shell: ShellConfig,
     #[serde(default)]
     pub peripherals: PeripheralsConfig,
     #[serde(default)]

@@ -523,6 +523,42 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     all_tools.push(Box::new(
         oh_ben_claw::tools::builtin::search::SearchSessionsTool::new(Arc::clone(&memory)),
     ));
+    // Parity Stage 3, item 10: where the shell tool runs. `docker` swaps the
+    // host-shell tool for one that execs into a long-lived Linux container
+    // (network off unless configured, only the listed mounts). The hardware
+    // tools stay where they are; a container cannot hold a servo.
+    if config.shell.backend == "docker" {
+        use oh_ben_claw::tools::builtin::shell::{DockerSandbox, ShellBackend, ShellTool};
+        let sandbox = DockerSandbox {
+            image: config.shell.image.clone(),
+            container: config.shell.container.clone(),
+            network: config.shell.network.clone(),
+            mounts: config
+                .shell
+                .mounts
+                .iter()
+                .map(|m| (m.host.clone(), m.guest.clone(), m.read_only))
+                .collect(),
+            memory: config.shell.memory.clone(),
+            cpus: config.shell.cpus,
+        };
+        info!(
+            image = %sandbox.image,
+            container = %sandbox.container,
+            network = %sandbox.network,
+            mounts = sandbox.mounts.len(),
+            "Shell tool runs in a Docker sandbox ([shell] backend = \"docker\")"
+        );
+        all_tools.retain(|t| t.name() != "shell");
+        all_tools.push(Box::new(ShellTool::with_backend(ShellBackend::Docker(
+            sandbox,
+        ))));
+    } else if config.shell.backend != "local" {
+        tracing::warn!(
+            backend = %config.shell.backend,
+            "[shell] backend must be \"local\" or \"docker\"; using the host shell"
+        );
+    }
     // The task scheduler (parity Stage 2, item 6). Opened here, before the tool
     // set is sealed, so the agent gets the `schedule` tool; the gateway's
     // /scheduler routes share the same store and the loop below fires the
