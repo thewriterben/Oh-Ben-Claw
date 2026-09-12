@@ -5,6 +5,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Every Telegram update leaves a trace (2026-09-12)
+
+### Fixed
+
+- **Telegram messages the adapter does not handle no longer vanish.** Each
+  update is logged at INFO with its kind (`text`, `voice`, `audio`, or the
+  field names Telegram sent — `video_note`, `photo`, `sticker`, …), and the
+  ignored paths say why (not text/voice, or transcription off). On the bench
+  two voice notes produced no log line, no transcription request and no
+  session message; the poll loop was alive and the updates were confirmed, so
+  whatever arrived took a silent arm. Now it cannot.
+- **Timeouts on `getUpdates` (45 s), `getFile` (30 s) and the file download
+  (120 s).** The poll loop awaits each message inline, so a hung download
+  would have frozen the whole inbound channel with nothing in the log.
+- A voice note from an unlisted sender is refused *with* a warning, like text.
+
 ## Unreleased — A fixed temp path is a shared temp path (2026-09-11)
 
 ### Fixed
