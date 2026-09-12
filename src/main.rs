@@ -501,20 +501,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     } else {
         default_tools()
     };
-    if config.browser.enabled {
-        info!(
-            cdp = %std::env::var("OBC_BROWSER_CDP_URL").unwrap_or_else(|_| "http://localhost:9222".into()),
-            profile = %config.browser.profile,
-            "Browser tools active (CDP; plain-HTTP fallback when the endpoint is down)"
-        );
-    } else {
-        let before = all_tools.len();
-        all_tools.retain(|t| !t.name().starts_with("browser_"));
-        info!(
-            removed = before - all_tools.len(),
-            "Browser tools disabled ([browser] enabled = false)"
-        );
-    }
+    apply_tool_fences(&config, &mut all_tools);
     // Skill forge management tool (list/install/remove skills at runtime).
     all_tools.push(Box::new(
         oh_ben_claw::skill_forge::SkillForgeTool::default_dir(),
@@ -523,42 +510,6 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     all_tools.push(Box::new(
         oh_ben_claw::tools::builtin::search::SearchSessionsTool::new(Arc::clone(&memory)),
     ));
-    // Parity Stage 3, item 10: where the shell tool runs. `docker` swaps the
-    // host-shell tool for one that execs into a long-lived Linux container
-    // (network off unless configured, only the listed mounts). The hardware
-    // tools stay where they are; a container cannot hold a servo.
-    if config.shell.backend == "docker" {
-        use oh_ben_claw::tools::builtin::shell::{DockerSandbox, ShellBackend, ShellTool};
-        let sandbox = DockerSandbox {
-            image: config.shell.image.clone(),
-            container: config.shell.container.clone(),
-            network: config.shell.network.clone(),
-            mounts: config
-                .shell
-                .mounts
-                .iter()
-                .map(|m| (m.host.clone(), m.guest.clone(), m.read_only))
-                .collect(),
-            memory: config.shell.memory.clone(),
-            cpus: config.shell.cpus,
-        };
-        info!(
-            image = %sandbox.image,
-            container = %sandbox.container,
-            network = %sandbox.network,
-            mounts = sandbox.mounts.len(),
-            "Shell tool runs in a Docker sandbox ([shell] backend = \"docker\")"
-        );
-        all_tools.retain(|t| t.name() != "shell");
-        all_tools.push(Box::new(ShellTool::with_backend(ShellBackend::Docker(
-            sandbox,
-        ))));
-    } else if config.shell.backend != "local" {
-        tracing::warn!(
-            backend = %config.shell.backend,
-            "[shell] backend must be \"local\" or \"docker\"; using the host shell"
-        );
-    }
     // The task scheduler (parity Stage 2, item 6). Opened here, before the tool
     // set is sealed, so the agent gets the `schedule` tool; the gateway's
     // /scheduler routes share the same store and the loop below fires the
@@ -3814,6 +3765,82 @@ fn run_consent_check(
 /// `oh-ben-claw mcp-serve` — run the MCP server standalone with the default
 /// tool set. The http transport is what the official conformance suite tests
 /// (`npx @modelcontextprotocol/conformance server --url http://…/mcp`).
+/// The operator's fences on the built-in tool set, applied wherever a tool
+/// set is built (the agent, `mcp-serve`, `a2a-serve`): `[browser]` on/off,
+/// `[shell]` backend, `[file]` roots. One place, so Claude Desktop driving
+/// the tools over MCP gets exactly what the agent gets (2026-09-12).
+fn apply_tool_fences(config: &Config, all_tools: &mut Vec<Box<dyn oh_ben_claw::tools::Tool>>) {
+    // `[browser]`: `enabled = false` drops the seven tools (and their schemas
+    // from every prompt); the CDP endpoint was seeded from `cdp_url` before
+    // the set was built.
+    if config.browser.enabled {
+        info!(
+            cdp = %std::env::var("OBC_BROWSER_CDP_URL").unwrap_or_else(|_| "http://localhost:9222".into()),
+            profile = %config.browser.profile,
+            "Browser tools active (CDP; plain-HTTP fallback when the endpoint is down)"
+        );
+    } else {
+        let before = all_tools.len();
+        all_tools.retain(|t| !t.name().starts_with("browser_"));
+        info!(
+            removed = before - all_tools.len(),
+            "Browser tools disabled ([browser] enabled = false)"
+        );
+    }
+    // Parity Stage 3, item 10: where the shell tool runs. `docker` swaps the
+    // host-shell tool for one that execs into a long-lived Linux container
+    // (network off unless configured, only the listed mounts). The hardware
+    // tools stay where they are; a container cannot hold a servo.
+    if config.shell.backend == "docker" {
+        use oh_ben_claw::tools::builtin::shell::{DockerSandbox, ShellBackend, ShellTool};
+        let sandbox = DockerSandbox {
+            image: config.shell.image.clone(),
+            container: config.shell.container.clone(),
+            network: config.shell.network.clone(),
+            mounts: config
+                .shell
+                .mounts
+                .iter()
+                .map(|m| (m.host.clone(), m.guest.clone(), m.read_only))
+                .collect(),
+            memory: config.shell.memory.clone(),
+            cpus: config.shell.cpus,
+        };
+        info!(
+            image = %sandbox.image,
+            container = %sandbox.container,
+            network = %sandbox.network,
+            mounts = sandbox.mounts.len(),
+            "Shell tool runs in a Docker sandbox ([shell] backend = \"docker\")"
+        );
+        all_tools.retain(|t| t.name() != "shell");
+        all_tools.push(Box::new(ShellTool::with_backend(ShellBackend::Docker(
+            sandbox,
+        ))));
+    } else if config.shell.backend != "local" {
+        tracing::warn!(
+            backend = %config.shell.backend,
+            "[shell] backend must be \"local\" or \"docker\"; using the host shell"
+        );
+    }
+    // `[file] roots`: the file tool sees only the listed directories. Empty is
+    // the whole host, said out loud.
+    if config.file.roots.is_empty() {
+        tracing::warn!(
+            "file tool reaches the whole host; set [file] roots to fence it (e.g. the OBC workspace and data directory)"
+        );
+    } else {
+        let fenced =
+            oh_ben_claw::tools::builtin::file::FileTool::with_roots(config.file.roots.clone());
+        info!(
+            roots = ?fenced.roots().iter().map(|r| r.display().to_string()).collect::<Vec<_>>(),
+            "File tool fenced to [file] roots"
+        );
+        all_tools.retain(|t| t.name() != "file");
+        all_tools.push(Box::new(fenced));
+    }
+}
+
 async fn run_mcp_serve(config: &Config, transport: &str, port: u16, mode: &str) -> Result<()> {
     use oh_ben_claw::mcp::{server::McpServer, ProtocolMode};
     use oh_ben_claw::tools::{default_tools, default_tools_with_reach};
@@ -3828,11 +3855,14 @@ async fn run_mcp_serve(config: &Config, transport: &str, port: u16, mode: &str) 
     // conscience reach allowlist when enabled. (No auditor in this standalone
     // path; the gate still refuses, it just isn't logged here.)
     let conscience = obc_conscience::Conscience::new(&config.conscience);
-    let tools = if conscience.enabled {
+    let mut tools = if conscience.enabled {
         default_tools_with_reach(Some(conscience.reach.clone()), None, None)
     } else {
         default_tools()
     };
+    // The same fences as the agent: browser on/off, shell backend, file roots.
+    // Claude Desktop drives these tools through this path (2026-09-12).
+    apply_tool_fences(config, &mut tools);
     let server = McpServer::with_mode(tools, mode);
 
     match transport {
@@ -3895,11 +3925,12 @@ async fn run_a2a_serve(
     // this agent's tools, so the conscience reach allowlist gates them when it
     // is enabled.
     let conscience = obc_conscience::Conscience::new(&config.conscience);
-    let tools = if conscience.enabled {
+    let mut tools = if conscience.enabled {
         default_tools_with_reach(Some(conscience.reach.clone()), None, None)
     } else {
         default_tools()
     };
+    apply_tool_fences(config, &mut tools);
     // Skills advertised on the card: the config's list when it names any,
     // otherwise the agent's actual tool names. A card that advertises a skill
     // the agent does not have is a lie told at discovery time, so the fallback

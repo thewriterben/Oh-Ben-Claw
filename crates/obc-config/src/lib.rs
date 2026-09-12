@@ -1659,6 +1659,17 @@ impl Default for SchedulerConfig {
     }
 }
 
+/// Where the `file` tool may read and write (`[file]`, 2026-09-12). Empty
+/// `roots` is the old behaviour — the whole host — and is logged as such at
+/// boot; list directories and every path outside them is refused, `..` and
+/// symlinks included. The Command Center helper has the same rule.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FileConfig {
+    /// Directories the tool may touch. `~` expands. Empty = unrestricted.
+    #[serde(default)]
+    pub roots: Vec<String>,
+}
+
 /// Where the `shell` tool runs its commands (`[shell]`, parity Stage 3 item 10,
 /// 2026-09-11). `local` is the host shell as before; `docker` is one long-lived
 /// Linux container — no network unless asked, only the listed mounts — which
@@ -1822,6 +1833,8 @@ pub struct Config {
     pub scheduler: SchedulerConfig,
     #[serde(default)]
     pub shell: ShellConfig,
+    #[serde(default)]
+    pub file: FileConfig,
     #[serde(default)]
     pub peripherals: PeripheralsConfig,
     #[serde(default)]
