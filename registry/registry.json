@@ -652,6 +652,27 @@
       ]
     },
     {
+      "vid": 10374,
+      "pid": 86,
+      "name": "xiao-esp32s3",
+      "architecture": "ESP32-S3R8 Xtensa LX7 dual-core @ 240 MHz, 8 MB PSRAM / 8 MB flash, Wi-Fi + BLE 5.0 (native USB)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "sensor_read"
+      ],
+      "vendor": "Seeed Studio",
+      "ecosystem": "XIAO",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
       "vid": 11012,
       "pid": 254,
       "name": "sipeed-6plus1-mic-array",
