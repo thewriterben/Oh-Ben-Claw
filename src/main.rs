@@ -2812,7 +2812,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
     if let Some(t) = &trajectory_store {
-        agent = agent.with_trajectory_store(Arc::clone(t));
+        agent = agent
+            .with_trajectory_store(Arc::clone(t))
+            .with_trajectory_skip(config.self_improvement.skip_session_prefixes.clone());
     }
     if let Some(k) = experience_k {
         agent = agent.with_experience_retrieval(k);

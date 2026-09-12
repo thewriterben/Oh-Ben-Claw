@@ -167,6 +167,8 @@ pub struct Agent {
     /// Phase 16: when attached, each run is captured as an `Episode` for
     /// experiential self-improvement.
     trajectory: Option<Arc<TrajectoryStore>>,
+    /// Session-id prefixes whose turns are not captured as trajectories.
+    trajectory_skip: Vec<String>,
     /// Track 0 dynamic trust: when attached, physical tool calls from an
     /// untrusted node are refused, and every tool round-trip (latency + success)
     /// feeds the per-node behavioral score.
@@ -292,6 +294,7 @@ impl Agent {
             world: None,
             world_context: world_context::WorldContextConfig::default(),
             trajectory: None,
+            trajectory_skip: vec!["scheduled-".to_string()],
             trust: None,
             approval: None,
             experience_k: None,
@@ -364,6 +367,13 @@ impl Agent {
     /// (Phase 16 experiential self-improvement).
     pub fn with_trajectory_store(mut self, store: Arc<TrajectoryStore>) -> Self {
         self.trajectory = Some(store);
+        self
+    }
+
+    /// Do not capture turns from sessions whose id starts with any of these
+    /// (`[self_improvement] skip_session_prefixes`).
+    pub fn with_trajectory_skip(mut self, prefixes: Vec<String>) -> Self {
+        self.trajectory_skip = prefixes;
         self
     }
 
@@ -1073,7 +1083,15 @@ impl Agent {
         }
 
         // Phase 16: capture this run as an episode for experiential self-improvement.
-        if let Some(traj) = &self.trajectory {
+        // Not for sessions the operator did not speak in (timers by default): the
+        // bench learned a skill from a scheduled turn and then replayed the timer.
+        let capture = self.trajectory.as_ref().filter(|_| {
+            !self
+                .trajectory_skip
+                .iter()
+                .any(|p| session_id.starts_with(p.as_str()))
+        });
+        if let Some(traj) = capture {
             let steps: Vec<EpisodeStep> = tool_calls_made
                 .iter()
                 .map(|tc| EpisodeStep {
@@ -2130,6 +2148,32 @@ mod streaming_events_tests {
             (100, 2, 50)
         );
         assert_eq!(u.prompt_tokens(), 150);
+    }
+
+    #[tokio::test]
+    async fn scheduled_sessions_leave_no_trajectory_but_console_sessions_do() {
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
+        let store = Arc::new(TrajectoryStore::open_in_memory().unwrap());
+        let agent = Agent::new(AgentConfig::default(), Arc::new(TwoDeltas), memory, vec![])
+            .with_trajectory_store(Arc::clone(&store));
+        let cfg = obc_providers::ProviderConfig::default();
+        agent
+            .process("scheduled-printer", "hi", &cfg)
+            .await
+            .unwrap();
+        assert_eq!(store.count().unwrap(), 0, "a timer's turn was captured");
+        agent.process("console", "hi", &cfg).await.unwrap();
+        assert_eq!(store.count().unwrap(), 1);
+        let quiet = Agent::new(
+            AgentConfig::default(),
+            Arc::new(TwoDeltas),
+            Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap()),
+            vec![],
+        )
+        .with_trajectory_store(Arc::clone(&store))
+        .with_trajectory_skip(vec!["tg-".into()]);
+        quiet.process("tg-42", "hi", &cfg).await.unwrap();
+        assert_eq!(store.count().unwrap(), 1);
     }
 
     #[tokio::test]

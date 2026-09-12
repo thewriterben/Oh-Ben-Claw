@@ -1367,6 +1367,12 @@ pub struct SelfImprovementConfig {
     /// allowed (Track 0 staged rollout, Phase 16 P3). Default 3.
     #[serde(default)]
     pub promotion_clean_runs: Option<u32>,
+    /// Sessions whose turns are *not* captured as trajectories, by id prefix
+    /// (2026-09-12). Default `["scheduled-"]`: a timer's own turn is not an
+    /// operator asking for something, and on the bench it became a learned
+    /// skill that replayed the timer. Add `"tg-"` to keep phone chats out too.
+    #[serde(default = "default_trajectory_skip")]
+    pub skip_session_prefixes: Vec<String>,
     /// Enable the offline description-evolution job (Phase 16 P4): an LLM
     /// periodically rewrites learned-skill descriptions from usage traces
     /// (diff-logged, revertible; never touches stage/enabled). Default false.
@@ -1729,6 +1735,10 @@ fn default_shell_memory() -> String {
 }
 fn default_shell_cpus() -> f64 {
     1.0
+}
+
+fn default_trajectory_skip() -> Vec<String> {
+    vec!["scheduled-".to_string()]
 }
 
 impl Default for ShellConfig {
