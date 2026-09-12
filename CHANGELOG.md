@@ -5,6 +5,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A fixed temp path is a shared temp path (2026-09-11)
+
+### Fixed
+
+- **`authorize`'s audit-log test no longer writes to a name another run can
+  hold.** `recorded()` used `%TEMP%/obc-authz-{tag}` — the same directory every
+  run, wiped on entry — so two overlapping `cargo test` runs on one machine both
+  opened one file in append mode. `writeln!` is not one syscall: it writes the
+  record, then the newline. Interleave those and line 1 holds two JSON objects,
+  and the helper's `serde_json::from_str` fails with *trailing characters, line
+  1, column 401* — column 401 being the length of the other run's record. Seen
+  once on 2026-09-11, from two overlapping workspace runs of my own; it passed
+  115/115 standalone immediately after, which is exactly how a shared-path race
+  presents. `tempfile::tempdir()` (already a dev-dependency) gives each call its
+  own directory, and it drops after the auditor so the file handle is closed
+  before Windows is asked to remove it. The now-meaningless `tag` argument is
+  gone from the helper and its three callers.
+- **The failure was reachable only off CI, and the fix is still worth it.** One
+  runner runs one job, so CI could not hit this; a developer with two terminals
+  can. The regression test spawns eight concurrent recordings and asserts each
+  reads back its own decision — under the old shared directory they wipe and
+  append over each other. 115 tests in `obc-safety` (up from 114).
+- `audit.rs`'s own helper was already correct (`{tag}-{nanos}`) and is untouched.
+  `obc-paths` still has three fixed temp paths (`obc-paths-root-test`,
+  `-published`, `-second`); same class, different crate, not changed here.
+
+---
 ## Unreleased — A turn in a session nobody created works again (2026-09-11)
 
 ### Fixed
@@ -101,6 +128,9 @@ mis-parsed as a node that never transmits.
   not recurred in the 45 days since. Sourcing node discovery at the radio
   (`Origin::Observed`) closed it at the root, as intended, and the withdrawal is
   `liveness.rs` doing its job.
+
+---
+
 ## Unreleased — The XIAO without its expansion board (2026-09-11)
 
 ### Added

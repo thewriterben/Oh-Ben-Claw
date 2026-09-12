@@ -164,15 +164,20 @@ mod tests {
     ///
     /// Read from the file rather than from memory on purpose: the claim in
     /// `docs/SAFETY-CASE.md` §3.3 is about what an auditor finds on disk.
-    fn recorded(
-        tag: &str,
-        gate: Option<&SafetyGate>,
-        args: &serde_json::Value,
-    ) -> crate::audit::Decision {
-        let dir = std::env::temp_dir().join(format!("obc-authz-{tag}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("audit.jsonl");
+    ///
+    /// The directory is unique per call. It used to be `%TEMP%/obc-authz-{tag}`,
+    /// the same path every run, wiped on entry — which is fine until two
+    /// `cargo test` runs overlap on one machine. Then both append to one file in
+    /// `O_APPEND` mode, and `writeln!` is not one syscall: it writes the record,
+    /// then the newline. Interleave those and line 1 holds two JSON objects, so
+    /// the parse below fails with *trailing characters at column 401* — the
+    /// length of the other run's record. Seen once, 2026-09-11, from two
+    /// overlapping workspace runs of my own. `tempdir()` removes the shared name
+    /// the collision needed; it also drops after `auditor`, so the file handle
+    /// is closed before Windows is asked to delete the directory.
+    fn recorded(gate: Option<&SafetyGate>, args: &serde_json::Value) -> crate::audit::Decision {
+        let dir = tempfile::tempdir().expect("a temp dir for the audit log");
+        let path = dir.path().join("audit.jsonl");
         let auditor = Mutex::new(ActionAuditor::open(b"k".to_vec(), path.clone()).unwrap());
         let risk = RiskClass::physical(false, BlastRadius::High);
         let _ = track0_authorize(gate, Some(&auditor), "gpio_write", risk, args);
@@ -192,7 +197,6 @@ mod tests {
     fn an_action_a_rule_covers_is_recorded_as_checked() {
         let gate = one_rule();
         let d = recorded(
-            "covered",
             Some(&gate),
             &json!({"node_id": "local", "pin": 17, "value": 1}),
         );
@@ -205,7 +209,6 @@ mod tests {
         // Same gate, a node it has never heard of. Allowed either way — the
         // point is that the record no longer claims it was checked.
         let d = recorded(
-            "uncovered",
             Some(&gate),
             &json!({"node_id": "arm-2", "pin": 99, "value": 1}),
         );
@@ -219,8 +222,33 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_recordings_do_not_share_an_audit_file() {
+        // The property the shared `%TEMP%/obc-authz-{tag}` path did not have.
+        // Eight callers doing the same thing at once: with one directory between
+        // them they wipe and append over each other and some read back a record
+        // that is not theirs — or not parseable at all. Each must see its own.
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    let gate = one_rule();
+                    recorded(
+                        Some(&gate),
+                        &json!({"node_id": "local", "pin": 17, "value": 1}),
+                    )
+                })
+            })
+            .collect();
+        for h in handles {
+            assert_eq!(
+                h.join().expect("no panic in a recording thread"),
+                Decision::Allowed
+            );
+        }
+    }
+
+    #[test]
     fn with_no_gate_at_all_the_record_says_so() {
-        let d = recorded("nogate", None, &json!({"pin": 4, "value": 1}));
+        let d = recorded(None, &json!({"pin": 4, "value": 1}));
         assert_eq!(
             d,
             Decision::AllowedUncovered("no safety gate configured".to_string())
