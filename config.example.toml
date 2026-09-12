@@ -158,6 +158,10 @@ timeout_secs = 30
 # allowed_user_ids = [123456789]
 # notify = true
 # notify_min_severity = "info"   # "warning" or "critical" to quiet routine results
+# quiet_hours = "23:00-07:00"     # hold routine (info) notifications overnight; warnings still ring
+# transcribe_voice = true         # voice notes -> text via OPENAI_API_BASE /audio/transcriptions
+# voice_replies = false           # answer a voice note with audio too (Kokoro via /audio/speech)
+# tts_voice = "af_bella"
 
 # ── Autonomy ─────────────────────────────────────────────────────────────────
 # Which tool calls wait for the operator. Level "full" (default) runs every
@@ -309,6 +313,7 @@ network = "none"                # "bridge" to allow egress (then pair with [cons
 memory = "512m"
 cpus = 1.0
 # mounts = [ { host = "C:/Users/you/.oh-ben-claw/workspace", guest = "/workspace" } ]
+# env = { TZ = "MST7MDT,M3.2.0,M11.1.0" }   # busybox reads a POSIX TZ string; recreate the container after changing
 
 # ── File tool fence ──────────────────────────────────────────────────────────
 # Directories the `file` tool may read and write. Everything outside them is

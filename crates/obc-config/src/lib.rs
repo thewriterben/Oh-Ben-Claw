@@ -151,6 +151,28 @@ pub struct TelegramConfig {
     /// unset = everything, scheduled results included.
     #[serde(default)]
     pub notify_min_severity: Option<String>,
+    /// Local-time window, `"HH:MM-HH:MM"` (may cross midnight), during which
+    /// routine (`info`) notifications are held back; warnings and critical
+    /// still go out. Unset = no quiet hours. (2026-09-12)
+    #[serde(default)]
+    pub quiet_hours: Option<String>,
+    /// Transcribe Telegram voice notes and audio messages through the speech
+    /// endpoint at `OPENAI_API_BASE` (`/audio/transcriptions`, Whisper-style)
+    /// and answer them like text. Default true; nothing happens without that
+    /// variable. (2026-09-12)
+    #[serde(default = "default_true")]
+    pub transcribe_voice: bool,
+    /// Also answer a voice note with a voice note: the reply rendered through
+    /// `/audio/speech` at `OPENAI_API_BASE` and sent as audio. Default false.
+    #[serde(default)]
+    pub voice_replies: bool,
+    /// Voice for `voice_replies` (Kokoro names, e.g. `af_bella`).
+    #[serde(default = "default_tg_voice")]
+    pub tts_voice: String,
+}
+
+fn default_tg_voice() -> String {
+    "af_bella".to_string()
 }
 
 /// Configuration for the Discord channel.
@@ -1707,6 +1729,11 @@ pub struct ShellConfig {
     /// CPU limit passed to `docker run --cpus`.
     #[serde(default = "default_shell_cpus")]
     pub cpus: f64,
+    /// Environment inside the container, e.g. `TZ`. Busybox reads a POSIX TZ
+    /// string without tzdata: `TZ = "MST7MDT,M3.2.0,M11.1.0"` is US Mountain.
+    /// Changing it needs the container recreated (`docker rm -f <container>`).
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 /// One bind mount for the shell sandbox.
@@ -1751,6 +1778,7 @@ impl Default for ShellConfig {
             mounts: Vec::new(),
             memory: default_shell_memory(),
             cpus: default_shell_cpus(),
+            env: std::collections::BTreeMap::new(),
         }
     }
 }
