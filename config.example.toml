@@ -310,6 +310,14 @@ memory = "512m"
 cpus = 1.0
 # mounts = [ { host = "C:/Users/you/.oh-ben-claw/workspace", guest = "/workspace" } ]
 
+# ── File tool fence ──────────────────────────────────────────────────────────
+# Directories the `file` tool may read and write. Everything outside them is
+# refused, `..` and symlinks resolved first. Empty = the whole host (the old
+# behaviour; the boot log says so). The same fence applies when the tools are
+# served over MCP (`mcp-serve`) or A2A.
+[file]
+roots = ["~/.oh-ben-claw/workspace"]
+
 # ── Scheduler ────────────────────────────────────────────────────────────────
 # Timers the agent sets for itself: "every weekday at 8 check the printer and
 # message me" → the `schedule` tool turns the phrase into a cron/interval/one-shot

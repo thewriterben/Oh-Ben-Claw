@@ -50,6 +50,20 @@ Parity plan Stage 3, item 8 (browser first) and the first step of item 9
   read were `Loaded config …` and `MCP server running on stdio`, which no
   JSON-RPC parser survives. Logs go to stderr for that command, as the MCP
   rule says; the http transport is unchanged.
+## Unreleased — The file tool has a fence, and the fences apply over MCP too (2026-09-12)
+
+### Added
+
+- **`[file] roots`.** The `file` tool may touch only the listed directories;
+  `..` and symlinks are resolved through the deepest existing ancestor before
+  the check, a relative path lands under the first root, and the tool's
+  description names the fence so the model does not try. Empty is the whole
+  host, as before, and the boot log now says so in a warning.
+- **`apply_tool_fences`** — `[browser]` on/off, `[shell]` backend and
+  `[file]` roots applied in one place, wherever a tool set is built: the agent,
+  `mcp-serve` and `a2a-serve`. Until now Claude Desktop driving OBC over MCP got
+  the unfenced host shell and file tool regardless of the config.
+
 ## Unreleased — Telegram sends omit null fields (2026-09-12)
 
 ### Fixed
