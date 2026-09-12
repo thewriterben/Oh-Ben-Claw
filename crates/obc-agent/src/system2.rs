@@ -21,7 +21,7 @@
 //!    records the wake + outcome back into world memory
 //!    (`system2.last_wake`), closing the perceive → reflex → reason loop.
 
-use crate::reflex::ActionSink;
+use crate::reflex::{escalation_label, ActionSink};
 use async_trait::async_trait;
 use obc_memory::world::WorldMemory;
 use obc_movement::MovementCommand;
@@ -239,16 +239,28 @@ impl System2Reasoner {
         match &decision {
             GateDecision::Repeat => {
                 self.count("system2_suppressed_repeat_total");
-                tracing::debug!(reason = %event.reason, "System 2: suppressed (repeat)");
+                tracing::debug!(
+                    escalation = escalation_label(&event.reason),
+                    "System 2: suppressed (repeat)"
+                );
             }
             GateDecision::OverBudget => {
                 self.count("system2_suppressed_budget_total");
-                tracing::warn!(reason = %event.reason, "System 2: suppressed (wake budget)");
+                tracing::warn!(
+                    escalation = escalation_label(&event.reason),
+                    "System 2: suppressed (wake budget)"
+                );
             }
             GateDecision::Wake => {
                 self.count("system2_wakes_total");
                 let objective = self.build_objective(&event);
-                tracing::info!(reason = %event.reason, "System 2: waking the slow reasoner");
+                // The full reason still reaches the reasoner (`build_objective`
+                // interpolates it) and the `system2.last_wake` record below, so
+                // nothing is lost by logging the label.
+                tracing::info!(
+                    escalation = escalation_label(&event.reason),
+                    "System 2: waking the slow reasoner"
+                );
                 let outcome = match self.reasoner.reason(&objective).await {
                     Ok(response) => {
                         let head: String = response.chars().take(240).collect();
