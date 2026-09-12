@@ -5,6 +5,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A transcript is words, not an envelope (2026-09-12)
+
+### Fixed
+
+- **Telegram voice notes: the agent gets the sentence, not the server's JSON.**
+  The adapter asks the speech endpoint for `response_format = text`, but the
+  bench's obc-stt.py answered `{"text": "What time is it in Shanghai?",
+  "duration_s": 10.4, "language": "en"}` and that whole object became the
+  operator's message. A JSON object with a string `text` now yields that
+  string; plain text is taken as is; anything else passes through untouched.
+
 ## Unreleased — Every Telegram update leaves a trace (2026-09-12)
 
 ### Fixed
