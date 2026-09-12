@@ -50,6 +50,16 @@ Parity plan Stage 3, item 8 (browser first) and the first step of item 9
   read were `Loaded config …` and `MCP server running on stdio`, which no
   JSON-RPC parser survives. Logs go to stderr for that command, as the MCP
   rule says; the http transport is unchanged.
+## Unreleased — Timers do not become skills (2026-09-12)
+
+### Added
+
+- **`[self_improvement] skip_session_prefixes`** (default `["scheduled-"]`):
+  turns in matching sessions are not captured as trajectories, so the
+  improvement pass cannot learn a skill from a timer firing — which is exactly
+  what it did on the bench (`learned_scheduled_task_…_fired_do`). Add `"tg-"`
+  to keep phone chats out too.
+
 ## Unreleased — The file tool has a fence, and the fences apply over MCP too (2026-09-12)
 
 ### Added
