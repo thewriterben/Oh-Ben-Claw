@@ -75,6 +75,13 @@ pub enum AgentEvent {
         session_id: String,
         content: String,
         tool_calls_made: u32,
+        /// Which brain answered, and what it read and wrote (2026-09-11).
+        #[serde(default)]
+        provider: String,
+        #[serde(default)]
+        model: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<obc_providers::Usage>,
     },
     /// The agent encountered an error.
     Error { session_id: String, message: String },
@@ -184,6 +191,9 @@ impl AgentHandle {
                     session_id: session_id.to_string(),
                     content: response.message.clone(),
                     tool_calls_made: response.tool_calls.len() as u32,
+                    provider: response.provider.clone(),
+                    model: response.model.clone(),
+                    usage: response.usage,
                 });
             }
             Err(e) => {
@@ -344,6 +354,9 @@ mod tests {
             session_id: "s1".to_string(),
             content: "Done!".to_string(),
             tool_calls_made: 2,
+            provider: String::new(),
+            model: String::new(),
+            usage: None,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("\"type\":\"response\""));
@@ -390,6 +403,9 @@ mod tests {
                 session_id: "s1".to_string(),
                 content: "The file contains: hello world".to_string(),
                 tool_calls_made: 1,
+                provider: String::new(),
+                model: String::new(),
+                usage: None,
             },
             AgentEvent::Error {
                 session_id: "s1".to_string(),

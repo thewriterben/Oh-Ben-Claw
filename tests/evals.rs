@@ -51,6 +51,7 @@ impl ScriptedProvider {
             tool_calls: vec![],
             provider: "scripted".to_string(),
             model: "eval-mock".to_string(),
+            usage: None,
         }
     }
 
@@ -64,6 +65,7 @@ impl ScriptedProvider {
             }],
             provider: "scripted".to_string(),
             model: "eval-mock".to_string(),
+            usage: None,
         }
     }
 }

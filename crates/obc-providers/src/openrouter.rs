@@ -146,6 +146,7 @@ impl Provider for OpenRouterProvider {
                 .collect(),
             provider: self.name().to_string(),
             model: config.model.clone(),
+            usage: None,
         })
     }
 }

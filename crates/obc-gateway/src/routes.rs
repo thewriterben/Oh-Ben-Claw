@@ -307,6 +307,14 @@ pub struct ChatResponse {
     pub message: String,
     pub tool_calls_made: usize,
     pub agent_available: bool,
+    /// Which brain answered and what it read/wrote (2026-09-11); empty when
+    /// the agent could not say.
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Value>,
 }
 
 /// `POST /api/v1/chat/stream` — Send a message and receive the turn as SSE.
@@ -581,6 +589,9 @@ pub async fn chat(
                 message: response.message,
                 tool_calls_made: response.tool_calls.len(),
                 agent_available: true,
+                provider: response.provider,
+                model: response.model,
+                usage: response.usage.and_then(|u| serde_json::to_value(u).ok()),
             })
             .into_response()
         }
@@ -1139,11 +1150,16 @@ mod tests {
             message: "hi".to_string(),
             tool_calls_made: 2,
             agent_available: true,
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-5".to_string(),
+            usage: Some(json!({"input_tokens": 12, "output_tokens": 3})),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("session_id"));
         assert!(json.contains("tool_calls_made"));
         assert!(json.contains("agent_available"));
+        assert!(json.contains("\"model\":\"claude-sonnet-5\""));
+        assert!(json.contains("\"input_tokens\":12"));
     }
 
     #[test]

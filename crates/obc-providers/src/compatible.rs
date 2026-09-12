@@ -145,6 +145,7 @@ impl Provider for CompatibleProvider {
                 .collect(),
             provider: self.name().to_string(),
             model: config.model.clone(),
+            usage: None,
         })
     }
 }

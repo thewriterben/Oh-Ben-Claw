@@ -221,6 +221,7 @@ mod streaming_restart_tests {
                 tool_calls: vec![],
                 provider: "flaky".into(),
                 model: c.model.clone(),
+                usage: None,
             })
         }
     }

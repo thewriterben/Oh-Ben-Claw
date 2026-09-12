@@ -302,6 +302,7 @@ mod tests {
                 tool_calls: vec![],
                 provider: "fixed".to_string(),
                 model: "test".to_string(),
+                usage: None,
             })
         }
     }

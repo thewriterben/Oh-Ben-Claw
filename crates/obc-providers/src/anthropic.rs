@@ -18,7 +18,7 @@
 use crate::ProviderConfig;
 use crate::{
     ChatCompletion, ChatMessage, ChatRole, DeltaSink, Provider, ResponseFormat, StreamDelta,
-    ToolCall,
+    ToolCall, Usage,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -268,6 +268,7 @@ impl Provider for AnthropicProvider {
             )
         })?;
 
+        let usage = response.usage.map(Usage::from);
         let mut message = String::new();
         let mut tool_calls = Vec::new();
 
@@ -290,6 +291,7 @@ impl Provider for AnthropicProvider {
             tool_calls,
             provider: self.name().to_string(),
             model: config.model.clone(),
+            usage,
         })
     }
 
@@ -372,6 +374,9 @@ pub fn sse_data(raw: &str) -> Option<String> {
 pub struct StreamFold {
     pub message: String,
     blocks: Vec<(usize, ToolCall)>,
+    /// `message_start` carries the prompt-side numbers (input, cache read,
+    /// cache write); `message_delta` the output count at the end.
+    pub usage: Option<Usage>,
 }
 
 impl StreamFold {
@@ -391,6 +396,7 @@ impl StreamFold {
             tool_calls,
             provider: provider.to_string(),
             model: model.to_string(),
+            usage: self.usage,
         }
     }
 }
@@ -433,6 +439,31 @@ pub fn fold_event(data: &str, fold: &mut StreamFold, sink: DeltaSink<'_>) -> Res
             }
             BlockDelta::Other => {}
         },
+        StreamEvent::MessageStart { message } => {
+            if let Some(u) = message.usage {
+                fold.usage = Some(u.into());
+            }
+        }
+        StreamEvent::MessageDelta { usage } => {
+            // The final usage: output_tokens is the count for the whole
+            // message; newer servers repeat the input-side numbers here too.
+            if let Some(u) = usage {
+                let mut cur = fold.usage.unwrap_or_default();
+                if u.output_tokens > 0 {
+                    cur.output_tokens = u.output_tokens;
+                }
+                if u.input_tokens > 0 {
+                    cur.input_tokens = u.input_tokens;
+                }
+                if u.cache_read_input_tokens > 0 {
+                    cur.cache_read_input_tokens = u.cache_read_input_tokens;
+                }
+                if u.cache_creation_input_tokens > 0 {
+                    cur.cache_creation_input_tokens = u.cache_creation_input_tokens;
+                }
+                fold.usage = Some(cur);
+            }
+        }
         StreamEvent::Error { error } => {
             anyhow::bail!("Anthropic API error (stream): {}", error.message);
         }
@@ -462,6 +493,39 @@ struct AnthropicTool {
 #[derive(Debug, Deserialize)]
 struct AnthropicResponse {
     content: Vec<AnthropicContent>,
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+}
+
+/// The API's `usage` object, on the response and on `message_start` /
+/// `message_delta`. Every field defaults so a partial object parses.
+#[derive(Debug, Default, Clone, Copy, Deserialize)]
+struct AnthropicUsage {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cache_read_input_tokens: u64,
+    #[serde(default)]
+    cache_creation_input_tokens: u64,
+}
+
+impl From<AnthropicUsage> for Usage {
+    fn from(u: AnthropicUsage) -> Self {
+        Usage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            cache_read_input_tokens: u.cache_read_input_tokens,
+            cache_creation_input_tokens: u.cache_creation_input_tokens,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct MessageStartBody {
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -493,6 +557,13 @@ enum StreamEvent {
     },
     #[serde(rename = "content_block_delta")]
     ContentBlockDelta { index: usize, delta: BlockDelta },
+    #[serde(rename = "message_start")]
+    MessageStart { message: MessageStartBody },
+    #[serde(rename = "message_delta")]
+    MessageDelta {
+        #[serde(default)]
+        usage: Option<AnthropicUsage>,
+    },
     #[serde(rename = "message_stop")]
     MessageStop,
     #[serde(rename = "error")]
@@ -795,5 +866,52 @@ mod current_models_tests {
             })
             .collect();
         assert_eq!(kinds, ["other", "text", "tool_use"]);
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+
+    #[test]
+    fn the_stream_fold_keeps_the_usage_from_start_and_delta() {
+        let mut fold = StreamFold::default();
+        let sink = |_d: StreamDelta| {};
+        let events = [
+            r#"{"type":"message_start","message":{"id":"m","usage":{"input_tokens":12,"cache_read_input_tokens":5000,"cache_creation_input_tokens":300,"output_tokens":1}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}"#,
+            r#"{"type":"message_stop"}"#,
+        ];
+        for e in events {
+            if fold_event(e, &mut fold, &sink).unwrap() {
+                break;
+            }
+        }
+        let done = fold.finish("anthropic", "claude-sonnet-5");
+        let u = done.usage.expect("usage");
+        assert_eq!(u.input_tokens, 12);
+        assert_eq!(u.cache_read_input_tokens, 5000);
+        assert_eq!(u.cache_creation_input_tokens, 300);
+        assert_eq!(u.output_tokens, 42);
+        assert_eq!(u.prompt_tokens(), 5312);
+        assert!((u.billable_input() - (12.0 + 500.0 + 375.0)).abs() < 1e-9);
+        assert!((u.cache_hit_ratio().unwrap() - 5000.0 / 5312.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_non_streaming_response_carries_its_usage() {
+        let raw = r#"{"content":[{"type":"text","text":"hello"}],
+            "usage":{"input_tokens":7,"output_tokens":3,"cache_read_input_tokens":100}}"#;
+        let r: AnthropicResponse = serde_json::from_str(raw).unwrap();
+        let u: Usage = r.usage.unwrap().into();
+        assert_eq!(
+            (u.input_tokens, u.output_tokens, u.cache_read_input_tokens),
+            (7, 3, 100)
+        );
+        // and a response without usage still parses
+        let r: AnthropicResponse = serde_json::from_str(r#"{"content":[]}"#).unwrap();
+        assert!(r.usage.is_none());
     }
 }
