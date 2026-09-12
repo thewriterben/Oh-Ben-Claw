@@ -336,9 +336,17 @@ fn parse_one_shot(words: &[&str], now_ts: u64, tz: Tz) -> Result<Option<Parsed>,
             return Err("the soonest one-shot is 5 seconds from now".into());
         }
         let ts = now_ts + n * secs;
+        let span = human_secs(n * secs);
+        // human_secs says "minute" for 60 (it reads well after "every"); after
+        // "in" it needs the one.
+        let span = if span.starts_with(|c: char| c.is_ascii_digit()) {
+            span
+        } else {
+            format!("1 {span}")
+        };
         return Ok(Some(Parsed {
             kind: TaskKind::OneShot(ts),
-            description: format!("once at {} (in {})", tz.render(ts), human_secs(n * secs)),
+            description: format!("once at {} (in {span})", tz.render(ts)),
         }));
     }
     let (head, time) = split_at_time(words)?;
@@ -470,6 +478,8 @@ mod tests {
     fn one_shots() {
         assert_eq!(p("in 20 minutes").kind, TaskKind::OneShot(NOW + 1200));
         assert_eq!(p("in an hour").kind, TaskKind::OneShot(NOW + 3600));
+        assert!(p("in an hour").description.ends_with("(in 1 hour)"));
+        assert!(p("in 20 minutes").description.ends_with("(in 20 minutes)"));
         assert_eq!(p("in 2 days").kind, TaskKind::OneShot(NOW + 2 * 86_400));
         // 15:00 UTC now: "at 16:00" is today, "at 8" is tomorrow
         assert_eq!(p("at 16:00").kind, TaskKind::OneShot(NOW + 3600));
