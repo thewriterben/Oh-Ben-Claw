@@ -43,6 +43,7 @@ obc-planner = { path = "../obc-planner", features = ["world-anchor"] }
 obc-position = { path = "../obc-position" }
 obc-reflex = { path = "../obc-reflex" }
 obc-safety = { path = "../obc-safety" }
+obc-scheduler = { path = "../obc-scheduler" }
 obc-spine = { path = "../obc-spine" }
 obc-telemetry = { path = "../obc-telemetry" }
 obc-tool-api = { path = "../obc-tool-api" }

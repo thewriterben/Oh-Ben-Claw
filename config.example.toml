@@ -269,6 +269,16 @@ enabled = true
 novelty_window_ms = 600000
 max_wakes_per_hour = 6
 
+# ── Scheduler ────────────────────────────────────────────────────────────────
+# Timers the agent sets for itself: "every weekday at 8 check the printer and
+# message me" → the `schedule` tool turns the phrase into a cron/interval/one-shot
+# task in scheduler.db; this loop fires it; the result goes out through
+# [notifications]. Also reachable as POST /api/v1/scheduler/tasks {"when": "..."}.
+[scheduler]
+enabled = true
+tick_interval_secs = 30
+timezone = "local"              # "local" or "utc"; phrases and cron are read here
+
 # ── Safety (Track 0) ─────────────────────────────────────────────────────────
 # Deterministic, model-independent limits on physical actuation. These are
 # enforced in code before any command reaches hardware — not instructions to

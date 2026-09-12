@@ -94,6 +94,7 @@ mod skill_replay;
 // from inside the loop as they happen rather than reconstructed afterwards.
 pub mod context;
 pub mod routing;
+pub mod scheduled;
 pub mod system2;
 pub mod world_context;
 pub use edge::{EdgeAgent, EdgeAgentBuilder};
@@ -715,7 +716,12 @@ impl Agent {
         let taint_pool = (self.taint_mode != obc_safety::taint::TaintMode::Off)
             .then(obc_safety::taint::TaintPool::new);
 
-        // 1. Store the user message
+        // 1. Store the user message. The session row must exist first: since
+        //    `PRAGMA foreign_keys` went on (2026-09-11, #146) a message for an
+        //    unknown session is refused, and callers hand this method fresh ids
+        //    all the time — a channel's chat id, a scheduled task's own
+        //    session, a Command Center tab. Idempotent, one cheap statement.
+        self.memory.create_session_with_id(session_id)?;
         self.memory
             .append_message(session_id, ChatRole::User, user_message)?;
 
@@ -2046,6 +2052,31 @@ mod streaming_events_tests {
                 model: c.model.clone(),
             })
         }
+    }
+
+    #[tokio::test]
+    async fn a_turn_in_a_session_nobody_created_still_works() {
+        // Channels, scheduled tasks and Command Center tabs hand `process` ids
+        // that have no row yet; with foreign keys on, that used to fail with
+        // "FOREIGN KEY constraint failed" before a single token was produced.
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
+        let agent = Agent::new(
+            AgentConfig::default(),
+            Arc::new(TwoDeltas),
+            Arc::clone(&memory),
+            vec![],
+        );
+        let cfg = obc_providers::ProviderConfig::default();
+        let response = agent
+            .process("scheduled-printer-check", "hi", &cfg)
+            .await
+            .unwrap();
+        assert_eq!(response.message, "hello world");
+        assert!(memory
+            .list_sessions()
+            .unwrap()
+            .iter()
+            .any(|s| s.id == "scheduled-printer-check"));
     }
 
     #[tokio::test]
