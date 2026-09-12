@@ -1606,6 +1606,43 @@ pub struct LoraGatewayConfig {
     pub baud: u32,
 }
 
+/// The task scheduler (`[scheduler]`, 2026-09-11): timers the agent sets for
+/// itself through the `schedule` tool ("every weekday at 8 check the printer and
+/// message me") and the gateway's `/scheduler/tasks` routes. Tasks live in
+/// `scheduler.db` in the data directory; the loop here is what fires them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerConfig {
+    /// Register the `schedule` tool and run the loop that fires due tasks.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// How often due tasks are looked for, in seconds. Default 30.
+    #[serde(default = "default_scheduler_tick")]
+    pub tick_interval_secs: u64,
+    /// Zone cron expressions and phrases are read in: `"local"` (the machine's
+    /// zone — what an operator means by "8") or `"utc"`. Default `"local"`.
+    /// Tasks created before this option existed stay UTC.
+    #[serde(default = "default_scheduler_tz")]
+    pub timezone: String,
+}
+
+fn default_scheduler_tick() -> u64 {
+    30
+}
+
+fn default_scheduler_tz() -> String {
+    "local".to_string()
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            tick_interval_secs: default_scheduler_tick(),
+            timezone: default_scheduler_tz(),
+        }
+    }
+}
+
 /// Escalation notifications (`[notifications]`): wire reflex escalations (mesh node
 /// lost, battery critical, alarm heard, …) to operator-facing channels — a durable
 /// log-of-record in world memory and/or a webhook (Slack/Discord/generic).
@@ -1690,6 +1727,8 @@ pub struct Config {
     /// a webhook.
     #[serde(default)]
     pub notifications: NotificationsConfig,
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
     #[serde(default)]
     pub peripherals: PeripheralsConfig,
     #[serde(default)]
@@ -3096,6 +3135,30 @@ mod routing_config_tests {
     use super::*;
 
     #[test]
+    fn scheduler_section_parses_with_defaults() {
+        let cfg: Config = toml::from_str(
+            "[agent]
+name = \"x\"
+",
+        )
+        .unwrap();
+        assert!(cfg.scheduler.enabled);
+        assert_eq!(cfg.scheduler.tick_interval_secs, 30);
+        assert_eq!(cfg.scheduler.timezone, "local");
+        let cfg: Config = toml::from_str(
+            "[scheduler]
+enabled = false
+tick_interval_secs = 10
+timezone = \"utc\"
+",
+        )
+        .unwrap();
+        assert!(!cfg.scheduler.enabled);
+        assert_eq!(cfg.scheduler.tick_interval_secs, 10);
+        assert_eq!(cfg.scheduler.timezone, "utc");
+    }
+
+    #[test]
     fn provider_routing_parses_with_defaults_and_rejects_unknown_keys() {
         let cfg: Config = toml::from_str(
             r#"
@@ -3114,7 +3177,10 @@ model = "claude-sonnet-5"
         assert!(r.enabled && r.console_to_cloud);
         assert_eq!(r.cloud.model, "claude-sonnet-5");
         assert_eq!(r.tool_threshold, 8);
-        assert_eq!(r.local_session_prefixes, ["system2", "harness-", "edge-"]);
+        assert_eq!(
+            r.local_session_prefixes,
+            ["system2", "harness-", "edge-", "scheduled-"]
+        );
         assert_eq!(r.private_sources, ["clawcam"]);
         assert_eq!(r.daily_budget_usd, 5.0);
 

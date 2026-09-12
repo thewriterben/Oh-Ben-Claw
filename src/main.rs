@@ -483,6 +483,41 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     all_tools.push(Box::new(
         oh_ben_claw::tools::builtin::search::SearchSessionsTool::new(Arc::clone(&memory)),
     ));
+    // The task scheduler (parity Stage 2, item 6). Opened here, before the tool
+    // set is sealed, so the agent gets the `schedule` tool; the gateway's
+    // /scheduler routes share the same store and the loop below fires the
+    // tasks. Scheduler::new takes a *path*, not a name (see the note that used
+    // to sit in the gateway block): a real file in the data directory, or
+    // in-memory when that cannot be opened rather than refusing to start.
+    let scheduler_tz = scheduler::Tz::parse(&config.scheduler.timezone).unwrap_or_else(|| {
+        tracing::warn!(
+            timezone = %config.scheduler.timezone,
+            "[scheduler] timezone must be \"local\" or \"utc\"; using local"
+        );
+        scheduler::Tz::Local
+    });
+    let scheduler: Arc<scheduler::Scheduler> = {
+        let sched_path = oh_ben_claw::config::paths::in_data_dir("scheduler.db");
+        match scheduler::Scheduler::new(&sched_path.to_string_lossy()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    path = %sched_path.display(),
+                    error = %e,
+                    "scheduler database unavailable - falling back to in-memory (tasks will not persist)"
+                );
+                scheduler::Scheduler::new(":memory:").expect("in-memory scheduler cannot fail")
+            }
+        }
+    };
+    if config.scheduler.enabled {
+        all_tools.push(Box::new(
+            oh_ben_claw::tools::builtin::schedule::ScheduleTool::new(
+                Arc::clone(&scheduler),
+                scheduler_tz,
+            ),
+        ));
+    }
     let mut node_count = 0usize;
 
     // Build the security context before anything that needs to enforce with it.
@@ -1650,6 +1685,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     let mut system2_rx: Option<
         tokio::sync::mpsc::Receiver<oh_ben_claw::agent::system2::WakeEvent>,
     > = None;
+    // The escalation notifier, kept for the scheduler too: a scheduled task's
+    // result is delivered through the same channels (world-memory log, webhook,
+    // speech). Built inside the reflex block below, so it exists only when
+    // reflexes, world memory and [notifications] are all on; otherwise the
+    // scheduler logs its results and they stay in the task's session.
+    let mut scheduled_notifier: Option<Arc<oh_ben_claw::agent::notify::Notifier>> = None;
     if config.reflex.enabled && !reflex_rules.is_empty() {
         if let Some(world) = &world_mem {
             use oh_ben_claw::agent::reflex::{
@@ -1759,6 +1800,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     "Escalation notifications wired"
                 );
                 let notifier = Arc::new(notifier);
+                scheduled_notifier = Some(Arc::clone(&notifier));
 
                 // Periodic digest: roll the escalation log up by reason on a schedule and
                 // deliver a one-line summary through the same channels.
@@ -3085,37 +3127,44 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
     }
 
+    // Fire scheduled tasks (parity Stage 2, item 6). `run_scheduler_loop` was
+    // written with the crate and never called: tasks were stored, listed and
+    // never run. Each due task runs its tool, then its prompt as a turn in its
+    // own session, and the result goes out through the notifier.
+    if config.scheduler.enabled {
+        let tick = config.scheduler.tick_interval_secs.clamp(5, 3600);
+        let sched = Arc::clone(&scheduler);
+        let loop_handle = handle.clone();
+        let loop_notifier = scheduled_notifier.clone();
+        info!(
+            tick_secs = tick,
+            tz = scheduler_tz.as_str(),
+            tasks = scheduler.enabled_count().unwrap_or(0),
+            notifier = loop_notifier.is_some(),
+            "Scheduler loop spawned (schedule tool active)"
+        );
+        tokio::spawn(scheduler::run_scheduler_loop(sched, tick, move |d| {
+            let h = loop_handle.clone();
+            let n = loop_notifier.clone();
+            async move {
+                oh_ben_claw::agent::scheduled::run_scheduled(&h, d, n).await;
+            }
+        }));
+    } else {
+        info!("Scheduler disabled ([scheduler] enabled = false)");
+    }
+
     // Start the gateway (with live agent attached) if enabled
     let _gateway_state = if config.gateway.enabled {
         // Build the full gateway state with all subsystems (reusing the shared
         // observability context so reflex/safing fire counts appear in /metrics).
         let obs = Arc::clone(&obs);
-        // Scheduler::new takes a *path*, not a name. Passing the agent name
-        // created a relative file in the process's working directory -- and
-        // then `.unwrap()`ed the fallback, so the whole agent panicked on
-        // startup whenever that directory wasn't writable. Every service
-        // manager runs with a working directory the user doesn't control
-        // (Task Scheduler uses System32), which made this fatal for any
-        // unattended start. Resolve a real path in the data directory.
-        let sched_path = oh_ben_claw::config::paths::in_data_dir("scheduler.db");
-        let sched = match scheduler::Scheduler::new(&sched_path.to_string_lossy()) {
-            Ok(s) => s,
-            Err(e) => {
-                // In-memory keeps the gateway serving; scheduled tasks simply
-                // don't survive a restart. Better than refusing to start.
-                tracing::warn!(
-                    path = %sched_path.display(),
-                    error = %e,
-                    "scheduler database unavailable - falling back to in-memory (tasks will not persist)"
-                );
-                scheduler::Scheduler::new(":memory:").expect("in-memory scheduler cannot fail")
-            }
-        };
         let mut gs = gateway::GatewayState::new(config.gateway.clone())
             .with_agent(handle.clone())
             .with_memory(Arc::clone(&memory))
             .with_obs(obs)
-            .with_scheduler(sched)
+            .with_scheduler(Arc::clone(&scheduler))
+            .with_scheduler_tz(scheduler_tz)
             .with_skills(gateway::SkillOps {
                 skill_dir: oh_ben_claw::skill_forge::SkillForge::default_dir(),
                 tracker: Arc::clone(&rollout_tracker),

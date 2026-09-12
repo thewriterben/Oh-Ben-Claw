@@ -54,6 +54,7 @@ obc-memory = { path = "../obc-memory" }
 obc-movement = { path = "../obc-movement" }
 obc-observability = { path = "../obc-observability" }
 obc-providers = { path = "../obc-providers" }
+obc-scheduler = { path = "../obc-scheduler" }
 obc-reflex = { path = "../obc-reflex" }
 obc-safety = { path = "../obc-safety" }
 obc-skill-forge = { path = "../obc-skill-forge" }
