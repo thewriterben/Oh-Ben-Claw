@@ -35,17 +35,18 @@ pub struct Outcome {
 /// The message a scheduled prompt turn starts with, so the model knows this is
 /// a timer firing and not the operator typing.
 pub fn turn_message(task_name: &str, prompt: &str, tool_report: Option<&str>) -> String {
-    // Blunt on purpose. On the bench the first wording ("Scheduled task X fired.
-    // Do what it says below…") got, from the local 14B with experience
-    // retrieval on, a reply that it had "successfully scheduled" the task —
-    // the retrieved similar turns were the ones that created it. The timer
-    // must read as a timer, and scheduling must be ruled out in words.
+    // Third wording. The first ("Scheduled task X fired. Do what it says below")
+    // got "I have successfully scheduled…"; the second ("It is already
+    // scheduled: do not create, list or change any schedule") got "already set,
+    // no further action is needed". Both from the local 14B with experience
+    // retrieval handing it the turns that created the task. So: no word of
+    // scheduling at all, a due reminder, one imperative, and the report asked
+    // for by name.
     let mut m = format!(
-        "[Timer] Your scheduled task \"{task_name}\" has just gone off. It is already \
-         scheduled: do not create, list or change any schedule now. Carry out the task \
-         below — use tools where they help; if something cannot be checked from here, \
-         say so plainly — then reply with the result in a few sentences. The reply is \
-         delivered to the operator.\nTask: {prompt}"
+        "[Reminder due] You asked to be reminded at this time: \"{task_name}\". Do it now: \
+         {prompt}\nUse tools where they help; if something cannot be checked from here, say \
+         so. Do not set any new reminder. Then reply with what you found, in a few \
+         sentences — that reply is sent to the operator."
     );
     if let Some(r) = tool_report {
         m.push_str("\n\n");
@@ -157,11 +158,12 @@ mod tests {
             "check the printer",
             Some("Result of `x`:\nok"),
         );
-        assert!(m.starts_with("[Timer] Your scheduled task \"Printer check\" has just gone off."));
-        assert!(m.contains("do not create, list or change any schedule now"));
-        assert!(m.contains("\nTask: check the printer\n\nResult of `x`:\nok"));
+        assert!(m.starts_with("[Reminder due] You asked to be reminded at this time: \"Printer check\". Do it now: check the printer\n"));
+        assert!(m.contains("Do not set any new reminder."));
+        assert!(m.ends_with("\n\nResult of `x`:\nok"));
+        assert!(!m.to_ascii_lowercase().contains("schedul"));
         let m = turn_message("t", "p", None);
-        assert!(m.ends_with("\nTask: p"));
+        assert!(m.ends_with("sent to the operator."));
     }
 
     #[test]

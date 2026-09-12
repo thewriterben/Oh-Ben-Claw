@@ -7,7 +7,7 @@
 //! persist in `scheduler.db` and are fired by the scheduler loop; the result of
 //! each run is delivered through the notifier.
 
-use crate::traits::{Tool, ToolResult};
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use obc_scheduler::{nl, ScheduledTask, Scheduler, TaskKind, Tz};
 use serde_json::{json, Value};
@@ -192,6 +192,20 @@ impl Tool for ScheduleTool {
          yourself, e.g. 'check the printer status and report anything off') and, when a \
          specific tool should run first, name it in 'tool' with 'tool_args'. Each run's \
          result is delivered to the operator."
+    }
+
+    fn risk_class(&self) -> RiskClass {
+        // Creating a timer is a side effect that acts later, and a replayed
+        // `create` re-arms a finished one-shot or resurrects a deleted task —
+        // which is exactly what the self-improvement pass did on the bench
+        // (2026-09-11) while verifying three skills it had learned from
+        // successful `schedule` turns. Not reversible, so the forge quarantines
+        // such recipes for operator promotion instead of auto-installing them.
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::Low,
+            physical: false,
+        }
     }
 
     fn parameters_schema(&self) -> Value {
@@ -409,6 +423,13 @@ mod tests {
             .execute(json!({"when": "in 5 minutes", "prompt": "x"}))
             .await
             .is_err());
+    }
+
+    #[test]
+    fn the_tool_is_not_safe_to_replay() {
+        let r = tool().risk_class();
+        assert!(!r.reversible && !r.physical);
+        assert!(!matches!(r.blast, BlastRadius::None));
     }
 
     #[test]
