@@ -757,6 +757,44 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         ecosystem: "XIAO",
         connectors: &[Connector::Bare],
     },
+    // ── Seeed XIAO ESP32S3 ────────────────────────────────────────────────────
+    // The Sense without its expansion board: the same ESP32-S3R8 module, 8 MB
+    // PSRAM and 8 MB flash, and none of the camera, microphone or SD hardware —
+    // all of which sit on the B2B expansion board, not on this PCB.
+    //
+    // USB VID=0x2886 (Seeed Studio), PID=0x0056, from arduino-esp32's own board
+    // definition: `XIAO_ESP32S3.vid.0`/`pid.0` in boards.txt and USB_VID/USB_PID
+    // in variants/XIAO_ESP32S3/pins_arduino.h (espressif/arduino-esp32 #7971).
+    // The definition's second pair, 0x8056, is this board in UF2 bootloader mode
+    // rather than a second board, so it is not listed.
+    //
+    // That same single Arduino definition also serves the Sense — Seeed's wiki
+    // tells you to select `XIAO_ESP32S3` for either — while the Sense entry above
+    // claims 0x0058 from a comment with nothing behind it. Recorded, not
+    // resolved, in #150: on a native-USB ESP32-S3 the PID comes from the firmware
+    // rather than the silicon, so the two can both be true of different firmware
+    // and neither is a fact about the board. Settling it needs a device on a wire.
+    BoardInfo {
+        vid: 0x2886,
+        pid: 0x0056,
+        name: "xiao-esp32s3",
+        architecture: Some(
+            "ESP32-S3R8 Xtensa LX7 dual-core @ 240 MHz, 8 MB PSRAM / 8 MB flash, Wi-Fi + BLE 5.0 (native USB)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio",
+            "analog_read",
+            "i2c",
+            "spi",
+            "wifi",
+            "ble",
+            "sensor_read",
+        ],
+        vendor: "Seeed Studio",
+        ecosystem: "XIAO",
+        connectors: &[Connector::Bare],
+    },
     // ── Sipeed 6+1 Mic Array ──────────────────────────────────────────────────
     // Circular microphone array with 6 peripheral mics and 1 center mic,
     // powered by an STM32F103 MCU.  Appears as a USB audio device and
@@ -2185,6 +2223,31 @@ mod tests {
         assert!(b.capabilities.contains(&"wifi"));
         assert!(b.capabilities.contains(&"ble"));
         assert_eq!(b.transport, "serial");
+    }
+
+    #[test]
+    fn lookup_xiao_esp32s3() {
+        let b = lookup_board(0x2886, 0x0056).unwrap();
+        assert_eq!(b.name, "xiao-esp32s3");
+        assert!(b.capabilities.contains(&"wifi"));
+        assert!(b.capabilities.contains(&"ble"));
+        assert_eq!(b.transport, "serial");
+    }
+
+    #[test]
+    fn the_plain_xiao_claims_none_of_the_expansion_board_hardware() {
+        // Camera, microphone and SD are on the Sense's B2B expansion board. A
+        // planner that read them off the bare module would propose a vision node
+        // on hardware that cannot see.
+        let b = lookup_board(0x2886, 0x0056).unwrap();
+        for cap in ["camera_capture", "audio_sample", "microsd"] {
+            assert!(
+                !b.capabilities.contains(&cap),
+                "xiao-esp32s3 claims {cap}, which lives on the Sense expansion board"
+            );
+        }
+        let sense = lookup_board(0x2886, 0x0058).unwrap();
+        assert!(sense.capabilities.contains(&"camera_capture"));
     }
 
     #[test]

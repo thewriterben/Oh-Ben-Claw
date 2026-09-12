@@ -45,6 +45,42 @@ mis-parsed as a node that never transmits.
   not recurred in the 45 days since. Sourcing node discovery at the radio
   (`Origin::Observed`) closed it at the root, as intended, and the withdrawal is
   `liveness.rs` doing its job.
+## Unreleased — The XIAO without its expansion board (2026-09-11)
+
+### Added
+
+- **`xiao-esp32s3`, the plain module.** The registry had the Sense and not the
+  board underneath it, so a bare XIAO was unidentifiable. Same ESP32-S3R8 module,
+  8 MB PSRAM and 8 MB flash; **no** `camera_capture`, `audio_sample` or
+  `microsd`, because all three live on the Sense's B2B expansion board rather
+  than on this PCB. A test asserts their absence: a planner that read them off
+  the bare module would propose a vision node on hardware that cannot see.
+- **The USB id is sourced this time.** `0x2886:0x0056`, from arduino-esp32's own
+  board definition — `XIAO_ESP32S3.vid.0`/`pid.0` in `boards.txt`, and
+  `USB_VID`/`USB_PID` in `variants/XIAO_ESP32S3/pins_arduino.h`
+  (espressif/arduino-esp32 #7971). The definition's second pair, `0x8056`, is
+  this board in UF2 bootloader mode rather than a second board, so it is not
+  listed.
+- `registry/registry.json` and `firmware-templates/templates.json` regenerated
+  from their emit binaries. The scaffold's capability-conditioned includes do the
+  right thing unprompted: the generated sketch carries `WiFi.h`, `BLEDevice.h`,
+  `Wire.h` and `SPI.h` and **not** `esp_camera.h`. The drift guard
+  `committed_templates_json_is_current` is what caught the stale templates —
+  adding a board makes them stale, which is worth knowing for the next one.
+  1,693 tests (two new).
+
+### Known conflict, recorded not resolved
+
+- **The Sense's `0x0058` has no source, and the only source there is disagrees**
+  (#150). That one Arduino board definition serves *both* variants — Seeed's wiki
+  tells you to select `XIAO_ESP32S3` for either — yet `xiao-esp32s3-sense` claims
+  `0x0058` from a comment with nothing behind it, pinned by a test. On a
+  native-USB ESP32-S3 the PID comes from the firmware and not the silicon, so
+  both ids can be true of different firmware and neither is a fact about the
+  board. The Sense entry and its test are untouched; the registry now carries one
+  sourced id and one unsourced one that disagree, which is the honest state.
+  Settling it needs a device on a wire, and the answer only means anything
+  alongside which firmware was on it.
 
 ---
 
