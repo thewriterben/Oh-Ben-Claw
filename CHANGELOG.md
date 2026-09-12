@@ -5,6 +5,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A turn in a session nobody created works again (2026-09-11)
+
+### Fixed
+
+- **`Agent::process` creates the session row before the first message.**
+  #146 turned `PRAGMA foreign_keys` on so deleting a session takes its
+  messages with it; the side effect was that appending a message for a
+  session id with no row — which is how channels (a chat id), scheduled
+  tasks (`scheduled-<name>`) and fresh Command Center tabs arrive — failed
+  with `FOREIGN KEY constraint failed` before a token was produced. Seen on
+  the bench as an empty reply and as the first scheduled task's
+  `the scheduled turn failed`. Now `create_session_with_id` (idempotent,
+  `INSERT OR IGNORE`) runs first. Regression tests in obc-memory and
+  obc-agent.
+
 ## Unreleased — Scheduled tasks fire, and are set in plain words (2026-09-11)
 
 Parity plan Stage 2, item 6. `obc_scheduler::run_scheduler_loop` was written
