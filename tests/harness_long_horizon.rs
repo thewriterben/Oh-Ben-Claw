@@ -49,6 +49,7 @@ impl Provider for WorkerProvider {
                 tool_calls: vec![],
                 provider: "worker-mock".to_string(),
                 model: "mock".to_string(),
+                usage: None,
             });
         }
         // Worker prompts name their objective; actuate for the door objective.
@@ -70,6 +71,7 @@ impl Provider for WorkerProvider {
             tool_calls,
             provider: "worker-mock".to_string(),
             model: "mock".to_string(),
+            usage: None,
         })
     }
 }

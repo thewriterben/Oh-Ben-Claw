@@ -64,7 +64,7 @@ pub struct ToolCall {
 }
 
 /// The response from a provider after a chat completion request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatCompletion {
     /// The assistant's primary response message.
     pub message: String,
@@ -75,6 +75,60 @@ pub struct ChatCompletion {
     pub provider: String,
     /// The model that generated this completion.
     pub model: String,
+    /// Token accounting as the provider reported it; `None` when it did not.
+    /// Until 2026-09-11 nothing carried this, so cost was a chars/4 guess and
+    /// prompt-cache hits were invisible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
+}
+
+/// Token accounting for one completion, in the provider's own numbers.
+/// Anthropic splits the prompt into uncached (`input_tokens`), served from
+/// cache (`cache_read_input_tokens`, billed at 10%) and written to cache
+/// (`cache_creation_input_tokens`, billed at 125%); Ollama reports
+/// `prompt_eval_count` / `eval_count`, which land in the first two fields.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
+}
+
+impl Usage {
+    /// Fold another completion's numbers into this one (a turn has one
+    /// completion per tool iteration).
+    pub fn add(&mut self, other: &Usage) {
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.cache_read_input_tokens += other.cache_read_input_tokens;
+        self.cache_creation_input_tokens += other.cache_creation_input_tokens;
+    }
+
+    /// Every prompt token the model read, cached or not.
+    pub fn prompt_tokens(&self) -> u64 {
+        self.input_tokens + self.cache_read_input_tokens + self.cache_creation_input_tokens
+    }
+
+    /// Prompt tokens weighted the way Anthropic bills them: uncached at 1.0,
+    /// cache reads at 0.1, cache writes at 1.25. Multiply by the input price.
+    pub fn billable_input(&self) -> f64 {
+        self.input_tokens as f64
+            + self.cache_read_input_tokens as f64 * 0.1
+            + self.cache_creation_input_tokens as f64 * 1.25
+    }
+
+    /// Share of the prompt that came from the cache, `None` for an empty prompt.
+    pub fn cache_hit_ratio(&self) -> Option<f64> {
+        let total = self.prompt_tokens();
+        (total > 0).then(|| self.cache_read_input_tokens as f64 / total as f64)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.prompt_tokens() == 0 && self.output_tokens == 0
+    }
 }
 
 /// A piece of a streamed completion, handed to a [`DeltaSink`] as it arrives.
@@ -544,6 +598,7 @@ mod streaming_default_tests {
                 tool_calls: vec![],
                 provider: "oneshot".into(),
                 model: config.model.clone(),
+                usage: None,
             })
         }
     }

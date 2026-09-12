@@ -127,6 +127,7 @@ impl Provider for OpenAiProvider {
                 .collect(),
             provider: self.name().to_string(),
             model: config.model.clone(),
+            usage: None,
         })
     }
 }

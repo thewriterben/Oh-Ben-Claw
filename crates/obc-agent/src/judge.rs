@@ -335,6 +335,7 @@ mod tests {
                 tool_calls: vec![],
                 provider: "fixed".to_string(),
                 model: "judge-mock".to_string(),
+                usage: None,
             })
         }
     }
@@ -421,6 +422,7 @@ mod tests {
                 tool_calls: vec![],
                 provider: "discerning".to_string(),
                 model: "judge-mock".to_string(),
+                usage: None,
             })
         }
     }

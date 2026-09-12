@@ -32,6 +32,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `-published`, `-second`); same class, different crate, not changed here.
 
 ---
+## Unreleased — The bill comes from the provider, not from chars/4 (2026-09-11)
+
+The router had been reaching Claude for an hour and nothing could say what a
+turn cost or whether the prompt cache was hitting: the adapter never read
+`usage`, the daily budget was charged from a chars/4 guess, and the Command
+Center showed a reply with no idea which brain wrote it.
+
+### Added
+
+- **`ChatCompletion::usage`** (`obc_providers::Usage`: input, output, cache
+  read, cache write). Anthropic fills it from the response body and, when
+  streaming, from `message_start` (prompt side) and `message_delta` (output);
+  Ollama from `prompt_eval_count` / `eval_count` on the final chunk. Summed
+  over a turn's iterations in the agent.
+- **Billing from real numbers when they exist.** `Usage::billable_input`
+  weights cache reads at 10% and cache writes at 125%; the router's daily
+  spend and the cost tracker record that, falling back to the estimate only
+  for providers that report nothing. One `brain usage` log line per turn:
+  prompt / uncached / cache_read / cache_write / output / cache_hit / cost.
+- **`AgentResponse` and `AgentEvent::Response` carry `provider`, `model` and
+  `usage`**; `POST /chat` returns them too. The Command Center's reply footer
+  reads `2s · 1 tool call · claude-sonnet-5 (anthropic) · 5.3k in (94% cached) / 60 out`.
+
 ## Unreleased — The Anthropic adapter speaks to current models (2026-09-11)
 
 Found the evening the router first reached Claude: every cloud turn came back

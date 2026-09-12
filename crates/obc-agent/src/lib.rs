@@ -747,6 +747,10 @@ impl Agent {
             tracing::info!(session_id = %session_id, route = route.as_str(), reason = route_reason, "routing");
         }
         let mut used_cloud = false;
+        // Real token numbers when the provider reports them (Anthropic, Ollama);
+        // summed over the turn's iterations. Otherwise the chars/4 guess below.
+        let mut turn_usage = obc_providers::Usage::default();
+        let mut usage_known = false;
         let mut brain: Option<(String, String)> = None;
 
         // 3–6. Agent loop
@@ -787,6 +791,10 @@ impl Agent {
                 .await?;
             used_cloud |= from_cloud;
             brain = Some((completion.provider.clone(), completion.model.clone()));
+            if let Some(u) = &completion.usage {
+                turn_usage.add(u);
+                usage_known = true;
+            }
 
             if completion.tool_calls.is_empty() {
                 // Final text response — we're done
@@ -947,6 +955,10 @@ impl Agent {
                     final_completion.provider.clone(),
                     final_completion.model.clone(),
                 ));
+                if let Some(u) = &final_completion.usage {
+                    turn_usage.add(u);
+                    usage_known = true;
+                }
                 final_response = final_completion.message;
             }
         }
@@ -1015,18 +1027,48 @@ impl Agent {
                 self.cost.as_ref().map(|c| c.2).unwrap_or(0.0),
             ),
         };
+        // Bill from the provider's numbers when it gave them: cache reads at
+        // 10%, cache writes at 125%, the rest at list. The estimate is the
+        // fallback, not the default.
+        let (input_billed, output_billed) = if usage_known {
+            (
+                turn_usage.billable_input().round() as u64,
+                turn_usage.output_tokens,
+            )
+        } else {
+            (input_est, output_est)
+        };
+        let turn_cost =
+            input_billed as f64 * in_price / 1e6 + output_billed as f64 * out_price / 1e6;
+        if usage_known {
+            tracing::info!(
+                session_id = %session_id,
+                provider = brain.as_ref().map(|b| b.0.as_str()).unwrap_or(""),
+                model = %model_used,
+                prompt = turn_usage.prompt_tokens(),
+                uncached = turn_usage.input_tokens,
+                cache_read = turn_usage.cache_read_input_tokens,
+                cache_write = turn_usage.cache_creation_input_tokens,
+                output = turn_usage.output_tokens,
+                cache_hit = format!("{:.0}%", turn_usage.cache_hit_ratio().unwrap_or(0.0) * 100.0),
+                cost_usd = format!("{turn_cost:.5}"),
+                "brain usage"
+            );
+        }
         if used_cloud {
             if let Some(r) = &self.routing {
-                r.add_spend(
-                    input_est as f64 * in_price / 1e6 + output_est as f64 * out_price / 1e6,
-                );
+                r.add_spend(turn_cost);
             }
         }
 
-        // Phase 15/9: record estimated usage against the cost budget.
+        // Phase 15/9: record usage against the cost budget.
         if let Some((tracker, _, _)) = &self.cost {
             tracker.record_usage(obc_cost::TokenUsage::new(
-                model_used, input_est, output_est, in_price, out_price,
+                model_used.clone(),
+                input_billed,
+                output_billed,
+                in_price,
+                out_price,
             ));
         }
 
@@ -1065,6 +1107,9 @@ impl Agent {
         Ok(AgentResponse {
             message: final_response,
             tool_calls: tool_calls_made,
+            provider: brain.as_ref().map(|b| b.0.clone()).unwrap_or_default(),
+            model: brain.as_ref().map(|b| b.1.clone()).unwrap_or_default(),
+            usage: usage_known.then_some(turn_usage),
         })
     }
 
@@ -1746,12 +1791,17 @@ pub struct ToolCallRecord {
 }
 
 /// The final response from the agent after processing a user message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AgentResponse {
     /// The assistant's final text response.
     pub message: String,
     /// All tool calls made during the agent loop.
     pub tool_calls: Vec<ToolCallRecord>,
+    /// Which brain answered (the router's choice, or the failover's).
+    pub provider: String,
+    pub model: String,
+    /// The turn's token numbers when the provider reported them.
+    pub usage: Option<obc_providers::Usage>,
 }
 
 impl AgentResponse {
@@ -1879,12 +1929,14 @@ mod tests {
                 result: "ok".to_string(),
                 duration_ms: 0,
             }],
+            ..Default::default()
         };
         assert!(response.used_tools());
 
         let empty = AgentResponse {
             message: "Hello".to_string(),
             tool_calls: vec![],
+            ..Default::default()
         };
         assert!(!empty.used_tools());
     }
@@ -2034,6 +2086,7 @@ mod streaming_events_tests {
                 tool_calls: vec![],
                 provider: "two".into(),
                 model: c.model.clone(),
+                usage: None,
             })
         }
         async fn chat_completion_streaming(
@@ -2050,8 +2103,33 @@ mod streaming_events_tests {
                 tool_calls: vec![],
                 provider: "two".into(),
                 model: c.model.clone(),
+                usage: Some(obc_providers::Usage {
+                    input_tokens: 100,
+                    output_tokens: 2,
+                    cache_read_input_tokens: 50,
+                    cache_creation_input_tokens: 0,
+                }),
             })
         }
+    }
+
+    #[tokio::test]
+    async fn the_response_says_which_brain_answered_and_what_it_read() {
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
+        let agent = Agent::new(AgentConfig::default(), Arc::new(TwoDeltas), memory, vec![]);
+        let cfg = obc_providers::ProviderConfig {
+            model: "m-two".into(),
+            ..Default::default()
+        };
+        let response = agent.process("s", "hi", &cfg).await.unwrap();
+        assert_eq!(response.provider, "two");
+        assert_eq!(response.model, "m-two");
+        let u = response.usage.expect("usage from the provider");
+        assert_eq!(
+            (u.input_tokens, u.output_tokens, u.cache_read_input_tokens),
+            (100, 2, 50)
+        );
+        assert_eq!(u.prompt_tokens(), 150);
     }
 
     #[tokio::test]
@@ -2136,6 +2214,7 @@ mod context_order_and_compaction_tests {
                 tool_calls: vec![],
                 provider: "fixed".into(),
                 model: c.model.clone(),
+                usage: None,
             })
         }
     }
@@ -2283,6 +2362,7 @@ mod routing_agent_tests {
                 tool_calls: vec![],
                 provider: self.0.into(),
                 model: c.model.clone(),
+                usage: None,
             })
         }
     }
@@ -2441,6 +2521,7 @@ mod notes_context_tests {
                 tool_calls: vec![],
                 provider: "silent".into(),
                 model: c.model.clone(),
+                usage: None,
             })
         }
     }

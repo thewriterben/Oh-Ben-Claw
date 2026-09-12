@@ -29,7 +29,7 @@
 use crate::ProviderConfig;
 use crate::{
     ChatCompletion, ChatMessage, ChatRole, DeltaSink, Provider, ResponseFormat, StreamDelta,
-    ToolCall,
+    ToolCall, Usage,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -154,6 +154,7 @@ impl Provider for OllamaProvider {
             )
         })?;
 
+        let usage = ollama_usage(response.prompt_eval_count, response.eval_count);
         Ok(ChatCompletion {
             message: response.message.content,
             tool_calls: response
@@ -165,6 +166,7 @@ impl Provider for OllamaProvider {
                 .collect(),
             provider: self.name().to_string(),
             model: config.model.clone(),
+            usage,
         })
     }
 
@@ -217,6 +219,8 @@ impl Provider for OllamaProvider {
 pub struct StreamFold {
     pub message: String,
     pub tool_calls: Vec<ToolCall>,
+    /// From the `done: true` chunk's `prompt_eval_count` / `eval_count`.
+    pub usage: Option<Usage>,
 }
 
 impl StreamFold {
@@ -226,6 +230,7 @@ impl StreamFold {
             tool_calls: self.tool_calls,
             provider: provider.to_string(),
             model: model.to_string(),
+            usage: self.usage,
         }
     }
 }
@@ -250,6 +255,9 @@ pub fn fold_chunk(line: &str, fold: &mut StreamFold, sink: DeltaSink<'_>) -> Res
         if let Some(calls) = message.tool_calls {
             fold.tool_calls.extend(calls.into_iter().map(Into::into));
         }
+    }
+    if chunk.done {
+        fold.usage = ollama_usage(chunk.prompt_eval_count, chunk.eval_count);
     }
     Ok(chunk.done)
 }
@@ -278,6 +286,22 @@ struct OllamaFunction {
 #[derive(Debug, Deserialize)]
 struct OllamaResponse {
     message: OllamaResponseMessage,
+    /// Prompt tokens evaluated / tokens generated, on the final message.
+    #[serde(default)]
+    prompt_eval_count: Option<u64>,
+    #[serde(default)]
+    eval_count: Option<u64>,
+}
+
+fn ollama_usage(prompt_eval_count: Option<u64>, eval_count: Option<u64>) -> Option<Usage> {
+    if prompt_eval_count.is_none() && eval_count.is_none() {
+        return None;
+    }
+    Some(Usage {
+        input_tokens: prompt_eval_count.unwrap_or(0),
+        output_tokens: eval_count.unwrap_or(0),
+        ..Usage::default()
+    })
 }
 
 /// One line of a streamed response. `message` is absent on error lines;
@@ -290,6 +314,10 @@ struct OllamaChunk {
     done: bool,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    prompt_eval_count: Option<u64>,
+    #[serde(default)]
+    eval_count: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -419,5 +447,33 @@ mod tests {
         let mut fold = StreamFold::default();
         let err = fold_chunk("<html>proxy said no</html>", &mut fold, &sink).unwrap_err();
         assert!(err.to_string().contains("unexpected Ollama stream chunk"));
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+
+    #[test]
+    fn the_done_chunk_gives_prompt_and_eval_counts() {
+        let mut fold = StreamFold::default();
+        let sink = |_d: StreamDelta| {};
+        assert!(!fold_chunk(
+            r#"{"model":"m","message":{"role":"assistant","content":"ok"},"done":false}"#,
+            &mut fold,
+            &sink
+        )
+        .unwrap());
+        assert!(fold.usage.is_none());
+        assert!(fold_chunk(
+            r#"{"model":"m","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":911,"eval_count":58}"#,
+            &mut fold,
+            &sink
+        )
+        .unwrap());
+        let u = fold.finish("ollama", "m").usage.expect("usage");
+        assert_eq!((u.input_tokens, u.output_tokens), (911, 58));
+        assert_eq!(u.cache_read_input_tokens, 0);
+        assert!(ollama_usage(None, None).is_none());
     }
 }
