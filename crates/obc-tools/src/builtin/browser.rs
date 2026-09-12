@@ -819,10 +819,12 @@ impl Tool for BrowserTypeTool {
 
         let cdp = match self.session.attach().await {
             Ok(c) => c,
-            Err(e) => return Ok(ToolResult::err(format!(
+            Err(e) => {
+                return Ok(ToolResult::err(format!(
                 "No browser is attached (CDP at {} unreachable: {e}); typing needs a real page.",
                 self.session.cdp_url
-            ))),
+            )))
+            }
         };
         if let Some(sel) = &selector {
             match cdp.eval(&browser_cdp::js_focus(sel)).await {
