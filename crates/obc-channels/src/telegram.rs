@@ -80,11 +80,17 @@ struct TgUser {
     username: Option<String>,
 }
 
+/// `sendMessage` body. The two optionals are *omitted* when unset: Telegram
+/// answers `"parse_mode": null` with `Bad Request: unsupported parse_mode`,
+/// which is how the first allowlisted reply on the bench never arrived
+/// (2026-09-12).
 #[derive(Debug, Serialize)]
 struct SendMessageRequest<'a> {
     chat_id: i64,
     text: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     parse_mode: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reply_to_message_id: Option<i64>,
 }
 
@@ -452,6 +458,28 @@ impl NotificationChannel for TelegramNotifyChannel {
 #[cfg(test)]
 mod allowlist_tests {
     use super::*;
+
+    #[test]
+    fn a_plain_text_send_body_carries_no_null_fields() {
+        let body = SendMessageRequest {
+            chat_id: 42,
+            text: "hi",
+            parse_mode: None,
+            reply_to_message_id: None,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert_eq!(json, r#"{"chat_id":42,"text":"hi"}"#);
+        let body = SendMessageRequest {
+            chat_id: 42,
+            text: "hi",
+            parse_mode: None,
+            reply_to_message_id: Some(7),
+        };
+        assert_eq!(
+            serde_json::to_string(&body).unwrap(),
+            r#"{"chat_id":42,"text":"hi","reply_to_message_id":7}"#
+        );
+    }
 
     #[test]
     fn an_empty_allowlist_admits_nobody_and_a_listed_id_gets_in() {
