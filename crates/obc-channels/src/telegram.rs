@@ -5,11 +5,20 @@
 //!
 //! # Setup
 //! 1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the token.
-//! 2. Set `channels.telegram.token` in `config.toml` (or set `TELEGRAM_BOT_TOKEN`).
+//! 2. Set `TELEGRAM_BOT_TOKEN` in the environment (or `channels.telegram.token`).
+//! 3. Send the bot `/start`; the log names your user id as unlisted; put it in
+//!    `channels.telegram.allowed_user_ids` and restart. Nobody else gets in.
+//!
+//! Since 2026-09-12 the adapter also carries the agent's *outbound* voice:
+//! [`TelegramNotifyChannel`] delivers escalations and scheduled-task results to
+//! every allowed user's private chat, which is what "and message me" means on
+//! a phone.
 //!
 //! # Limitations
 //! Only text messages from private chats and groups are processed.  Media and
-//! commands other than `/start`, `/help`, and `/clear` are ignored.
+//! commands other than `/start`, `/help`, and `/clear` are ignored. Replies are
+//! sent as plain text: the previous `parse_mode = Markdown` made Telegram
+//! reject any reply with an unbalanced `_` or `*`, silently.
 
 // Wire-format types: fields mirror the platform's webhook payload and exist to
 // document what arrives, even where this code does not read them. Deleting them
@@ -19,10 +28,20 @@
 use crate::typing::TypingTask;
 use crate::utils::chunk_text;
 use anyhow::{Context, Result};
+use async_trait::async_trait;
+use obc_agent::notify::{Escalation, NotificationChannel};
 use obc_agent::Agent;
 use obc_config::{ProviderConfig, TelegramConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+/// Whether a sender may talk to the agent. An empty allowlist admits nobody.
+pub fn allowed(allowed_user_ids: &[i64], user_id: Option<i64>) -> bool {
+    match user_id {
+        Some(id) => allowed_user_ids.contains(&id),
+        None => false,
+    }
+}
 
 // ── Telegram API types ────────────────────────────────────────────────────────
 
@@ -78,6 +97,7 @@ pub struct TelegramChannel {
     token: String,
     api_base: String,
     http: reqwest::Client,
+    allowed_user_ids: Vec<i64>,
     /// Whether to send "typing…" indicators while the agent processes.
     typing_indicators: bool,
 }
@@ -108,12 +128,19 @@ impl TelegramChannel {
             .clone()
             .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())?;
 
+        if config.allowed_user_ids.is_empty() {
+            tracing::warn!(
+                "Telegram: allowed_user_ids is empty, so every sender is refused; send the bot \
+                 /start and add the user id the log names to [channels.telegram]"
+            );
+        }
         Some(Self {
             agent,
             provider_config,
             api_base: format!("https://api.telegram.org/bot{}", token),
             token,
             http: reqwest::Client::new(),
+            allowed_user_ids: config.allowed_user_ids.clone(),
             typing_indicators,
         })
     }
@@ -178,10 +205,14 @@ impl TelegramChannel {
         let url = format!("{}/sendMessage", self.api_base);
         // Split long messages to respect the 4096-char Telegram limit.
         for chunk in chunk_text(text, 4000) {
+            // Plain text. With `parse_mode = Markdown` any reply holding an
+            // unbalanced `_` or `*` (a path, a snake_case name, a bullet) came
+            // back 400 "can't parse entities" and was dropped with a warning
+            // the operator never saw.
             let body = SendMessageRequest {
                 chat_id,
                 text: chunk,
-                parse_mode: Some("Markdown"),
+                parse_mode: None,
                 reply_to_message_id: reply_to,
             };
             let resp: TgResponse<serde_json::Value> = self
@@ -196,9 +227,9 @@ impl TelegramChannel {
                 .context("Telegram sendMessage JSON parse error")?;
 
             if !resp.ok {
-                tracing::warn!(
-                    description = ?resp.description,
-                    "Telegram sendMessage returned not-ok"
+                anyhow::bail!(
+                    "Telegram sendMessage refused: {}",
+                    resp.description.as_deref().unwrap_or("unknown")
                 );
             }
         }
@@ -240,12 +271,28 @@ impl TelegramChannel {
             "Telegram message received"
         );
 
+        // The allowlist comes before anything else, commands included.
+        let user_id = msg.from.as_ref().map(|u| u.id);
+        if !allowed(&self.allowed_user_ids, user_id) {
+            tracing::warn!(
+                user_id = ?user_id,
+                username = ?msg.from.as_ref().and_then(|u| u.username.clone()),
+                first_name = ?msg.from.as_ref().map(|u| u.first_name.clone()),
+                chat_id = msg.chat.id,
+                "Telegram: message from an unlisted user refused; add the id to \
+                 [channels.telegram] allowed_user_ids to let them in"
+            );
+            return self
+                .send_text(msg.chat.id, "This bot is private.", Some(msg.message_id))
+                .await;
+        }
+
         // Built-in commands
         if text == "/start" || text == "/help" {
             return self
                 .send_text(
                     msg.chat.id,
-                    "👋 *Oh-Ben-Claw* is ready\\. Send me any message and I'll respond\\.\n\nCommands:\n• `/clear` — clear session history",
+                    "Oh-Ben-Claw is ready. Send me any message and I'll respond.\n\nCommands:\n/clear - clear this chat's session history",
                     Some(msg.message_id),
                 )
                 .await;
@@ -304,5 +351,145 @@ impl TelegramChannel {
 
         self.send_text(msg.chat.id, &response.message, Some(msg.message_id))
             .await
+    }
+}
+
+// ── Outbound: escalations and scheduled results ──────────────────────────────
+
+/// The agent's outbound voice on Telegram: a [`NotificationChannel`] that
+/// delivers escalations and scheduled-task results to every allowed user's
+/// private chat (for a private chat, chat id == user id). Built from the same
+/// `[channels.telegram]` block as the inbound adapter; `None` without a token,
+/// with `notify = false`, or with nobody allowlisted.
+pub struct TelegramNotifyChannel {
+    api_base: String,
+    chat_ids: Vec<i64>,
+    http: reqwest::Client,
+}
+
+impl TelegramNotifyChannel {
+    pub fn from_config(config: &TelegramConfig) -> Option<Self> {
+        if !config.notify || config.allowed_user_ids.is_empty() {
+            return None;
+        }
+        let token = config
+            .token
+            .clone()
+            .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())?;
+        Some(Self {
+            api_base: format!("https://api.telegram.org/bot{token}"),
+            chat_ids: config.allowed_user_ids.clone(),
+            http: reqwest::Client::new(),
+        })
+    }
+
+    pub fn chat_count(&self) -> usize {
+        self.chat_ids.len()
+    }
+
+    /// The text sent for an escalation: the reason as it is (scheduled results
+    /// already read `⏰ name: …`), prefixed for reflex escalations so a phone
+    /// notification says where it came from.
+    pub fn text_for(esc: &Escalation) -> String {
+        if esc.reason.starts_with('⏰') {
+            esc.reason.clone()
+        } else {
+            format!("OBC: {}", esc.reason)
+        }
+    }
+
+    async fn send_plain(&self, chat_id: i64, text: &str) -> Result<()> {
+        let url = format!("{}/sendMessage", self.api_base);
+        for chunk in chunk_text(text, 4000) {
+            let body = SendMessageRequest {
+                chat_id,
+                text: chunk,
+                parse_mode: None,
+                reply_to_message_id: None,
+            };
+            let resp: TgResponse<serde_json::Value> = self
+                .http
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .context("Telegram sendMessage HTTP error")?
+                .json()
+                .await
+                .context("Telegram sendMessage JSON parse error")?;
+            if !resp.ok {
+                anyhow::bail!(
+                    "Telegram sendMessage refused: {}",
+                    resp.description.as_deref().unwrap_or("unknown")
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl NotificationChannel for TelegramNotifyChannel {
+    fn name(&self) -> &str {
+        "telegram"
+    }
+    async fn deliver(&self, esc: &Escalation) -> Result<()> {
+        let text = Self::text_for(esc);
+        let mut first_err = None;
+        for chat_id in &self.chat_ids {
+            if let Err(e) = self.send_plain(*chat_id, &text).await {
+                tracing::warn!(chat_id, error = %e, "Telegram notification failed");
+                first_err.get_or_insert(e);
+            }
+        }
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod allowlist_tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_allowlist_admits_nobody_and_a_listed_id_gets_in() {
+        assert!(!allowed(&[], Some(42)));
+        assert!(!allowed(&[42], None));
+        assert!(allowed(&[42, 7], Some(7)));
+        assert!(!allowed(&[42], Some(43)));
+    }
+
+    #[test]
+    fn the_notify_channel_needs_a_token_and_someone_to_tell() {
+        let mut cfg = TelegramConfig {
+            token: Some("123:abc".into()),
+            allowed_user_ids: vec![42],
+            notify: true,
+            notify_min_severity: None,
+        };
+        assert_eq!(
+            TelegramNotifyChannel::from_config(&cfg)
+                .unwrap()
+                .chat_count(),
+            1
+        );
+        cfg.notify = false;
+        assert!(TelegramNotifyChannel::from_config(&cfg).is_none());
+        cfg.notify = true;
+        cfg.allowed_user_ids.clear();
+        assert!(TelegramNotifyChannel::from_config(&cfg).is_none());
+    }
+
+    #[test]
+    fn scheduled_results_go_out_as_they_are_and_escalations_get_a_prefix() {
+        let sched = Escalation::new("⏰ Printer check: bed is 60C", 0);
+        assert_eq!(
+            TelegramNotifyChannel::text_for(&sched),
+            "⏰ Printer check: bed is 60C"
+        );
+        let esc = Escalation::new("mesh node lost", 0);
+        assert_eq!(TelegramNotifyChannel::text_for(&esc), "OBC: mesh node lost");
     }
 }

@@ -134,7 +134,23 @@ pub struct PeripheralsConfig {
 /// Configuration for the Telegram channel.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TelegramConfig {
+    /// Bot token from @BotFather. Prefer the `TELEGRAM_BOT_TOKEN` environment
+    /// variable over writing it here.
     pub token: Option<String>,
+    /// Telegram user ids allowed to talk to the agent. **Empty means nobody**:
+    /// a bot token is public the moment anyone finds the bot, and this agent
+    /// has a shell. An unlisted sender is refused and logged with their id so
+    /// the operator can add it. (2026-09-12)
+    #[serde(default)]
+    pub allowed_user_ids: Vec<i64>,
+    /// Also deliver escalations and scheduled-task results to every allowed
+    /// user's private chat (their user id is their chat id). Default true.
+    #[serde(default = "default_true")]
+    pub notify: bool,
+    /// Minimum severity delivered there (`"info"`/`"warning"`/`"critical"`);
+    /// unset = everything, scheduled results included.
+    #[serde(default)]
+    pub notify_min_severity: Option<String>,
 }
 
 /// Configuration for the Discord channel.

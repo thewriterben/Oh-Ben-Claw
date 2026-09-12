@@ -1871,6 +1871,19 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                         Severity::from_name(config.notifications.speak_min_severity.as_deref()),
                     );
                 }
+                // Telegram (2026-09-12): escalations and scheduled-task results to
+                // every allowlisted user's private chat — "and message me".
+                if let Some(tg) = oh_ben_claw::channels::TelegramNotifyChannel::from_config(
+                    &config.channels.telegram,
+                ) {
+                    info!(chats = tg.chat_count(), "Notifications also go to Telegram");
+                    notifier = notifier.with_channel_min(
+                        Arc::new(tg),
+                        Severity::from_name(
+                            config.channels.telegram.notify_min_severity.as_deref(),
+                        ),
+                    );
+                }
                 info!(
                     channels = notifier.channel_count(),
                     "Escalation notifications wired"
