@@ -1,6 +1,14 @@
 //! Browser automation tools — headless Chrome via the Chrome DevTools Protocol
 //! (CDP) with an HTTP-only fallback for simple page fetching.
 //!
+//! Real since 2026-09-12: navigation, snapshots, clicks, typing and scrolling
+//! go over a WebSocket to the tab ([`super::browser_cdp`]). Before that the
+//! tools opened a tab over HTTP and then fetched the page with a plain GET,
+//! and `browser_click` / `browser_type` / `browser_scroll` reported success
+//! without touching anything. With no Chrome reachable, `navigate` and
+//! `snapshot` still fall back to a plain fetch and say so; the three that
+//! need a page refuse instead of pretending.
+//!
 //! Inspired by the browser automation overhaul shipped in OpenClaw 3.13
 //! (March 2026): stable CDP attach mode, batched actions, CSS/XPath selector
 //! targeting, delayed-click support, and per-tab session management.
@@ -24,6 +32,7 @@
 //! | `browser_new_tab` | Open a new browser tab |
 //! | `browser_close_tab` | Close the active tab |
 
+use super::browser_cdp::{self, Cdp};
 use crate::{Tool, ToolResult};
 use async_trait::async_trait;
 use obc_conscience::{ReachDecision, ReachGate};
@@ -48,8 +57,11 @@ pub enum BrowserProfile {
 /// Internal state held inside an `Arc<Mutex<_>>` so all tool structs can share it.
 #[derive(Debug, Default)]
 struct SessionState {
-    /// Websocket debugger URL of the active tab (CDP target).
+    /// Id of the active tab (CDP target).
     active_target_id: Option<String>,
+    /// The active tab's `webSocketDebuggerUrl`; `None` means no browser is
+    /// attached and the tools are in plain-HTTP mode.
+    active_ws_url: Option<String>,
     /// URL currently loaded in the active tab.
     current_url: Option<String>,
     /// Title of the current page.
@@ -123,22 +135,85 @@ impl BrowserSession {
         Ok(response)
     }
 
-    /// Open a new tab via the CDP `/json/new` endpoint.
+    /// Open a new tab via the CDP `/json/new` endpoint. `PUT`: Chrome has
+    /// refused `GET` here since version 111 (`405 … supports only PUT verb`),
+    /// which is what "error decoding response body" on every navigation was.
     async fn new_target(&self, url: Option<&str>) -> anyhow::Result<Value> {
         let endpoint = if let Some(u) = url {
             format!("{}/json/new?{}", self.cdp_url, url_encode(u))
         } else {
             format!("{}/json/new", self.cdp_url)
         };
-        let target = self
+        let response = self
             .client
-            .get(&endpoint)
+            .put(&endpoint)
             .timeout(self.timeout)
             .send()
-            .await?
-            .json::<Value>()
             .await?;
+        let status = response.status();
+        let text = response.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("CDP /json/new returned {status}: {}", text.trim());
+        }
+        let target: Value = serde_json::from_str(&text)?;
         Ok(target)
+    }
+
+    /// The active tab as a CDP client, opening a tab when there is none.
+    /// `Err` means no browser is reachable at `cdp_url`.
+    async fn attach(&self) -> anyhow::Result<Cdp> {
+        let existing = {
+            let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.active_ws_url.clone()
+        };
+        if let Some(ws) = existing {
+            return Ok(Cdp::new(ws, self.timeout));
+        }
+        let target = self.new_target(None).await?;
+        let id = target["id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("CDP new target returned no id"))?
+            .to_string();
+        let ws = target["webSocketDebuggerUrl"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("CDP new target returned no webSocketDebuggerUrl"))?
+            .to_string();
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.active_target_id = Some(id.clone());
+        state.active_ws_url = Some(ws.clone());
+        state.open_tabs.push(id);
+        Ok(Cdp::new(ws, self.timeout))
+    }
+
+    /// Whether a real browser is attached (as opposed to plain-HTTP mode).
+    pub fn attached(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .active_ws_url
+            .is_some()
+    }
+
+    /// Refresh the remembered URL and title from the page itself.
+    async fn sync_location(&self, cdp: &Cdp) {
+        if let Ok((href, title)) = cdp.location().await {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.current_url = Some(href);
+            state.current_title = Some(title);
+        }
+    }
+
+    /// Run a page script through the attached tab; a plain-HTTP session gets
+    /// the explanation the model needs instead of a pretend success.
+    async fn page_script(&self, script: &str) -> Result<Value, String> {
+        let cdp = self.attach().await.map_err(|e| {
+            format!(
+                "No browser is attached (CDP at {} unreachable: {e}); this action needs a real page. \
+                 browser_navigate and browser_snapshot still work as a plain fetch.",
+                self.cdp_url
+            )
+        })?;
+        cdp.eval(script).await.map_err(|e| e.to_string())
     }
 
     /// Close a tab by its target ID.
@@ -148,39 +223,37 @@ impl BrowserSession {
         Ok(())
     }
 
-    /// Navigate the active tab.  Returns the new page title.
-    async fn navigate(&self, url: &str) -> anyhow::Result<String> {
-        // Ensure we have an active target; open one if needed.
-        let target_id = {
-            let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-            state.active_target_id.clone()
-        };
+    /// Navigate the active tab. Returns the page title and whether a real
+    /// browser did it (`false` = plain HTTP fetch, no page to click on).
+    async fn navigate(&self, url: &str) -> anyhow::Result<(String, bool)> {
+        match self.attach().await {
+            Ok(cdp) => {
+                cdp.navigate(url).await?;
+                let (href, title) = cdp.location().await.unwrap_or_default();
+                let title = if title.trim().is_empty() {
+                    url.to_string()
+                } else {
+                    title
+                };
+                let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+                state.current_url = Some(if href.is_empty() {
+                    url.to_string()
+                } else {
+                    href
+                });
+                state.current_title = Some(title.clone());
+                return Ok((title, true));
+            }
+            Err(e) => {
+                tracing::warn!(
+                    cdp = %self.cdp_url,
+                    error = %e,
+                    "browser: no CDP endpoint, falling back to a plain HTTP fetch"
+                );
+            }
+        }
 
-        let target_id = if let Some(id) = target_id {
-            id
-        } else {
-            let target = self.new_target(None).await?;
-            let id = target["id"]
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("CDP new target returned no id"))?
-                .to_string();
-            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-            state.active_target_id = Some(id.clone());
-            state.open_tabs.push(id.clone());
-            id
-        };
-
-        // Issue Navigation via the CDP activate + Runtime.evaluate over HTTP
-        // (simplified — a full WS transport is used in production; this HTTP
-        // path exercises the "activate then fetch" pattern for unit-testability).
-        let _activate = self
-            .client
-            .get(format!("{}/json/activate/{}", self.cdp_url, target_id))
-            .timeout(self.timeout)
-            .send()
-            .await;
-
-        // Fetch the page content directly for the fallback case.
+        // Plain-HTTP fallback: fetch the page and read its title.
         let page_text = self
             .client
             .get(url)
@@ -199,11 +272,13 @@ impl BrowserSession {
             state.current_title = Some(title.clone());
         }
 
-        Ok(title)
+        Ok((title, false))
     }
 
-    /// Fetch the current page's text content for snapshot purposes.
-    async fn fetch_snapshot(&self) -> anyhow::Result<String> {
+    /// The current page as text: from the live DOM (title, headings, inputs,
+    /// buttons, links with selectors, visible text) when a browser is
+    /// attached, else a plain fetch stripped of tags.
+    async fn fetch_snapshot(&self, max_chars: usize) -> anyhow::Result<String> {
         let url = {
             let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
             state
@@ -211,6 +286,12 @@ impl BrowserSession {
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("No page loaded; call browser_navigate first"))?
         };
+        if self.attached() {
+            let cdp = self.attach().await?;
+            let v = cdp.eval(&browser_cdp::js_snapshot(max_chars)).await?;
+            self.sync_location(&cdp).await;
+            return Ok(v.as_str().unwrap_or_default().to_string());
+        }
 
         let html = self
             .client
@@ -482,8 +563,12 @@ impl Tool for BrowserNavigateTool {
         }
 
         match self.session.navigate(&url).await {
-            Ok(title) => Ok(ToolResult::ok(format!(
-                "Navigated to {url}\nPage title: {title}"
+            Ok((title, true)) => Ok(ToolResult::ok(format!(
+                "Navigated to {url}\nPage title: {title}\n(live browser tab; browser_snapshot, browser_click and browser_type act on it)"
+            ))),
+            Ok((title, false)) => Ok(ToolResult::ok(format!(
+                "Fetched {url} over plain HTTP (no browser attached at {})\nPage title: {title}\n(browser_snapshot returns the fetched text; clicking and typing are not possible)",
+                self.session.cdp_url
             ))),
             Err(e) => Ok(ToolResult::err(format!("Navigation failed for {url}: {e}"))),
         }
@@ -541,7 +626,9 @@ impl Tool for BrowserSnapshotTool {
             .unwrap_or(4000)
             .clamp(100, 8000) as usize;
 
-        match self.session.fetch_snapshot().await {
+        let live = self.session.attached();
+        match self.session.fetch_snapshot(max_chars).await {
+            Ok(text) if live => Ok(ToolResult::ok(text)),
             Ok(text) => {
                 let truncated: String = text.chars().take(max_chars).collect();
                 let url = self
@@ -553,7 +640,7 @@ impl Tool for BrowserSnapshotTool {
                     .current_title()
                     .unwrap_or_else(|| "(unknown)".to_string());
                 Ok(ToolResult::ok(format!(
-                    "URL: {url}\nTitle: {title}\n\n{truncated}"
+                    "URL: {url}\nTitle: {title}\n(plain HTTP fetch, no browser attached)\n\n{truncated}"
                 )))
             }
             Err(e) => Ok(ToolResult::err(format!("Snapshot failed: {e}"))),
@@ -630,14 +717,24 @@ impl Tool for BrowserClickTool {
             }
         };
 
-        // For CDP-attached sessions this would send a Runtime.evaluate command
-        // that calls `document.querySelector(selector).click()`.  The HTTP
-        // fallback records the action and confirms intent.
-        tracing::debug!(selector = %selector, url = %url, "browser_click dispatched");
-
-        Ok(ToolResult::ok(format!(
-            "Clicked element '{selector}' on {url}"
-        )))
+        match self.session.page_script(&browser_cdp::js_click(&selector)).await {
+            Ok(v) if v.as_str() == Some("NOT_FOUND") => Ok(ToolResult::err(format!(
+                "No element matches '{selector}' on {url}; take a browser_snapshot for the selectors that exist"
+            ))),
+            Ok(v) => {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                if let Ok(cdp) = self.session.attach().await {
+                    self.session.sync_location(&cdp).await;
+                }
+                let now = self.session.current_url().unwrap_or(url);
+                let title = self.session.current_title().unwrap_or_default();
+                Ok(ToolResult::ok(format!(
+                    "Clicked {} '{selector}'. Page is now {now} — {title}",
+                    v.as_str().unwrap_or("element").trim_start_matches("OK ")
+                )))
+            }
+            Err(e) => Ok(ToolResult::err(format!("Click failed: {e}"))),
+        }
     }
 }
 
@@ -720,17 +817,40 @@ impl Tool for BrowserTypeTool {
 
         let target = selector.as_deref().unwrap_or("focused element");
 
-        tracing::debug!(
-            text = %text,
-            target = %target,
-            submit = submit,
-            url = %url,
-            "browser_type dispatched"
-        );
-
+        let cdp = match self.session.attach().await {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(ToolResult::err(format!(
+                "No browser is attached (CDP at {} unreachable: {e}); typing needs a real page.",
+                self.session.cdp_url
+            )))
+            }
+        };
+        if let Some(sel) = &selector {
+            match cdp.eval(&browser_cdp::js_focus(sel)).await {
+                Ok(v) if v.as_str() == Some("NOT_FOUND") => {
+                    return Ok(ToolResult::err(format!(
+                        "No element matches '{sel}' on {url}; take a browser_snapshot for the selectors that exist"
+                    )))
+                }
+                Ok(_) => {}
+                Err(e) => return Ok(ToolResult::err(format!("Focus failed: {e}"))),
+            }
+        }
+        if let Err(e) = cdp.insert_text(&text).await {
+            return Ok(ToolResult::err(format!("Typing failed: {e}")));
+        }
+        if submit {
+            if let Err(e) = cdp.press_enter().await {
+                return Ok(ToolResult::err(format!("Typed, but Enter failed: {e}")));
+            }
+            tokio::time::sleep(Duration::from_millis(600)).await;
+        }
+        self.session.sync_location(&cdp).await;
         let suffix = if submit { " + Enter" } else { "" };
+        let now = self.session.current_url().unwrap_or(url);
         Ok(ToolResult::ok(format!(
-            "Typed '{text}'{suffix} into {target} on {url}"
+            "Typed '{text}'{suffix} into {target}. Page is now {now}"
         )))
     }
 }
@@ -795,10 +915,19 @@ impl Tool for BrowserScrollTool {
         };
 
         if let Some(selector) = args.get("selector").and_then(|v| v.as_str()) {
-            tracing::debug!(selector = %selector, url = %url, "browser_scroll to element");
-            return Ok(ToolResult::ok(format!(
-                "Scrolled to element '{selector}' on {url}"
-            )));
+            return Ok(
+                match self
+                    .session
+                    .page_script(&browser_cdp::js_scroll_to(selector))
+                    .await
+                {
+                    Ok(v) if v.as_str() == Some("NOT_FOUND") => {
+                        ToolResult::err(format!("No element matches '{selector}' on {url}"))
+                    }
+                    Ok(_) => ToolResult::ok(format!("Scrolled to '{selector}' on {url}")),
+                    Err(e) => ToolResult::err(format!("Scroll failed: {e}")),
+                },
+            );
         }
 
         let direction = args
@@ -812,16 +941,17 @@ impl Tool for BrowserScrollTool {
             .unwrap_or(500)
             .clamp(1, 10_000);
 
-        tracing::debug!(
-            direction = %direction,
-            amount_px = amount_px,
-            url = %url,
-            "browser_scroll dispatched"
-        );
-
-        Ok(ToolResult::ok(format!(
-            "Scrolled {direction} by {amount_px}px on {url}"
-        )))
+        match self
+            .session
+            .page_script(&browser_cdp::js_scroll(direction, amount_px))
+            .await
+        {
+            Ok(v) => Ok(ToolResult::ok(format!(
+                "Scrolled {direction} on {url} (scrollY now {})",
+                v.as_str().unwrap_or("?").trim_start_matches("OK ")
+            ))),
+            Err(e) => Ok(ToolResult::err(format!("Scroll failed: {e}"))),
+        }
     }
 }
 
@@ -869,7 +999,10 @@ impl Tool for BrowserNewTabTool {
                 {
                     let mut state = self.session.state.lock().unwrap_or_else(|p| p.into_inner());
                     state.active_target_id = Some(id.clone());
+                    state.active_ws_url = target["webSocketDebuggerUrl"].as_str().map(String::from);
                     state.open_tabs.push(id.clone());
+                    state.current_url = url.clone();
+                    state.current_title = None;
                 }
                 let msg = if let Some(ref u) = url {
                     format!("Opened new tab (id={id}) and navigated to {u}")
@@ -947,6 +1080,7 @@ impl Tool for BrowserCloseTabTool {
                 let mut state = self.session.state.lock().unwrap_or_else(|p| p.into_inner());
                 state.open_tabs.retain(|id| id != &target_id);
                 state.active_target_id = state.open_tabs.last().cloned();
+                state.active_ws_url = None; // re-attached on the next action
                 state.current_url = None;
                 state.current_title = None;
                 Ok(ToolResult::ok(format!("Closed tab {target_id}")))

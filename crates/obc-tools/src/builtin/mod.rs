@@ -7,6 +7,7 @@ pub mod audio;
 pub mod audio_speech;
 pub mod audio_suite;
 pub mod browser;
+pub mod browser_cdp;
 pub mod comms;
 pub mod file;
 pub mod fleet;
