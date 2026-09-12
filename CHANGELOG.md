@@ -32,6 +32,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `-published`, `-second`); same class, different crate, not changed here.
 
 ---
+## Unreleased — The Anthropic adapter speaks to current models (2026-09-11)
+
+Found the evening the router first reached Claude: every cloud turn came back
+400 and was answered locally. Two causes, both in `obc_providers::anthropic`.
+
+### Fixed
+
+- **`temperature` is no longer sent.** Sonnet 5 (and Opus 4.7 and later)
+  refuse it: `temperature is deprecated for this model`. The field stays on
+  `ProviderConfig` for the other providers.
+- **A tool whose name breaks the API rule is left out, not fatal.** The rule is
+  1-128 characters of `[A-Za-z0-9_-]`; a 208-character learned skill drew
+  `tools.30.custom.name: String should have at most 128 characters` on every
+  request. Now such a tool is skipped with a warning naming it and the rest go
+  through (`valid_tool_name`).
+- **Thinking blocks in a non-streaming response no longer fail the parse**
+  (`AnthropicContent::Other`).
+
+### Added
+
+- `ProviderConfig::think` now means something for Anthropic too: `false` sends
+  `thinking: {type: "disabled"}` (the setting for a tool-using brain, since the
+  agent does not replay thinking blocks between tool calls), `true` sends
+  `{type: "adaptive"}`, unset leaves the model default. The example config sets
+  `think = false` on `[provider.routing.cloud]`.
+
 ## Unreleased — The forge must not replay `schedule` (2026-09-11)
 
 ### Fixed

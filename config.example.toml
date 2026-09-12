@@ -132,6 +132,7 @@ initial_backoff_ms = 500
 # [provider.routing.cloud]
 # name = "anthropic"
 # model = "claude-sonnet-5"
+# think = false                        # no thinking blocks on the cloud brain: the agent does not replay them between tool calls; unset = the model default
 
 # ── Autonomy ─────────────────────────────────────────────────────────────────
 # Which tool calls wait for the operator. Level "full" (default) runs every
