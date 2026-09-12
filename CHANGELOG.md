@@ -32,6 +32,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `-published`, `-second`); same class, different crate, not changed here.
 
 ---
+## Unreleased — A timer reads as a timer (2026-09-11)
+
+### Changed
+
+- **Scheduled turns open with `[Timer] … has just gone off. It is already
+  scheduled: do not create, list or change any schedule now.`** The first live
+  run of #152 on the bench (local 14B, experience retrieval on) answered that it
+  had "successfully scheduled" the task — the retrieved similar turns were the
+  ones that created it. The wording now rules scheduling out and names the job
+  as `Task: …`.
+- One-shot descriptions say `in 1 minute` / `in 1 hour`, not `in minute`.
+
 ## Unreleased — A turn in a session nobody created works again (2026-09-11)
 
 ### Fixed

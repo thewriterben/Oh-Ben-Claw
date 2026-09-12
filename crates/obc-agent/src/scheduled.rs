@@ -35,9 +35,17 @@ pub struct Outcome {
 /// The message a scheduled prompt turn starts with, so the model knows this is
 /// a timer firing and not the operator typing.
 pub fn turn_message(task_name: &str, prompt: &str, tool_report: Option<&str>) -> String {
+    // Blunt on purpose. On the bench the first wording ("Scheduled task X fired.
+    // Do what it says below…") got, from the local 14B with experience
+    // retrieval on, a reply that it had "successfully scheduled" the task —
+    // the retrieved similar turns were the ones that created it. The timer
+    // must read as a timer, and scheduling must be ruled out in words.
     let mut m = format!(
-        "[Scheduled task \"{task_name}\" fired. Do what it says below, then answer with \
-         the result in a few sentences; that answer is delivered to the operator.]\n{prompt}"
+        "[Timer] Your scheduled task \"{task_name}\" has just gone off. It is already \
+         scheduled: do not create, list or change any schedule now. Carry out the task \
+         below — use tools where they help; if something cannot be checked from here, \
+         say so plainly — then reply with the result in a few sentences. The reply is \
+         delivered to the operator.\nTask: {prompt}"
     );
     if let Some(r) = tool_report {
         m.push_str("\n\n");
@@ -149,10 +157,11 @@ mod tests {
             "check the printer",
             Some("Result of `x`:\nok"),
         );
-        assert!(m.starts_with("[Scheduled task \"Printer check\" fired."));
-        assert!(m.contains("\ncheck the printer\n\nResult of `x`:\nok"));
+        assert!(m.starts_with("[Timer] Your scheduled task \"Printer check\" has just gone off."));
+        assert!(m.contains("do not create, list or change any schedule now"));
+        assert!(m.contains("\nTask: check the printer\n\nResult of `x`:\nok"));
         let m = turn_message("t", "p", None);
-        assert!(m.ends_with("\np"));
+        assert!(m.ends_with("\nTask: p"));
     }
 
     #[test]
