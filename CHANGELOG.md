@@ -50,6 +50,39 @@ Parity plan Stage 3, item 8 (browser first) and the first step of item 9
   read were `Loaded config …` and `MCP server running on stdio`, which no
   JSON-RPC parser survives. Logs go to stderr for that command, as the MCP
   rule says; the http transport is unchanged.
+## Unreleased — The browser tools drive a browser (2026-09-12)
+
+Parity plan Stage 3, item 8, second half. Pointing the tools at a real Chrome
+(#159) showed what was behind them: `browser_navigate` opened a tab with a
+`GET /json/new` that Chrome has refused since version 111 ("error decoding
+response body" on every navigation), then fetched the page with a plain HTTP
+GET; `browser_snapshot` stripped that HTML; `browser_click`, `browser_type`
+and `browser_scroll` logged the request and reported success without touching
+a page. A model that "clicked" was told it had.
+
+### Added
+
+- **`obc_tools::builtin::browser_cdp`** — a small DevTools client over
+  WebSocket (`tokio-tungstenite`, loopback, one command per connection):
+  `Page.navigate` + readyState wait, `Runtime.evaluate`, `Input.insertText`,
+  Enter via `Input.dispatchKeyEvent`; plus the page scripts the tools run,
+  kept as pure builders (`js_click`, `js_focus`, `js_scroll*`, `js_snapshot`)
+  and unit-tested without a browser.
+- **Live snapshot.** `browser_snapshot` returns title, URL, headings, and the
+  inputs, buttons and links with a selector each (`#id`, `tag[name=…]`,
+  `tag:nth-of-type(n)`), then the visible text — what a model needs to click
+  the right thing next.
+
+### Fixed
+
+- `/json/new` is `PUT`. Tabs remember their `webSocketDebuggerUrl`.
+- `browser_navigate` navigates the tab and reports the title the page has;
+  without a reachable Chrome it says "fetched over plain HTTP (no browser
+  attached)" so the model knows clicks will not work. `browser_click`,
+  `browser_type` and `browser_scroll` act on the page or refuse with that
+  same explanation — never a pretend success. A selector that matches
+  nothing is an error pointing at `browser_snapshot`.
+
 ## Unreleased — The shell tool can live in a container (2026-09-11)
 
 Parity plan Stage 3, item 10. Every desktop-agent CVE list of 2026 has the
