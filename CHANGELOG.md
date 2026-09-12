@@ -50,6 +50,15 @@ Parity plan Stage 3, item 8 (browser first) and the first step of item 9
   read were `Loaded config …` and `MCP server running on stdio`, which no
   JSON-RPC parser survives. Logs go to stderr for that command, as the MCP
   rule says; the http transport is unchanged.
+## Unreleased — Telegram sends omit null fields (2026-09-12)
+
+### Fixed
+
+- The first allowlisted reply never arrived: `sendMessage` went out with
+  `"parse_mode": null` and Telegram answered `Bad Request: unsupported
+  parse_mode`. Unset optionals are omitted from the body now; a unit test
+  pins the wire shape.
+
 ## Unreleased — Telegram, verified, allowlisted, and talking back (2026-09-12)
 
 Parity plan Stage 2, item 7: the channels were claimed, none verified. Telegram
