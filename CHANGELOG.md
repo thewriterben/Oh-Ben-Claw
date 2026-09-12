@@ -32,6 +32,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `-published`, `-second`); same class, different crate, not changed here.
 
 ---
+## Unreleased — The forge must not replay `schedule` (2026-09-11)
+
+### Fixed
+
+- **`schedule` declares `RiskClass { reversible: false, blast: Low }`.** With
+  the default (safe) class, the self-improvement pass learned three skills from
+  the evening's successful `schedule` turns and, verifying them, re-armed a
+  finished one-shot and resurrected a deleted weekday task — both fired again
+  after the next restart. The forge's replay gate (`safe_to_replay`) now
+  quarantines such recipes for operator promotion instead of auto-installing
+  them, the same treatment `memory` has.
+
+### Changed
+
+- Scheduled turns now open `[Reminder due] You asked to be reminded at this
+  time: "…". Do it now: <prompt>` with no word of scheduling in it: the second
+  wording ("It is already scheduled: do not create…") got "already set, no
+  further action is needed" from the local brain.
+
 ## Unreleased — A timer reads as a timer (2026-09-11)
 
 ### Changed
