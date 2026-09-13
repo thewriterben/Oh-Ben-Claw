@@ -239,8 +239,8 @@ fn intervals(ds: &[Descend]) -> Vec<(String, i64, Posture)> {
 
 fn posture_at(iv: &[(String, i64, Posture)], node: &str, t: i64) -> Option<Posture> {
     iv.iter()
-        .filter(|(n, from, _)| n == node && *from <= t)
-        .last()
+        .rev()
+        .find(|(n, from, _)| n == node && *from <= t)
         .map(|(_, _, p)| *p)
 }
 
