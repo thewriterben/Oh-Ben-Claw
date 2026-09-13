@@ -89,9 +89,15 @@ Wired at two points: the ClawCam ingest path (novelty score attached to each det
 > as first shipped it could not call anything novel (first-seen median
 > 0.08, 0 of 74 at threshold 0.7); with warm-up centring, a sparser code
 > and a threshold set from that data it separates new objectives (0.31–0.75)
-> from rewordings of seen ones (≤ 0.24), repeats still ≤ 0.002. Not yet
-> measured: the body live in the running brain — the deployed binary
-> predates it. 4 waits for a moving node.
+> from rewordings of seen ones (≤ 0.24), repeats still ≤ 0.002. And it has
+> run live: in the deployed brain, on 2026-09-13 at 12:52, a fruit-fly
+> question with no precedent scored 0.372 → cautious → the node's slot 0 went
+> to 0.15 on the first attempt; a familiar escalation at 13:10 (novelty
+> 0.03) cleared it (`world.db`, `descending.obc-esp32-s3-001`; CHANGELOG).
+> The loop this document proposed in §3 is closed in the running system.
+> Not measured: whether the lowered threshold changed any outcome — the
+> `posture_real_effect` harness exists for that and has no data yet. 4 waits
+> for a moving node.
 
 ## 5. What I could not verify
 
