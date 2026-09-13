@@ -29,7 +29,13 @@ That closes step 1 of the WILD port: detector wired to the right input
 (link contact), persistence vet (`hold_ms`), history-relative threshold
 (`sensor_baseline`), and a log of every fire. What is not built, on purpose:
 any model, any IMU, a rate condition, `offset` on a slot — each waits for a
-concrete use.
+concrete use. The thread is filed in `docs/WILD-2026-09.md` — the paper's
+numbers, why the loop shape transfers and the biology does not, the six
+decisions, what each commit found, and steps 2–3 with their preconditions.
+Filing it turned up the next defect: with no I2C bus, `read_sensor_snapshot`
+puts the *stub* accelerometer (`9.81` in `sensor.accel_z`) and environment
+values into every reflex snapshot — a plausible number a rule could act on
+for weeks. Step 2 starts there.
 
 ## Unreleased — `sensor_baseline`: a threshold on the signal's own history (2026-09-13)
 
