@@ -527,6 +527,50 @@ second test's port open needed a retry loop: the first test's serial
 thread lets go of the port only when its next line fails to send, up to
 one keepalive later.
 
+### A5f. The first real slot-bound rule: die temperature → onboard LED
+
+**What it proves:** the spinal tier acting on a real signal, not a synthetic
+snapshot. The XIAO's on-die temperature sensor (no wiring; ~1 °C
+quantisation, moves with load and room — `scripts/probe_die_temp.py` shows
+it) is in the node's reflex snapshot as `sensor.die_temperature`. Two rules
+bound to slot 0 — `die-hot` (`>` threshold → GPIO21 = 0, LED on) and
+`die-cool` (`<=` threshold → GPIO21 = 1, LED off), threshold `30 + level·40`
+°C, default level 0.5 — are pushed over USB. The script reads the real
+temperature, then slides the slot *around it* over the authenticated LoRa
+link: threshold above the reading (LED must go off), below it (on), above
+again (off), each verified by `gpio_read 21` and the node's own `reflex`
+report with `applied: true`. The brain does the same thing with
+`mesh_command descend {"m": [[0, level]]}`.
+
+**What it does not prove:** that the brain has a reason to move it. The
+modulation path is proven end to end on a real quantity; *when* the reasoner
+should lower a node's thresholds (novelty from the mushroom body, say) is
+the next feature, not this one. Also: a holding rule re-fires every
+`debounce_ms` (10 s here), so the node reports every 10 s while the
+condition holds — edge-triggering on the node is a known gap.
+
+**Preconditions.** Node on COM6 with this firmware (die sensor +
+`MAX_LINE_LEN` 2048 — see the box), base on COM3 with A5d's build.
+
+```powershell
+python scripts\bench_die_rule.py --node COM6 --base COM3
+```
+
+**Run 2026-09-13: 11/11** (`results/bench_die_rule-20260913-020024.json`).
+Die 38.3 °C; thresholds 44 °C (level 0.357) and 32 °C (0.057). LED off →
+on → off with a `die-cool` / `die-hot` / `die-cool` report each, all
+`applied: true`, each transition within 10 s of the descend; one descend
+needed its second attempt (collision, as usual).
+
+> **It did not pass the first time, and again the reason was the wire.**
+> `set_reflex_rules` with the two rules is ~620 bytes; the node's
+> `MAX_LINE_LEN` was 512, and an over-long line was cleared *silently* —
+> the same defect class as the 256-byte RX ring the day before, one layer
+> up. Now 2048, and an over-long or unparseable command line is answered
+> (`{"ok":false,"error":"command line longer than 2048 bytes — discarded
+> whole"}` / `"request not understood: …"`) rather than met with silence.
+> `scripts/probe_linelen.py` is the tool if a line ever goes quiet again.
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**

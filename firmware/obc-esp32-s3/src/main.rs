@@ -103,8 +103,8 @@
 use esp_idf_svc::hal::peripherals::Peripherals;
 // Command I/O runs over the native USB-Serial-JTAG (the XIAO ESP32-S3's only USB
 // interface), not UART0 — UART0's GPIO43/44 aren't wired to the XIAO's USB port.
-use esp_idf_svc::hal::usb_serial::{UsbSerialConfig, UsbSerialDriver};
 use esp_idf_svc::hal::uart::UartDriver;
+use esp_idf_svc::hal::usb_serial::{UsbSerialConfig, UsbSerialDriver};
 use log::info;
 use serde::{Deserialize, Serialize};
 
@@ -151,7 +151,14 @@ mod dht;
 mod camera;
 
 /// Maximum line length for incoming serial commands (bytes).
-const MAX_LINE_LEN: usize = 512;
+///
+/// 2048, up from 512 on 2026-09-13: a `set_reflex_rules` with the two
+/// slot-bound rules of the first real reflex (walkthrough §A5f) is ~620 bytes,
+/// and at 512 it was discarded — silently, because the overflow path cleared
+/// the buffer and said nothing, the same defect class as the 256-byte RX ring
+/// caught the day before. The USB ring is 4096, so this fits with a line to
+/// spare. An over-long line is now *answered*, not dropped (see the intake).
+const MAX_LINE_LEN: usize = 2048;
 
 /// Firmware version — must match the host-side `CARGO_PKG_VERSION`.
 const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -281,6 +288,13 @@ struct AgentState {
     /// is reused in between. `(monotonic ms of last read attempt, last reading)`.
     dht_last_read_ms: u64,
     dht_last: Option<(f32, f32)>,
+    /// The ESP32-S3's on-die temperature sensor. The one real, zero-wiring
+    /// quantity every node has: it tracks package temperature, which moves
+    /// with load and with the room, and it is what the first slot-bound rule
+    /// on the bench body watches (`sensor.die_temperature`, walkthrough §A5f).
+    /// `None` ⇒ the entity is absent from the snapshot, never stubbed — a
+    /// rule on a made-up temperature would be a made-up rule.
+    die_temp: Option<esp_idf_svc::hal::temp_sensor::TempSensorDriver<'static>>,
 }
 
 impl AgentState {
@@ -296,7 +310,16 @@ impl AgentState {
             audio: None,
             dht_last_read_ms: 0,
             dht_last: None,
+            die_temp: None,
         }
+    }
+
+    /// Package temperature in °C from the on-die sensor, if it is running.
+    fn die_temperature(&self) -> Option<f64> {
+        self.die_temp
+            .as_ref()
+            .and_then(|d| d.get_celsius().ok())
+            .map(f64::from)
     }
 
     /// Append a message to history, evicting the oldest entry if needed.
@@ -465,8 +488,12 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "board-waveshare-21")]
     let mut spine_uart: Option<UartDriver<'static>> = None;
     match &spine_uart {
-        Some(_) => info!("Spine uplink: UART1 ready — mirroring status/reflex out D6 (GPIO43) @115200."),
-        None => log::warn!("Spine uplink: UART1 init FAILED — no LoRa mirror (check pin/peripheral)."),
+        Some(_) => {
+            info!("Spine uplink: UART1 ready — mirroring status/reflex out D6 (GPIO43) @115200.")
+        }
+        None => {
+            log::warn!("Spine uplink: UART1 init FAILED — no LoRa mirror (check pin/peripheral).")
+        }
     }
 
     // Configure output pins via raw ESP-IDF sys API.
@@ -518,7 +545,10 @@ fn main() -> anyhow::Result<()> {
     info!("Stack headroom after init: {} bytes", stack_headroom());
 
     let mut agent_state = AgentState::new();
-    info!("Stack headroom after AgentState: {} bytes", stack_headroom());
+    info!(
+        "Stack headroom after AgentState: {} bytes",
+        stack_headroom()
+    );
 
     // Say, on the wire and not only in the log, that this node has no policy.
     //
@@ -599,23 +629,41 @@ fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "board-waveshare-21"))]
     {
         use esp_idf_svc::hal::i2s::{config, I2sDriver};
-        let i2s_cfg = config::StdConfig::philips(
-            audio::SAMPLE_RATE_HZ,
-            config::DataBitWidth::Bits32,
-        );
+        let i2s_cfg =
+            config::StdConfig::philips(audio::SAMPLE_RATE_HZ, config::DataBitWidth::Bits32);
         match I2sDriver::new_std_rx(
             peripherals.i2s0,
             &i2s_cfg,
-            pins.gpio0,                                            // BCLK / SCK
-            pins.gpio2,                                            // DIN / SD
-            Option::<esp_idf_svc::hal::gpio::AnyIOPin>::None,      // no MCLK
-            pins.gpio1,                                            // WS / LRCLK
+            pins.gpio0,                                       // BCLK / SCK
+            pins.gpio2,                                       // DIN / SD
+            Option::<esp_idf_svc::hal::gpio::AnyIOPin>::None, // no MCLK
+            pins.gpio1,                                       // WS / LRCLK
         ) {
             Ok(drv) => {
                 agent_state.audio = Some(audio::AudioMic::new(drv));
                 info!("I2S mic ready (SCK=0, WS=1, SD=2)");
             }
             Err(e) => log::warn!("I2S mic init failed ({e}); audio_sample falls back to stub"),
+        }
+    }
+    // On-die temperature sensor: no wiring, real signal. The default range
+    // (−10…80 °C) is the accurate one for a bench and a room; the driver
+    // trades accuracy for range outside it.
+    {
+        use esp_idf_svc::hal::temp_sensor::{TempSensorConfig, TempSensorDriver};
+        match TempSensorDriver::new(&TempSensorConfig::new(), peripherals.temp_sensor)
+            .and_then(|mut d| d.enable().map(|()| d))
+        {
+            Ok(d) => {
+                agent_state.die_temp = Some(d);
+                match agent_state.die_temperature() {
+                    Some(t) => info!("die temperature sensor ready: {t:.1} °C"),
+                    None => log::warn!("die temperature sensor enabled but the first read failed"),
+                }
+            }
+            Err(e) => log::warn!(
+                "die temperature sensor init failed ({e}); sensor.die_temperature absent from reflex snapshots"
+            ),
         }
     }
     // Load the built-in safing rules so the node self-protects from boot, even
@@ -626,7 +674,10 @@ fn main() -> anyhow::Result<()> {
         .reflex
         .set_rules(safing::default_safing_rules())
         .expect("built-in safing rules validate");
-    log::info!("on-MCU safing rules loaded ({} built-in)", agent_state.reflex.rule_count());
+    log::info!(
+        "on-MCU safing rules loaded ({} built-in)",
+        agent_state.reflex.rule_count()
+    );
     // System prompt prepended to every LLM request.
     agent_state.push_message(
         "system",
@@ -663,6 +714,10 @@ fn main() -> anyhow::Result<()> {
     let mut last_power_mode: Option<safing::PowerMode> = None;
     // Line buffer for commands arriving over the spine UART (LoRa return path).
     let mut uart_line: Vec<u8> = Vec::new();
+    // The USB line outgrew `MAX_LINE_LEN`: the rest of it is discarded and the
+    // line is answered with an error at its newline, rather than the tail
+    // fusing with the next command and both vanishing.
+    let mut usb_line_overflowed = false;
 
     loop {
         // `Ok(0)` is a read timeout (no host data) — fall through to the reflex
@@ -673,20 +728,46 @@ fn main() -> anyhow::Result<()> {
                 last_host_contact_ms = now_ms(); // any host byte ⇒ link is alive
                 for &b in &buf[..n] {
                     if b == b'\n' || b == b'\r' {
-                        if !line.is_empty() {
-                            if let Ok(line_str) = std::str::from_utf8(&line) {
-                                if let Ok(resp) = handle_request(line_str, &mut agent_state) {
-                                    let out = serde_json::to_string(&resp).unwrap_or_default();
-                                    send_line(&mut usb, &out);
-                                }
-                            }
+                        if usb_line_overflowed {
+                            usb_line_overflowed = false;
+                            line.clear();
+                            send_line(
+                                &mut usb,
+                                &serde_json::json!({
+                                    "ok": false,
+                                    "error": format!("command line longer than {MAX_LINE_LEN} bytes — discarded whole"),
+                                })
+                                .to_string(),
+                            );
+                        } else if !line.is_empty() {
+                            // A line that cannot be handled is answered too: a
+                            // command with no reply is indistinguishable from a
+                            // dead wire (bench, 2026-09-13).
+                            let answer = match std::str::from_utf8(&line) {
+                                Ok(line_str) => match handle_request(line_str, &mut agent_state) {
+                                    Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
+                                    Err(e) => serde_json::json!({
+                                        "ok": false,
+                                        "error": format!("request not understood: {e}"),
+                                    })
+                                    .to_string(),
+                                },
+                                Err(_) => serde_json::json!({
+                                    "ok": false,
+                                    "error": "request is not UTF-8",
+                                })
+                                .to_string(),
+                            };
+                            send_line(&mut usb, &answer);
                             line.clear();
                         }
-                    } else {
+                    } else if usb_line_overflowed {
+                        // Discarding the rest of an over-long line.
+                    } else if line.len() < MAX_LINE_LEN {
                         line.push(b);
-                        if line.len() > MAX_LINE_LEN {
-                            line.clear();
-                        }
+                    } else {
+                        usb_line_overflowed = true;
+                        line.clear();
                     }
                 }
             }
@@ -718,8 +799,14 @@ fn main() -> anyhow::Result<()> {
                                             let mut v = serde_json::to_value(&resp)
                                                 .unwrap_or(serde_json::Value::Null);
                                             if let serde_json::Value::Object(ref mut m) = v {
-                                                m.insert("type".into(), serde_json::json!("cmd_result"));
-                                                m.insert("node_id".into(), serde_json::json!(NODE_ID));
+                                                m.insert(
+                                                    "type".into(),
+                                                    serde_json::json!("cmd_result"),
+                                                );
+                                                m.insert(
+                                                    "node_id".into(),
+                                                    serde_json::json!(NODE_ID),
+                                                );
                                             }
                                             let out = v.to_string();
                                             let _ = u.write(out.as_bytes());
@@ -745,6 +832,11 @@ fn main() -> anyhow::Result<()> {
         {
             last_reflex_ms = now;
             let mut snapshot = read_sensor_snapshot(&mut agent_state.sensors);
+            // The package temperature: real on every node, absent rather than
+            // stubbed when the sensor is not running.
+            if let Some(t) = agent_state.die_temperature() {
+                snapshot.insert(DIE_TEMPERATURE_ENTITY.to_string(), t);
+            }
             // DHT22 environment (single-wire, off the I2C bus): read at most once
             // per ~2 s (the sensor's minimum) and reuse the last good value in
             // between. Overrides the stubbed sensor.temperature with a real reading
@@ -763,7 +855,8 @@ fn main() -> anyhow::Result<()> {
             // rule can fire, and self-report the link state.
             let silence_ms = now.saturating_sub(last_host_contact_ms);
             snapshot.insert(safing::LINK_SILENCE_ENTITY.to_string(), silence_ms as f64);
-            let link_offline = safing::link_offline(silence_ms as f64, safing::DEFAULT_LINK_TIMEOUT_MS as f64);
+            let link_offline =
+                safing::link_offline(silence_ms as f64, safing::DEFAULT_LINK_TIMEOUT_MS as f64);
             // Report link state only on a change (online↔offline).
             if last_link_offline != Some(link_offline) {
                 last_link_offline = Some(link_offline);
@@ -891,304 +984,323 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
     // commands (e.g. a Track 0 safety denial) would send no reply at all.
     let result: anyhow::Result<String> = (|| {
         match req.cmd.as_str() {
-        // The whole reply is built in `board.rs`, which has no ESP
-        // dependencies, so `tests/firmware_node_selfreport.rs` asserts every
-        // board's answer under the ordinary workspace `cargo test` — including
-        // the board this build is not. Nothing in CI can compile this crate, so
-        // that shim is the only place any of this is checked.
-        "capabilities" | "announce" => {
-            // Headroom either side of the one reply known to overflow the main
-            // task stack. `capabilities` is ~1170 bytes of JSON built with
-            // `json!` and then serialised, and on 2026-08-22 it killed the node
-            // on roughly every other call -- truncating at ~1088 bytes, printing
-            // the stack-overflow banner, and rebooting. The stack was raised
-            // from 8192 to 16384 earlier the same day by picking a number; that
-            // moved the line without crossing it. These two logs make the next
-            // number a measurement instead.
-            let before = stack_headroom();
-            let body = board::describe_json(
-                &BOARD,
-                cfg!(feature = "camera"),
-                NODE_ID,
-                FIRMWARE_VERSION,
-            );
-            let after = stack_headroom();
-            log::info!(
-                "capabilities: {} bytes, headroom {} -> {} (used {})",
-                body.len(),
-                before,
-                after,
-                before.saturating_sub(after)
-            );
-            Ok(body)
-        }
+            // The whole reply is built in `board.rs`, which has no ESP
+            // dependencies, so `tests/firmware_node_selfreport.rs` asserts every
+            // board's answer under the ordinary workspace `cargo test` — including
+            // the board this build is not. Nothing in CI can compile this crate, so
+            // that shim is the only place any of this is checked.
+            "capabilities" | "announce" => {
+                // Headroom either side of the one reply known to overflow the main
+                // task stack. `capabilities` is ~1170 bytes of JSON built with
+                // `json!` and then serialised, and on 2026-08-22 it killed the node
+                // on roughly every other call -- truncating at ~1088 bytes, printing
+                // the stack-overflow banner, and rebooting. The stack was raised
+                // from 8192 to 16384 earlier the same day by picking a number; that
+                // moved the line without crossing it. These two logs make the next
+                // number a measurement instead.
+                let before = stack_headroom();
+                let body = board::describe_json(
+                    &BOARD,
+                    cfg!(feature = "camera"),
+                    NODE_ID,
+                    FIRMWARE_VERSION,
+                );
+                let after = stack_headroom();
+                log::info!(
+                    "capabilities: {} bytes, headroom {} -> {} (used {})",
+                    body.len(),
+                    before,
+                    after,
+                    before.saturating_sub(after)
+                );
+                Ok(body)
+            }
 
-        "gpio_read" => {
-            let pin = req.args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-            let value = gpio_read(pin)?;
-            Ok(value.to_string())
-        }
+            "gpio_read" => {
+                let pin = req.args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let value = gpio_read(pin)?;
+                Ok(value.to_string())
+            }
 
-        "gpio_write" => {
-            let pin = req.args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-            let value = req.args.get("value").and_then(|v| v.as_u64()).unwrap_or(0);
-            gpio_write(&mut state.safety, pin, value, now_ms())?;
-            Ok("done".into())
-        }
+            "gpio_write" => {
+                let pin = req.args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let value = req.args.get("value").and_then(|v| v.as_u64()).unwrap_or(0);
+                gpio_write(&mut state.safety, pin, value, now_ms())?;
+                Ok("done".into())
+            }
 
-        // Track 0: host pushes this node's deterministic actuator limits (mirror of
-        // the host `[[safety.limits]]` set). Retained on `obc/nodes/{id}/limits`.
-        // Tightens the boot default-deny policy in the field with no reflash.
-        "set_limits" => {
-            // Measured 2026-08-22: this arm crashed the node on 5 of 6 calls,
-            // where `gpio_read` and `gpio_write` never did. Three stack-hungry
-            // steps stacked on a main task with ~2 KB of headroom: cloning the
-            // `limits` Value, deserialising it recursively, and then building
-            // the reply with `json!` and serialising that. `capabilities` had
-            // already been fixed the same way; this is the same bug, and it is
-            // the more damaging one -- crashing *while being told the safety
-            // policy* is what silently reverted the node to deny-all in the
-            // middle of a bench run and made a working gate look broken.
-            //
-            // The clone is gone (the args are owned here), and the reply is
-            // formatted straight into a String.
-            let before = stack_headroom();
-            use core::fmt::Write as _;
-            let limits: Vec<safety::SafetyLimit> = match req.args.get_mut("limits") {
-                Some(v) => serde_json::from_value(v.take())?,
-                None => Vec::new(),
-            };
-            let applied = state.safety.apply_pushed(limits, NODE_ID);
-            let policy = state.safety.policy();
+            // Track 0: host pushes this node's deterministic actuator limits (mirror of
+            // the host `[[safety.limits]]` set). Retained on `obc/nodes/{id}/limits`.
+            // Tightens the boot default-deny policy in the field with no reflash.
+            "set_limits" => {
+                // Measured 2026-08-22: this arm crashed the node on 5 of 6 calls,
+                // where `gpio_read` and `gpio_write` never did. Three stack-hungry
+                // steps stacked on a main task with ~2 KB of headroom: cloning the
+                // `limits` Value, deserialising it recursively, and then building
+                // the reply with `json!` and serialising that. `capabilities` had
+                // already been fixed the same way; this is the same bug, and it is
+                // the more damaging one -- crashing *while being told the safety
+                // policy* is what silently reverted the node to deny-all in the
+                // middle of a bench run and made a working gate look broken.
+                //
+                // The clone is gone (the args are owned here), and the reply is
+                // formatted straight into a String.
+                let before = stack_headroom();
+                use core::fmt::Write as _;
+                let limits: Vec<safety::SafetyLimit> = match req.args.get_mut("limits") {
+                    Some(v) => serde_json::from_value(v.take())?,
+                    None => Vec::new(),
+                };
+                let applied = state.safety.apply_pushed(limits, NODE_ID);
+                let policy = state.safety.policy();
 
-            let mut out = String::with_capacity(160);
-            out.push_str(if applied {
-                r#"{"applied":true,"allowed_pins":"#
-            } else {
-                r#"{"applied":false,"allowed_pins":"#
-            });
-            match &policy.allowed_pins {
-                Some(pins) => {
-                    out.push('[');
-                    for (i, p) in pins.iter().enumerate() {
-                        if i > 0 {
-                            out.push(',');
+                let mut out = String::with_capacity(160);
+                out.push_str(if applied {
+                    r#"{"applied":true,"allowed_pins":"#
+                } else {
+                    r#"{"applied":false,"allowed_pins":"#
+                });
+                match &policy.allowed_pins {
+                    Some(pins) => {
+                        out.push('[');
+                        for (i, p) in pins.iter().enumerate() {
+                            if i > 0 {
+                                out.push(',');
+                            }
+                            let _ = write!(out, "{p}");
                         }
-                        let _ = write!(out, "{p}");
+                        out.push(']');
                     }
-                    out.push(']');
+                    None => out.push_str("null"),
                 }
-                None => out.push_str("null"),
+                let _ = write!(
+                    out,
+                    r#","value_min":{},"value_max":{},"min_interval_ms":{},"boot_id":{}}}"#,
+                    OptNum(policy.value_min),
+                    OptNum(policy.value_max),
+                    OptNum(policy.min_interval_ms.map(|v| v as i64)),
+                    boot_id(),
+                );
+                log::info!(
+                    "set_limits: headroom {} -> {} (used {})",
+                    before,
+                    stack_headroom(),
+                    before.saturating_sub(stack_headroom())
+                );
+                Ok(out)
             }
-            let _ = write!(
-                out,
-                r#","value_min":{},"value_max":{},"min_interval_ms":{},"boot_id":{}}}"#,
-                OptNum(policy.value_min),
-                OptNum(policy.value_max),
-                OptNum(policy.min_interval_ms.map(|v| v as i64)),
-                boot_id(),
-            );
-            log::info!(
-                "set_limits: headroom {} -> {} (used {})",
-                before,
-                stack_headroom(),
-                before.saturating_sub(stack_headroom())
-            );
-            Ok(out)
-        }
 
-        // Phase 18: host pushes this node's reflex rule set (mirror of the host
-        // engine). Retained on `obc/nodes/{id}/reflex_rules` once the spine lands.
-        "set_reflex_rules" => {
-            let rules: Vec<reflex::ReflexRule> = serde_json::from_value(
-                req.args.get("rules").cloned().unwrap_or(serde_json::json!([])),
-            )?;
-            let n = rules.len();
-            // Keep the built-in safing rules in front of host-pushed rules so a
-            // node never loses self-protection when the host replaces its set.
-            let merged = safing::with_defaults(rules);
-            let total = merged.len();
-            state
-                .reflex
-                .set_rules(merged)
-                .map_err(|e| anyhow::anyhow!("set_reflex_rules refused: {e}"))?;
-            Ok(serde_json::json!({ "loaded": n, "total": total, "builtin_safing": total - n }).to_string())
-        }
-
-        // The spinal tier: the brain modulates this node's reflexes rather than
-        // naming its actuators. `{"m":[[slot,level],...]}` — levels in [0, 1],
-        // sparse (only the slots being changed), all-or-nothing. Whatever a
-        // modulated rule then does still passes the Track 0 gate. Levels are
-        // RAM-only: a reboot returns every rule to its own default.
-        "descend" => {
-            // `{"clear":true}` first drops every level (defaults), then any
-            // pairs in the same message are applied on top.
-            if req.args.get("clear").and_then(|v| v.as_bool()) == Some(true) {
-                state.reflex.clear_modulations();
+            // Phase 18: host pushes this node's reflex rule set (mirror of the host
+            // engine). Retained on `obc/nodes/{id}/reflex_rules` once the spine lands.
+            "set_reflex_rules" => {
+                let rules: Vec<reflex::ReflexRule> = serde_json::from_value(
+                    req.args
+                        .get("rules")
+                        .cloned()
+                        .unwrap_or(serde_json::json!([])),
+                )?;
+                let n = rules.len();
+                // Keep the built-in safing rules in front of host-pushed rules so a
+                // node never loses self-protection when the host replaces its set.
+                let merged = safing::with_defaults(rules);
+                let total = merged.len();
+                state
+                    .reflex
+                    .set_rules(merged)
+                    .map_err(|e| anyhow::anyhow!("set_reflex_rules refused: {e}"))?;
+                Ok(
+                    serde_json::json!({ "loaded": n, "total": total, "builtin_safing": total - n })
+                        .to_string(),
+                )
             }
-            let pairs: Vec<(u8, f64)> = match req.args.get_mut("m") {
-                Some(v) => serde_json::from_value(v.take())?,
-                None => Vec::new(),
-            };
-            let applied = state
-                .reflex
-                .descend(&pairs)
-                .map_err(|e| anyhow::anyhow!("descend refused: {e}"))?;
-            let active = state.reflex.modulations().active();
-            Ok(serde_json::json!({ "applied": applied, "active": active }).to_string())
-        }
 
-        // Phase 18: evaluate reflexes against a sensor snapshot. Fired
-        // `gpio_write` actions are actuated locally through the Track 0 safety
-        // gate; the fired set is the `obc/nodes/{id}/reflex` report payload.
-        "reflex_tick" => {
-            let mut snapshot: std::collections::HashMap<String, f64> =
-                std::collections::HashMap::new();
-            if let Some(obj) = req.args.get("snapshot").and_then(|v| v.as_object()) {
-                for (k, v) in obj {
-                    if let Some(f) = v.as_f64() {
-                        snapshot.insert(k.clone(), f);
-                    }
+            // The spinal tier: the brain modulates this node's reflexes rather than
+            // naming its actuators. `{"m":[[slot,level],...]}` — levels in [0, 1],
+            // sparse (only the slots being changed), all-or-nothing. Whatever a
+            // modulated rule then does still passes the Track 0 gate. Levels are
+            // RAM-only: a reboot returns every rule to its own default.
+            "descend" => {
+                // `{"clear":true}` first drops every level (defaults), then any
+                // pairs in the same message are applied on top.
+                if req.args.get("clear").and_then(|v| v.as_bool()) == Some(true) {
+                    state.reflex.clear_modulations();
                 }
+                let pairs: Vec<(u8, f64)> = match req.args.get_mut("m") {
+                    Some(v) => serde_json::from_value(v.take())?,
+                    None => Vec::new(),
+                };
+                let applied = state
+                    .reflex
+                    .descend(&pairs)
+                    .map_err(|e| anyhow::anyhow!("descend refused: {e}"))?;
+                let active = state.reflex.modulations().active();
+                Ok(serde_json::json!({ "applied": applied, "active": active }).to_string())
             }
-            // The injected `now_ms` arg is intentionally ignored: reflex_tick now
-            // evaluates against an isolated scratch pass (no shared debounce state),
-            // so a bench tick reports exactly what this snapshot would trigger
-            // without contending with the autonomous loop. Any resulting actuation
-            // is gated with the real monotonic clock below.
-            let gate_now = now_ms();
-            let fired = state.reflex.evaluate_scratch(&snapshot);
 
-            let mut reports = Vec::with_capacity(fired.len());
-            for f in &fired {
-                let mut applied = false;
-                let mut error: Option<String> = None;
-                if let reflex::Action::GpioWrite { pin, value, .. } = &f.action {
-                    match gpio_write(&mut state.safety, *pin as i32, *value as u64, gate_now) {
-                        Ok(()) => applied = true,
-                        Err(e) => error = Some(e.to_string()),
+            // Phase 18: evaluate reflexes against a sensor snapshot. Fired
+            // `gpio_write` actions are actuated locally through the Track 0 safety
+            // gate; the fired set is the `obc/nodes/{id}/reflex` report payload.
+            "reflex_tick" => {
+                let mut snapshot: std::collections::HashMap<String, f64> =
+                    std::collections::HashMap::new();
+                if let Some(obj) = req.args.get("snapshot").and_then(|v| v.as_object()) {
+                    for (k, v) in obj {
+                        if let Some(f) = v.as_f64() {
+                            snapshot.insert(k.clone(), f);
+                        }
                     }
                 }
-                reports.push(serde_json::json!({
+                // The injected `now_ms` arg is intentionally ignored: reflex_tick now
+                // evaluates against an isolated scratch pass (no shared debounce state),
+                // so a bench tick reports exactly what this snapshot would trigger
+                // without contending with the autonomous loop. Any resulting actuation
+                // is gated with the real monotonic clock below.
+                let gate_now = now_ms();
+                let fired = state.reflex.evaluate_scratch(&snapshot);
+
+                let mut reports = Vec::with_capacity(fired.len());
+                for f in &fired {
+                    let mut applied = false;
+                    let mut error: Option<String> = None;
+                    if let reflex::Action::GpioWrite { pin, value, .. } = &f.action {
+                        match gpio_write(&mut state.safety, *pin as i32, *value as u64, gate_now) {
+                            Ok(()) => applied = true,
+                            Err(e) => error = Some(e.to_string()),
+                        }
+                    }
+                    reports.push(serde_json::json!({
                     "rule_id": f.rule_id,
                     "action": serde_json::to_value(&f.action).unwrap_or(serde_json::Value::Null),
                     "applied": applied,
                     "error": error,
                 }));
+                }
+                Ok(serde_json::json!({ "node_id": NODE_ID, "fired": reports }).to_string())
             }
-            Ok(serde_json::json!({ "node_id": NODE_ID, "fired": reports }).to_string())
-        }
 
-        "camera_capture" => {
-            let quality = req
-                .args
-                .get("quality")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(CAMERA_QUALITY_DEFAULT)
-                .clamp(CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX) as u8;
-            let format = req
-                .args
-                .get("format")
-                .and_then(|v| v.as_str())
-                .unwrap_or("jpeg")
-                .to_string();
-            camera_capture(quality, &format)
-        }
+            "camera_capture" => {
+                let quality =
+                    req.args
+                        .get("quality")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(CAMERA_QUALITY_DEFAULT)
+                        .clamp(CAMERA_QUALITY_MIN, CAMERA_QUALITY_MAX) as u8;
+                let format = req
+                    .args
+                    .get("format")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("jpeg")
+                    .to_string();
+                camera_capture(quality, &format)
+            }
 
-        "audio_sample" => {
-            let duration_ms = req
-                .args
-                .get("duration_ms")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(AUDIO_DURATION_DEFAULT_MS)
-                .clamp(AUDIO_DURATION_MIN_MS, AUDIO_DURATION_MAX_MS);
-            let raw = req
-                .args
-                .get("raw")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            audio_sample(&mut state.audio, duration_ms, raw)
-        }
+            "audio_sample" => {
+                let duration_ms = req
+                    .args
+                    .get("duration_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(AUDIO_DURATION_DEFAULT_MS)
+                    .clamp(AUDIO_DURATION_MIN_MS, AUDIO_DURATION_MAX_MS);
+                let raw = req
+                    .args
+                    .get("raw")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                audio_sample(&mut state.audio, duration_ms, raw)
+            }
 
-        "sensor_read" => {
-            let sensor = req
-                .args
-                .get("sensor")
-                .and_then(|v| v.as_str())
-                .unwrap_or("bme280")
-                .to_string();
-            let field = req
-                .args
-                .get("field")
-                .and_then(|v| v.as_str())
-                .unwrap_or("temperature")
-                .to_string();
-            if sensor == "dht22" {
-                // Not on the I2C bus — its own single-wire GPIO (D10). ~5 ms read.
-                let (t, h) = dht::read_dht22(DHT22_GPIO)?;
-                let v = match field.as_str() {
-                    "temperature" => t,
-                    "humidity" => h,
-                    other => anyhow::bail!("unknown dht22 field: {other}"),
+            "sensor_read" => {
+                let sensor = req
+                    .args
+                    .get("sensor")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("bme280")
+                    .to_string();
+                let field = req
+                    .args
+                    .get("field")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("temperature")
+                    .to_string();
+                if sensor == "dht22" {
+                    // Not on the I2C bus — its own single-wire GPIO (D10). ~5 ms read.
+                    let (t, h) = dht::read_dht22(DHT22_GPIO)?;
+                    let v = match field.as_str() {
+                        "temperature" => t,
+                        "humidity" => h,
+                        other => anyhow::bail!("unknown dht22 field: {other}"),
+                    };
+                    return Ok(format!("{v:.1}"));
+                }
+                if sensor == "esp32" {
+                    // The chip's own sensors. Read live, never stubbed: an absent
+                    // sensor is an error the caller sees, not a plausible number.
+                    return match field.as_str() {
+                        "die_temperature" => state
+                            .die_temperature()
+                            .map(|t| format!("{t:.1}"))
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("die temperature sensor is not running")
+                            }),
+                        other => anyhow::bail!("unknown esp32 field: {other}"),
+                    };
+                }
+                read_sensor(&mut state.sensors, &sensor, &field).map(|v| v.to_string())
+            }
+
+            // Bench diagnostic: list every I2C address that ACKs on the bus, so a
+            // non-responding sensor can be told apart from wiring/address problems.
+            "i2c_scan" => {
+                let addrs: Vec<String> = match &mut state.sensors {
+                    Some(bus) => bus.scan().iter().map(|a| format!("0x{a:02X}")).collect(),
+                    None => Vec::new(),
                 };
-                return Ok(format!("{v:.1}"));
+                Ok(serde_json::json!({
+                    "node_id": NODE_ID,
+                    "count": addrs.len(),
+                    "addresses": addrs,
+                })
+                .to_string())
             }
-            read_sensor(&mut state.sensors, &sensor, &field).map(|v| v.to_string())
-        }
 
-        // Bench diagnostic: list every I2C address that ACKs on the bus, so a
-        // non-responding sensor can be told apart from wiring/address problems.
-        "i2c_scan" => {
-            let addrs: Vec<String> = match &mut state.sensors {
-                Some(bus) => bus.scan().iter().map(|a| format!("0x{a:02X}")).collect(),
-                None => Vec::new(),
-            };
-            Ok(serde_json::json!({
-                "node_id": NODE_ID,
-                "count": addrs.len(),
-                "addresses": addrs,
-            })
-            .to_string())
-        }
-
-        // ── Edge-Native Agent Commands ─────────────────────────────────────
-        "agent_config" => {
-            if let Some(ssid) = req.args.get("wifi_ssid").and_then(|v| v.as_str()) {
-                state.wifi_ssid = ssid.to_string();
+            // ── Edge-Native Agent Commands ─────────────────────────────────────
+            "agent_config" => {
+                if let Some(ssid) = req.args.get("wifi_ssid").and_then(|v| v.as_str()) {
+                    state.wifi_ssid = ssid.to_string();
+                }
+                if let Some(pwd) = req.args.get("wifi_password").and_then(|v| v.as_str()) {
+                    state.wifi_password = pwd.to_string();
+                }
+                if let Some(key) = req.args.get("llm_api_key").and_then(|v| v.as_str()) {
+                    state.llm.api_key = key.to_string();
+                }
+                if let Some(url) = req.args.get("llm_base_url").and_then(|v| v.as_str()) {
+                    state.llm.base_url = url.to_string();
+                }
+                if let Some(model) = req.args.get("llm_model").and_then(|v| v.as_str()) {
+                    state.llm.model = model.to_string();
+                }
+                Ok("agent config updated".to_string())
             }
-            if let Some(pwd) = req.args.get("wifi_password").and_then(|v| v.as_str()) {
-                state.wifi_password = pwd.to_string();
-            }
-            if let Some(key) = req.args.get("llm_api_key").and_then(|v| v.as_str()) {
-                state.llm.api_key = key.to_string();
-            }
-            if let Some(url) = req.args.get("llm_base_url").and_then(|v| v.as_str()) {
-                state.llm.base_url = url.to_string();
-            }
-            if let Some(model) = req.args.get("llm_model").and_then(|v| v.as_str()) {
-                state.llm.model = model.to_string();
-            }
-            Ok("agent config updated".to_string())
-        }
 
-        "agent_clear" => {
-            // Retain only the system message.
-            state.history.retain(|m| m.role == "system");
-            Ok("history cleared".to_string())
-        }
+            "agent_clear" => {
+                // Retain only the system message.
+                state.history.retain(|m| m.role == "system");
+                Ok("history cleared".to_string())
+            }
 
-        "agent_chat" => {
-            let message = req
-                .args
-                .get("message")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("agent_chat requires 'message' argument"))?
-                .to_string();
+            "agent_chat" => {
+                let message = req
+                    .args
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("agent_chat requires 'message' argument"))?
+                    .to_string();
 
-            agent_chat(&message, state)
-        }
+                agent_chat(&message, state)
+            }
 
-        unknown => Err(anyhow::anyhow!("Unknown command: {}", unknown)),
+            unknown => Err(anyhow::anyhow!("Unknown command: {}", unknown)),
         }
     })();
 
@@ -1259,7 +1371,11 @@ fn camera_capture(quality: u8, format: &str) -> anyhow::Result<String> {
     #[cfg(not(feature = "camera"))]
     {
         // Built without the `camera` feature — return the placeholder (see CAMERA.md).
-        log::info!("camera_capture stub: quality={}, format={}", quality, format);
+        log::info!(
+            "camera_capture stub: quality={}, format={}",
+            quality,
+            format
+        );
         Ok(format!(
             "STUB:camera_capture:quality={quality}:format={format}:base64_jpeg_data_here"
         ))
@@ -1379,6 +1495,10 @@ fn send_line(usb: &mut UsbSerialDriver, line: &str) {
 fn now_ms() -> u64 {
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000) as u64
 }
+
+/// Reflex-snapshot entity for the on-die temperature (°C). Named for what it
+/// is — the package, not the room — so a rule cannot mistake it for ambient.
+const DIE_TEMPERATURE_ENTITY: &str = "sensor.die_temperature";
 
 /// Build a reflex snapshot from the node's local sensors. Entity keys follow the
 /// host world-memory convention (`sensor.{quantity}`) so a rule authored against

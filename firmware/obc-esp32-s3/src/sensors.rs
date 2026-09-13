@@ -31,8 +31,8 @@
 //!   That does need a bench (`BRINGUP.md` §4/§6), and still has not had one.
 
 use crate::sensor_math::{
-    compensate_humidity, compensate_pressure, compensate_temperature, decode_accel,
-    decode_soc, parse_bme280_calib, Bme280Calib,
+    compensate_humidity, compensate_pressure, compensate_temperature, decode_accel, decode_soc,
+    parse_bme280_calib, Bme280Calib,
 };
 use anyhow::Context;
 use esp_idf_svc::hal::delay::{TickType, TickType_t};
@@ -158,7 +158,12 @@ impl SensorBus {
         // Burst-read the 6 accel bytes (XH,XL,YH,YL,ZH,ZL) from ACCEL_XOUT_H.
         let mut buf = [0u8; 6];
         self.i2c
-            .write_read(MPU6050_ADDR, &[MPU6050_REG_ACCEL_XOUT_H], &mut buf, I2C_TIMEOUT)
+            .write_read(
+                MPU6050_ADDR,
+                &[MPU6050_REG_ACCEL_XOUT_H],
+                &mut buf,
+                I2C_TIMEOUT,
+            )
             .context("MPU6050 accel read")?;
         Ok(decode_accel([buf[axis * 2], buf[axis * 2 + 1]]))
     }
@@ -176,7 +181,9 @@ impl SensorBus {
             {
                 if let Ok(calib) = self.read_bme280_calib(addr) {
                     // Filter off, forced mode is driven per-read.
-                    let _ = self.i2c.write(addr, &[BME280_REG_CONFIG, 0x00], I2C_TIMEOUT);
+                    let _ = self
+                        .i2c
+                        .write(addr, &[BME280_REG_CONFIG, 0x00], I2C_TIMEOUT);
                     return Some(Bme280State { addr, calib });
                 }
             }
@@ -202,10 +209,18 @@ impl SensorBus {
     fn read_bme280(&mut self, st: Bme280State, field: &str) -> anyhow::Result<f64> {
         // Forced mode: set humidity oversampling, then ctrl_meas re-arms one shot.
         self.i2c
-            .write(st.addr, &[BME280_REG_CTRL_HUM, BME280_CTRL_HUM_X1], I2C_TIMEOUT)
+            .write(
+                st.addr,
+                &[BME280_REG_CTRL_HUM, BME280_CTRL_HUM_X1],
+                I2C_TIMEOUT,
+            )
             .context("BME280 ctrl_hum")?;
         self.i2c
-            .write(st.addr, &[BME280_REG_CTRL_MEAS, BME280_CTRL_MEAS_FORCED], I2C_TIMEOUT)
+            .write(
+                st.addr,
+                &[BME280_REG_CTRL_MEAS, BME280_CTRL_MEAS_FORCED],
+                I2C_TIMEOUT,
+            )
             .context("BME280 ctrl_meas")?;
         // Wait for the measurement to complete (status.measuring clears), bounded.
         for _ in 0..64 {

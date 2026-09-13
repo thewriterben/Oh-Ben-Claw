@@ -5,6 +5,49 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The first real slot-bound rule (2026-09-13)
+
+The spinal tier acting on a real quantity. The XIAO's on-die temperature
+sensor — every node has one, no wiring — is in the reflex snapshot as
+`sensor.die_temperature`, and two rules on slot 0 turn the onboard LED on
+above a threshold and off below it, with the threshold at `30 + level·40`
+°C where `level` is whatever the brain last sent with `descend`.
+Bench (walkthrough §A5f, `scripts/bench_die_rule.py`): **11/11** — real
+reading 38.3 °C, slot slid over the authenticated LoRa link to 44 °C, 32 °C,
+44 °C; LED off, on, off; each transition reported by the node with
+`applied: true`.
+
+### Added (firmware `obc-esp32-s3`)
+
+- On-die temperature (`esp_idf_hal::temp_sensor`, −10…80 °C range) in
+  `AgentState`; `sensor.die_temperature` in every reflex snapshot when the
+  sensor is running, absent — never stubbed — when it is not;
+  `sensor_read {"sensor":"esp32","field":"die_temperature"}` for the bench
+  and for `mesh_command`.
+- An over-long or unparseable USB command line is **answered** with an
+  error instead of dropped: `MAX_LINE_LEN` 512 → 2048 (the two-rule push is
+  ~620 B and was silently discarded), overflow answered at the newline,
+  `handle_request` errors answered too.
+
+### Added (host)
+
+- `config.example.toml`: the `die-hot` / `die-cool` rules under
+  `[[reflex.rules]]`, commented, so the brain and the operator know slot 0
+  exists on the bench body.
+- `tests/firmware_node_gates.rs`: the two rules, as the host emits them,
+  loaded by the node's engine and evaluated at 38.3 °C across the slot moves
+  the bench makes — pins which rule fires at which level.
+- `scripts/bench_die_rule.py`, `scripts/probe_die_temp.py`.
+
+### Not claimed
+
+- A reason for the brain to move the slot. The path is proven; the policy
+  (novelty → conservative thresholds, or whatever it turns out to be) is
+  the next feature.
+- Edge-triggering on the node: a holding rule re-fires every `debounce_ms`
+  and reports each time. Host `fire_on_change` is evidence-id based and does
+  not apply to value-only snapshots.
+
 ## Unreleased — The host verifies the base station's frames itself (2026-09-13)
 
 SPINE-AUTH.md §3.4, the last bullet. Step 4 put a tag on every LoRa frame

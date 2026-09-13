@@ -292,6 +292,26 @@ safing = true
 interval_ms = 1000
 max_escalations_per_min = 6
 
+# The first slot-bound rule on the bench body (walkthrough §A5f): the XIAO's
+# on-die temperature drives its onboard LED (GPIO21, active-low) through a
+# threshold the brain slides — `mesh_command descend {"m":[[0, level]]}` puts
+# it at 30 + level·40 °C; level 0.5 (50 °C) when nothing has been said. Two
+# rules on one slot so the light both comes on and goes off. Pushed to the
+# node with `set_reflex_rules` (over USB — a rule set never fits a LoRa
+# frame); listed here so the brain and the operator know the slot exists.
+# The node re-fires a holding rule every `debounce_ms`, so a rule that holds
+# reports every 10 s until the node has edge-triggering.
+# [[reflex.rules]]
+# id = "die-hot"
+# when = { type = "sensor_slot", entity = "sensor.die_temperature", op = "gt", slot = 0, min = 30.0, max = 70.0, default = 0.5 }
+# then = { type = "gpio_write", node_id = "obc-esp32-s3-001", pin = 21, value = 0 }
+# debounce_ms = 10000
+# [[reflex.rules]]
+# id = "die-cool"
+# when = { type = "sensor_slot", entity = "sensor.die_temperature", op = "le", slot = 0, min = 30.0, max = 70.0, default = 0.5 }
+# then = { type = "gpio_write", node_id = "obc-esp32-s3-001", pin = 21, value = 1 }
+# debounce_ms = 10000
+
 # System 2: escalations wake the model, novelty-gated so a standing condition
 # does not wake it forever.
 [system2]

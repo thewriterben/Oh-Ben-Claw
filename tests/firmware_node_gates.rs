@@ -85,6 +85,89 @@ fn a_slot_rule_the_host_emits_is_the_rule_the_node_loads() {
     );
 }
 
+/// The first real slot-bound rule (walkthrough §A5f, `config.example.toml`):
+/// the die temperature drives the onboard LED through a threshold the brain
+/// slides. Two rules on one slot, as the host writes them, loaded by the
+/// node's engine and evaluated on the node's own snapshot. The bench proves
+/// the LED; this pins the arithmetic the bench relies on — which rule fires
+/// at which level around a given reading — so a slot-range edit cannot
+/// quietly turn the light inside out.
+#[test]
+fn the_die_temperature_rules_fire_the_way_the_bench_expects() {
+    let rule = |id: &str, op: obc_reflex::Cmp, value: i64| obc_reflex::ReflexRule {
+        id: id.into(),
+        when: obc_reflex::Condition::SensorSlot {
+            entity: "sensor.die_temperature".into(),
+            op,
+            slot: 0,
+            min: 30.0,
+            max: 70.0,
+            default: 0.5,
+        },
+        then: obc_reflex::Action::GpioWrite {
+            node_id: "obc-esp32-s3-001".into(),
+            pin: 21,
+            value,
+        },
+        debounce_ms: 10_000,
+        max_rate_hz: None,
+        fire_on_change: false,
+    };
+    let host_rules = vec![
+        rule("die-hot", obc_reflex::Cmp::Gt, 0),
+        rule("die-cool", obc_reflex::Cmp::Le, 1),
+    ];
+    // Across the wire exactly as `set_reflex_rules` carries them.
+    let json = serde_json::to_string(&host_rules).unwrap();
+    let node_rules: Vec<reflex::ReflexRule> = serde_json::from_str(&json).unwrap();
+    let mut engine = reflex::ReflexEngine::default();
+    engine
+        .set_rules(node_rules)
+        .expect("both rules bind slot 0, which exists");
+
+    let snapshot = |t: f64| {
+        let mut s = std::collections::HashMap::new();
+        s.insert("sensor.die_temperature".to_string(), t);
+        s
+    };
+    let fired = |engine: &mut reflex::ReflexEngine, t: f64, now: u64| -> Vec<(String, i64)> {
+        engine
+            .evaluate(&snapshot(t), now)
+            .into_iter()
+            .map(|f| match f.action {
+                reflex::Action::GpioWrite { pin, value, .. } => {
+                    assert_eq!(pin, 21);
+                    (f.rule_id, value)
+                }
+                other => panic!("unexpected action {other:?}"),
+            })
+            .collect()
+    };
+
+    // The bench reading was 38.3 °C. Default level 0.5 → 50 °C: cool, LED off.
+    assert_eq!(
+        fired(&mut engine, 38.3, 1_000),
+        vec![("die-cool".to_string(), 1)]
+    );
+    // Threshold slid below the reading (level for 32 °C): hot, LED on.
+    engine.descend(&[(0, 0.05)]).unwrap();
+    assert_eq!(
+        fired(&mut engine, 38.3, 20_000),
+        vec![("die-hot".to_string(), 0)]
+    );
+    // And above it again (44 °C): off. Only ever one rule at a time.
+    engine.descend(&[(0, 0.35)]).unwrap();
+    assert_eq!(
+        fired(&mut engine, 38.3, 40_000),
+        vec![("die-cool".to_string(), 1)]
+    );
+    // Without the entity in the snapshot — sensor not running — nothing fires:
+    // an absent reading is not a cool reading.
+    assert!(engine
+        .evaluate(&std::collections::HashMap::new(), 60_000)
+        .is_empty());
+}
+
 /// The property the whole safety case rests on, asserted here rather than only
 /// inside the module: a gate seeded with an allow-list refuses a pin outside
 /// it. `bodies/benchtop` in OBC-Prime allows pins 3 and 7; the bench procedure
