@@ -5,6 +5,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The mushroom body measured on real episodes: it cannot yet call anything novel (2026-09-13)
+
+The brain has been recording embedded episodes since 2026-09-11 — 94 of
+them, `[self_improvement] semantic = true` was on all along — so the body's
+judgement was finally measured on what it would actually have seen.
+`crates/obc-memory/tests/mushroom_real_episodes.rs` (ignored; needs
+`OBC_TRAJECTORIES_DB`) replays the store prequentially: before each
+episode is observed, the body is asked what it thinks of it.
+
+**Found:** repeats are detected perfectly (17 exact repeats after warm-up,
+median novelty 0.000, max 0.001) and *nothing else is*: 57 first-seen
+objectives — "Tell me a fact about insects" after two days of printer and
+clock questions, `pip install neuprint-python` — score a median of 0.082,
+max 0.25, so at the shipped threshold of 0.7 the body called **0 of 74**
+novel at any threshold from 0.5 up, and the posture policy would have sent
+one `descend` in 94 turns. The Bloom-filter novelty saturates: 2000 cells
+with 100 active per tag are mostly all "seen" within thirty distinct
+objectives. The synthetic retention result stands; this is the other axis.
+
+Two things the fly literature prescribes, measured in the same harness:
+mean-centring the input before the projection (FlyHash's preprocessing)
+doubles the first-seen median to 0.160; a sparser code (20 000 cells, 2 %)
+alone does nothing (0.072); both together lift it to **0.404** with repeats
+still at 0.000 — a usable gap. Not fixed here: the centring has to be a
+pure function of the store (a running mean recomputed at attach, not a
+batch mean), the defaults have to change, and the threshold has to be set
+from data rather than kept at 0.7. That is the next feature.
+
+Also `scripts/probe_trajectories.py`: what is in a store before believing
+anything about it.
+
 ## Unreleased — Edge-triggered reflexes on the node (2026-09-13)
 
 A holding rule no longer costs the mesh a frame every `debounce_ms`.
