@@ -1,0 +1,69 @@
+{
+  "port": "COM3",
+  "reserve": 32,
+  "boots": [
+    {
+      "resumed": 704,
+      "seqs": [
+        193
+      ],
+      "disabled": false
+    },
+    {
+      "resumed": 736,
+      "seqs": [
+        225
+      ],
+      "disabled": false,
+      "gap_after_previous_boot": 31,
+      "first_seq_is_count_low_byte": true
+    },
+    {
+      "resumed": 768,
+      "seqs": [
+        1
+      ],
+      "disabled": false,
+      "gap_after_previous_boot": 31,
+      "first_seq_is_count_low_byte": true
+    },
+    {
+      "resumed": 800,
+      "seqs": [
+        33
+      ],
+      "disabled": false,
+      "gap_after_previous_boot": 31,
+      "first_seq_is_count_low_byte": true
+    },
+    {
+      "resumed": 832,
+      "seqs": [
+        65
+      ],
+      "disabled": false,
+      "gap_after_previous_boot": 31,
+      "first_seq_is_count_low_byte": true
+    },
+    {
+      "resumed": 864,
+      "seqs": [
+        97
+      ],
+      "disabled": false,
+      "gap_after_previous_boot": 31,
+      "first_seq_is_count_low_byte": true
+    },
+    {
+      "resumed": 896,
+      "seqs": [
+        129
+      ],
+      "disabled": false,
+      "gap_after_previous_boot": 31,
+      "first_seq_is_count_low_byte": true
+    }
+  ],
+  "strictly_increasing": true,
+  "gaps_within_reserve": true
+}

@@ -75,9 +75,35 @@ or may not have executed. `[lora_gateway] reply_timeout_ms` (8000) and
 `reply_retries` (2; 0 restores fire-and-forget). A test pins a reply line
 captured verbatim from the base console to the fact the tool polls.
 
-The base-reboot de-dup trap remains a protocol fault, not a bench one:
-`SPINE-REPLAY.md`'s boot-safe counter is the fix, and this is a second
-reason to build it.
+### The seq counter survives a reboot (SPINE-REPLAY §2, built)
+
+The base-reboot de-dup trap was a protocol fault, and `SPINE-REPLAY.md` §2
+already held the fix — for the authentication counter it was written for,
+and, it turns out, unchanged for this byte. `spine::SeqCounter` persists a
+*ceiling*, not a position: on boot it resumes at the persisted ceiling and
+authorises the next 32 before issuing any; it extends the ceiling before
+crossing it. A crash costs at most 32 numbers and repeats none, and since a
+neighbour's de-dup ring holds at most 32 of a source's recent seqs (the
+reserve is tied to `SeenSet::CAP` by a test), a rebooted station's first
+frames can never land in it — across the 8-bit wrap too, because the ring
+remembers 32 of 256, not all of them. The flash half is NVS
+(`spine/seq_ceil`) on the Heltec; a station whose NVS is unusable receives
+and forwards but does not transmit, and says so at boot — fail closed. Six
+host tests pin the properties, including the ring-miss-across-the-wrap one
+that is the whole point.
+
+**Bench, 2026-09-13** (`scripts/probe_seq_reboot.py`, record in `results/`):
+7 boots by DTR reset — unclean, no orderly shutdown — resumed counts 704 →
+896 strictly increasing, every gap exactly 31 ≤ 32, first seq always the
+count's low byte, crossing 256 twice. Then the sequence that dropped every
+command earlier: reset the base and send `descend` at once — **10/10 first
+attempt**, and again 10/10 (one collision retry). SPINE-REPLAY §6 steps 1–3
+are done for the Heltec's seq; steps 4–6 and the node's u32 counter are not.
+
+Also fixed on the way: the keepalive hold-off could put `last_keepalive` a
+little into the future in the first seconds after a boot, and a plain `u64`
+subtraction there wrapped and fired a keepalive 120 ms after a command.
+Saturating now.
 
 Also found and not fixed: gw-40 had the Heltec factory demo on it, not this
 firmware. A lit OLED is the tell — `heltec-lora-linktest` never drives it.
