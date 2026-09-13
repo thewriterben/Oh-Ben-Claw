@@ -39,6 +39,16 @@
 //! characters (`short_correlation_id`). Measured below with the id the host
 //! actually sends: the two-pin `set_limits` that was the casualty now fits
 //! with room, and the tightest mesh payload is no longer at the edge.
+//!
+//! **And then the first `set_limits` actually sent over the mesh never
+//! arrived** (later on 2026-09-13). This census measures the *radio* budget,
+//! which is the right budget — but the base station's console fed its framer
+//! from the ROM UART's 128-byte FIFO, so any line of 128 bytes or more lost
+//! its tail before the framer ever saw it. Every row here above 127 bytes had
+//! been true on paper and false on the bench; `descend` and `gpio_read`
+//! crossed by luck of size. `scripts/probe_mesh_frame_size.py` is the
+//! instrument, and the station now installs a UART driver with a 2 KiB ring.
+//! A census is a claim about the code; only the air is evidence.
 
 #[path = "../firmware/heltec-lora-linktest/src/spine.rs"]
 mod spine;

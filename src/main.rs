@@ -1017,9 +1017,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 let world_sup = Arc::clone(world);
                 let sink_sup = mesh_sink.clone();
                 let cfg = config.mesh_supervisor.clone();
+                // The limits this host holds for its nodes, re-pushed whenever a node
+                // announces a boot the host has not pushed against (the node boots
+                // deny-all and says so; until 2026-09-13 nobody was listening).
+                let limits = config.safety.limits.clone();
                 info!(
                     stale_ms = cfg.stale_ms,
                     recover = ?cfg.recover,
+                    limits_for_nodes = limits.len(),
                     "Mesh supervisor active (mesh -> brain)"
                 );
                 tokio::spawn(async move {
@@ -1036,6 +1041,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             &world_sup,
                             sink_sup.as_ref(),
                             &cfg,
+                            now,
+                        )
+                        .await;
+                        let _ = oh_ben_claw::spine::mesh_supervisor::hydrate_limits(
+                            &world_sup,
+                            sink_sup.as_ref(),
+                            &limits,
                             now,
                         )
                         .await;

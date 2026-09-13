@@ -964,11 +964,23 @@ fn main() -> anyhow::Result<()> {
         // mirrored the same way as state reports so it rides the mesh home.
         if now.saturating_sub(last_beacon_ms) >= BEACON_INTERVAL_MS {
             last_beacon_ms = now;
-            let beacon = serde_json::json!({
+            // `boot_id` on every beacon, and `policy: "deny-all"` on every beacon
+            // sent before a host has pushed limits. The boot announcement is one
+            // frame, and on 2026-09-13 both of a bench's boot announcements were
+            // lost to the air while the first `link_state` a second later
+            // arrived; a host that hydrates limits on boot (the supervisor) then
+            // never learned there was a boot. Saying "still deny-all" every 30 s
+            // until told is the node keeping its side of that bargain: it costs
+            // ~40 bytes on a ~60-byte frame and stops the moment limits land.
+            let mut beacon = serde_json::json!({
                 "type": "beacon",
                 "node_id": NODE_ID,
                 "ts_ms": now,
+                "boot_id": boot_id(),
             });
+            if !agent_state.safety.told() {
+                beacon["policy"] = serde_json::json!("deny-all");
+            }
             let spine_msg = beacon.to_string();
             send_line(&mut usb, &spine_msg);
             mirror_spine(&mut spine_uart, &spine_msg);
@@ -990,6 +1002,10 @@ fn main() -> anyhow::Result<()> {
 /// second: `boot_id` rides on every `set_limits` reply and on `capabilities`,
 /// and a `policy_state` line is emitted at startup. A host that remembers the
 /// `boot_id` it pushed against can detect the reset without polling for it.
+///
+/// For 22 days no host did. `capabilities` also did not carry it — this comment
+/// said it did — which the first host code to listen (the supervisor's limits
+/// hydration, 2026-09-13) found on its first bench run. Both are true now.
 static BOOT_ID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
 
 fn boot_id() -> u32 {
@@ -1042,6 +1058,7 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                     cfg!(feature = "camera"),
                     NODE_ID,
                     FIRMWARE_VERSION,
+                    boot_id(),
                 );
                 let after = stack_headroom();
                 log::info!(

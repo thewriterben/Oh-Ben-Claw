@@ -103,6 +103,12 @@ pub struct SafetyGate {
     policy: SafetyLimit,
     /// pin -> last write time (ms), for the per-pin rate limit.
     last_fire: HashMap<i64, u64>,
+    /// Whether a host has pushed a policy since boot. Until it has, the node is
+    /// running the boot posture, and it says so in every beacon — the boot
+    /// announcement is one frame that can be lost to the air, and was
+    /// (bench, 2026-09-13: two boots, both announcements missing at the host,
+    /// both first `link_state` lines present).
+    told: bool,
 }
 
 impl SafetyGate {
@@ -142,6 +148,7 @@ impl SafetyGate {
                 min_interval_ms: None,
             },
             last_fire: HashMap::new(),
+            told: false,
         }
     }
 
@@ -162,6 +169,7 @@ impl SafetyGate {
                 min_interval_ms: None,
             },
             last_fire: HashMap::new(),
+            told: false,
         }
     }
 
@@ -177,6 +185,7 @@ impl SafetyGate {
         {
             self.policy = limit;
             self.last_fire.clear();
+            self.told = true;
             true
         } else {
             false
@@ -186,6 +195,12 @@ impl SafetyGate {
     /// A snapshot of the active policy (for the `set_limits` ack / diagnostics).
     pub fn policy(&self) -> &SafetyLimit {
         &self.policy
+    }
+
+    /// Whether a host has pushed a policy since boot. `false` means the boot
+    /// posture (deny-all) is what is enforced, whatever the host believes.
+    pub fn told(&self) -> bool {
+        self.told
     }
 
     /// Check a `gpio_write` against the active policy, recording the fire time for

@@ -277,9 +277,35 @@ fn main() -> anyhow::Result<()> {
 
     // Host-command origin (Phase B outbound). A background thread reads newline/CR-
     // delimited lines from the USB console (UART0 stdin) and hands each to the radio
-    // loop, which frames it onto LoRa. It only *reads* stdin — it never installs a
-    // UART0 driver or reconfigures the console, so EspLogger output is untouched. This
-    // lets a host originate node commands with no extra wiring on this board.
+    // loop, which frames it onto LoRa. This lets a host originate node commands with
+    // no extra wiring on this board.
+    //
+    // The console needs a real RX buffer first. Without a UART0 driver, stdin is
+    // served straight from the ROM UART's hardware FIFO, which is 128 bytes: a
+    // line of 127 bytes + newline arrives whole, and a line of 128 loses its tail
+    // in the FIFO, never sees its newline, and leaves the framer holding a
+    // fragment that swallows every following command until the station is
+    // reset. Measured 2026-09-13 with `scripts/probe_mesh_frame_size.py`: 126 B
+    // crosses, 127 B crosses, 128 B and everything after it is never transmitted.
+    // Every `set_limits` the host ever "sent" over the mesh (202–205 B, well
+    // inside the 228-byte radio budget the census measured against) died here,
+    // and so did `reflex_tick` with four quantities (157 B); `descend` (81–90 B)
+    // and `gpio_read` (72–92 B) crossed by luck of size. Installing the driver
+    // gives the VFS a 2 KiB ring and makes the framer's 228-byte discipline the
+    // only limit, as it was always documented to be. EspLogger output still
+    // goes out the same UART; only the path the bytes take changes.
+    //
+    // SAFETY: plain ESP-IDF calls with valid arguments — port 0, a 2 KiB RX ring,
+    // no TX ring (writes stay synchronous, as they were), no event queue.
+    unsafe {
+        let err = esp_idf_svc::sys::uart_driver_install(0, 2048, 0, 0, core::ptr::null_mut(), 0);
+        if err == esp_idf_svc::sys::ESP_OK {
+            esp_idf_svc::sys::esp_vfs_dev_uart_use_driver(0);
+            info!("console: UART0 driver installed (2 KiB RX ring); lines up to {MAX_AUTH_PAYLOAD} B accepted");
+        } else {
+            warn!("console: UART0 driver install failed ({err}); lines over 127 B will be lost");
+        }
+    }
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<String>();
     std::thread::Builder::new()
         .stack_size(4096)

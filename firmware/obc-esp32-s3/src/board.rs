@@ -122,6 +122,7 @@ pub fn describe_json(
     camera_on: bool,
     node_id: &str,
     firmware_version: &str,
+    boot_id: u32,
 ) -> String {
     use core::fmt::Write as _;
 
@@ -130,13 +131,19 @@ pub fn describe_json(
     // integer, so none of them needs escaping. `node_id` and `firmware_version`
     // are `const &str` in main.rs; if either ever becomes host-supplied this has
     // to go back through a real serialiser.
+    //
+    // `boot_id`: the 2026-08-22 note on `boot_id()` said it "rides on every
+    // set_limits reply and on capabilities". It rode on set_limits. Found on
+    // 2026-09-13 when the host started listening for it: the supervisor's
+    // recovery probe is `capabilities`, and its reply is the one place a reset
+    // shows up when the boot announcement itself was lost to the air.
     let _ = write!(
         s,
         concat!(
-            r#"{{"node_id":"{}","board":"{}","firmware_version":"{}","#,
+            r#"{{"node_id":"{}","board":"{}","firmware_version":"{}","boot_id":{},"#,
             r#""edge_agent":true,"tools":{},"gpio":["#
         ),
-        node_id, board.name, firmware_version, TOOLS_JSON
+        node_id, board.name, firmware_version, boot_id, TOOLS_JSON
     );
     for (i, pin) in board.output_pins.iter().enumerate() {
         let _ = write!(s, "{}{}", if i > 0 { "," } else { "" }, pin);
@@ -164,7 +171,13 @@ pub fn describe_json(
 ///
 /// Not what goes on the wire any more — see `describe_json` — but still the
 /// definition of the answer, and what the self-report tests read.
-pub fn describe(board: &Board, camera_on: bool, node_id: &str, firmware_version: &str) -> Value {
+pub fn describe(
+    board: &Board,
+    camera_on: bool,
+    node_id: &str,
+    firmware_version: &str,
+    boot_id: u32,
+) -> Value {
     let i2c: Option<[i32; 2]> = if camera_on {
         None
     } else {
@@ -174,6 +187,7 @@ pub fn describe(board: &Board, camera_on: bool, node_id: &str, firmware_version:
         "node_id": node_id,
         "board": board.name,
         "firmware_version": firmware_version,
+        "boot_id": boot_id,
         "edge_agent": true,
         "tools": [
             {"name": "gpio_read", "description": "Read a GPIO pin value (0 or 1)."},

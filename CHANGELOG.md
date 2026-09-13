@@ -5,6 +5,42 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A node that boots gets its limits back; the base could not carry them (2026-09-13)
+
+The 2026-08-22 decision, finished. The node boots deny-all and announces it
+so that a host "can detect the reset without polling for it" — and for 22
+days no host code listened. `mesh_supervisor::hydrate_limits` now reads each
+node's latest `boot_id` (announcement, beacon, or any reply) and, when it is
+not the boot the host last pushed against, sends that node's
+`[[safety.limits]]` as `set_limits` (id `lim<boot_id hex>`, retries `r{n}`),
+recording `mesh.<node>.limits_pushed {boot_id, id, attempts}`. A node with no
+configured limits is left deny-all: that is the configuration. A push the
+mesh cannot carry is recorded with an error and not retried.
+
+Found on the way, and fixed:
+
+- The boot announcement is one frame, and both of the bench's were lost while
+  the `link_state` a second later arrived. The node now carries `boot_id` on
+  every beacon and `policy: "deny-all"` on every beacon until a push lands;
+  a beacon that still says deny-all 20 s after a push means the push was
+  lost, and it is sent again. `capabilities` now carries `boot_id` too — its
+  comment said it did; it did not.
+- **The base station could not carry a `set_limits`.** Its console framer was
+  fed from the ROM UART's 128-byte FIFO: 127-byte lines crossed, 128 lost
+  their tail and wedged the console until reset. Every `set_limits` the host
+  ever sent over the mesh (202–205 B, inside the 228-byte radio budget the
+  census measured against) died there; `descend` and `gpio_read` crossed by
+  luck of size. `scripts/probe_mesh_frame_size.py` measures it; the station
+  installs the UART0 driver with a 2 KiB ring, and 90/150/205/228 B cross
+  while 229 is refused as designed. Both bench stations reflashed.
+
+`scripts/bench_boot_hydrate.py` against the live brain: PASS in 62 s — first
+push lost, retry landed, node `applied: true`, next beacon without `policy`
+(`results/bench_boot_hydrate-20260913-144237.json`). Walkthrough §A5l. Note:
+the host pushes what `[[safety.limits]]` says — `[12, 13]` on this bench —
+so the pin-21 LED rules are now refused after a reset until the config lists
+21. That is the feature working.
+
 ## Unreleased — The supervisor's staleness is three beacons, and the live check passed (2026-09-13)
 
 Read from the running brain's `world.db` after its 13:10 restart with

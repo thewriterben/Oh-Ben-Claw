@@ -34,7 +34,7 @@ mod board;
 use board::{Board, WAVESHARE_ESP32_S3_TOUCH_LCD_21 as WAVESHARE, XIAO_ESP32_S3 as XIAO};
 
 fn describe(b: &Board, camera: bool) -> serde_json::Value {
-    board::describe(b, camera, "obc-esp32-s3-001", "0.4.2")
+    board::describe(b, camera, "obc-esp32-s3-001", "0.4.2", 0xC0FFEE)
 }
 
 /// The node stopped putting `describe`'s output on the wire on 2026-08-22.
@@ -54,7 +54,7 @@ fn describe(b: &Board, camera: bool) -> serde_json::Value {
 fn the_wire_format_and_the_definition_are_the_same_document() {
     for (name, board) in [("xiao", &XIAO), ("waveshare", &WAVESHARE)] {
         for camera in [false, true] {
-            let wire = board::describe_json(board, camera, "obc-esp32-s3-001", "0.4.2");
+            let wire = board::describe_json(board, camera, "obc-esp32-s3-001", "0.4.2", 0xC0FFEE);
             let parsed: serde_json::Value = serde_json::from_str(&wire).unwrap_or_else(|e| {
                 panic!("{name} camera={camera}: describe_json emitted invalid JSON: {e}\n{wire}")
             });
@@ -71,7 +71,7 @@ fn the_wire_format_and_the_definition_are_the_same_document() {
 /// on. 1024 bytes measured on hardware; the USB TX buffer is 4096.
 #[test]
 fn the_wire_format_stays_small() {
-    let wire = board::describe_json(&XIAO, false, "obc-esp32-s3-001", "0.4.2");
+    let wire = board::describe_json(&XIAO, false, "obc-esp32-s3-001", "0.4.2", 0xC0FFEE);
     assert!(
         wire.len() < 2048,
         "capabilities grew to {} bytes; it is built on a main task with about \

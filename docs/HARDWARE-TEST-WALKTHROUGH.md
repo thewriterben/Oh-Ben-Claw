@@ -778,6 +778,61 @@ report carries its `ev` (`[34.3]`, `[33.3]` — the die cooled a degree
 mid-run) and no `error` key
 (`results/bench_die_rule-20260913-122058.json`).
 
+### A5l. A node that boots gets its limits back — and the base could not carry them
+
+**What it proves:** that the 2026-08-22 decision is finished. The node boots
+deny-all and announces it (`policy_state`, `boot_id`) so that "a host that
+remembers the boot_id it pushed against can detect the reset" — and for 22
+days no host code listened. Now the mesh supervisor does: `hydrate_limits`
+reads every node's latest `boot_id` (from the announcement, from the
+beacon, or from any reply), and when it differs from the boot the host last
+pushed limits for, sends that node's `[[safety.limits]]` as `set_limits`,
+recording `mesh.<node>.limits_pushed {boot_id, id, attempts}`. The command
+id is `lim<boot_id hex>`, retries `r{n}`. A node with no configured limits is
+left deny-all on purpose.
+
+Two things the bench found on the way, both now fixed:
+
+- **The boot announcement is one frame and it was lost, twice in a row**,
+  while the `link_state` a second later arrived. So the node now carries
+  `boot_id` on every beacon and `policy: "deny-all"` on every beacon until a
+  push lands; the host treats a beacon that still says deny-all 20 s after a
+  push as the push having been lost, and pushes again with `r{n}`. The
+  beacon is the node's standing word, and it stops the moment limits land.
+  (`capabilities` also did not carry `boot_id`, though its comment said it
+  did. It does now.)
+- **The base station could not carry a `set_limits` at all.** Its console
+  read stdin from the ROM UART's 128-byte hardware FIFO: 127-byte lines
+  crossed, 128-byte lines lost their tail and wedged the framer until the
+  station was reset. Every `set_limits` the host ever "sent" over the mesh
+  (202–205 B, inside the 228-byte *radio* budget the census measured
+  against) died there; `descend` and `gpio_read` crossed by luck of size.
+  `scripts/probe_mesh_frame_size.py` measures it. The station now installs
+  the UART0 driver with a 2 KiB ring; 90 / 150 / 205 / 228 B cross, 229 is
+  refused as designed, and the console no longer wedges.
+
+**Measured with** `scripts/bench_boot_hydrate.py` against the LIVE brain: reads
+`boot_id` over USB, resets the node (RTS asserted, DTR not), confirms a new
+`boot_id`, closes USB, then watches world memory for the push and for the
+node's next beacon to have dropped `policy: "deny-all"`.
+
+```powershell
+python scripts\bench_boot_hydrate.py --node COM6 --within 120
+```
+
+**Run 2026-09-13 14:42: PASS in 62 s** — first push lost on the air, retry
+`lim5c578fe5r1` landed, node replied `applied: true, allowed_pins [12,13]`,
+next beacon carried no `policy`
+(`results/bench_boot_hydrate-20260913-144237.json`). The two runs before it
+(`…-141814`, `…-144023`) are the evidence for the base defect: 14 pushes
+recorded, none transmitted.
+
+> **Watch the pins.** The host pushes what `[[safety.limits]]` says — on this
+> bench `[12, 13]`, while the die-temperature rules drive pin 21. After any
+> node reset the LED rules will now be *refused* by the gate the host itself
+> pushed, visibly (`applied: false`, `safety: pin 21 not in allow-list`),
+> until the config lists 21. That is the feature working.
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**

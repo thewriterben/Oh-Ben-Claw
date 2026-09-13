@@ -1,0 +1,24 @@
+{
+  "stamp": "20260913-141814",
+  "node": "COM6",
+  "boot_id_before": 3056119527,
+  "boot_id_after": 3563847596,
+  "pushed": {
+    "boot_id": 3563847596,
+    "id": "limd46bffac",
+    "limits": [
+      {
+        "allowed_pins": [
+          12,
+          13
+        ],
+        "tool": "gpio_write"
+      }
+    ],
+    "ts_ms": 1789330637074
+  },
+  "reply": null,
+  "applied": null,
+  "seconds": 90.3,
+  "passed": false
+}

@@ -1,0 +1,49 @@
+{
+  "stamp": "20260913-144237",
+  "node": "COM6",
+  "boot_id_before": 430178687,
+  "boot_id_after": 1549242341,
+  "pushed": {
+    "attempts": 2,
+    "boot_id": 1549242341,
+    "id": "lim5c578fe5r1",
+    "limits": [
+      {
+        "allowed_pins": [
+          12,
+          13
+        ],
+        "tool": "gpio_write"
+      }
+    ],
+    "ts_ms": 1789332150692
+  },
+  "reply": {
+    "_mesh": {
+      "ctr": 15405,
+      "rssi_dbm": -56,
+      "seq": 45,
+      "src": "40"
+    },
+    "id": "lim5c578fe5r1",
+    "node_id": "obc-esp32-s3-001",
+    "ok": true,
+    "result": "{\"applied\":true,\"allowed_pins\":[12,13],\"value_min\":0,\"value_max\":1,\"min_interval_ms\":500,\"boot_id\":1549242341}",
+    "type": "cmd_result"
+  },
+  "applied": true,
+  "told_beacon": {
+    "_mesh": {
+      "ctr": 15407,
+      "rssi_dbm": -56,
+      "seq": 47,
+      "src": "40"
+    },
+    "boot_id": 1549242341,
+    "node_id": "obc-esp32-s3-001",
+    "ts_ms": 60979,
+    "type": "beacon"
+  },
+  "seconds": 62.2,
+  "passed": true
+}

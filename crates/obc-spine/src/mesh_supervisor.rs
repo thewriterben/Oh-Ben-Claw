@@ -19,6 +19,7 @@
 use crate::lora_gateway::{CommandSink, NodeCommand};
 use crate::MeshSupervisorConfig;
 use obc_memory::world::{Origin, WorldMemory};
+use obc_safety::limits::SafetyLimit;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -609,6 +610,302 @@ pub async fn tick(
     }
 
     applied
+}
+
+// ── Limits hydration: a node that announces a boot gets its limits back ─────────
+//
+// Since 2026-08-22 the node boots deny-all and *says so*: a `policy_state` line
+// with `reason: "boot"` and a fresh `boot_id`, and the same `boot_id` on every
+// `set_limits` and `capabilities` reply, "so a host that remembers the boot_id it
+// pushed against can detect the reset without polling for it". Until 2026-09-13
+// no host code remembered anything: the announcement landed in world memory as
+// `mesh.<node>.policy_state` and nothing read it. The gap that comment named —
+// "a host that pushed [3,7] will happily go on believing [3,7] is in force while
+// the node refuses everything" — was the live state of the bench that afternoon:
+// a power cycle wiped the die-temperature rules' pin-21 limit, the brain's
+// posture arrived and modulated a rule that could not act.
+//
+// This closes it in the direction the 08-22 decision chose: authority stays with
+// the host, the node still boots deny-all, and the host re-pushes the limits it
+// holds for that node (`[[safety.limits]]`) the moment it learns of a boot it has
+// not pushed against. Rules are not re-pushed here — a rule set does not fit a
+// mesh frame (`tests/spine_payload_budget.rs`), and that is a separate change.
+
+/// What a node last said its boot was, and which boot the host last pushed
+/// limits for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BootView {
+    pub node: String,
+    /// The node's current `boot_id`, from its `policy_state` announcement or the
+    /// `boot_id` any of its replies carries — whichever the node said most recently.
+    pub boot_id: Option<u64>,
+    /// Row id of the fact `boot_id` came from — the evidence a push is derived from.
+    pub evidence_id: Option<i64>,
+    /// The `boot_id` the host last pushed limits for (`mesh.<node>.limits_pushed`).
+    pub pushed_boot_id: Option<u64>,
+    /// When that push was made (ms), and how many attempts it has taken so far.
+    pub pushed_at_ms: Option<u64>,
+    pub push_attempts: u64,
+    /// Whether the last push was refused before sending (over budget) — not retried.
+    pub push_refused: bool,
+    /// Whether the node's latest beacon still says `policy: "deny-all"` for the
+    /// current boot: the push has not landed (the mesh loses about a frame in
+    /// three under chatter), so it is owed again.
+    pub still_deny_all: bool,
+}
+
+/// How long after a push the host waits before pushing again to a node whose
+/// beacon still says deny-all. The beacon is every 30 s, so a retry sooner than
+/// that would answer stale evidence.
+pub const LIMITS_RETRY_MS: u64 = 20_000;
+
+/// The `boot_id` a node's reply carries, if any. Replies put the node's answer in
+/// `result` as a JSON *string* (the firmware formats it by hand), so it is parsed
+/// again here.
+fn boot_id_in_reply(cmd_result: &serde_json::Value) -> Option<u64> {
+    let result = cmd_result.get("result")?;
+    let parsed;
+    let obj = match result {
+        serde_json::Value::String(s) => {
+            parsed = serde_json::from_str::<serde_json::Value>(s).ok()?;
+            &parsed
+        }
+        other => other,
+    };
+    obj.get("boot_id").and_then(|b| b.as_u64())
+}
+
+/// Read every mesh node's boot evidence from world memory. Node discovery is the
+/// same as [`snapshot`]'s: a node is a `mesh.<node>` rollup the gateway observed.
+pub fn boot_snapshot(world: &WorldMemory) -> Vec<BootView> {
+    let mut views = Vec::new();
+    for e in world.entities().unwrap_or_default() {
+        let parts: Vec<&str> = e.split('.').collect();
+        if parts.len() != 2 || parts[0] != "mesh" {
+            continue;
+        }
+        let node = parts[1].to_string();
+        match world.current(&e).ok().flatten() {
+            Some(f) if f.origin == Origin::Observed => {}
+            _ => continue,
+        }
+        // The three places a boot id shows up; take the one the node said last.
+        // The announcement is one frame and can be lost to the air (it was, on
+        // the bench, twice in a row); the beacon repeats it every 30 s, and any
+        // reply carries it.
+        let announced = world
+            .current(&format!("mesh.{node}.policy_state"))
+            .ok()
+            .flatten()
+            .filter(|f| f.origin == Origin::Observed)
+            .and_then(|f| {
+                f.value
+                    .get("boot_id")
+                    .and_then(|b| b.as_u64())
+                    .map(|b| (f.valid_from, b, f.id))
+            });
+        let beaconed = world
+            .current(&format!("mesh.{node}.beacon"))
+            .ok()
+            .flatten()
+            .filter(|f| f.origin == Origin::Observed)
+            .and_then(|f| {
+                f.value
+                    .get("boot_id")
+                    .and_then(|b| b.as_u64())
+                    .map(|b| (f.valid_from, b, f.id))
+            });
+        let replied = world
+            .current(&format!("mesh.{node}.cmd_result"))
+            .ok()
+            .flatten()
+            .filter(|f| f.origin == Origin::Observed)
+            .and_then(|f| boot_id_in_reply(&f.value).map(|b| (f.valid_from, b, f.id)));
+        let latest = [announced, beaconed, replied]
+            .into_iter()
+            .flatten()
+            .max_by_key(|(at, _, id)| (*at, *id));
+        let pushed = world
+            .current(&format!("mesh.{node}.limits_pushed"))
+            .ok()
+            .flatten();
+        let pushed_boot_id = pushed
+            .as_ref()
+            .and_then(|f| f.value.get("boot_id").and_then(|b| b.as_u64()));
+        let pushed_at_ms = pushed.as_ref().map(|f| f.valid_from);
+        let push_attempts = pushed
+            .as_ref()
+            .and_then(|f| f.value.get("attempts").and_then(|a| a.as_u64()))
+            .unwrap_or(0);
+        let push_refused = pushed
+            .as_ref()
+            .is_some_and(|f| f.value.get("error").is_some());
+        // The beacon is the node's standing word on its policy. It says deny-all
+        // for the boot it names until a push lands; the moment one does, the
+        // field disappears from the next beacon.
+        let still_deny_all = world
+            .current(&format!("mesh.{node}.beacon"))
+            .ok()
+            .flatten()
+            .filter(|f| f.origin == Origin::Observed)
+            .is_some_and(|f| {
+                f.value.get("policy").and_then(|p| p.as_str()) == Some("deny-all")
+                    && f.value.get("boot_id").and_then(|b| b.as_u64()) == latest.map(|l| l.1)
+            });
+        views.push(BootView {
+            node,
+            boot_id: latest.map(|l| l.1),
+            evidence_id: latest.map(|l| l.2),
+            pushed_boot_id,
+            pushed_at_ms,
+            push_attempts,
+            push_refused,
+            still_deny_all,
+        });
+    }
+    views
+}
+
+/// A limits push the host owes a node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LimitsPush {
+    pub node: String,
+    pub boot_id: u64,
+    pub evidence_id: Option<i64>,
+    /// 1 for a boot's first push; counts up while the beacon keeps saying deny-all.
+    pub attempt: u64,
+    pub cmd: NodeCommand,
+}
+
+/// Pure decision: which nodes are owed a limits push. A node is owed one when
+/// it has named a boot the host has not pushed against, or when it has and the
+/// node's beacon still says deny-all for that boot [`LIMITS_RETRY_MS`] after the
+/// push — the mesh loses frames, and a push that never landed is owed again.
+/// A node with no configured limits is left deny-all: that is the
+/// configuration, not an omission. A push refused for size is not retried; a
+/// frame too long today is too long tomorrow.
+///
+/// The command id is `lim` + the boot id in hex, so the reply says which boot
+/// it answered for; a retry carries `r{n}`, like `mesh_command`'s.
+pub fn limits_to_push(views: &[BootView], limits: &[SafetyLimit], now_ms: u64) -> Vec<LimitsPush> {
+    let mut out = Vec::new();
+    for v in views {
+        let Some(boot_id) = v.boot_id else { continue };
+        let attempt = if v.pushed_boot_id == Some(boot_id) {
+            let retry_due = v.still_deny_all
+                && !v.push_refused
+                && v.pushed_at_ms
+                    .is_some_and(|t| now_ms.saturating_sub(t) >= LIMITS_RETRY_MS);
+            if !retry_due {
+                continue;
+            }
+            v.push_attempts + 1
+        } else {
+            1
+        };
+        let mine: Vec<&SafetyLimit> = limits.iter().filter(|l| l.node_id == v.node).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let id = if attempt > 1 {
+            format!("lim{boot_id:08x}r{}", attempt - 1)
+        } else {
+            format!("lim{boot_id:08x}")
+        };
+        let cmd = NodeCommand::new(&v.node, id, "set_limits", json!({ "limits": mine }));
+        out.push(LimitsPush {
+            node: v.node.clone(),
+            boot_id,
+            evidence_id: v.evidence_id,
+            attempt,
+            cmd,
+        });
+    }
+    out
+}
+
+/// One hydration pass: read the boot evidence, push limits where owed, record what
+/// was pushed as `mesh.<node>.limits_pushed { boot_id, id, pins, ts_ms }` derived
+/// from the boot evidence. A push the mesh cannot carry is recorded with an
+/// `error` and the same `boot_id`, so it is visible and not retried every tick —
+/// a frame that is too long today is too long tomorrow. A push the sink fails to
+/// send is not recorded, so the next tick tries again. Returns the number of
+/// pushes sent.
+pub async fn hydrate_limits(
+    world: &WorldMemory,
+    sink: Option<&Arc<dyn CommandSink>>,
+    limits: &[SafetyLimit],
+    now_ms: u64,
+) -> usize {
+    let Some(sink) = sink else { return 0 };
+    let views = boot_snapshot(world);
+    let mut sent = 0;
+    for push in limits_to_push(&views, limits, now_ms) {
+        let support: Vec<i64> = push.evidence_id.into_iter().collect();
+        let pins: Vec<serde_json::Value> = limits
+            .iter()
+            .filter(|l| l.node_id == push.node)
+            .map(|l| json!({ "tool": l.tool, "allowed_pins": l.allowed_pins }))
+            .collect();
+        if !push.cmd.fits_one_frame() {
+            tracing::warn!(
+                node = %push.node,
+                bytes = push.cmd.encoded_len(),
+                budget = crate::lora_gateway::MESH_LINE_BUDGET,
+                "mesh supervisor: this node's limits do not fit one mesh frame; it stays deny-all"
+            );
+            let _ = world.observe_derived_from(
+                &format!("mesh.{}.limits_pushed", push.node),
+                json!({
+                    "boot_id": push.boot_id,
+                    "id": push.cmd.id,
+                    "attempts": push.attempt,
+                    "error": format!(
+                        "set_limits is {} bytes; the mesh carries {}",
+                        push.cmd.encoded_len(),
+                        crate::lora_gateway::MESH_LINE_BUDGET
+                    ),
+                    "limits": pins,
+                    "ts_ms": now_ms,
+                }),
+                now_ms,
+                now_ms,
+                SUPERVISOR_SOURCE,
+                &support,
+            );
+            continue;
+        }
+        match sink.send_command(&push.cmd).await {
+            Ok(()) => {
+                tracing::info!(
+                    node = %push.node,
+                    boot_id = push.boot_id,
+                    id = %push.cmd.id,
+                    attempt = push.attempt,
+                    "mesh supervisor: node is deny-all for a boot the host holds limits for — limits pushed"
+                );
+                let _ = world.observe_derived_from(
+                    &format!("mesh.{}.limits_pushed", push.node),
+                    json!({
+                        "boot_id": push.boot_id,
+                        "id": push.cmd.id,
+                        "attempts": push.attempt,
+                        "limits": pins,
+                        "ts_ms": now_ms,
+                    }),
+                    now_ms,
+                    now_ms,
+                    SUPERVISOR_SOURCE,
+                    &support,
+                );
+                sent += 1;
+            }
+            Err(e) => {
+                tracing::warn!(node = %push.node, error = %e, "mesh supervisor: limits push not sent; will retry");
+            }
+        }
+    }
+    sent
 }
 
 #[cfg(test)]
@@ -1468,5 +1765,323 @@ mod tests {
             .unwrap();
         let v = status_json(&world);
         assert_eq!(v["escalations"].as_array().unwrap().len(), 2);
+    }
+
+    // ── Limits hydration ────────────────────────────────────────────────────
+
+    const NODE: &str = "obc-esp32-s3-001";
+
+    fn heard(world: &WorldMemory, t: u64) {
+        world
+            .observe_as(
+                &format!("mesh.{NODE}"),
+                json!({ "last_type": "beacon", "rssi_dbm": -55, "seq": 1, "src": "40" }),
+                t,
+                t,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+    }
+
+    /// The node's own boot announcement, as the gateway lands it.
+    fn announced_boot(world: &WorldMemory, boot_id: u64, t: u64) {
+        world
+            .observe_as(
+                &format!("mesh.{NODE}.policy_state"),
+                json!({
+                    "type": "policy_state", "node_id": NODE, "boot_id": boot_id,
+                    "policy": "deny-all", "reason": "boot",
+                    "detail": "no pin can be driven until set_limits arrives"
+                }),
+                t,
+                t,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+    }
+
+    /// A reply as the gateway lands it: the firmware's answer is a JSON *string*.
+    fn replied(world: &WorldMemory, id: &str, result: serde_json::Value, t: u64) {
+        world
+            .observe_as(
+                &format!("mesh.{NODE}.cmd_result"),
+                json!({
+                    "type": "cmd_result", "node_id": NODE, "id": id, "ok": true,
+                    "result": result.to_string()
+                }),
+                t,
+                t,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+    }
+
+    fn led_limit() -> SafetyLimit {
+        SafetyLimit {
+            node_id: NODE.into(),
+            tool: "gpio_write".into(),
+            allowed_pins: Some(vec![21]),
+            value_min: Some(0),
+            value_max: Some(1),
+            min_interval_ms: Some(500),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_boot_announcement_gets_the_nodes_limits_pushed_once() {
+        // The 2026-08-22 gap, closed: the node says it has no policy; the host
+        // that holds one for it sends it, once per boot, and records which boot.
+        let world = WorldMemory::open_in_memory().unwrap();
+        heard(&world, 1_000);
+        announced_boot(&world, 0x1234_abcd, 1_000);
+        let mock = Arc::new(MockSink {
+            sent: Mutex::new(Vec::new()),
+        });
+        let sink: Arc<dyn CommandSink> = mock.clone();
+
+        assert_eq!(
+            hydrate_limits(&world, Some(&sink), &[led_limit()], 2_000).await,
+            1
+        );
+        {
+            let sent = mock.sent.lock().unwrap();
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0].to, NODE);
+            assert_eq!(sent[0].cmd, "set_limits");
+            assert_eq!(
+                sent[0].id, "lim1234abcd",
+                "the id names the boot it answers"
+            );
+            assert_eq!(sent[0].args["limits"][0]["allowed_pins"], json!([21]));
+            assert!(sent[0].fits_one_frame(), "{} bytes", sent[0].encoded_len());
+        }
+
+        let pushed = world
+            .current(&format!("mesh.{NODE}.limits_pushed"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(pushed.value["boot_id"], json!(0x1234_abcd));
+        assert_eq!(pushed.source, SUPERVISOR_SOURCE);
+
+        // The mesh repeats; the same boot is not pushed twice on the announcement.
+        announced_boot(&world, 0x1234_abcd, 3_000);
+        assert_eq!(
+            hydrate_limits(&world, Some(&sink), &[led_limit()], 4_000).await,
+            0
+        );
+        assert_eq!(mock.sent.lock().unwrap().len(), 1);
+    }
+
+    fn beacon(world: &WorldMemory, boot_id: u64, deny_all: bool, t: u64) {
+        let mut b = json!({ "type": "beacon", "node_id": NODE, "ts_ms": t, "boot_id": boot_id });
+        if deny_all {
+            b["policy"] = json!("deny-all");
+        }
+        world
+            .observe_as(
+                &format!("mesh.{NODE}.beacon"),
+                b,
+                t,
+                t,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_push_the_mesh_lost_is_pushed_again_while_the_beacon_says_deny_all() {
+        // Bench 2026-09-13 14:17: the push was sent, the node never got it (a
+        // frame in three is lost under chatter), and the next beacon still said
+        // deny-all. The beacon is the node's standing word; while it stands, the
+        // push is owed again — after LIMITS_RETRY_MS, with a retry suffix on the
+        // id — and the moment limits land the field is gone and so is the debt.
+        let world = WorldMemory::open_in_memory().unwrap();
+        heard(&world, 1_000);
+        beacon(&world, 5, true, 1_000);
+        let mock = Arc::new(MockSink {
+            sent: Mutex::new(Vec::new()),
+        });
+        let sink: Arc<dyn CommandSink> = mock.clone();
+        assert_eq!(
+            hydrate_limits(&world, Some(&sink), &[led_limit()], 2_000).await,
+            1
+        );
+        // Too soon to judge — the next beacon has not come.
+        assert_eq!(
+            hydrate_limits(&world, Some(&sink), &[led_limit()], 10_000).await,
+            0
+        );
+        // The next beacon still says deny-all, and the retry interval has passed.
+        beacon(&world, 5, true, 31_000);
+        assert_eq!(
+            hydrate_limits(&world, Some(&sink), &[led_limit()], 32_000).await,
+            1
+        );
+        {
+            let sent = mock.sent.lock().unwrap();
+            assert_eq!(sent.len(), 2);
+            assert_eq!(sent[1].id, "lim00000005r1");
+        }
+        let pushed = world
+            .current(&format!("mesh.{NODE}.limits_pushed"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(pushed.value["attempts"], json!(2));
+        // Limits landed: the beacon drops the field; nothing more is owed.
+        beacon(&world, 5, false, 61_000);
+        assert_eq!(
+            hydrate_limits(&world, Some(&sink), &[led_limit()], 62_000).await,
+            0
+        );
+        assert_eq!(mock.sent.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_new_boot_id_on_any_reply_is_a_reset_and_gets_a_fresh_push() {
+        // The announcement can be lost to the air (the base was not listening,
+        // or the frame collided). Every set_limits and capabilities reply carries
+        // boot_id too, and the supervisor's own recovery probe is `capabilities`.
+        let world = WorldMemory::open_in_memory().unwrap();
+        heard(&world, 1_000);
+        announced_boot(&world, 1, 1_000);
+        let mock = Arc::new(MockSink {
+            sent: Mutex::new(Vec::new()),
+        });
+        let sink: Arc<dyn CommandSink> = mock.clone();
+        assert_eq!(
+            hydrate_limits(&world, Some(&sink), &[led_limit()], 2_000).await,
+            1
+        );
+
+        // The node's reply to that push confirms boot 1: nothing more to do.
+        replied(
+            &world,
+            "lim00000001",
+            json!({ "applied": true, "boot_id": 1 }),
+            3_000,
+        );
+        assert_eq!(
+            hydrate_limits(&world, Some(&sink), &[led_limit()], 4_000).await,
+            0
+        );
+
+        // Then a capabilities reply carries boot 2 — the node reset and the
+        // announcement never arrived.
+        replied(
+            &world,
+            "sup-x",
+            json!({ "node_id": NODE, "boot_id": 2, "tools": [] }),
+            5_000,
+        );
+        assert_eq!(
+            hydrate_limits(&world, Some(&sink), &[led_limit()], 6_000).await,
+            1
+        );
+        let sent = mock.sent.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[1].id, "lim00000002");
+    }
+
+    #[tokio::test]
+    async fn a_beacon_that_still_says_deny_all_is_enough_to_push() {
+        // Both boot announcements were lost on the bench; the beacon carries the
+        // boot id every 30 s until limits land. No announcement, no reply — the
+        // beacon alone triggers the push.
+        let world = WorldMemory::open_in_memory().unwrap();
+        heard(&world, 1_000);
+        world
+            .observe_as(
+                &format!("mesh.{NODE}.beacon"),
+                json!({ "type": "beacon", "node_id": NODE, "ts_ms": 30_000,
+                        "boot_id": 0xbeef, "policy": "deny-all" }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+        let mock = Arc::new(MockSink {
+            sent: Mutex::new(Vec::new()),
+        });
+        let sink: Arc<dyn CommandSink> = mock.clone();
+        assert_eq!(
+            hydrate_limits(&world, Some(&sink), &[led_limit()], 2_000).await,
+            1
+        );
+        assert_eq!(mock.sent.lock().unwrap()[0].id, "lim0000beef");
+    }
+
+    #[tokio::test]
+    async fn a_node_with_no_configured_limits_stays_deny_all() {
+        // Deny-all is the configuration, not an omission to repair.
+        let world = WorldMemory::open_in_memory().unwrap();
+        heard(&world, 1_000);
+        announced_boot(&world, 7, 1_000);
+        let mock = Arc::new(MockSink {
+            sent: Mutex::new(Vec::new()),
+        });
+        let sink: Arc<dyn CommandSink> = mock.clone();
+        let other = SafetyLimit {
+            node_id: "some-other-node".into(),
+            ..led_limit()
+        };
+        assert_eq!(
+            hydrate_limits(&world, Some(&sink), &[other], 2_000).await,
+            0
+        );
+        assert!(mock.sent.lock().unwrap().is_empty());
+        assert!(world
+            .current(&format!("mesh.{NODE}.limits_pushed"))
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn limits_the_mesh_cannot_carry_are_recorded_not_retried() {
+        // A frame over budget is discarded whole by the station; sending it every
+        // tick would be silent forever. Record the refusal against the boot id and
+        // leave the node deny-all, visibly.
+        let world = WorldMemory::open_in_memory().unwrap();
+        heard(&world, 1_000);
+        announced_boot(&world, 9, 1_000);
+        let mock = Arc::new(MockSink {
+            sent: Mutex::new(Vec::new()),
+        });
+        let sink: Arc<dyn CommandSink> = mock.clone();
+        let wide = SafetyLimit {
+            allowed_pins: Some((1..=40).collect()),
+            ..led_limit()
+        };
+        assert_eq!(
+            hydrate_limits(&world, Some(&sink), std::slice::from_ref(&wide), 2_000).await,
+            0
+        );
+        assert!(mock.sent.lock().unwrap().is_empty());
+        let pushed = world
+            .current(&format!("mesh.{NODE}.limits_pushed"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(pushed.value["boot_id"], json!(9));
+        assert!(pushed.value["error"].as_str().unwrap().contains("bytes"));
+        // …and not again next tick for the same boot.
+        assert_eq!(hydrate_limits(&world, Some(&sink), &[wide], 3_000).await, 0);
+    }
+
+    #[test]
+    fn the_boot_id_is_read_from_a_reply_whether_result_is_a_string_or_an_object() {
+        assert_eq!(
+            boot_id_in_reply(&json!({ "result": "{\"applied\":true,\"boot_id\":42}" })),
+            Some(42)
+        );
+        assert_eq!(
+            boot_id_in_reply(&json!({ "result": { "boot_id": 43 } })),
+            Some(43)
+        );
+        assert_eq!(boot_id_in_reply(&json!({ "result": "0" })), None);
+        assert_eq!(boot_id_in_reply(&json!({ "ok": false })), None);
     }
 }
