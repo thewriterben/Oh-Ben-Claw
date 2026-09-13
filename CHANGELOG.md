@@ -43,6 +43,103 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   would have frozen the whole inbound channel with nothing in the log.
 - A voice note from an unlisted sender is refused *with* a warning, like text.
 
+---
+
+## Unreleased — The memory grows a mushroom body (2026-09-12)
+
+First piece of the fly-connectome work (`docs/CONNECTOME-2026-09.md`): the one
+circuit from the fly brain that maps onto a seam OBC already has, built so that
+measuring it is the research.
+
+### Added
+
+- **`obc_memory::mushroom`** — a sparse-expansion memory over episode
+  embeddings, copied from the insect mushroom body as the connectomes describe
+  it: a seeded sparse random projection onto `kenyon_cells` cells, winner-take-
+  all to the top `active_fraction`, and the surviving set is the objective's
+  *tag*. Three published algorithms fall out of that wiring and are what the
+  module is: FlyHash (the tag), the fly Bloom filter (a *novelty* score that is
+  distance-sensitive — partial overlap is partial familiarity — and
+  time-sensitive, recovering with `novelty_half_life_ms`), and FlyModel
+  (per-valence compartments where only the active cells of the current valence
+  move, so reinforcing one kind of objective leaves the others' weights frozen).
+  Everything is deterministic: the projection comes from an explicit seed
+  through the same splitmix64 as `obc_safety::redteam`, time enters only as the
+  caller's `now_ms`, ties break by index. No new dependency.
+- **`TrajectoryStore::attach_mushroom` / `assess`.** The body sits on the
+  embeddings the dense retrieval leg already produces, so it needs `semantic`
+  and refuses without an embedder — the refusal is a startup warning, not a
+  silent no-op. It keeps no state of its own: on attach it replays every stored
+  episode with a vector, oldest first, so its state is a pure function of
+  (store, config); a test proves the replayed body answers identically to one
+  that watched the episodes arrive. `record()` observes each episode at its
+  own timestamp and reinforces by outcome; an abort reinforces nothing, since a
+  hit iteration cap says nothing about whether the plan was right.
+- **The reasoner is told.** `experience_block` asks the store before each
+  turn. An objective with no close precedent gets a one-line block saying so
+  even when nothing else is known — that *is* the information; the reasoner
+  should verify before acting rather than pattern-match — and counts
+  `mushroom_novel_objectives_total`. A familiar one gets the outcome prior of
+  its kind beside the recipes. Nothing is reported until the store holds
+  `warmup_episodes`: a body that has seen nothing finds everything novel, which
+  is true and useless.
+- **`[self_improvement.mushroom]`** — every parameter of the circuit is a key
+  (`deny_unknown_fields`; a misspelled key fails the load and names itself),
+  validated on attach with the key named in the error. Off by default.
+
+### The measurement
+
+FlyModel's claim is that sparse tags plus partial freezing retain what was
+learned about early inputs after a long run of unrelated later ones. The test
+builds a chronological stream — four synthetic families, then four different
+ones, valence alternating by family — trains the body and an online perceptron
+on the same dense vectors, and scores both on fresh samples of the *old*
+families afterwards, over 20 seeds. Thresholds were fixed before the first
+run: mushroom mean ≥ 0.9, worst seed ≥ 0.8, mushroom ≥ perceptron. First run:
+**mushroom 1.000 (min 1.000), perceptron 0.958.** The claim holds, but the
+margin is small because this stream is easy for both — eight random centroids
+in 32 dimensions are linearly separable. The number that matters is the same
+test against `trajectories.db` once there are real episodes; there are none
+yet. The perceptron's figure is printed under `--nocapture` so a regression
+in either direction is visible.
+
+### Found while building it
+
+- A prior was leaking through chance overlap: an objective unrelated to
+  anything seen shares ~`active_fraction` of its cells with every seen tag, and
+  one such cell was enough to report "50% of these succeeded" for something
+  with no precedent. `prior_min_coverage` (default 0.5) now requires evidence
+  on that share of the tag's cells before a prior is reported at all; below
+  it the answer is `None`, not a number.
+- The outcome prior is a share of trace strength, not a count: two rewards
+  and one punishment at learning-rate 0.2 read 64%, not 67%, because the
+  Hebbian step saturates. Documented in the test that noticed.
+- Each turn now embeds the objective twice (once for `similar()`, once for
+  `assess()`). Not fixed here: the embedder is a local ONNX model, and sharing
+  the vector across the two calls is a refactor of `similar()`'s signature
+  that belongs with real timing data.
+
+### Removed
+
+- **`obc-memory/src/vector.rs`** — `VectorStore`, `EmbeddingClient`,
+  `chunk_text`, `build_rag_context`: zero callers since the tool impls were
+  struck on 2026-07-30 (README, "Memory"). Its cosine and float↔bytes helpers
+  were already duplicated in the live `trajectory.rs`, so nothing moved; the
+  inline decoder in leg 3 became `bytes_to_floats`, which the replay shares.
+  `reqwest` and `base64` leave the crate with it — the substrate makes no
+  network call at all now.
+
+### Not claimed
+
+That a connectome-shaped network is better at anything. The survey behind this
+found the opposite: a connectome alone underdetermines the dynamics it
+produces, and reported topology advantages mostly vanish under fair controls.
+What is claimed is narrower — that a circuit *motif* with known properties,
+implemented small, shows those properties on this agent's workload — and only
+the synthetic half of that is measured so far.
+
+---
+
 ## Unreleased — A fixed temp path is a shared temp path (2026-09-11)
 
 ### Fixed

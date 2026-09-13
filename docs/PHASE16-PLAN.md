@@ -51,6 +51,7 @@ Before the LLM call, retrieve top-k relevant learned skills + proven episodes fo
 > cosine) matching the RAG index's philosophy — no per-turn network latency, fully testable.
 > An embedding backend can replace `lexical_score` behind the same `similar()` API when an
 > embedder config lands (candidate for P4 alongside the offline-evolution job).
+> (`vector.rs` was deleted 2026-09-12; the dense leg that did land uses `embed.rs`.)
 
 ### P2 — Stronger synthesis + real verification *(items 5–6 ✅ shipped 2026-07-02; item 7 deferred to P4 — see CHANGELOG)*
 

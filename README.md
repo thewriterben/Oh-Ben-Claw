@@ -331,9 +331,12 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 > standing when I struck them. `VectorStore`, `EmbeddingClient`,
 > `VectorSearchTool` and `DocumentIngestTool` all have zero references outside
 > `vector.rs`; the two tool impls were deleted on 2026-07-30 when the substrate
-> became its own crate, and the store is kept but unwired. It escaped the file
+> became its own crate, and the store was kept but unwired. It escaped the file
 > sweep because several of its type names are generic enough to match unrelated
-> code — a reminder that the sweep clears nothing, it only accuses.
+> code — a reminder that the sweep clears nothing, it only accuses. The rest of
+> `vector.rs` went on 2026-09-12: the cosine and float↔bytes helpers it held
+> were already duplicated in the live `trajectory.rs`, so nothing moved, and
+> `reqwest`/`base64` left the crate with it.
 
 > `HEARTBEAT.md` task dispatch and the daily journal were listed here and are
 > **not wired**: `HeartbeatStore`'s `has_tasks`, `actionable_tasks`,

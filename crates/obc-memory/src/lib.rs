@@ -22,9 +22,9 @@ pub mod expiry;
 pub mod heartbeat;
 pub mod journal;
 pub mod liveness;
+pub mod mushroom;
 pub mod notes;
 pub mod trajectory;
-pub mod vector;
 pub mod world;
 
 pub use heartbeat::HeartbeatStore;

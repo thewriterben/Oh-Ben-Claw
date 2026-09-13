@@ -10,7 +10,8 @@
 //! `MemoryStore`. Each episode is one row; the steps are stored as a JSON blob
 //! plus promoted columns (`outcome`, `ts_ms`) for querying.
 
-use anyhow::Result;
+use crate::mushroom::{Assessment, MushroomBody, MushroomConfig, Valence};
+use anyhow::{bail, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -42,6 +43,16 @@ impl Outcome {
             "success" => Outcome::Success,
             "aborted" => Outcome::Aborted,
             _ => Outcome::Failure,
+        }
+    }
+    /// How the mushroom body should take this outcome. An abort (iteration
+    /// cap, cancellation) says nothing about whether the plan was right, so
+    /// it reinforces nothing.
+    fn valence(self) -> Option<Valence> {
+        match self {
+            Outcome::Success => Some(Valence::Rewarded),
+            Outcome::Failure => Some(Valence::Punished),
+            Outcome::Aborted => None,
         }
     }
 }
@@ -100,6 +111,9 @@ pub struct TrajectoryStore {
     /// Optional embedder: when set, objectives are embedded at record time and
     /// a dense leg joins the hybrid retrieval fusion.
     embedder: Option<Box<dyn Embedder>>,
+    /// Optional mushroom body over the same embeddings: novelty of an
+    /// objective and how objectives like it tended to end. Needs `embedder`.
+    mushroom: Option<Mutex<MushroomBody>>,
 }
 
 impl TrajectoryStore {
@@ -110,6 +124,7 @@ impl TrajectoryStore {
             conn: Mutex::new(conn),
             fts: false,
             embedder: None,
+            mushroom: None,
         };
         store.migrate()?;
         Ok(store)
@@ -122,6 +137,7 @@ impl TrajectoryStore {
             conn: Mutex::new(conn),
             fts: false,
             embedder: None,
+            mushroom: None,
         };
         store.migrate()?;
         Ok(store)
@@ -132,6 +148,64 @@ impl TrajectoryStore {
     pub fn with_embedder(mut self, embedder: Box<dyn Embedder>) -> Self {
         self.embedder = Some(embedder);
         self
+    }
+
+    /// Attach a mushroom body and replay every stored episode that has an
+    /// embedding through it, oldest first, so the body's state is a pure
+    /// function of (store contents, config) and needs no persistence of its
+    /// own. Refuses without an embedder: a body with nothing to tag would
+    /// parse from config and change nothing.
+    pub fn attach_mushroom(&mut self, cfg: MushroomConfig) -> Result<()> {
+        if self.embedder.is_none() {
+            bail!("[self_improvement.mushroom] needs the semantic leg (an embedder) — nothing attached");
+        }
+        let mut body = MushroomBody::new(cfg)?;
+        let rows: Vec<(String, Vec<u8>, i64)> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "SELECT e.outcome, v.vec, e.ts_ms FROM episodes e
+                 JOIN episode_vecs v ON v.id = e.id
+                 ORDER BY e.ts_ms ASC, e.id ASC",
+            )?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        let replayed = rows.len();
+        for (outcome, blob, ts_ms) in rows {
+            let vec = bytes_to_floats(&blob);
+            let tag = body.tag(&vec)?;
+            body.observe(&tag, ts_ms as u64);
+            if let Some(v) = Outcome::from_str(&outcome).valence() {
+                body.reinforce(&tag, v);
+            }
+        }
+        tracing::info!(replayed, "mushroom body attached to trajectory store");
+        self.mushroom = Some(Mutex::new(body));
+        Ok(())
+    }
+
+    /// Whether a mushroom body is attached.
+    pub fn has_mushroom(&self) -> bool {
+        self.mushroom.is_some()
+    }
+
+    /// What the mushroom body says about `objective` at `now_ms`: novelty and
+    /// the outcome prior of objectives like it. `None` when no body is
+    /// attached or the objective could not be embedded (logged, not hidden).
+    pub fn assess(&self, objective: &str, now_ms: u64) -> Option<Assessment> {
+        let body = self.mushroom.as_ref()?;
+        let embedder = self.embedder.as_ref()?;
+        let vec = embedder
+            .embed(objective)
+            .map_err(|err| tracing::warn!(error = %err, "objective embedding failed"))
+            .ok()?;
+        body.lock()
+            .unwrap()
+            .assess(&vec, now_ms)
+            .map_err(|err| tracing::warn!(error = %err, "mushroom assessment failed"))
+            .ok()
     }
 
     fn migrate(&mut self) -> Result<()> {
@@ -218,6 +292,21 @@ impl TrajectoryStore {
                 "INSERT OR REPLACE INTO episode_vecs (id, dim, vec) VALUES (?1, ?2, ?3)",
                 params![ep.id, vec.len() as i64, blob],
             );
+            drop(conn);
+            // The body sees the episode the same way replay will on the next
+            // open: observed at its own timestamp, reinforced by its outcome.
+            if let Some(body) = &self.mushroom {
+                let mut body = body.lock().unwrap();
+                match body.tag(&vec) {
+                    Ok(tag) => {
+                        body.observe(&tag, ep.ts_ms);
+                        if let Some(v) = ep.outcome.valence() {
+                            body.reinforce(&tag, v);
+                        }
+                    }
+                    Err(err) => tracing::warn!(error = %err, "mushroom body skipped an episode"),
+                }
+            }
         }
         Ok(())
     }
@@ -418,13 +507,7 @@ impl TrajectoryStore {
                     .into_iter()
                     .filter_map(|(id, blob)| {
                         let i = *index_of.get(id.as_str())?;
-                        let v: Vec<f32> = blob
-                            .as_chunks::<4>()
-                            .0
-                            .iter()
-                            .map(|c| f32::from_le_bytes(*c))
-                            .collect();
-                        let s = cosine(&qv, &v);
+                        let s = cosine(&qv, &bytes_to_floats(&blob));
                         (s >= MIN_COSINE).then_some((s, i))
                     })
                     .collect();
@@ -543,6 +626,18 @@ fn tokens(text: &str) -> std::collections::HashSet<String> {
         .collect()
 }
 
+/// Decode an `episode_vecs.vec` blob (little-endian f32s). `as_chunks::<4>()`
+/// hands back `&[u8; 4]`, which is what `from_le_bytes` wants; a trailing
+/// partial chunk is dropped.
+fn bytes_to_floats(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
+        .collect()
+}
+
 /// Cosine similarity between two dense vectors (0 on dimension mismatch).
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
@@ -596,17 +691,19 @@ mod tests {
         }
     }
 
-    /// Deterministic mock: known strings map to fixed vectors.
+    /// Deterministic mock: known strings map to fixed vectors. Four dims, not
+    /// two: the mushroom body centres each vector, and a cell that sums *all*
+    /// dims of a centred vector always reads zero.
     struct MockEmbedder;
     impl Embedder for MockEmbedder {
         fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
             // "door"-ish texts cluster on axis 0; "weather"-ish on axis 1.
             Ok(if text.contains("door") || text.contains("entrance") {
-                vec![1.0, 0.0]
+                vec![1.0, 0.0, 0.0, 0.0]
             } else if text.contains("weather") || text.contains("forecast") {
-                vec![0.0, 1.0]
+                vec![0.0, 1.0, 0.0, 0.0]
             } else {
-                vec![0.6, 0.6]
+                vec![0.6, 0.6, 0.0, 0.0]
             })
         }
     }
@@ -626,6 +723,105 @@ mod tests {
         let hits = s.similar("open the door", 1).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "d1", "paraphrase retrieved via embeddings");
+    }
+
+    fn mushroom_cfg() -> MushroomConfig {
+        MushroomConfig {
+            enabled: true,
+            warmup_episodes: 1,
+            kenyon_cells: 200,
+            inputs_per_cell: 2,
+            ..MushroomConfig::default()
+        }
+    }
+
+    #[test]
+    fn a_mushroom_body_needs_an_embedder() {
+        let mut s = TrajectoryStore::open_in_memory().unwrap();
+        let err = s.attach_mushroom(mushroom_cfg()).unwrap_err().to_string();
+        assert!(err.contains("embedder"), "{err}");
+        assert!(!s.has_mushroom());
+        assert!(s.assess("anything", 0).is_none());
+    }
+
+    #[test]
+    fn recorded_episodes_make_their_kind_familiar_and_set_the_outcome_prior() {
+        let mut s = TrajectoryStore::open_in_memory()
+            .unwrap()
+            .with_embedder(Box::new(MockEmbedder));
+        s.attach_mushroom(mushroom_cfg()).unwrap();
+
+        // Cold: nothing is familiar, nothing has a prior.
+        let cold = s.assess("open the door", 10).unwrap();
+        assert_eq!(cold.novelty, 1.0);
+        assert_eq!(cold.success_prior, None);
+        assert!(!cold.novel, "below warm-up nothing is reported novel");
+
+        s.record(&ep("d1", "unlock the entrance", Outcome::Success, 5))
+            .unwrap();
+        s.record(&ep("d2", "unlock the entrance", Outcome::Failure, 6))
+            .unwrap();
+
+        // "open the door" embeds onto the same axis as the entrance episodes.
+        let door = s.assess("open the door", 10).unwrap();
+        assert!(
+            door.novelty < 1e-6,
+            "exact tag repeat, seen milliseconds ago: {}",
+            door.novelty
+        );
+        assert!(!door.novel);
+        let prior = door.success_prior.unwrap();
+        assert!(
+            (prior - 0.5).abs() < 1e-5,
+            "one success, one failure: {prior}"
+        );
+
+        // Weather has never been seen: novel, no prior.
+        let weather = s.assess("fetch the forecast", 10).unwrap();
+        assert!(weather.novel, "novelty {}", weather.novelty);
+        assert_eq!(weather.success_prior, None);
+    }
+
+    #[test]
+    fn an_aborted_episode_is_observed_but_reinforces_nothing() {
+        let mut s = TrajectoryStore::open_in_memory()
+            .unwrap()
+            .with_embedder(Box::new(MockEmbedder));
+        s.attach_mushroom(mushroom_cfg()).unwrap();
+        s.record(&ep("a", "unlock the entrance", Outcome::Aborted, 5))
+            .unwrap();
+        let a = s.assess("open the door", 5).unwrap();
+        assert_eq!(a.novelty, 0.0);
+        assert_eq!(a.success_prior, None);
+    }
+
+    #[test]
+    fn attaching_later_replays_the_store_and_matches_the_live_path() {
+        // Live: body attached before recording.
+        let mut live = TrajectoryStore::open_in_memory()
+            .unwrap()
+            .with_embedder(Box::new(MockEmbedder));
+        live.attach_mushroom(mushroom_cfg()).unwrap();
+        // Replay: same episodes recorded first, body attached after.
+        let mut replay = TrajectoryStore::open_in_memory()
+            .unwrap()
+            .with_embedder(Box::new(MockEmbedder));
+        for s in [&live, &replay] {
+            s.record(&ep("d1", "unlock the entrance", Outcome::Success, 5))
+                .unwrap();
+            s.record(&ep("w1", "fetch the forecast", Outcome::Failure, 7))
+                .unwrap();
+            s.record(&ep("d2", "unlock the entrance", Outcome::Success, 9))
+                .unwrap();
+        }
+        replay.attach_mushroom(mushroom_cfg()).unwrap();
+        for q in ["open the door", "fetch the forecast", "water the plants"] {
+            assert_eq!(
+                live.assess(q, 1_000).unwrap(),
+                replay.assess(q, 1_000).unwrap(),
+                "{q}"
+            );
+        }
     }
 
     #[test]

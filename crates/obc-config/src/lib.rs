@@ -1425,6 +1425,11 @@ pub struct SelfImprovementConfig {
     /// 0 = no cap. Default 40.
     #[serde(default)]
     pub max_enabled_learned: Option<usize>,
+    /// `[self_improvement.mushroom]` — the sparse-expansion memory over episode
+    /// embeddings that tells the reasoner whether an objective has precedent
+    /// and how objectives like it ended. Needs `semantic = true`.
+    #[serde(default)]
+    pub mushroom: obc_memory::mushroom::MushroomConfig,
 }
 
 /// One `[[self_improvement.verification]]` entry: a check that synthesized
@@ -3149,8 +3154,32 @@ enabled = false
 [[perception.expiry]]
 prefix = "incident."
 max_age_ms = 1000
+[self_improvement.mushroom]
+enabled = true
+seed = 7
+kenyon_cells = 2000
+inputs_per_cell = 6
+active_fraction = 0.05
+novelty_half_life_ms = 604800000
+novel_threshold = 0.7
+learning_rate = 0.2
+warmup_episodes = 20
+prior_min_coverage = 0.5
 "#;
         toml::from_str::<super::Config>(raw).expect("all known keys parse");
+    }
+
+    #[test]
+    fn a_misspelled_mushroom_key_fails_the_load_and_names_itself() {
+        let raw = r#"
+[self_improvement.mushroom]
+enabled = true
+kenyon_cels = 2000
+"#;
+        let msg = toml::from_str::<super::Config>(raw)
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("kenyon_cels"), "{msg}");
     }
 }
 

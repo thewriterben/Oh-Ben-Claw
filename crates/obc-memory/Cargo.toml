@@ -15,15 +15,15 @@ description = "Open Body Control's memory substrate: a bitemporal world model wi
 # it that way is the point: the substrate must not depend on its consumers.
 [dependencies]
 anyhow = "1.0"
-base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 rusqlite = { version = "0.38", features = ["bundled"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 tracing = { version = "0.1", default-features = false }
 uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 obc-paths = { path = "../obc-paths" }
+# `reqwest` and `base64` were dropped on 2026-09-12 with `vector.rs`, their only
+# user in this crate. The substrate makes no network calls at all now.
 fastembed = { version = "5", optional = true }
 
 [features]

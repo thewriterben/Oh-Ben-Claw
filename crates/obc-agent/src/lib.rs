@@ -1135,9 +1135,20 @@ impl Agent {
     /// relevant registered learned skills and `k` similar past successful
     /// episodes, both ranked by deterministic token overlap. `None` when
     /// nothing relevant is known — no prompt noise on novel tasks.
+    ///
+    /// When the trajectory store has a mushroom body, the block also carries
+    /// its assessment: an objective with no close precedent gets a one-line
+    /// block saying so even when nothing else is known (that *is* the
+    /// information — the reasoner should verify before acting rather than
+    /// pattern-match), and a familiar one gets the outcome prior of its kind.
     fn experience_block(&self, objective: &str, k: usize) -> Option<String> {
         use obc_memory::trajectory::lexical_score;
         const MIN_SCORE: f32 = 0.2;
+
+        let assessment = self
+            .trajectory
+            .as_ref()
+            .and_then(|t| t.assess(objective, now_ms()));
 
         // Relevant learned skills currently registered as tools.
         let mut skills: Vec<(f32, String, String)> = {
@@ -1162,13 +1173,33 @@ impl Agent {
             .and_then(|t| t.similar(objective, k).ok())
             .unwrap_or_default();
 
-        if skills.is_empty() && episodes.is_empty() {
+        let novel = assessment.as_ref().is_some_and(|a| a.novel);
+        if skills.is_empty() && episodes.is_empty() && !novel {
             return None;
         }
 
         let mut block = String::from(
             "[Learned experience — verified results from this agent's past successful runs]\n",
         );
+        if let Some(a) = &assessment {
+            if a.novel {
+                if let Some(obs) = &self.obs {
+                    obs.metrics.counter("mushroom_novel_objectives_total").inc();
+                }
+                block.push_str(&format!(
+                    "No close precedent for this objective in memory (novelty {:.2}): treat it \
+                     as new — verify assumptions with tools before acting.\n",
+                    a.novelty
+                ));
+            } else if let Some(p) = a.success_prior {
+                block.push_str(&format!(
+                    "Objectives like this have been attempted before (novelty {:.2}); \
+                     {:.0}% of them succeeded.\n",
+                    a.novelty,
+                    p * 100.0
+                ));
+            }
+        }
         if !skills.is_empty() {
             block.push_str(
                 "Learned skills relevant to this task (prefer them over re-deriving the steps):\n",
@@ -2606,5 +2637,131 @@ mod notes_context_tests {
             ctx[1].content, "hi",
             "still one system message before the history"
         );
+    }
+}
+
+#[cfg(test)]
+mod mushroom_experience_tests {
+    use super::*;
+    use obc_memory::mushroom::MushroomConfig;
+    use obc_memory::trajectory::Embedder;
+
+    struct Silent;
+    #[async_trait::async_trait]
+    impl obc_providers::Provider for Silent {
+        fn name(&self) -> &str {
+            "silent"
+        }
+        async fn chat_completion(
+            &self,
+            _m: &[obc_providers::ChatMessage],
+            _t: &[Box<dyn Tool>],
+            c: &obc_providers::ProviderConfig,
+        ) -> Result<obc_providers::ChatCompletion> {
+            Ok(obc_providers::ChatCompletion {
+                message: String::new(),
+                tool_calls: vec![],
+                provider: "silent".into(),
+                model: c.model.clone(),
+                usage: None,
+            })
+        }
+    }
+
+    /// Doors on axis 0, weather on axis 1 (four dims: the body centres its
+    /// input, and a cell summing every dim of a centred vector reads zero).
+    struct Axes;
+    impl Embedder for Axes {
+        fn embed(&self, text: &str) -> Result<Vec<f32>> {
+            Ok(if text.contains("door") {
+                vec![1.0, 0.0, 0.0, 0.0]
+            } else if text.contains("weather") {
+                vec![0.0, 1.0, 0.0, 0.0]
+            } else {
+                vec![0.0, 0.0, 1.0, 0.0]
+            })
+        }
+    }
+
+    fn episode(id: &str, objective: &str, outcome: Outcome) -> Episode {
+        Episode {
+            id: id.into(),
+            session_id: "s".into(),
+            objective: objective.into(),
+            steps: vec![EpisodeStep {
+                tool: "gpio_write".into(),
+                args: serde_json::json!({"pin": 4}),
+                result: "ok".into(),
+                ok: true,
+            }],
+            outcome,
+            // Novelty recovers against the real clock; an episode stamped
+            // `1` would be fifty years forgotten.
+            ts_ms: now_ms(),
+            duration_ms: None,
+            tokens_est: None,
+        }
+    }
+
+    fn agent_with_store() -> (Agent, Arc<TrajectoryStore>) {
+        let mut store = TrajectoryStore::open_in_memory()
+            .unwrap()
+            .with_embedder(Box::new(Axes));
+        store
+            .attach_mushroom(MushroomConfig {
+                enabled: true,
+                warmup_episodes: 1,
+                kenyon_cells: 200,
+                inputs_per_cell: 2,
+                ..MushroomConfig::default()
+            })
+            .unwrap();
+        let store = Arc::new(store);
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
+        let agent = Agent::new(AgentConfig::default(), Arc::new(Silent), memory, vec![])
+            .with_trajectory_store(Arc::clone(&store))
+            .with_experience_retrieval(3);
+        (agent, store)
+    }
+
+    #[test]
+    fn a_cold_body_adds_nothing_to_the_prompt() {
+        let (agent, _) = agent_with_store();
+        assert_eq!(agent.experience_block("open the door", 3), None);
+    }
+
+    #[test]
+    fn an_objective_with_no_precedent_gets_the_novelty_line_and_nothing_else() {
+        let (agent, store) = agent_with_store();
+        store
+            .record(&episode("d1", "open the door", Outcome::Success))
+            .unwrap();
+        let block = agent
+            .experience_block("check the weather", 3)
+            .expect("novelty alone is worth a line");
+        assert!(block.contains("No close precedent"), "{block}");
+        assert!(!block.contains("Similar past successes"), "{block}");
+    }
+
+    #[test]
+    fn a_familiar_objective_gets_its_outcome_prior_beside_the_recipes() {
+        let (agent, store) = agent_with_store();
+        store
+            .record(&episode("d1", "open the door", Outcome::Success))
+            .unwrap();
+        store
+            .record(&episode("d2", "open the door", Outcome::Failure))
+            .unwrap();
+        store
+            .record(&episode("d3", "open the door", Outcome::Success))
+            .unwrap();
+        let block = agent.experience_block("open the door", 3).unwrap();
+        // Two rewards at learning-rate 0.2 leave a trace of 0.2 + 0.2·0.8 =
+        // 0.36 against one punishment's 0.2: 0.36 / 0.56 = 64%. The prior is a
+        // share of trace strength (saturating), not a count — which is why it
+        // is not 67%.
+        assert!(block.contains("64% of them succeeded"), "{block}");
+        assert!(block.contains("Similar past successes"), "{block}");
+        assert!(!block.contains("No close precedent"), "{block}");
     }
 }

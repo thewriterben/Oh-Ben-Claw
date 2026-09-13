@@ -830,6 +830,16 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                          `semantic` cargo feature — rebuild with `--features semantic`"
                     );
                 }
+                // Mushroom body over the same embeddings. Refuses without the
+                // semantic leg; the refusal is a warning here, not a silent no-op.
+                if config.self_improvement.mushroom.enabled {
+                    match store.attach_mushroom(config.self_improvement.mushroom.clone()) {
+                        Ok(()) => info!("mushroom body active (novelty + outcome prior)"),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "[self_improvement.mushroom] not attached")
+                        }
+                    }
+                }
                 trajectory_store = Some(Arc::new(store));
                 info!(path = %traj_path, "Phase 16 trajectory capture active");
             }
