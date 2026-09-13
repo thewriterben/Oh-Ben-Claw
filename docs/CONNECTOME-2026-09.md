@@ -84,10 +84,14 @@ Wired at two points: the ClawCam ingest path (novelty score attached to each det
 > `obc_agent::posture`: the mushroom body's novelty lowers a node's
 > thresholds before the model has said a word, and a familiar objective
 > restores them. Bench: novel → LED on, familiar → LED off, over LoRa, node
-> reply confirmed. What is *not* measured is the mushroom body on real
-> episodes — the brain has still not been run with `semantic = true` — so
-> the assessment feeding the policy on the bench was the one the body
-> would produce, not one it did. 4 waits for a moving node.
+> reply confirmed. The body has since been measured on the brain's own 94
+> embedded episodes (`crates/obc-memory/tests/mushroom_real_episodes.rs`):
+> as first shipped it could not call anything novel (first-seen median
+> 0.08, 0 of 74 at threshold 0.7); with warm-up centring, a sparser code
+> and a threshold set from that data it separates new objectives (0.31–0.75)
+> from rewordings of seen ones (≤ 0.24), repeats still ≤ 0.002. Not yet
+> measured: the body live in the running brain — the deployed binary
+> predates it. 4 waits for a moving node.
 
 ## 5. What I could not verify
 

@@ -175,13 +175,13 @@ impl TrajectoryStore {
         let replayed = rows.len();
         for (outcome, blob, ts_ms) in rows {
             let vec = bytes_to_floats(&blob);
-            let tag = body.tag(&vec)?;
-            body.observe(&tag, ts_ms as u64);
-            if let Some(v) = Outcome::from_str(&outcome).valence() {
-                body.reinforce(&tag, v);
-            }
+            body.experience(&vec, ts_ms as u64, Outcome::from_str(&outcome).valence())?;
         }
-        tracing::info!(replayed, "mushroom body attached to trajectory store");
+        tracing::info!(
+            replayed,
+            warm = body.warm(),
+            "mushroom body attached to trajectory store"
+        );
         self.mushroom = Some(Mutex::new(body));
         Ok(())
     }
@@ -296,15 +296,12 @@ impl TrajectoryStore {
             // The body sees the episode the same way replay will on the next
             // open: observed at its own timestamp, reinforced by its outcome.
             if let Some(body) = &self.mushroom {
-                let mut body = body.lock().unwrap();
-                match body.tag(&vec) {
-                    Ok(tag) => {
-                        body.observe(&tag, ep.ts_ms);
-                        if let Some(v) = ep.outcome.valence() {
-                            body.reinforce(&tag, v);
-                        }
-                    }
-                    Err(err) => tracing::warn!(error = %err, "mushroom body skipped an episode"),
+                if let Err(err) =
+                    body.lock()
+                        .unwrap()
+                        .experience(&vec, ep.ts_ms, ep.outcome.valence())
+                {
+                    tracing::warn!(error = %err, "mushroom body skipped an episode");
                 }
             }
         }
@@ -697,11 +694,14 @@ mod tests {
     struct MockEmbedder;
     impl Embedder for MockEmbedder {
         fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
-            // "door"-ish texts cluster on axis 0; "weather"-ish on axis 1.
+            // "door"-ish texts sit on axis 0, "weather"-ish on axis 1,
+            // "plant"-ish on axis 2; anything else between the first two.
             Ok(if text.contains("door") || text.contains("entrance") {
                 vec![1.0, 0.0, 0.0, 0.0]
             } else if text.contains("weather") || text.contains("forecast") {
                 vec![0.0, 1.0, 0.0, 0.0]
+            } else if text.contains("plant") {
+                vec![0.0, 0.0, 1.0, 0.0]
             } else {
                 vec![0.6, 0.6, 0.0, 0.0]
             })
@@ -725,10 +725,13 @@ mod tests {
         assert_eq!(hits[0].id, "d1", "paraphrase retrieved via embeddings");
     }
 
+    /// Two warm-up episodes: the centre is their mean, so the tests below
+    /// open with one door and one non-door episode (a mean of one vector
+    /// would centre that vector to zero).
     fn mushroom_cfg() -> MushroomConfig {
         MushroomConfig {
             enabled: true,
-            warmup_episodes: 1,
+            warmup_episodes: 2,
             kenyon_cells: 200,
             inputs_per_cell: 2,
             ..MushroomConfig::default()
@@ -759,7 +762,11 @@ mod tests {
 
         s.record(&ep("d1", "unlock the entrance", Outcome::Success, 5))
             .unwrap();
-        s.record(&ep("d2", "unlock the entrance", Outcome::Failure, 6))
+        // Still warming up: one episode in, no opinion yet.
+        assert!(!s.assess("open the door", 6).unwrap().novel);
+        s.record(&ep("p1", "water the plants", Outcome::Aborted, 6))
+            .unwrap();
+        s.record(&ep("d2", "unlock the entrance", Outcome::Failure, 7))
             .unwrap();
 
         // "open the door" embeds onto the same axis as the entrance episodes.
@@ -788,6 +795,8 @@ mod tests {
             .unwrap()
             .with_embedder(Box::new(MockEmbedder));
         s.attach_mushroom(mushroom_cfg()).unwrap();
+        s.record(&ep("p1", "water the plants", Outcome::Success, 4))
+            .unwrap();
         s.record(&ep("a", "unlock the entrance", Outcome::Aborted, 5))
             .unwrap();
         let a = s.assess("open the door", 5).unwrap();

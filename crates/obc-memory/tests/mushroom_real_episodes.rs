@@ -18,8 +18,9 @@
 //! Prints one line per episode and a summary: novelty distribution, how many
 //! objectives the body would have called novel after warm-up at the default
 //! threshold and at two others, how many `descend`s the posture policy would
-//! have sent (posture *changes*, not novel turns), and which objectives got
-//! an outcome prior.
+//! have sent (posture *changes*, not novel turns), which objectives got an
+//! outcome prior, the repeat-vs-new gap for the body as first shipped and as
+//! it is now, and the objectives nearest the threshold on either side.
 
 use obc_memory::mushroom::{MushroomBody, MushroomConfig, Valence};
 use rusqlite::{Connection, OpenFlags};
@@ -86,55 +87,29 @@ fn replay(rows: &[Row], threshold: f32) -> (Vec<(f32, bool, Option<f32>)>, usize
             novel_threshold: threshold,
             ..MushroomConfig::default()
         },
-        false,
     )
 }
 
-/// The same replay under any config, optionally subtracting the mean of
-/// all stored vectors first — the centering FlyHash prescribes (Dasgupta
-/// 2017 §"preprocessing": inputs are mean-centred before the random
-/// projection, because a shared component dominates the top-k otherwise).
-/// Batch mean here, which is a first look, not the deployable form.
-fn replay_with(
-    rows: &[Row],
-    cfg: MushroomConfig,
-    centre: bool,
-) -> (Vec<(f32, bool, Option<f32>)>, usize) {
-    let dim = rows[0].vec.len();
-    let mut mean = vec![0f32; dim];
-    if centre {
-        for r in rows {
-            for (m, v) in mean.iter_mut().zip(&r.vec) {
-                *m += v / rows.len() as f32;
-            }
-        }
-    }
-    let prep = |v: &[f32]| -> Vec<f32> { v.iter().zip(&mean).map(|(x, m)| x - m).collect() };
+/// The same replay under any config: exactly what `attach_mushroom` does on
+/// open, with `assess` asked before each episode goes in.
+fn replay_with(rows: &[Row], cfg: MushroomConfig) -> (Vec<(f32, bool, Option<f32>)>, usize) {
     let mut body = MushroomBody::new(cfg).unwrap();
     let mut out = Vec::new();
     let mut last_cautious: Option<bool> = None;
     let mut changes = 0;
     for r in rows {
-        let x = prep(&r.vec);
-        let r = &Row {
-            objective: r.objective.clone(),
-            outcome: r.outcome.clone(),
-            ts_ms: r.ts_ms,
-            vec: x,
-        };
         let a = body.assess(&r.vec, r.ts_ms as u64).unwrap();
         out.push((a.novelty, a.novel, a.success_prior));
         if last_cautious != Some(a.novel) {
             changes += 1;
             last_cautious = Some(a.novel);
         }
-        let tag = body.tag(&r.vec).unwrap();
-        body.observe(&tag, r.ts_ms as u64);
-        match r.outcome.as_str() {
-            "success" => body.reinforce(&tag, Valence::Rewarded),
-            "failure" => body.reinforce(&tag, Valence::Punished),
-            _ => {}
-        }
+        let valence = match r.outcome.as_str() {
+            "success" => Some(Valence::Rewarded),
+            "failure" => Some(Valence::Punished),
+            _ => None,
+        };
+        body.experience(&r.vec, r.ts_ms as u64, valence).unwrap();
     }
     (out, changes)
 }
@@ -194,7 +169,7 @@ fn the_body_on_the_brains_own_episodes() {
         after.len(),
         with_prior
     );
-    for t in [0.5f32, MushroomConfig::default().novel_threshold, 0.9] {
+    for t in [0.15f32, MushroomConfig::default().novel_threshold, 0.4] {
         let (p, ch) = replay(&rows, t);
         let novel = p.iter().skip(warmup).filter(|x| x.1).count();
         println!(
@@ -215,35 +190,39 @@ fn the_body_on_the_brains_own_episodes() {
         .iter()
         .map(|r| !seen.insert(r.objective.trim().to_string()))
         .collect();
-    let variants: Vec<(&str, MushroomConfig, bool)> = vec![
+    // `warmup_episodes = 0` is the body as first shipped: no centring. The
+    // "after warm-up" cut below is the default warm-up for every variant so
+    // the groups are the same episodes.
+    let variants: Vec<(&str, MushroomConfig)> = vec![
         (
-            "as shipped (2000 KC, 5%, raw)",
-            MushroomConfig::default(),
-            false,
-        ),
-        ("mean-centred", MushroomConfig::default(), true),
-        (
-            "sparser (20000 KC, 2%)",
+            "first shipped (2000 KC, 5%, raw)",
             MushroomConfig {
-                kenyon_cells: 20_000,
-                active_fraction: 0.02,
+                kenyon_cells: 2000,
+                active_fraction: 0.05,
+                warmup_episodes: 0,
                 ..MushroomConfig::default()
             },
-            false,
         ),
         (
-            "sparser + centred",
+            "centred only (2000 KC, 5%)",
             MushroomConfig {
-                kenyon_cells: 20_000,
-                active_fraction: 0.02,
+                kenyon_cells: 2000,
+                active_fraction: 0.05,
                 ..MushroomConfig::default()
             },
-            true,
         ),
+        (
+            "sparser only (20000 KC, 2%, raw)",
+            MushroomConfig {
+                warmup_episodes: 0,
+                ..MushroomConfig::default()
+            },
+        ),
+        ("now (defaults)", MushroomConfig::default()),
     ];
     println!("\nrepeat vs new, after warm-up (median novelty):");
-    for (name, cfg, centre) in variants {
-        let (p, _) = replay_with(&rows, cfg, centre);
+    for (name, cfg) in variants {
+        let (p, _) = replay_with(&rows, cfg);
         let mut rep: Vec<f32> = Vec::new();
         let mut new: Vec<f32> = Vec::new();
         for (i, x) in p.iter().enumerate().skip(warmup) {
@@ -265,10 +244,48 @@ fn the_body_on_the_brains_own_episodes() {
         let new_min = new.first().copied().unwrap_or(f32::NAN);
         let rep_max = rep.last().copied().unwrap_or(f32::NAN);
         println!(
-            "  {name:<32} repeats ({}) median {mr:.3} max {rep_max:.3}   new ({}) median {mn:.3} min {new_min:.3}   gap {:.3}",
+            "  {name:<34} repeats ({}) median {mr:.3} max {rep_max:.3}   new ({}) median {mn:.3} min {new_min:.3}   gap {:.3}",
             rep.len(),
             new.len(),
             mn - mr
         );
     }
+
+    // Where the threshold has to sit: the least-novel first-seen objectives
+    // and the most-novel repeats under the defaults, with their text, so a
+    // near-repeat ("Note 2 for the record") is judged by eye, not by string
+    // equality.
+    let (p, _) = replay_with(&rows, MushroomConfig::default());
+    let mut scored: Vec<(f32, usize)> = p
+        .iter()
+        .enumerate()
+        .skip(warmup)
+        .map(|(i, x)| (x.0, i))
+        .collect();
+    scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    let show = |(n, i): &(f32, usize)| {
+        let obj: String = rows[*i]
+            .objective
+            .chars()
+            .take(70)
+            .collect::<String>()
+            .replace('\n', " ");
+        println!(
+            "  {n:.3}  {:6}  {obj:?}",
+            if is_repeat[*i] { "repeat" } else { "new" }
+        );
+    };
+    println!("\nleast novel first-seen objectives (defaults):");
+    scored
+        .iter()
+        .filter(|s| !is_repeat[s.1])
+        .take(10)
+        .for_each(show);
+    println!("most novel repeats (defaults):");
+    scored
+        .iter()
+        .rev()
+        .filter(|s| is_repeat[s.1])
+        .take(5)
+        .for_each(show);
 }

@@ -3219,11 +3219,11 @@ nodes = [{ node_id = "obc-esp32-s3-001", slots = [0] }]
 [self_improvement.mushroom]
 enabled = true
 seed = 7
-kenyon_cells = 2000
+kenyon_cells = 20000
 inputs_per_cell = 6
-active_fraction = 0.05
+active_fraction = 0.02
 novelty_half_life_ms = 604800000
-novel_threshold = 0.7
+novel_threshold = 0.25
 learning_rate = 0.2
 warmup_episodes = 20
 prior_min_coverage = 0.5

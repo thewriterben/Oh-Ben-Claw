@@ -193,6 +193,31 @@ timeout_secs = 30
 # curate = true
 # archive_after_days = 30
 # max_enabled_learned = 40
+#
+# `semantic = true` adds a local embedding of every objective (build with
+# `--features semantic`) — the dense retrieval leg, and what the mushroom
+# body below hashes.
+# semantic = true
+#
+# The mushroom body (walkthrough §A5g): a sparse-expansion memory over those
+# embeddings that tells the reasoner, before it sees an objective, whether
+# anything like it has been done and how that tended to end — and feeds
+# [descending]. Rebuilt from the stored episodes on every open; nothing to
+# persist. Defaults were set on the brain's own episodes
+# (`crates/obc-memory/tests/mushroom_real_episodes.rs`): the first
+# warmup_episodes fix the centre the body subtracts from every embedding,
+# and novel_threshold sits between rewordings of a seen objective (≤ 0.24)
+# and objectives with no precedent (≥ 0.31). Every key is optional.
+# [self_improvement.mushroom]
+# enabled = true
+# kenyon_cells = 20000
+# active_fraction = 0.02
+# inputs_per_cell = 6
+# warmup_episodes = 20
+# novel_threshold = 0.25
+# novelty_half_life_ms = 604800000   # a week
+# learning_rate = 0.2
+# prior_min_coverage = 0.5
 
 # ── Perception ───────────────────────────────────────────────────────────────
 [perception]

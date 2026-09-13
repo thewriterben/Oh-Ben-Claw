@@ -5,6 +5,57 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The mushroom body can tell a new objective from a reworded one (2026-09-13)
+
+The fix the measurement below asked for. Three changes to
+`obc_memory::mushroom`, each set by the same replay of the brain's 94 real
+episodes rather than by choice:
+
+- **Centring.** Sentence embeddings share a large common vector, and a
+  random projection of it is what wins the top-k — every objective hashed
+  to nearly the same cells. The body now holds its first `warmup_episodes`
+  back, fixes their mean as its *centre*, subtracts it from every embedding
+  before hashing, and tags the held episodes with it in order. The centre
+  is fixed once, so every tag the body holds was made the same way, and
+  the body stays a pure function of (stored episodes in time order,
+  config): replay at attach and live recording give the same state, which
+  is now a unit test (`the_same_sequence_gives_the_same_body_however_it_
+  was_split`). This is the "all-but-the-top" correction (Mu & Viswanath
+  2018), not a fly mechanism; the module says so. While warming up the
+  body has no opinion — novelty 1.0, not novel, no prior — and `tag`
+  refuses, since a tag made without the centre would match nothing.
+- **Sparser defaults.** `kenyon_cells` 2 000 → 20 000, `active_fraction`
+  0.05 → 0.02 (400 active cells per tag instead of 100 of 2 000).
+- **Threshold from data.** `novel_threshold` 0.7 → 0.25.
+
+**Measured** (`tests/mushroom_real_episodes.rs`, same 94 episodes, same
+prequential replay, after the 20-episode warm-up): first-seen objectives
+median 0.082 → **0.278**; exact repeats still ≤ 0.002. The first look last
+entry reported 0.404 with a batch mean over all 94 vectors; the deployable
+form — the mean of the first 20 — gives less, and 0.278 is the number that
+ships. Where the line sits: rewordings of something seen ("Note 2 for the
+record" after "Note 1", the second browser task like the first, a URL
+variant, "what is today's date" after "what time is it") score 0.06–0.24;
+objectives with no precedent ("Tell me a fact about insects", "Every
+weekday at 8 check the printer", `pip install neuprint-python`) 0.31–0.75.
+At 0.25 the body calls 31 of 74 post-warm-up episodes novel — a store of
+scattered bench-testing is one-third new ground — and the posture policy
+would have sent 33 `descend`s in 94 turns (0.15: 41 novel / 25 sends;
+0.40: 14 / 25). Not claimed: that 0.25 is right for a store that is not
+this one; the harness is how to re-set it. Not measured: the body running
+live in the brain — the release binary predates it.
+
+### Changed (`obc-memory`)
+
+- `MushroomBody::experience(x, now_ms, valence)` is the one way an episode
+  enters (replaces external `observe` + `reinforce`); `warm()` says whether
+  the centre is fixed. `TrajectoryStore::attach_mushroom` and `record` use
+  it. The synthetic retention measurement pins the fly-scale 2 000/5 %
+  circuit explicitly — its claim is the mechanism, and 20 seeds at 20 000
+  cells took over a minute in debug.
+- `config.example.toml` gains the `[self_improvement.mushroom]` block and
+  `semantic = true`, both commented, with the measured defaults.
+
 ## Unreleased — The mushroom body measured on real episodes: it cannot yet call anything novel (2026-09-13)
 
 The brain has been recording embedded episodes since 2026-09-11 — 94 of

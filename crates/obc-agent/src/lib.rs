@@ -2760,7 +2760,9 @@ mod mushroom_experience_tests {
         store
             .attach_mushroom(MushroomConfig {
                 enabled: true,
-                warmup_episodes: 1,
+                // Two warm-up episodes: the tests open with a door and a
+                // plant episode, whose mean is the body's centre.
+                warmup_episodes: 2,
                 kenyon_cells: 200,
                 inputs_per_cell: 2,
                 ..MushroomConfig::default()
@@ -2786,6 +2788,14 @@ mod mushroom_experience_tests {
         store
             .record(&episode("d1", "open the door", Outcome::Success))
             .unwrap();
+        assert_eq!(
+            agent.experience_block("check the weather", 3),
+            None,
+            "one episode in, the body is still warming up"
+        );
+        store
+            .record(&episode("p1", "water the plants", Outcome::Success))
+            .unwrap();
         let block = agent
             .experience_block("check the weather", 3)
             .expect("novelty alone is worth a line");
@@ -2798,6 +2808,9 @@ mod mushroom_experience_tests {
         let (agent, store) = agent_with_store();
         store
             .record(&episode("d1", "open the door", Outcome::Success))
+            .unwrap();
+        store
+            .record(&episode("p1", "water the plants", Outcome::Success))
             .unwrap();
         store
             .record(&episode("d2", "open the door", Outcome::Failure))
