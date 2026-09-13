@@ -1,10 +1,11 @@
-//! Spine frame authentication — the primitive, ahead of the wire format.
+//! Spine frame authentication — the primitive both ends of the spine share.
 //!
-//! Step 2 of `OBC-Prime/docs/SPINE-AUTH.md`: *"Node-side HMAC-SHA256 …
-//! verified against a host-side test vector. **No wire change yet.**"* Nothing
-//! here is sent or checked on any link. It is the shared arithmetic both ends
-//! will use in step 4, landed first so that host and node can be proven to agree
-//! before either starts depending on the other being right.
+//! Step 2 of `OBC-Prime/docs/SPINE-AUTH.md` landed this ahead of the wire
+//! format so host and node could be proven to agree before either depended
+//! on the other. Since step 4 (2026-09-13) it is on the wire: the Heltec
+//! stations tag every LoRa frame with it (`auth.rs`, the mirror), and
+//! `obc_spine::lora_gateway::LoraAuth` verifies each frame again on the host
+//! with this copy. `frame_auth` uses it for MQTT and P2P tool calls.
 //!
 //! The mirror is `firmware/heltec-lora-linktest/src/auth.rs`, and
 //! `tests/spine_auth_vectors.rs` compiles both and fails if they ever disagree —
@@ -53,6 +54,15 @@ pub fn derive_node_key(root_secret: &[u8], node_id: &str) -> [u8; 32] {
     hk.expand(node_id.as_bytes(), &mut key)
         .expect("32 bytes is a valid HKDF-SHA256 output length");
     key
+}
+
+/// Two bytes of SHA-256 over the root secret: enough to tell at a glance
+/// whether the host and a station were provisioned with the same secret
+/// (the stations print theirs at boot), far too little to recover it.
+pub fn root_fingerprint(root_secret: &[u8]) -> u16 {
+    use sha2::Digest;
+    let d = Sha256::digest(root_secret);
+    u16::from_be_bytes([d[0], d[1]])
 }
 
 /// The authenticated bytes: `src ‖ ctr(big-endian) ‖ payload`.

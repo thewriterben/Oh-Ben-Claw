@@ -213,6 +213,11 @@ const KEEPALIVE_HOLDOFF_AFTER_CMD_MS: u64 = 3_000;
 /// echo being dropped as a dup; a true 3rd hop needs a node out of direct range.)
 const SPINE_TTL: u8 = 2;
 
+/// The tag as sixteen lowercase hex digits, for the console line.
+fn hex16(mac: &[u8; spine::MAC_LEN]) -> String {
+    mac.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn now_ms() -> u64 {
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000) as u64
 }
@@ -533,9 +538,22 @@ fn main() -> anyhow::Result<()> {
                         // Safe to add: the host parser reads these by key
                         // (`field_after(rest, "rssi=")`), not by position, and splits
                         // the payload on " : " which still follows.
+                        // `ctr=` and `mac=` are on the line so the host can verify
+                        // the same tag this station just verified, rather than
+                        // trusting this console (`lora_gateway::LoraAuth`). The
+                        // host parser reads fields by key, so their position is
+                        // free; the payload still follows " : " and precedes the
+                        // colour reset, and is printed byte for byte — the host
+                        // verifies over exactly what it sees between the two.
                         info!(
-                            "SPINE ◄ src={:02X} seq={} ctr={} rssi={} dBm snr={} dB : {}",
-                            f.src, f.seq, f.ctr, rx.rssi_dbm, rx.snr_db, txt
+                            "SPINE ◄ src={:02X} seq={} ctr={} mac={} rssi={} dBm snr={} dB : {}",
+                            f.src,
+                            f.seq,
+                            f.ctr,
+                            hex16(&f.mac),
+                            rx.rssi_dbm,
+                            rx.snr_db,
+                            txt
                         );
                         // Forward the payload to the wired compute node.
                         let _ = uart.write(f.payload);

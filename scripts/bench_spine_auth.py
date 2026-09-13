@@ -44,7 +44,7 @@ import serial
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-RX = re.compile(r"SPINE ◄ src=([0-9A-F]{2}) seq=(\d+) ctr=(\d+) rssi=(-?\d+) dBm")
+RX = re.compile(r"SPINE ◄ src=([0-9A-F]{2}) seq=(\d+) ctr=(\d+) (?:mac=[0-9a-f]{16} )?rssi=(-?\d+) dBm")
 REJECTED = re.compile(r"SPINE ◄ REJECTED src=([0-9A-F]{2}) ctr=(\d+) rssi=(-?\d+) dBm \((\d+) B\): (.*)")
 TX = re.compile(r"SPINE ► \((\w+)\) seq=(\d+)")
 RESUMED = re.compile(r"frame counter resumed at (\d+)")

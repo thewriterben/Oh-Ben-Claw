@@ -488,6 +488,45 @@ the bridge 5/5 base frames, all `bad tag`, 0 accepted.
 > with the jitter in. The ~1-in-5 loss measured on 2026-09-12 was very
 > likely this mechanism in a milder phase; watch the retry counts.
 
+### A5e. The host verifies what the base station heard
+
+**What it proves:** the trust boundary is no longer a USB cable. The base
+station prints each frame's `ctr=` and `mac=`; the host's
+`lora_gateway::LoraAuth` verifies the tag again under the deployment root,
+judges the counter against a per-station window persisted in world memory
+(`spine.auth.gw-XX`, M = 1), and only then ingests. Under a root the
+stations do not have, nothing lands. This is SPINE-AUTH.md §3.4's last
+bullet, and the test runs the production pieces — `open_split`,
+`run_gateway_rx`, world memory — not a re-implementation.
+
+**What it does not prove:** that the node ↔ bridge serial wire is
+authenticated (it is not; the bridge signs what it forwards), or anything
+about a base station that lies *consistently* — one that holds the root
+can sign what it likes. Track 0 on the node is the boundary for that.
+
+**Preconditions.** A5d done (both stations on the same root, base on COM3),
+the root at `~/.obc/spine_root`.
+
+```powershell
+$env:OBC_BASE_PORT = 'COM3'
+$env:OBC_SPINE_ROOT = (Get-Content $env:USERPROFILE\.obc\spine_root)
+cargo test --features hardware --test lora_gateway_live -- --ignored --nocapture --test-threads 1
+```
+
+The first test listens 40 s and wants ≥ 3 frames verified, 0 refused, and
+a `mesh.*` fact in world memory. The second listens 40 s under a root of
+zeros and wants 0 verified, ≥ 3 refused as `bad tag`, and *no* `mesh.*`
+fact. The host's log line `host root fingerprint XXXX` must match the
+stations' boot logs.
+
+**Run 2026-09-13: 2/2.** Under the stations' root (fingerprint `c4cd`):
+gw-40 `accepted 9, rejected 0`, high-water mark 1447, `mesh.gw-40` and
+`mesh.obc-esp32-s3-001` in world memory. Under zeros (fingerprint `60e0`):
+`accepted 0, rejected 9`, every reason `bad tag`, no `mesh.*` fact. The
+second test's port open needed a retry loop: the first test's serial
+thread lets go of the port only when its next line fails to send, up to
+one keepalive later.
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**

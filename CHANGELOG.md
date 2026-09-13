@@ -5,6 +5,57 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The host verifies the base station's frames itself (2026-09-13)
+
+SPINE-AUTH.md §3.4, the last bullet. Step 4 put a tag on every LoRa frame
+and the stations verified it; the host still took the base station's USB
+console at its word, so the trust boundary sat at a cable. Now the base
+prints each frame's `ctr=` and `mac=`, and `lora_gateway::LoraAuth`
+verifies the tag again under the deployment root and judges the counter
+against a per-station window persisted in world memory (M = 1) before a
+byte reaches `mesh.*`. No root, no gateway: the host refuses to start it
+and says what to set. Bench (walkthrough §A5e, `tests/lora_gateway_live.rs`
+on the production path): under the stations' root 9 frames verified, 0
+refused, `mesh.*` facts landed; under a root of zeros 0 verified, 9
+refused as `bad tag`, nothing landed.
+
+### Added
+
+- `lora_gateway::LoraAuth` — `from_config(spine_root, spine_root_file)`,
+  `admit(frame, world, now)` → `Ok` or `LoraRefused::{Unsigned, BadTag,
+  Replayed, TooOld}`; keys derived per station (`gw-XX`) with
+  `obc_safety::spine_tag`, the same arithmetic the stations run; the
+  `spine.auth.gw-XX` fact carries `ctr` (the resumed high-water mark),
+  `accepted`, `rejected`, `last_rejected`. Rejections are one warn line
+  each and are on the fact for reflexes and `status` (SPINE-REPLAY.md
+  §5.3–4, answered: a rejection is a fact).
+- `obc_safety::replay::ReplayWindow::resume(source, highest)` — a window
+  resumed from a persisted mark starts with its bitmap full, refusing
+  everything at or below the mark.
+- `obc_safety::spine_tag::root_fingerprint` — the two bytes the stations
+  print at boot, now printed by the host at gateway start.
+- `[lora_gateway] spine_root_file` (preferred) / `spine_root`. `~/` expands.
+- `GatewayFrame` gained `ctr`, `mac`, and `signed` (the payload exactly as
+  printed, which is what the tag covers); `_mesh.ctr` on ingested facts.
+- `tests/lora_gateway_live.rs` — two `#[ignore]`d bench tests that run
+  `open_split` + `run_gateway_rx` against the real base station: every
+  frame verifies and lands; under a root of zeros nothing does.
+
+### Changed
+
+- `run_gateway_rx` takes a `LoraAuth`; the serial path is parse → admit →
+  ingest, with no unverified branch. `ingest_gateway_line` remains for the
+  parse-and-ingest tests and the e2e harness and says so.
+- Station log line: `mac=` after `ctr=`; `bench_spine_auth.py` accepts it.
+
+### Not claimed
+
+- The node ↔ bridge serial wire (unauthenticated; the bridge signs what it
+  forwards). A base station that holds the root can sign what it likes;
+  Track 0 on the node is the boundary for that.
+- `NodePairingManager` and `security/trust.rs` still do not consume
+  `spine.auth.*`; the fact is there for them.
+
 ## Unreleased — Every spine frame is authenticated (2026-09-13)
 
 SPINE-AUTH.md step 4. The wire between the Heltec stations is now

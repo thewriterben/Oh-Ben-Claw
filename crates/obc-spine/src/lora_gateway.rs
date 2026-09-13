@@ -12,6 +12,21 @@
 //! and reflex/safing reports heard across the mesh land in the brain's world model,
 //! exactly as if the node were on the wired MQTT spine.
 //!
+//! Since 2026-09-13 every frame on the air is authenticated (SPINE-AUTH.md
+//! step 4) and the station prints the frame's `ctr=` and `mac=` on the line:
+//!
+//! ```text
+//! SPINE ◄ src=40 seq=67 ctr=835 mac=1f0e…c3 rssi=-50 dBm snr=12 dB : {"type":…}
+//! ```
+//!
+//! [`LoraAuth`] verifies that tag *again* on the host, under the same root
+//! the stations hold, and judges the counter against a per-station window
+//! persisted in world memory — so the host trusts the station's radio, not
+//! its console: a replaced or replayed base station cannot put a frame into
+//! world memory that a station's key did not sign. A line without a tag is
+//! refused, not tolerated; there is no unverified ingest path from the
+//! serial loop.
+//!
 //! It is deliberately the *inverse* of [`super::lora_mesh`]: that module speaks OBC's
 //! compact fleet codec (`{"t":"hb"}` heartbeats / `{"t":"as"}` assignments); this one
 //! ingests the node's own autonomous JSON (`{"type":…,"node_id":…}`) as reported by
@@ -30,10 +45,19 @@ pub struct GatewayFrame {
     pub src: u8,
     /// Per-source sequence, from `seq=`.
     pub seq: u8,
+    /// The frame counter the tag covers, from `ctr=`. `None` on a line from
+    /// a station running firmware older than step 4 — which [`LoraAuth`]
+    /// refuses.
+    pub ctr: Option<u32>,
+    /// The frame's tag, from `mac=` (sixteen hex digits). `None` as above.
+    pub mac: Option<[u8; obc_safety::spine_tag::TAG_LEN]>,
     /// Received signal strength in dBm, from `rssi=`.
     pub rssi_dbm: i32,
-    /// The raw node payload after the ` : ` delimiter (expected to be JSON).
+    /// The node payload after the ` : ` delimiter, trimmed (expected to be JSON).
     pub payload: String,
+    /// The payload exactly as the station printed it — untrimmed — which is
+    /// what the tag was computed over. Verification uses this, not `payload`.
+    pub signed: String,
 }
 
 /// A summary of what an ingested line contributed to world memory.
@@ -88,18 +112,36 @@ pub fn parse_gateway_line(line: &str) -> Option<GatewayFrame> {
     // Real console lines end with an ANSI color-reset (`\x1b[0m`) AFTER the
     // payload — trailing escape bytes break serde_json, so cut at the first ESC
     // (bench-caught 2026-07-17: every frame silently failed to ingest).
-    let payload = rest
-        .split_once(" : ")
-        .map(|(_, p)| p.split('\u{1b}').next().unwrap_or("").trim().to_string())?;
+    let (header, signed) = rest.split_once(" : ")?;
+    let signed = signed.split('\u{1b}').next().unwrap_or("").to_string();
+    let payload = signed.trim().to_string();
     if payload.is_empty() {
         return None;
     }
+    // The authentication fields live in the header, before the payload, so a
+    // payload that happens to contain "ctr=" cannot supply them.
+    let ctr: Option<u32> =
+        field_after(header, "ctr=").and_then(|s| leading(s, |c| c.is_ascii_digit()).parse().ok());
+    let mac = field_after(header, "mac=").and_then(|s| {
+        let hex = leading(s, |c| c.is_ascii_hexdigit());
+        if hex.len() != 2 * obc_safety::spine_tag::TAG_LEN {
+            return None;
+        }
+        let mut out = [0u8; obc_safety::spine_tag::TAG_LEN];
+        for (i, b) in out.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()?;
+        }
+        Some(out)
+    });
 
     Some(GatewayFrame {
         src,
         seq,
+        ctr,
+        mac,
         rssi_dbm: rssi,
         payload,
+        signed,
     })
 }
 
@@ -172,7 +214,19 @@ pub fn parse_clawcam_summary(payload: &str) -> Option<ClawCamSummary> {
 pub const SOURCE: &str = "lora-gateway";
 
 /// Parse one gateway console line and, if it carries a node message, ingest it into
-/// world memory. Writes two facts, both valid *now*:
+/// world memory **without verifying it**. The serial loop does not call this;
+/// it goes through [`LoraAuth::admit`] first and then [`ingest_frame`]. This
+/// exists for the parse-and-ingest tests and the e2e harness, which exercise
+/// what a verified frame becomes in world memory, not whether it was verified.
+///
+/// Returns a [`GatewayIngest`] summary, or `None` for non-`◄` or non-JSON lines.
+pub fn ingest_gateway_line(line: &str, world: &WorldMemory, now_ms: u64) -> Option<GatewayIngest> {
+    let frame = parse_gateway_line(line)?;
+    ingest_frame(&frame, world, now_ms)
+}
+
+/// Ingest a parsed (and, on the serial path, verified) frame into world
+/// memory. Writes two facts, both valid *now*:
 ///
 /// - `mesh.<node_id>.<type>` — the node's payload (augmented with a `_mesh`
 ///   envelope carrying `src`/`seq`/`rssi_dbm`), so per-message-type state is queryable.
@@ -180,18 +234,251 @@ pub const SOURCE: &str = "lora-gateway";
 ///   `last_type`), so `current("mesh.<node_id>")` answers "is this node alive, and
 ///   how strong is the mesh link?".
 ///
-/// Returns a [`GatewayIngest`] summary, or `None` for non-`◄` or non-JSON lines.
-pub fn ingest_gateway_line(line: &str, world: &WorldMemory, now_ms: u64) -> Option<GatewayIngest> {
-    let frame = parse_gateway_line(line)?;
+/// Returns `None` for a payload that is neither node JSON nor a ClawCam summary.
+pub fn ingest_frame(
+    frame: &GatewayFrame,
+    world: &WorldMemory,
+    now_ms: u64,
+) -> Option<GatewayIngest> {
     // Node JSON (`{"type":…}`) is the common case; a ClawCam `CC|…` field summary is the
     // camera-on-mesh case (G2). Anything else is ignored.
     if let Ok(payload) = serde_json::from_str::<Value>(&frame.payload) {
-        return Some(ingest_node_json(&frame, payload, world, now_ms));
+        return Some(ingest_node_json(frame, payload, world, now_ms));
     }
     if let Some(summary) = parse_clawcam_summary(&frame.payload) {
-        return Some(ingest_clawcam_summary(&frame, summary, world, now_ms));
+        return Some(ingest_clawcam_summary(frame, summary, world, now_ms));
     }
     None
+}
+
+// ── Host-side verification of what the base station heard ───────────────────
+//
+// SPINE-AUTH.md §3.4, the last bullet. The stations verify every frame on the
+// air (step 4); until this existed the host took the base station's console
+// at its word, so the trust boundary sat at a USB cable. Now the host verifies
+// the same tag under the same root, and the base is a transcriber the host can
+// check rather than an oracle it has to believe.
+
+/// Why [`LoraAuth`] refused a line. Each is a distinct operator message and a
+/// distinct field in the `spine.auth.<station>` fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoraRefused {
+    /// The line carries no `ctr=`/`mac=`: a station running firmware older
+    /// than step 4, or a console that is not a station's. Refused rather
+    /// than tolerated — see SPINE-AUTH.md §4 on permissive modes.
+    Unsigned,
+    /// The tag does not verify under the key derived for `src`: a different
+    /// root, a forgery, or a console line altered in transit.
+    BadTag,
+    /// The counter was already accepted: a replay of a line the host has
+    /// seen — which the station's own window would have caught on the air,
+    /// so on this path it means the console, not the radio.
+    Replayed,
+    /// Older than the window can judge.
+    TooOld,
+}
+
+impl LoraRefused {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LoraRefused::Unsigned => "unsigned (no ctr=/mac= on the line: pre-step-4 firmware?)",
+            LoraRefused::BadTag => "bad tag (wrong root, forged, or altered)",
+            LoraRefused::Replayed => "counter already accepted (replayed)",
+            LoraRefused::TooOld => "counter older than the receive window",
+        }
+    }
+}
+
+/// Prefix of the per-station facts this verifier writes.
+pub const AUTH_FACT_PREFIX: &str = "spine.auth.";
+
+/// Host-side authentication of station frames: the tag under the deployment
+/// root, and an anti-replay window per station persisted in world memory
+/// with `M = 1` (`SPINE-REPLAY.md` §3: the host has SQLite and no wear
+/// problem, so it persists every accept and loses nothing on restart).
+///
+/// The fact `spine.auth.gw-XX` holds `{ctr, accepted, rejected, last_rejected}`:
+/// `ctr` is the persisted high-water mark the window resumes from, and the
+/// rest is what an operator (or a reflex) needs to notice a station that is
+/// sending frames the host will not take.
+pub struct LoraAuth {
+    root: Vec<u8>,
+    keys: std::collections::HashMap<u8, [u8; 32]>,
+    window: obc_safety::replay::ReplayWindow,
+    /// Stations whose window has been resumed from world memory.
+    resumed: std::collections::HashSet<u8>,
+    tally: std::collections::HashMap<u8, Tally>,
+}
+
+/// What the `spine.auth.<station>` fact carries besides the counter.
+#[derive(Debug, Clone, Default)]
+struct Tally {
+    accepted: u64,
+    rejected: u64,
+    last_rejected: Option<Value>,
+}
+
+impl LoraAuth {
+    /// Shortest root accepted — the stations enforce the same at build time.
+    pub const MIN_ROOT_LEN: usize = 32;
+
+    /// From the deployment root as a string (the same bytes the stations
+    /// were built with in `OBC_SPINE_ROOT`).
+    pub fn new(root: &str) -> anyhow::Result<Self> {
+        let root = root.trim();
+        anyhow::ensure!(
+            root.len() >= Self::MIN_ROOT_LEN,
+            "spine root is {} characters; the stations require at least {} \
+             (`openssl rand -hex 32`)",
+            root.len(),
+            Self::MIN_ROOT_LEN
+        );
+        Ok(Self {
+            root: root.as_bytes().to_vec(),
+            keys: Default::default(),
+            window: obc_safety::replay::ReplayWindow::new(),
+            resumed: Default::default(),
+            tally: Default::default(),
+        })
+    }
+
+    /// From `[lora_gateway]`: `spine_root_file` (preferred — the secret stays
+    /// out of the config) or `spine_root` inline. Exactly one must be set;
+    /// without a root there is no verifying, and no unverified path.
+    pub fn from_config(inline: Option<&str>, file: Option<&str>) -> anyhow::Result<Self> {
+        match (inline, file) {
+            (Some(_), Some(_)) => {
+                anyhow::bail!("[lora_gateway] set spine_root or spine_root_file, not both")
+            }
+            (Some(root), None) => Self::new(root),
+            (None, Some(path)) => {
+                let expanded = expand_home(path);
+                let root = std::fs::read_to_string(&expanded).map_err(|e| {
+                    anyhow::anyhow!("[lora_gateway] spine_root_file {expanded}: {e}")
+                })?;
+                Self::new(&root)
+            }
+            (None, None) => anyhow::bail!(
+                "[lora_gateway] spine_root_file (or spine_root) is required: every station \
+                 frame has been authenticated since 2026-09-13 (SPINE-AUTH.md step 4) and \
+                 the host verifies each one under the same root the stations were built \
+                 with (OBC_SPINE_ROOT). There is no unverified ingest path."
+            ),
+        }
+    }
+
+    /// Two bytes of SHA-256 over the root — the same fingerprint the stations
+    /// print at boot, so a mismatch is visible before the first rejection.
+    pub fn fingerprint(&self) -> u16 {
+        obc_safety::spine_tag::root_fingerprint(&self.root)
+    }
+
+    /// The station id a `src` byte denotes, as the stations name themselves.
+    pub fn station(src: u8) -> String {
+        format!("gw-{src:02X}")
+    }
+
+    fn key_for(&mut self, src: u8) -> [u8; 32] {
+        let root = &self.root;
+        *self
+            .keys
+            .entry(src)
+            .or_insert_with(|| obc_safety::spine_tag::derive_node_key(root, &Self::station(src)))
+    }
+
+    /// Verify `frame` and judge its counter, persisting the window's
+    /// high-water mark and the outcome to world memory. `Ok` means the
+    /// payload may be ingested; `Err` says why it must not be, and the same
+    /// reason is on the `spine.auth.<station>` fact.
+    pub fn admit(
+        &mut self,
+        frame: &GatewayFrame,
+        world: &WorldMemory,
+        now_ms: u64,
+    ) -> Result<(), LoraRefused> {
+        let station = Self::station(frame.src);
+        let key_name = format!("{AUTH_FACT_PREFIX}{station}");
+        if !self.resumed.contains(&frame.src) {
+            // First frame from this station since the host started: resume
+            // its window from the persisted mark, or start fresh.
+            if let Ok(Some(fact)) = world.current(&key_name) {
+                if let Some(h) = fact.value.get("ctr").and_then(Value::as_u64) {
+                    self.window.resume(&station, h as u32);
+                }
+                let v = &fact.value;
+                self.tally.insert(
+                    frame.src,
+                    Tally {
+                        accepted: v.get("accepted").and_then(Value::as_u64).unwrap_or(0),
+                        rejected: v.get("rejected").and_then(Value::as_u64).unwrap_or(0),
+                        last_rejected: v.get("last_rejected").filter(|r| !r.is_null()).cloned(),
+                    },
+                );
+            }
+            self.resumed.insert(frame.src);
+        }
+
+        let verdict = match (frame.ctr, frame.mac) {
+            (Some(ctr), Some(mac)) => {
+                let key = self.key_for(frame.src);
+                if !obc_safety::spine_tag::verify(
+                    &key,
+                    frame.src,
+                    ctr,
+                    frame.signed.as_bytes(),
+                    &mac,
+                ) {
+                    Err(LoraRefused::BadTag)
+                } else {
+                    // Tag first, counter second: an unsigned counter must not
+                    // be able to move the window.
+                    use obc_safety::replay::ReplayVerdict;
+                    match self.window.admit(&station, ctr) {
+                        ReplayVerdict::Fresh => Ok(()),
+                        ReplayVerdict::Duplicate => Err(LoraRefused::Replayed),
+                        ReplayVerdict::TooOld => Err(LoraRefused::TooOld),
+                    }
+                }
+            }
+            _ => Err(LoraRefused::Unsigned),
+        };
+
+        let tally = self.tally.entry(frame.src).or_default();
+        match verdict {
+            Ok(()) => tally.accepted += 1,
+            Err(why) => {
+                tally.rejected += 1;
+                tally.last_rejected = Some(json!({
+                    "ctr": frame.ctr,
+                    "reason": why.as_str(),
+                    "at_ms": now_ms,
+                    "rssi_dbm": frame.rssi_dbm,
+                }));
+            }
+        }
+        // Written on every frame, accepted or not: `ctr` is the persisted
+        // high-water mark (M = 1), the rest is the operator's view.
+        let fact = json!({
+            "station": station,
+            "ctr": self.window.highest(&station),
+            "accepted": tally.accepted,
+            "rejected": tally.rejected,
+            "last_rejected": tally.last_rejected,
+        });
+        let _ = world.observe_as(&key_name, fact, now_ms, now_ms, SOURCE, Origin::Observed);
+        verdict
+    }
+}
+
+/// `~/x` → `<home>/x`; anything else unchanged.
+fn expand_home(path: &str) -> String {
+    match path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        Some(rest) => match std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+            Ok(home) => format!("{home}/{rest}"),
+            Err(_) => path.to_string(),
+        },
+        None => path.to_string(),
+    }
 }
 
 /// Ingest a node's own JSON payload as `mesh.<node_id>.<type>` + a `mesh.<node_id>` rollup.
@@ -215,6 +502,7 @@ fn ingest_node_json(
     let mesh_meta = json!({
         "src": format!("{:02X}", frame.src),
         "seq": frame.seq,
+        "ctr": frame.ctr,
         "rssi_dbm": frame.rssi_dbm,
     });
 
@@ -444,7 +732,7 @@ pub trait CommandSink: Send + Sync {
 // port streamed happily. Boring beats async here.
 #[cfg(feature = "hardware")]
 mod serial {
-    use super::{ingest_gateway_line, CommandSink, NodeCommand};
+    use super::{ingest_frame, parse_gateway_line, CommandSink, LoraAuth, NodeCommand};
     use anyhow::Context;
     use obc_memory::world::WorldMemory;
     use std::io::{Read, Write};
@@ -567,10 +855,12 @@ mod serial {
         Ok((line_rx, cmd_tx))
     }
 
-    /// RX loop: take console lines off the reader-thread channel and bridge each
-    /// node message into world memory. Runs until the reader thread exits.
+    /// RX loop: take console lines off the reader-thread channel, verify each
+    /// received frame under the deployment root, and bridge the verified ones
+    /// into world memory. Runs until the reader thread exits.
     pub async fn run_gateway_rx<F>(
         mut lines: mpsc::Receiver<String>,
+        mut auth: LoraAuth,
         world: Arc<WorldMemory>,
         now_ms: F,
     ) where
@@ -584,13 +874,29 @@ mod serial {
                 "[lora_gateway] raw: {}",
                 line.chars().take(110).collect::<String>()
             );
-            if let Some(ing) = ingest_gateway_line(&line, &world, now_ms()) {
-                tracing::info!(
-                    node = %ing.node_id,
-                    msg = %ing.msg_type,
-                    rssi = ing.rssi_dbm,
-                    "LoRa gateway → world memory"
-                );
+            let Some(frame) = parse_gateway_line(&line) else {
+                continue;
+            };
+            let now = now_ms();
+            match auth.admit(&frame, &world, now) {
+                Ok(()) => {
+                    if let Some(ing) = ingest_frame(&frame, &world, now) {
+                        tracing::info!(
+                            node = %ing.node_id,
+                            msg = %ing.msg_type,
+                            rssi = ing.rssi_dbm,
+                            ctr = frame.ctr,
+                            "LoRa gateway → world memory (verified)"
+                        );
+                    }
+                }
+                Err(why) => tracing::warn!(
+                    station = %LoraAuth::station(frame.src),
+                    ctr = frame.ctr,
+                    rssi = frame.rssi_dbm,
+                    "[lora_gateway] REJECTED frame: {} — payload not ingested",
+                    why.as_str()
+                ),
             }
         }
     }
@@ -936,5 +1242,208 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("deer")
         );
+    }
+
+    // ── Host-side verification (SPINE-AUTH.md §3.4, last bullet) ─────────────
+
+    const ROOT: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// A console line as the base station prints it since step 4, tagged the
+    /// way the station tags it: key = HKDF(root, "gw-XX"), tag over
+    /// `src ‖ ctr ‖ payload` — computed with the host's `spine_tag`, which
+    /// `tests/spine_auth_vectors.rs` pins to the station's `auth.rs`.
+    fn signed_line(root: &str, src: u8, ctr: u32, payload: &str) -> String {
+        let key = obc_safety::spine_tag::derive_node_key(root.as_bytes(), &format!("gw-{src:02X}"));
+        let mac = obc_safety::spine_tag::tag(&key, src, ctr, payload.as_bytes());
+        let hex: String = mac.iter().map(|b| format!("{b:02x}")).collect();
+        format!(
+            "\u{1b}[0;32mI (93772) heltec_lora_linktest: SPINE ◄ src={src:02X} seq={} ctr={ctr} \
+             mac={hex} rssi=-50 dBm snr=12 dB : {payload}\u{1b}[0m",
+            ctr & 0xff
+        )
+    }
+
+    const KEEPALIVE: &str = r#"{"node_id":"gw-40","type":"gw_keepalive","seq":1}"#;
+
+    #[test]
+    fn a_step_4_line_parses_its_counter_and_tag() {
+        let f = parse_gateway_line(&signed_line(ROOT, 0x40, 835, KEEPALIVE)).unwrap();
+        assert_eq!(f.src, 0x40);
+        assert_eq!(f.seq, (835u32 & 0xff) as u8, "seq is the low byte of ctr");
+        assert_eq!(f.ctr, Some(835));
+        assert!(f.mac.is_some());
+        assert_eq!(f.payload, KEEPALIVE);
+        assert_eq!(f.signed, KEEPALIVE);
+    }
+
+    #[test]
+    fn a_pre_step_4_line_parses_without_them() {
+        let f = parse_gateway_line(REFLEX_LINE).unwrap();
+        assert_eq!(f.ctr, None);
+        assert_eq!(f.mac, None);
+    }
+
+    #[test]
+    fn a_ctr_in_the_payload_is_not_the_frames_counter() {
+        // The header is what carries ctr=/mac=; a payload that happens to
+        // contain the text must not be read as one.
+        let line = "SPINE ◄ src=40 seq=1 rssi=-50 dBm : {\"note\":\"ctr=999 mac=00\"}";
+        let f = parse_gateway_line(line).unwrap();
+        assert_eq!(f.ctr, None);
+        assert_eq!(f.mac, None);
+    }
+
+    #[test]
+    fn a_verified_frame_is_admitted_and_its_mark_persisted() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let mut auth = LoraAuth::new(ROOT).unwrap();
+        let f = parse_gateway_line(&signed_line(ROOT, 0x40, 835, KEEPALIVE)).unwrap();
+        assert_eq!(auth.admit(&f, &world, 1_000), Ok(()));
+        let fact = world
+            .current("spine.auth.gw-40")
+            .unwrap()
+            .expect("auth fact");
+        assert_eq!(fact.value["ctr"], 835);
+        assert_eq!(fact.value["accepted"], 1);
+        assert_eq!(fact.value["rejected"], 0);
+        assert!(fact.value["last_rejected"].is_null());
+    }
+
+    #[test]
+    fn a_frame_under_a_different_root_is_refused_as_a_bad_tag() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let mut auth = LoraAuth::new(ROOT).unwrap();
+        let other = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let f = parse_gateway_line(&signed_line(other, 0x40, 835, KEEPALIVE)).unwrap();
+        assert_eq!(auth.admit(&f, &world, 1_000), Err(LoraRefused::BadTag));
+        let fact = world.current("spine.auth.gw-40").unwrap().unwrap();
+        assert_eq!(fact.value["rejected"], 1);
+        assert_eq!(fact.value["last_rejected"]["ctr"], 835);
+        assert!(fact.value["last_rejected"]["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("bad tag"));
+        assert!(
+            fact.value["ctr"].is_null(),
+            "a bad tag must not move the window"
+        );
+    }
+
+    #[test]
+    fn an_altered_payload_fails_the_tag() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let mut auth = LoraAuth::new(ROOT).unwrap();
+        let line = signed_line(ROOT, 0x40, 835, KEEPALIVE).replace("\"seq\":1", "\"seq\":2");
+        let f = parse_gateway_line(&line).unwrap();
+        assert_eq!(auth.admit(&f, &world, 1_000), Err(LoraRefused::BadTag));
+    }
+
+    #[test]
+    fn an_unsigned_line_is_refused_not_tolerated() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let mut auth = LoraAuth::new(ROOT).unwrap();
+        let f = parse_gateway_line(REFLEX_LINE).unwrap();
+        assert_eq!(auth.admit(&f, &world, 1_000), Err(LoraRefused::Unsigned));
+    }
+
+    #[test]
+    fn the_same_counter_twice_is_a_replay_even_with_a_valid_tag() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let mut auth = LoraAuth::new(ROOT).unwrap();
+        let f = parse_gateway_line(&signed_line(ROOT, 0x40, 835, KEEPALIVE)).unwrap();
+        assert_eq!(auth.admit(&f, &world, 1_000), Ok(()));
+        assert_eq!(auth.admit(&f, &world, 1_001), Err(LoraRefused::Replayed));
+        let old = parse_gateway_line(&signed_line(ROOT, 0x40, 835 - 200, KEEPALIVE)).unwrap();
+        assert_eq!(auth.admit(&old, &world, 1_002), Err(LoraRefused::TooOld));
+        let fact = world.current("spine.auth.gw-40").unwrap().unwrap();
+        assert_eq!(fact.value["accepted"], 1);
+        assert_eq!(fact.value["rejected"], 2);
+    }
+
+    /// The host persists with M = 1: after a restart a new verifier resumes
+    /// from the fact and refuses everything at or below the mark, including
+    /// a replay of the very frame accepted before the restart.
+    #[test]
+    fn a_restarted_host_refuses_what_it_accepted_before() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let before = parse_gateway_line(&signed_line(ROOT, 0x40, 835, KEEPALIVE)).unwrap();
+        {
+            let mut auth = LoraAuth::new(ROOT).unwrap();
+            assert_eq!(auth.admit(&before, &world, 1_000), Ok(()));
+        }
+        // Restart: a fresh verifier over the same world memory.
+        let mut auth = LoraAuth::new(ROOT).unwrap();
+        assert_eq!(
+            auth.admit(&before, &world, 2_000),
+            Err(LoraRefused::Replayed)
+        );
+        let never_seen = parse_gateway_line(&signed_line(ROOT, 0x40, 830, KEEPALIVE)).unwrap();
+        assert_eq!(
+            auth.admit(&never_seen, &world, 2_001),
+            Err(LoraRefused::Replayed),
+            "below the mark and unseen: the restarted host cannot know, so it refuses"
+        );
+        let next = parse_gateway_line(&signed_line(ROOT, 0x40, 836, KEEPALIVE)).unwrap();
+        assert_eq!(auth.admit(&next, &world, 2_002), Ok(()));
+        let fact = world.current("spine.auth.gw-40").unwrap().unwrap();
+        assert_eq!(fact.value["ctr"], 836);
+        assert_eq!(fact.value["accepted"], 2, "counts carry across the restart");
+        assert_eq!(fact.value["rejected"], 2);
+    }
+
+    #[test]
+    fn stations_are_judged_independently() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let mut auth = LoraAuth::new(ROOT).unwrap();
+        let a = parse_gateway_line(&signed_line(ROOT, 0x40, 100, KEEPALIVE)).unwrap();
+        let b = parse_gateway_line(&signed_line(ROOT, 0xD8, 100, KEEPALIVE)).unwrap();
+        assert_eq!(auth.admit(&a, &world, 1), Ok(()));
+        assert_eq!(auth.admit(&b, &world, 2), Ok(()));
+        // A frame from D8 tagged with 40's key does not verify as D8.
+        let spoof = signed_line(ROOT, 0x40, 101, KEEPALIVE).replace("src=40", "src=D8");
+        let s = parse_gateway_line(&spoof).unwrap();
+        assert_eq!(auth.admit(&s, &world, 3), Err(LoraRefused::BadTag));
+    }
+
+    #[test]
+    fn the_verified_path_ingests_the_same_facts_as_before() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let mut auth = LoraAuth::new(ROOT).unwrap();
+        let payload =
+            r#"{"type":"reflex","node_id":"obc-esp32-s3-001","rule":"safe-link-offline"}"#;
+        let f = parse_gateway_line(&signed_line(ROOT, 0x28, 30, payload)).unwrap();
+        assert_eq!(auth.admit(&f, &world, 5_000), Ok(()));
+        let ing = ingest_frame(&f, &world, 5_000).unwrap();
+        assert_eq!(ing.node_id, "obc-esp32-s3-001");
+        assert_eq!(ing.msg_type, "reflex");
+        assert!(world
+            .current("mesh.obc-esp32-s3-001.reflex")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn the_root_has_to_be_long_enough_and_come_from_exactly_one_place() {
+        assert!(LoraAuth::new("short").is_err());
+        assert!(LoraAuth::new(ROOT).is_ok());
+        assert!(
+            LoraAuth::from_config(None, None).is_err(),
+            "no root: refuse to start"
+        );
+        assert!(
+            LoraAuth::from_config(Some(ROOT), Some("x")).is_err(),
+            "both: ambiguous"
+        );
+        assert!(LoraAuth::from_config(Some(ROOT), None).is_ok());
+        assert!(LoraAuth::from_config(None, Some("/definitely/not/here")).is_err());
+        let dir = std::env::temp_dir().join(format!("obc-spine-root-{}", std::process::id()));
+        std::fs::write(&dir, format!("{ROOT}\n")).unwrap();
+        let a = LoraAuth::from_config(None, Some(dir.to_str().unwrap())).unwrap();
+        assert_eq!(
+            a.fingerprint(),
+            LoraAuth::new(ROOT).unwrap().fingerprint(),
+            "trailing newline ignored"
+        );
+        let _ = std::fs::remove_file(dir);
     }
 }

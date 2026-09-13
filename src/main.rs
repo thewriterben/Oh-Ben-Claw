@@ -922,6 +922,20 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         info!(port = %gw.port, baud = gw.baud, "Phase B: LoRa gateway bridge (mesh <-> host)");
         #[cfg(feature = "hardware")]
         {
+            // The root the stations were built with. Required: every frame
+            // on the air is authenticated, and the host verifies each one
+            // again rather than trusting the base's console (SPINE-AUTH.md
+            // §3.4). Refusing to start is the loud form of "no unverified
+            // ingest path".
+            let auth = oh_ben_claw::spine::lora_gateway::LoraAuth::from_config(
+                gw.spine_root.as_deref(),
+                gw.spine_root_file.as_deref(),
+            )?;
+            info!(
+                fingerprint = format!("{:04x}", auth.fingerprint()),
+                "LoRa gateway: verifying station frames under the spine root \
+                 (compare with the stations' boot logs)"
+            );
             match oh_ben_claw::spine::lora_gateway::open_split(&gw.port, gw.baud) {
                 Ok((rd, wr)) => {
                     // Inbound: mesh node messages -> world memory (needs a store).
@@ -936,12 +950,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                         .unwrap_or(0)
                                 };
                                 oh_ben_claw::spine::lora_gateway::run_gateway_rx(
-                                    rd, world_rx, now_ms,
+                                    rd, auth, world_rx, now_ms,
                                 )
                                 .await;
                                 tracing::warn!("LoRa gateway RX loop ended (serial link closed)");
                             });
-                            info!("LoRa gateway: inbound mesh -> world memory active");
+                            info!("LoRa gateway: inbound mesh -> world memory active (verified)");
                         }
                         None => {
                             drop(rd);

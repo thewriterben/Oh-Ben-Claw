@@ -21,16 +21,21 @@
 //! newer than the highest seen; accept anything inside the window that has not
 //! been seen; refuse everything else.
 //!
-//! ## What is deliberately absent
+//! ## Persistence is the caller's, and [`ReplayWindow::resume`] is its seam
 //!
-//! **Persistence.** `SPINE-REPLAY.md` §3 works out that a receiver must persist
-//! a *ceiling* (`H + M`) rather than its position, because a receiver that
-//! resumes below its true high-water mark accepts replays of everything in
-//! between — the opposite rounding from the sender, and the classic form of this
-//! bug. That belongs with the transport that needs it, and on the host the
-//! answer is cheap (SQLite, `M = 1`) while on the node it is a flash question
-//! that cannot be settled without hardware. This type stays in memory and says
-//! so; a restart collapses the window, which fails closed.
+//! `SPINE-REPLAY.md` §3 works out that a receiver must persist a *ceiling*
+//! (`H + M`) rather than its position, because a receiver that resumes below
+//! its true high-water mark accepts replays of everything in between — the
+//! opposite rounding from the sender, and the classic form of this bug. The
+//! store belongs with the transport that needs it: on the host it is world
+//! memory with `M = 1` (`lora_gateway::LoraAuth` writes the highest accepted
+//! counter per station on every accept and resumes from it), on the node it
+//! is NVS with `M = 8`. This type stays in memory; a caller that persists
+//! hands the value back through [`resume`](ReplayWindow::resume), which
+//! treats everything at or below it as already seen — the bitmap starts
+//! *full*, because a window resumed at its ceiling with an empty bitmap
+//! accepts a replay of the 64 counters beneath it, which is the hole the
+//! ceiling exists to close (found by the firmware's host tests, 2026-09-13).
 //!
 //! **The first frame.** A receiver that has never heard from a source has no
 //! high-water mark and accepts what it hears, starting the window there. That is
@@ -142,6 +147,19 @@ impl ReplayWindow {
                 }
             }
         }
+    }
+
+    /// Resume `source` at a persisted high-water mark: `highest` and every
+    /// counter below it are treated as already accepted, so a restart admits
+    /// nothing it might have admitted before. Replaces any state for `source`.
+    pub fn resume(&mut self, source: &str, highest: u32) {
+        self.sources.insert(
+            source.to_string(),
+            Source {
+                highest,
+                seen: u64::MAX,
+            },
+        );
     }
 
     /// The highest counter accepted from `source`, if any has been.
@@ -282,6 +300,33 @@ mod tests {
         assert_eq!(w.admit(N, 1), ReplayVerdict::TooOld);
         w.forget(N);
         assert_eq!(w.admit(N, 1), ReplayVerdict::Fresh);
+    }
+
+    /// A restart that resumes from a persisted high-water mark must refuse
+    /// everything at or below it — including counters the window never saw,
+    /// because after a restart it cannot know which of those it accepted.
+    #[test]
+    fn resuming_refuses_everything_at_or_below_the_mark() {
+        let mut w = ReplayWindow::new();
+        w.resume(N, 500);
+        assert_eq!(w.admit(N, 500), ReplayVerdict::Duplicate);
+        assert_eq!(
+            w.admit(N, 499),
+            ReplayVerdict::Duplicate,
+            "inside the window, never seen, still refused"
+        );
+        assert_eq!(w.admit(N, 500 - WINDOW), ReplayVerdict::Duplicate);
+        assert_eq!(w.admit(N, 500 - WINDOW - 1), ReplayVerdict::TooOld);
+        assert_eq!(w.admit(N, 501), ReplayVerdict::Fresh);
+        assert_eq!(w.highest(N), Some(501));
+        // And the resumed source is a normal window from then on.
+        assert_eq!(w.admit(N, 510), ReplayVerdict::Fresh);
+        assert_eq!(
+            w.admit(N, 505),
+            ReplayVerdict::Fresh,
+            "fresh: above the mark, unseen"
+        );
+        assert_eq!(w.admit(N, 505), ReplayVerdict::Duplicate);
     }
 
     /// Counters near `u32::MAX` must not panic on the arithmetic. Exhaustion is

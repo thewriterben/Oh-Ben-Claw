@@ -157,11 +157,22 @@ Each received line writes two facts (valid *now*, source `lora-gateway`):
 
 | Entity | Value |
 |---|---|
-| `mesh.<node_id>.<type>` | the node payload + a `_mesh` envelope (`src`, `seq`, `rssi_dbm`) |
+| `mesh.<node_id>.<type>` | the node payload + a `_mesh` envelope (`src`, `seq`, `ctr`, `rssi_dbm`) |
 | `mesh.<node_id>` | liveness/link rollup — `rssi_dbm`, `seq`, `src`, `last_type` |
+| `spine.auth.gw-XX` | the host's verification state for one station — `ctr` (the persisted high-water mark), `accepted`, `rejected`, `last_rejected {ctr, reason, at_ms, rssi_dbm}` |
 
 So `current("mesh.obc-esp32-s3-001")` answers *"is this node alive, and how strong is
 the mesh link?"*, and `history("mesh.obc-esp32-s3-001.reflex")` gives the reflex trail.
+
+**Nothing reaches `mesh.*` unverified.** The base station prints each frame's
+`ctr=` and `mac=`; the host (`lora_gateway::LoraAuth`) verifies the tag under
+the deployment root — the same `OBC_SPINE_ROOT` the stations were built
+with — and judges the counter against a per-station window persisted in
+`spine.auth.gw-XX` (M = 1: every accept is written, so a restart refuses
+everything at or below the mark). A line without a tag, a bad tag, a
+replayed or too-old counter is refused, logged as `[lora_gateway] REJECTED`,
+and counted on the fact. The base is a transcriber the host checks, not an
+oracle it believes.
 
 ### Config
 
@@ -172,7 +183,12 @@ world_memory = true          # the bridge needs somewhere to write
 [lora_gateway]
 port = "COM3"                # base-station Heltec; COM6 is the XIAO
 baud = 115200
+spine_root_file = "~/.obc/spine_root"   # the stations' OBC_SPINE_ROOT; required
 ```
+
+Without a root the host refuses to start the gateway and says so; there is
+no unverified ingest path. The startup log prints the root's two-byte
+fingerprint, which must match the one in each station's boot log.
 
 Ports re-enumerate — confirm yours. Node ids are MAC-derived and permanent, and each
 board prints its own in the boot banner (`Gateway XX — UART1…`); read it there rather

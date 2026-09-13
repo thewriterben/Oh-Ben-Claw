@@ -1664,6 +1664,18 @@ pub struct LoraGatewayConfig {
     /// 2026-09-12); 0 restores fire-and-forget.
     #[serde(default = "default_mesh_reply_retries")]
     pub reply_retries: u32,
+    /// Path to a file holding the deployment's spine root secret — the same
+    /// bytes the Heltec stations were built with (`OBC_SPINE_ROOT`). Every
+    /// frame the base station reports is verified under it before anything
+    /// reaches world memory (SPINE-AUTH.md §3.4). Preferred over
+    /// `spine_root`, which puts the secret in this file. One of the two is
+    /// required when the gateway opens; there is no unverified ingest path.
+    /// `~/` is expanded.
+    #[serde(default)]
+    pub spine_root_file: Option<String>,
+    /// The spine root secret inline. See `spine_root_file`.
+    #[serde(default)]
+    pub spine_root: Option<String>,
 }
 
 fn default_mesh_reply_timeout_ms() -> u64 {
@@ -3177,6 +3189,7 @@ max_age_ms = 1000
 port = "COM3"
 reply_timeout_ms = 8000
 reply_retries = 2
+spine_root_file = "~/.obc/spine_root"
 [self_improvement.mushroom]
 enabled = true
 seed = 7
