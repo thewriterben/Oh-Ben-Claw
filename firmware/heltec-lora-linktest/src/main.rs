@@ -42,6 +42,10 @@ const PIN_RST: i32 = 12;
 const PIN_BUSY: i32 = 13;
 const PIN_DIO1: i32 = 14;
 const KEEPALIVE_MS: u64 = 5_000;
+/// After originating a command from the console, the next keepalive waits at
+/// least this long — long enough for a node's reply to come back (see the
+/// note at the console-drain step).
+const KEEPALIVE_HOLDOFF_AFTER_CMD_MS: u64 = 3_000;
 /// Hop budget for flood-relay. A node that hears a *new* frame rebroadcasts it with
 /// ttl-1 until it reaches 0; the `SeenSet` de-dup stops it looping. 2 lets a frame
 /// reach nodes two hops out. (With two radios you'll see the rebroadcast and the
@@ -61,6 +65,9 @@ fn main() -> anyhow::Result<()> {
 
     info!("──────────────────────────────────────────────");
     info!("Heltec V3 OBC spine gateway — LoRa 915 MHz ⇄ UART1 (compute uplink)");
+    if cfg!(feature = "no-relay") {
+        info!("flood relay DISABLED (no-relay build): this station does not re-broadcast");
+    }
 
     // UART1 to the compute node: TX=GPIO4, RX=GPIO2.
     let uart = UartDriver::new(
@@ -208,6 +215,13 @@ fn main() -> anyhow::Result<()> {
                 Ok(()) => info!("SPINE ► (console) seq={seq} ({} B) {cmd}", buf.len()),
                 Err(e) => info!("SPINE TX error: {e:#}"),
             }
+            // A station that has just asked a question stays quiet for the
+            // answer. The node replies 1–2 s after a command; a keepalive
+            // transmitted in that window makes this radio deaf for exactly
+            // the frame it is waiting for. Measured 2026-09-12: with
+            // continuous RX in place, the remaining reply losses each lined
+            // up with a base keepalive 1.1–1.9 s after the command.
+            last_keepalive = now_ms().saturating_sub(KEEPALIVE_MS) + KEEPALIVE_HOLDOFF_AFTER_CMD_MS;
         }
 
         // ── 2. Keepalive so the link is visible without a compute node wired. ──
@@ -247,7 +261,7 @@ fn main() -> anyhow::Result<()> {
                         let _ = uart.write(b"\n");
                         // Flood-relay onward if hops remain. Keep the ORIGINAL src/seq
                         // so every node de-dups it identically — that's what stops loops.
-                        if f.ttl > 0 {
+                        if f.ttl > 0 && !cfg!(feature = "no-relay") {
                             SpineFrame { src: f.src, seq: f.seq, ttl: f.ttl - 1, payload: f.payload }
                                 .encode(&mut buf);
                             match radio.transmit(&buf) {

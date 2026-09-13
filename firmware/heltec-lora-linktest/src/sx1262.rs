@@ -31,6 +31,10 @@ const OP_CALIBRATE: u8 = 0x89;
 const OP_SET_DIO2_AS_RFSWITCH: u8 = 0x9D;
 const OP_SET_PA_CONFIG: u8 = 0x95;
 const OP_SET_TX_PARAMS: u8 = 0x8E;
+
+/// TX power in dBm: the SX1262's +22 maximum for the field, its -9 floor for a
+/// bench where the other radio is within reach (see `bench-low-power`).
+pub const TX_POWER_DBM: i8 = if cfg!(feature = "bench-low-power") { -9 } else { 22 };
 const OP_SET_BUFFER_BASE: u8 = 0x8F;
 const OP_SET_MODULATION_PARAMS: u8 = 0x8B;
 const OP_SET_PACKET_PARAMS: u8 = 0x8C;
@@ -74,6 +78,9 @@ pub struct Sx1262 {
     busy: i32,
     #[allow(dead_code)]
     dio1: i32,
+    /// Whether the chip is currently in continuous RX (see [`Self::receive`]).
+    /// `transmit` and `init` leave it standby, so they clear this.
+    listening: bool,
 }
 
 impl Sx1262 {
@@ -90,7 +97,13 @@ impl Sx1262 {
             gpio_set_direction(busy, gpio_mode_t_GPIO_MODE_INPUT);
             gpio_set_direction(dio1, gpio_mode_t_GPIO_MODE_INPUT);
         }
-        Self { spi, rst, busy, dio1 }
+        Self {
+            spi,
+            rst,
+            busy,
+            dio1,
+            listening: false,
+        }
     }
 
     /// Wait for BUSY low (chip ready), bounded so a dead radio can't hang us.
@@ -174,6 +187,7 @@ impl Sx1262 {
         Ets::delay_us(5_000);
         self.wait_busy()?;
 
+        self.listening = false;
         self.cmd(OP_SET_STANDBY, &[0x00])?; // STDBY_RC
         self.cmd(OP_SET_REGULATOR_MODE, &[0x01])?; // DC-DC + LDO (SX1262 has DC-DC)
         self.cmd(OP_SET_PACKET_TYPE, &[0x01])?; // LoRa
@@ -195,9 +209,20 @@ impl Sx1262 {
             &[(frf >> 24) as u8, (frf >> 16) as u8, (frf >> 8) as u8, frf as u8],
         )?;
 
-        // PA config for the SX1262 (+22 dBm capable) and TX power.
+        // PA config for the SX1262 (+22 dBm capable) and TX power. The power
+        // byte is a signed dBm; the SX1262 range is -9..=+22. `bench-low-power`
+        // (Cargo.toml) selects the floor for two radios on one desk.
         self.cmd(OP_SET_PA_CONFIG, &[0x04, 0x07, 0x00, 0x01])?;
-        self.cmd(OP_SET_TX_PARAMS, &[0x16, 0x04])?; // +22 dBm, 200 µs ramp
+        self.cmd(OP_SET_TX_PARAMS, &[TX_POWER_DBM as u8, 0x04])?; // 200 µs ramp
+        info!(
+            "SX1262 TX power {:+} dBm{}",
+            TX_POWER_DBM,
+            if cfg!(feature = "bench-low-power") {
+                " (bench-low-power build — not for the field)"
+            } else {
+                ""
+            }
+        );
 
         self.cmd(OP_SET_BUFFER_BASE, &[0x00, 0x00])?; // TX/RX base = 0
 
@@ -228,6 +253,7 @@ impl Sx1262 {
 
     /// Transmit a buffer (blocks until TxDone or ~3 s timeout).
     pub fn transmit(&mut self, data: &[u8]) -> Result<()> {
+        self.listening = false;
         self.cmd(OP_SET_STANDBY, &[0x00])?;
         // Set payload length for this frame.
         self.cmd(
@@ -256,25 +282,39 @@ impl Sx1262 {
         }
     }
 
-    /// Listen for a frame for up to `timeout_ms`. `Ok(None)` when nothing usable
-    /// arrived — but the three ways that happens are not equivalent, and the noisy
-    /// ones are logged:
+    /// Poll for a frame for up to `timeout_ms`, keeping the radio in
+    /// **continuous RX** between calls. `Ok(None)` when nothing usable arrived —
+    /// but the ways that happens are not equivalent, and the noisy one is logged:
     ///
-    /// - **timeout** — heard nothing. Normal, silent.
+    /// - **nothing heard** in this poll — normal, silent; the radio is still
+    ///   listening when this returns.
     /// - **CRC error** — a frame *arrived and was destroyed*. Logged at warn, with the
     ///   RSSI it arrived at, because that is the only externally visible sign of it.
-    /// - **hard deadline** — the radio failed to report its own timeout. Logged,
-    ///   because it means the part is misbehaving rather than the link being quiet.
+    ///
+    /// Until 2026-09-12 every call put the chip in standby and re-armed a
+    /// *single-shot* RX with `timeout_ms` as the chip timeout. Two costs, both
+    /// measured that night with two Heltecs at −50 dBm / SNR 12 and no CRC
+    /// errors: a frame that *starts* inside the last airtime of the window is
+    /// aborted when the chip timeout fires mid-packet, which alone loses about
+    /// airtime ÷ window — ~17% of 55 B keepalives, ~35% of 206 B reports — and
+    /// two stations whose 5 s keepalive clocks drift into lock-step lose every
+    /// one of them for minutes at a time (`scripts/probe_collisions.py`: 6 of 11
+    /// gw-40 frames lost, each landing 0.5–0.6 s before the base's own TX, i.e.
+    /// in the tail of its window). Continuous RX has no window to fall off.
+    /// `transmit` leaves RX (the chip goes to standby to send) and the next call
+    /// re-arms it.
     pub fn receive(&mut self, timeout_ms: u32) -> Result<Option<RxFrame>> {
-        self.cmd(OP_SET_STANDBY, &[0x00])?;
-        self.cmd(OP_SET_PACKET_PARAMS, &[0x00, 0x08, 0x00, 0xFF, 0x01, 0x00])?;
-        self.clear_irq()?;
-        // SetRx timeout in 15.625 µs steps (≈ ms × 64).
-        let t = ((timeout_ms as u64) * 64).min(0x00FF_FFFE);
-        self.cmd(OP_SET_RX, &[(t >> 16) as u8, (t >> 8) as u8, t as u8])?;
+        if !self.listening {
+            self.cmd(OP_SET_STANDBY, &[0x00])?;
+            self.cmd(OP_SET_PACKET_PARAMS, &[0x00, 0x08, 0x00, 0xFF, 0x01, 0x00])?;
+            self.clear_irq()?;
+            // 0xFFFFFF = continuous: the chip stays in RX after each packet.
+            self.cmd(OP_SET_RX, &[0xFF, 0xFF, 0xFF])?;
+            self.listening = true;
+        }
 
         let start = now_us();
-        let hard_deadline_us = (timeout_ms as i64 + 500) * 1_000;
+        let poll_deadline_us = (timeout_ms as i64) * 1_000;
         loop {
             let irq = self.irq_status()?;
             if irq & IRQ_RX_DONE != 0 {
@@ -313,18 +353,15 @@ impl Sx1262 {
                 }));
             }
             if irq & IRQ_TIMEOUT != 0 {
+                // Continuous RX never times out on its own; if the chip says it
+                // did, it has left RX and must be re-armed on the next call.
                 self.clear_irq()?;
+                self.listening = false;
+                warn!("SX1262 RX: unexpected timeout IRQ in continuous RX — re-arming");
                 return Ok(None);
             }
-            if now_us() - start > hard_deadline_us {
-                // The radio should have raised its own RX timeout well before this.
-                // Reaching the backstop means the part (or the SPI link to it) is
-                // misbehaving — worth saying so rather than looking like a quiet band.
-                warn!(
-                    "SX1262 RX: radio missed its own {timeout_ms} ms timeout — backstop fired \
-                     (irq=0x{irq:04X})"
-                );
-                return Ok(None);
+            if now_us() - start > poll_deadline_us {
+                return Ok(None); // nothing this poll; still listening
             }
             Ets::delay_us(2_000);
         }

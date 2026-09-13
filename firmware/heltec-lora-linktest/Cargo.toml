@@ -23,6 +23,22 @@ hmac = "0.12"
 sha2 = "0.10"
 hkdf = "0.12"
 
+[features]
+# Bench build: SX1262 TX at its minimum (-9 dBm) instead of +22. Two Heltecs
+# at arm's length on a desk read -8 to -20 dBm at full power, and above about
+# -35 the receiver overdrives: ~55 B keepalives pass while 120 B+ frames
+# vanish (BENCH-PINOUT-CARDS.md Card 0; measured again 2026-09-12 with the
+# spinal tier's 121 B replies arriving 1 in 5). 31 dB less puts the same desk
+# at ~-50. The boot log names the power so a bench build cannot be mistaken
+# for a field one.
+bench-low-power = []
+# Do not flood-relay received frames. For the base station, which is the sink:
+# it was re-broadcasting every frame it heard, deaf for the ~300 ms each relay
+# takes, and on 2026-09-12 that cost it about half of everything gw-40 sent —
+# the frame after any received frame, reliably. A relay is a role
+# (heltec-relay); a station with a host plugged in should not play it.
+no-relay = []
+
 [build-dependencies]
 embuild = "0.33"
 

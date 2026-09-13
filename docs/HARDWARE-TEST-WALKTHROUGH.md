@@ -330,8 +330,68 @@ worth seeing rather than reading.
 is unchanged, (f) fires again, (g) refuses, (h) fires after reboot. What this
 proves: the brain moves a threshold inside a range the rule owns, never an
 actuator, and a reboot or a bad message leaves the node exactly as safe as it
-was. What it does not prove: the same over LoRa — that is `mesh_command`
-with `command = "descend"` through the Heltec bridge, Part B.
+was. What it does not prove: the same over LoRa — that is Part B below.
+
+**Run 2026-09-12: 18/18** (`scripts/bench_descend.py`, record in `results/`).
+
+### A5c. Descending modulation over the mesh (Part B)
+
+Same rule, same steps, but the `descend` lines go in on the **base station's
+console** (COM3), cross LoRa to gw-40, arrive at the node on the UART jumper,
+and the node's reply comes back the same way as a `SPINE ◄ … "type":"cmd_result"`
+line. The node's USB stays connected so each threshold move is verified with
+a `reflex_tick` independently of the reply.
+
+```powershell
+python scripts/bench_descend_lora.py --node COM6 --base COM3
+```
+
+Preconditions the first attempt got wrong, each now enforced or documented
+in the script:
+
+- **gw-40 must run `heltec-lora-linktest`.** A lit OLED means it does not
+  (this firmware never drives the display); the factory demo was on it.
+- **Both Heltecs built with `--features bench-low-power`** (−9 dBm). At +22
+  dBm two radios on one desk read −8 to −20 and the receiver overdrives —
+  121 B replies arrived 1 in 5 while 55 B keepalives passed. Target
+  −45…−60; the record carries the RSSI of every reply.
+- **The base built with `no-relay`.** A sink that re-broadcasts everything it
+  hears is deaf for the next frame; it has no one to relay to.
+- **Open the base's port with DTR/RTS low.** A default open resets it, its
+  8-bit seq restarts at 0, and gw-40's 32-entry de-dup ring drops the next
+  commands as duplicates. The script does this; anything else on COM3 must
+  too. Reflashing the base has the same effect — reboot gw-40 afterwards
+  (a default open of *its* port does it) or wait until the base's seq is
+  clear of the ring.
+- **Keep the node's USB drained** while waiting on the base. The XIAO's
+  native USB-Serial-JTAG blocks on write once the host holds the port open
+  and stops reading, and the node writes every reply to USB *and* UART1, so
+  the over-the-air reply arrives 8–17 s late. The script reads both ports.
+
+Two firmware defects this uncovered, both fixed the same night and both
+field bugs rather than bench artefacts:
+
+1. **Single-shot RX.** `Sx1262::receive` re-armed a 600 ms one-shot receive
+   from standby on every call; a frame *starting* in the last airtime of the
+   window was aborted by the chip's own timeout. With two stations' 5 s
+   keepalive clocks in lock-step (they were: +0.6 s apart for minutes) that
+   lost 6 of 11 frames at −50 dBm, SNR 12, zero CRC errors. Now continuous RX,
+   armed once, left on between polls: 10 of 11, and the one loss was a true
+   simultaneous transmission.
+2. **Keepalive in the reply window.** After sending a command the base's
+   next keepalive could land 1–2 s later — exactly when the node's reply
+   arrives — making it deaf to the frame it was waiting for. The base now
+   holds its keepalive 3 s after any console-originated command.
+
+What remains is real: the mesh has no ACK, and a plain half-duplex
+collision still takes roughly one command or reply in five. The script
+resends an unanswered `descend` (idempotent; new id per attempt; attempts
+recorded), which is what the host's `mesh_command` sink should do and does
+not yet.
+
+**PASS A5c:** every over-the-air step answered and verified.
+**Run 2026-09-12: 10/10**, `b1` on its second attempt, replies at −50/−51 dBm
+(`results/bench_descend_lora-20260912-233135.json`).
 
 > **Run 2026-09-13, XIAO ESP32-S3 `obc-esp32-s3-001` on COM6: 18/18 steps as
 > stated** (`results/bench_descend-20260912-221327.json`), (h) done as a USB

@@ -5,6 +5,72 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The spinal tier over the air, and two radio defects it found (2026-09-13)
+
+`descend` crossed the mesh and came back: base console → LoRa → gw-40 → UART
+→ node, reply the same way, each threshold move verified independently over
+the node's USB. **10/10** (`results/bench_descend_lora-20260912-233135.json`,
+walkthrough §A5c). Getting there took most of a night, and what it cost is
+the more useful half of this entry.
+
+### Fixed (firmware `heltec-lora-linktest`)
+
+- **Single-shot RX dropped frames at −50 dBm with no CRC errors.**
+  `Sx1262::receive` re-armed a 600 ms one-shot receive from standby on every
+  call, and the chip's own timeout aborted any frame that *started* in the
+  last airtime of the window — about airtime ÷ window, so ~17% of keepalives
+  and ~35% of 206 B reports for random arrivals, and with two stations'
+  5 s keepalive clocks in lock-step (they sat 0.6 s apart for minutes) 6 of 11
+  frames. Now continuous RX, armed once and kept between polls;
+  `transmit` leaves it and the next `receive` re-arms. Same API. Measured
+  after: 10 of 11, the one loss a genuine simultaneous transmission
+  (`scripts/probe_collisions.py`).
+- **The base's keepalive landed in the reply window.** A keepalive 1–2 s
+  after a console command made the base deaf to the reply it was waiting
+  for. Held off 3 s after any console-originated command.
+
+### Added (firmware `heltec-lora-linktest`)
+
+- **`bench-low-power` feature** — SX1262 at −9 dBm instead of +22, logged at
+  boot. Two radios on one desk at full power read −8 to −20 dBm and
+  overdrive: 121 B replies arrived 1 in 5 while 55 B keepalives passed.
+- **`no-relay` feature** — a station with a host plugged in is the sink;
+  re-broadcasting every frame it hears only made it deaf for the next one.
+  Relay is a role, not a default.
+
+### Added (bench)
+
+- `scripts/bench_descend.py` (A5b over USB, 18/18) and
+  `scripts/bench_descend_lora.py` (A5c over the mesh) — every reply matched
+  by id, records under `results/`, misses recorded rather than stopped on.
+  The over-the-air script opens the base without toggling DTR (a default
+  open reboots the Heltec, its seq restarts, and gw-40's 32-entry de-dup ring
+  drops the next commands as duplicates — four earlier runs "sent" commands
+  that never left the ring), drains the node's USB while waiting (the XIAO's
+  USB-Serial-JTAG blocks on write once the host holds the port and stops
+  reading, and the node writes every reply to USB *and* UART1 — replies
+  arrived 8–17 s late), buffers whole console lines (a 50 ms `readline`
+  hands back a 200-char log line in fragments), and resends an unanswered
+  `descend` up to twice with attempts recorded.
+- Three probes that found the above: `probe_lora_roundtrip.py`,
+  `probe_seq_streams.py`, `probe_collisions.py`, `probe_base_open.py`,
+  `probe_push.py`. Kept: each one names a failure mode the next person
+  will meet.
+
+### Not claimed, and what it implies
+
+The mesh has no ACK. With both fixes in, a plain half-duplex collision still
+takes about one command or reply in five (`b1` needed its second attempt).
+The bench script retries; the host's `mesh_command` sink does not, and
+should — that is the next change on this path. And the base-reboot de-dup
+trap is a protocol fault, not a bench one: `SPINE-REPLAY.md`'s boot-safe
+counter is the fix, and this is a second reason to build it.
+
+Also found and not fixed: gw-40 had the Heltec factory demo on it, not this
+firmware. A lit OLED is the tell — `heltec-lora-linktest` never drives it.
+
+---
+
 ## Unreleased — The spinal tier: the brain modulates, the node acts (2026-09-13)
 
 Step 3 of `docs/CONNECTOME-2026-09.md`. What the LIF fly measured
