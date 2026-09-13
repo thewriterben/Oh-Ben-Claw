@@ -78,13 +78,40 @@ to, a bad pair refuses and leaves `active` untouched, clear restores the
 default, a slot-16 rule is refused at the door, and a reboot forgets the
 level. Every tick is a synthetic snapshot; no sensor needed. The firmware
 compiles for `xtensa-esp32s3-espidf` (`cargo build`, 2026-09-13, one
-pre-existing `board::describe` unused warning) — the walkthrough's JSON has
-not yet been sent to a board.
+pre-existing `board::describe` unused warning). Run the same day — see below.
+
+### Run on the bench (2026-09-13)
+
+**18/18 steps as stated** on `obc-esp32-s3-001` (XIAO ESP32-S3, COM6), (h) as
+a USB power cycle. Record: `results/bench_descend-20260912-221327.json`,
+written by `scripts/bench_descend.py`, which drives the whole section over
+serial on top of `bench_run.Node` and asks for the one step that needs a hand.
+
+### Fixed — found by the run above
+
+- **The node silently dropped every command line over 256 bytes, and the
+  command after it.** The USB-Serial-JTAG RX buffer was the driver default
+  (256 B) — TX had been raised to 4096 on 2026-08-22 for `capabilities`, RX
+  had not. An overflowed line loses its tail and its newline, fuses with the
+  next line, fails to parse, and a parse failure answers nothing: two runs
+  lost `set_reflex_rules` and the tick after it while a hand probe of the
+  identical bytes answered in 0.16 s (the second failing run is kept as
+  `results/bench_descend-20260912-220831.json`; the first crashed the script
+  at (h) before writing). `scripts/probe_linelen.py` measured the
+  edge (reply at 256, none at 260–500, one lucky 290 — timing-dependent, as a
+  ring overflow is) and the fix (`rx_buffer_size(4096)`; every length to 500
+  answers, and a long line no longer eats a short one). The walkthrough's A5
+  rule is 250 bytes with a two-character id, which is why it has always
+  worked; A5b's slot rule is ~300, which is why it never could have. This
+  predates the spinal tier and would have bitten the first real rule anyone
+  pushed with a longer id.
+- `bench_descend.py` closes the port before the reset and reopens it after,
+  with retries: the XIAO's native USB re-enumerates on reset, and the first
+  run died at (h) with `WriteFile failed` on the stale handle.
 
 ### Not claimed
 
-That the procedure above has been run: no node carries this firmware yet, so
-`descend` has never executed on hardware, only in host-side tests. And the
+`descend` over LoRa (Part B, through the Heltec bridge): not run. And the
 correlation id is still a UUID; shortening it is step 4's job, and `descend`
 was measured with it in place so that step loses nothing here.
 

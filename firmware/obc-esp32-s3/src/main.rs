@@ -427,7 +427,20 @@ fn main() -> anyhow::Result<()> {
         // TX buffer defaults to 256 B — too small for multi-rule `reflex_tick`
         // and `capabilities` replies, which then truncate. Bump it so whole
         // responses fit and go out in one write.
-        &UsbSerialConfig::new().tx_buffer_size(4096),
+        //
+        // RX had the same default and the same problem, found on the bench
+        // 2026-09-13 (`scripts/probe_linelen.py`): every command line over
+        // 256 bytes got no reply *and took the next command with it* — the
+        // overflowed tail has no newline, so it fuses with the following line
+        // and both fail to parse, and a parse failure answers nothing. A
+        // `set_reflex_rules` with one slot-bound rule is ~300 bytes. The
+        // walkthrough's A5 rule was 250 with a two-character id, which is why
+        // it always worked and A5b never did. `MAX_LINE_LEN` is 512; the ring
+        // has to hold at least a whole line plus whatever arrives while the
+        // main loop is mid-tick.
+        &UsbSerialConfig::new()
+            .tx_buffer_size(4096)
+            .rx_buffer_size(4096),
     )?;
 
     // Optional spine uplink (Phase B): mirror autonomous status/reflex JSON out

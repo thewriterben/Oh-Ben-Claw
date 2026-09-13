@@ -261,8 +261,11 @@ Fire it deterministically with a synthetic snapshot (works even without a real s
 
 ### A5b. Descending modulation (the spinal tier)
 
-*Needs firmware from 2026-09-13 or later (`descend` in `main.rs`); reflash
-first if the node predates it.* Same rule as A5, but its threshold is bound to
+*Needs firmware from 2026-09-13 or later (`descend` in `main.rs`, **and** the
+4 KB USB RX buffer — see the note at the end of this section); reflash first
+if the node predates it.* `scripts/bench_descend.py --port COMx` runs every
+step below and writes the replies to `results/`; it asks for the power cycle
+in (h). Same rule as A5, but its threshold is bound to
 **slot 3** over a range the rule owns (40–80 °C), default level 0.5 — so it
 starts at 60 °C, exactly where A5 had it. Nothing here needs a sensor: every
 tick is a synthetic snapshot, so the pass/fail is deterministic. The built-in
@@ -329,6 +332,24 @@ proves: the brain moves a threshold inside a range the rule owns, never an
 actuator, and a reboot or a bad message leaves the node exactly as safe as it
 was. What it does not prove: the same over LoRa — that is `mesh_command`
 with `command = "descend"` through the Heltec bridge, Part B.
+
+> **Run 2026-09-13, XIAO ESP32-S3 `obc-esp32-s3-001` on COM6: 18/18 steps as
+> stated** (`results/bench_descend-20260912-221327.json`), (h) done as a USB
+> power cycle rather than a reset — a stronger form of the same claim.
+>
+> **It did not pass the first two times, and the reason was not this
+> feature.** Both runs lost the `set_reflex_rules` reply *and the command
+> after it*, while the same push from a hand-rolled probe answered in 0.16 s.
+> `scripts/probe_linelen.py` settled it: the node answered every padded line
+> up to 256 bytes and none above (one lucky 290), and an over-long line took
+> the next one with it. The USB-Serial-JTAG **RX** buffer had been left at the
+> driver default of 256 B when TX was raised to 4096 — the overflowed tail has
+> no newline, fuses with the following line, and a line that fails to parse is
+> answered with nothing. A5's rule line is 250 bytes with a two-character id,
+> which is why A5 always worked; A5b's slot rule is ~300 and never could.
+> Fixed in `main.rs` (`rx_buffer_size(4096)`); the probe then answered every
+> length to 500 and the run above followed. If a command over the wire ever
+> goes silent again, run the probe before suspecting the command.
 
 ### A6. Safing (self-protection)
 

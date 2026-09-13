@@ -1,0 +1,486 @@
+{
+  "port": "COM6",
+  "stamp": "20260912-220831",
+  "misses": [
+    "a-push-slot-rule",
+    "b-default-60-fires-at-65",
+    "d2-45-fires",
+    "f2-65-fires-again",
+    "g-bad-rule-refused-at-door",
+    "g2-rule-set-intact",
+    "h1-repush-after-reboot",
+    "h3-65-fires-at-default"
+  ],
+  "steps": [
+    {
+      "step": "a0-capabilities",
+      "cmd": "capabilities",
+      "args": {},
+      "expect": "ok:true, a node id",
+      "ok": true,
+      "reply": {
+        "id": "a0-capabilities#1",
+        "ok": true,
+        "result": {
+          "node_id": "obc-esp32-s3-001",
+          "board": "seeed-xiao-esp32-s3",
+          "firmware_version": "0.1.0",
+          "edge_agent": true,
+          "tools": [
+            {
+              "name": "gpio_read",
+              "description": "Read a GPIO pin value (0 or 1)."
+            },
+            {
+              "name": "gpio_write",
+              "description": "Set a GPIO pin high (1) or low (0)."
+            },
+            {
+              "name": "camera_capture",
+              "description": "Capture a JPEG image from the OV2640 camera."
+            },
+            {
+              "name": "audio_sample",
+              "description": "Sample audio from the I2S microphone."
+            },
+            {
+              "name": "sensor_read",
+              "description": "Read a value from an I2C/SPI sensor."
+            },
+            {
+              "name": "set_reflex_rules",
+              "description": "Push the on-MCU reflex (System 1) rule set."
+            },
+            {
+              "name": "set_limits",
+              "description": "Push the Track 0 actuator safety limits (allow-list, range, rate)."
+            },
+            {
+              "name": "agent_chat",
+              "description": "Chat with the on-device LLM agent."
+            },
+            {
+              "name": "agent_config",
+              "description": "Configure WiFi and LLM settings."
+            },
+            {
+              "name": "agent_clear",
+              "description": "Clear the agent conversation history."
+            }
+          ],
+          "gpio": [
+            21,
+            3,
+            7,
+            8
+          ],
+          "camera": false,
+          "microphone": true,
+          "i2c_bus": [
+            5,
+            6
+          ],
+          "transport": "usb-serial-jtag",
+          "wifi": true
+        }
+      }
+    },
+    {
+      "step": "a-push-slot-rule",
+      "cmd": "set_reflex_rules",
+      "args": {
+        "rules": [
+          {
+            "id": "overheat",
+            "when": {
+              "type": "sensor_slot",
+              "entity": "sensor.temperature",
+              "op": "gt",
+              "slot": 3,
+              "min": 40.0,
+              "max": 80.0,
+              "default": 0.5
+            },
+            "then": {
+              "type": "gpio_write",
+              "node_id": "self",
+              "pin": 3,
+              "value": 0
+            },
+            "debounce_ms": 1000
+          }
+        ]
+      },
+      "expect": "ok:true, loaded 1",
+      "ok": false,
+      "reply": {}
+    },
+    {
+      "step": "b-default-60-fires-at-65",
+      "cmd": "reflex_tick",
+      "args": {
+        "snapshot": {
+          "sensor.temperature": 65.0
+        }
+      },
+      "expect": "'overheat' fires (and safe-overtemp-warn)",
+      "ok": false,
+      "reply": {}
+    },
+    {
+      "step": "c1-descend-1.0",
+      "cmd": "descend",
+      "args": {
+        "m": [
+          [
+            3,
+            1.0
+          ]
+        ]
+      },
+      "expect": "ok:true, active [[3,1.0]]",
+      "ok": true,
+      "reply": {
+        "id": "c1-descend-1.0#4",
+        "ok": true,
+        "result": {
+          "active": [
+            [
+              3,
+              1.0
+            ]
+          ],
+          "applied": 1
+        }
+      }
+    },
+    {
+      "step": "c2-65-no-longer-fires",
+      "cmd": "reflex_tick",
+      "args": {
+        "snapshot": {
+          "sensor.temperature": 65.0
+        }
+      },
+      "expect": "safe-overtemp-warn only, NO 'overheat'",
+      "ok": true,
+      "reply": {
+        "id": "c2-65-no-longer-fires#5",
+        "ok": true,
+        "result": {
+          "fired": [
+            {
+              "action": {
+                "reason": "over-temperature \u2014 shed load / increase cooling",
+                "type": "escalate"
+              },
+              "applied": false,
+              "error": null,
+              "rule_id": "safe-overtemp-warn"
+            }
+          ],
+          "node_id": "obc-esp32-s3-001"
+        }
+      }
+    },
+    {
+      "step": "d1-descend-0.0",
+      "cmd": "descend",
+      "args": {
+        "m": [
+          [
+            3,
+            0.0
+          ]
+        ]
+      },
+      "expect": "ok:true, active [[3,0.0]]",
+      "ok": true,
+      "reply": {
+        "id": "d1-descend-0.0#6",
+        "ok": true,
+        "result": {
+          "active": [
+            [
+              3,
+              0.0
+            ]
+          ],
+          "applied": 1
+        }
+      }
+    },
+    {
+      "step": "d2-45-fires",
+      "cmd": "reflex_tick",
+      "args": {
+        "snapshot": {
+          "sensor.temperature": 45.0
+        }
+      },
+      "expect": "'overheat' only",
+      "ok": false,
+      "reply": {
+        "id": "d2-45-fires#7",
+        "ok": true,
+        "result": {
+          "fired": [],
+          "node_id": "obc-esp32-s3-001"
+        }
+      }
+    },
+    {
+      "step": "e1-bad-slot-refused",
+      "cmd": "descend",
+      "args": {
+        "m": [
+          [
+            3,
+            0.5
+          ],
+          [
+            16,
+            0.5
+          ]
+        ]
+      },
+      "expect": "ok:false, 'slot 16 out of range'",
+      "ok": true,
+      "reply": {
+        "id": "e1-bad-slot-refused#8",
+        "ok": false,
+        "result": null,
+        "error": "descend refused: slot 16 out of range (max 15)"
+      }
+    },
+    {
+      "step": "e2-bad-level-refused",
+      "cmd": "descend",
+      "args": {
+        "m": [
+          [
+            3,
+            1.5
+          ]
+        ]
+      },
+      "expect": "ok:false, 'not in [0, 1]'",
+      "ok": true,
+      "reply": {
+        "id": "e2-bad-level-refused#9",
+        "ok": false,
+        "result": null,
+        "error": "descend refused: slot 3: level 1.5 not in [0, 1]"
+      }
+    },
+    {
+      "step": "e3-active-unchanged",
+      "cmd": "descend",
+      "args": {
+        "m": []
+      },
+      "expect": "ok:true, active still [[3,0.0]]",
+      "ok": true,
+      "reply": {
+        "id": "e3-active-unchanged#10",
+        "ok": true,
+        "result": {
+          "active": [
+            [
+              3,
+              0.0
+            ]
+          ],
+          "applied": 0
+        }
+      }
+    },
+    {
+      "step": "f1-clear",
+      "cmd": "descend",
+      "args": {
+        "clear": true
+      },
+      "expect": "ok:true, active []",
+      "ok": true,
+      "reply": {
+        "id": "f1-clear#11",
+        "ok": true,
+        "result": {
+          "active": [],
+          "applied": 0
+        }
+      }
+    },
+    {
+      "step": "f2-65-fires-again",
+      "cmd": "reflex_tick",
+      "args": {
+        "snapshot": {
+          "sensor.temperature": 65.0
+        }
+      },
+      "expect": "'overheat' fires again",
+      "ok": false,
+      "reply": {
+        "id": "f2-65-fires-again#12",
+        "ok": true,
+        "result": {
+          "fired": [
+            {
+              "action": {
+                "reason": "over-temperature \u2014 shed load / increase cooling",
+                "type": "escalate"
+              },
+              "applied": false,
+              "error": null,
+              "rule_id": "safe-overtemp-warn"
+            }
+          ],
+          "node_id": "obc-esp32-s3-001"
+        }
+      }
+    },
+    {
+      "step": "g-bad-rule-refused-at-door",
+      "cmd": "set_reflex_rules",
+      "args": {
+        "rules": [
+          {
+            "id": "bad",
+            "when": {
+              "type": "sensor_slot",
+              "entity": "sensor.temperature",
+              "op": "gt",
+              "slot": 16,
+              "min": 0.0,
+              "max": 1.0,
+              "default": 0.5
+            },
+            "then": {
+              "type": "escalate",
+              "reason": "x"
+            },
+            "debounce_ms": 0
+          }
+        ]
+      },
+      "expect": "ok:false, 'rule bad: slot 16 out of range'",
+      "ok": false,
+      "reply": {}
+    },
+    {
+      "step": "g2-rule-set-intact",
+      "cmd": "reflex_tick",
+      "args": {
+        "snapshot": {
+          "sensor.temperature": 65.0
+        }
+      },
+      "expect": "'overheat' still fires (the refused push changed nothing)",
+      "ok": false,
+      "reply": {}
+    },
+    {
+      "step": "h0-descend-0.0-before-reboot",
+      "cmd": "descend",
+      "args": {
+        "m": [
+          [
+            3,
+            0.0
+          ]
+        ]
+      },
+      "expect": "ok:true, active [[3,0.0]]",
+      "ok": true,
+      "reply": {
+        "id": "h0-descend-0.0-before-reboot#15",
+        "ok": true,
+        "result": {
+          "active": [
+            [
+              3,
+              0.0
+            ]
+          ],
+          "applied": 1
+        }
+      }
+    },
+    {
+      "step": "h1-repush-after-reboot",
+      "cmd": "set_reflex_rules",
+      "args": {
+        "rules": [
+          {
+            "id": "overheat",
+            "when": {
+              "type": "sensor_slot",
+              "entity": "sensor.temperature",
+              "op": "gt",
+              "slot": 3,
+              "min": 40.0,
+              "max": 80.0,
+              "default": 0.5
+            },
+            "then": {
+              "type": "gpio_write",
+              "node_id": "self",
+              "pin": 3,
+              "value": 0
+            },
+            "debounce_ms": 1000
+          }
+        ]
+      },
+      "expect": "ok:true, loaded 1",
+      "ok": false,
+      "reply": {}
+    },
+    {
+      "step": "h2-level-forgotten-45-does-not-fire",
+      "cmd": "reflex_tick",
+      "args": {
+        "snapshot": {
+          "sensor.temperature": 45.0
+        }
+      },
+      "expect": "nothing fires: level is RAM-only, threshold back at 60",
+      "ok": true,
+      "reply": {}
+    },
+    {
+      "step": "h3-65-fires-at-default",
+      "cmd": "reflex_tick",
+      "args": {
+        "snapshot": {
+          "sensor.temperature": 65.0
+        }
+      },
+      "expect": "'overheat' fires at the default",
+      "ok": false,
+      "reply": {
+        "id": "h3-65-fires-at-default#18",
+        "ok": true,
+        "result": {
+          "fired": [
+            {
+              "action": {
+                "reason": "over-temperature \u2014 shed load / increase cooling",
+                "type": "escalate"
+              },
+              "applied": false,
+              "error": null,
+              "rule_id": "safe-overtemp-warn"
+            }
+          ],
+          "node_id": "obc-esp32-s3-001"
+        }
+      }
+    }
+  ],
+  "unsolicited": [
+    "{\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":30728,\"type\":\"beacon\"}"
+  ]
+}
