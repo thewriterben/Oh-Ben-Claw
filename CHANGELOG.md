@@ -129,6 +129,18 @@ in either direction is visible.
   `reqwest` and `base64` leave the crate with it — the substrate makes no
   network call at all now.
 
+### Experiment (not a feature): `experiments/lif-fly`
+
+Step 2 of the sequence in `docs/CONNECTOME-2026-09.md`: the Shiu et al. 2024
+whole-brain LIF model run here on FlyWire v783, unmodified, to look at the
+descending signal before the spinal tier's message is designed. It reproduces
+(MN9-left 63.3 Hz on sugar at 100 Hz vs the paper's 67.0 Hz on v630) and the
+look was worth it: a behaviour recruits ~4–5% of the 1,303 descending
+neurons, graded over an order of magnitude, and two behaviours (feeding,
+grooming) recruit nearly disjoint sets — cosine 0.04 between their DN
+population vectors. Numbers and what they imply for the message shape are in
+`experiments/lif-fly/RESULTS.md`; nothing in `crates/` depends on it.
+
 ### Not claimed
 
 That a connectome-shaped network is better at anything. The survey behind this

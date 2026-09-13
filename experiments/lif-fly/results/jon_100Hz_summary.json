@@ -1,0 +1,50 @@
+{
+  "group": "jon",
+  "rate_hz": 100.0,
+  "trials": 3,
+  "t_run_ms": 1000,
+  "seed": 12648430,
+  "stimulated": 145,
+  "missing_in_v783": [
+    720575940626307902
+  ],
+  "neurons_responding": 371,
+  "mn9_left_hz": 0.0,
+  "descending_active": 48,
+  "descending_total_in_annotations": 1303,
+  "descending_top_types": {
+    "DNg84": 73.3,
+    "DNg07": 61.3,
+    "DNg29": 55.3,
+    "DNge091": 50.7,
+    "DNg35": 50.0,
+    "DNbe001": 42.3,
+    "DNge054": 38.3,
+    "DNg15": 37.3,
+    "DNp33": 29.0,
+    "DNpe002": 22.3,
+    "DNg57": 20.7,
+    "DNge084": 19.3,
+    "DNge011": 18.3,
+    "DNp18": 17.0,
+    "DNg06": 15.0
+  },
+  "wall_s_per_trial": [
+    67.9,
+    68.7,
+    69.3
+  ],
+  "provenance": {
+    "model": "Shiu et al. 2024, model.py unmodified; params default except t_run/r_poi/n_run",
+    "codegen_target": "numpy",
+    "python": "3.14.7",
+    "brian2": "2.10.1",
+    "numpy": "2.5.3",
+    "pandas": "3.0.5",
+    "data": {
+      "Completeness_783.csv": "bbb847a4cc2caaa7a16349722d220c087317b946d148d4d592d94d250617a311",
+      "Connectivity_783.parquet": "efeb23fb99098e9c390f6869969b2a121a2ee92c833cfc45ecb2c1d8e1af0347",
+      "flywire_annotations_783.tsv": "9a4f8b2f843196074431ebd7cd883536afa1be86c8a4ce90970441e8be81d1be"
+    }
+  }
+}

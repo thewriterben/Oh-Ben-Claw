@@ -1,0 +1,4 @@
+.venv/
+data/
+results/*_rates.csv
+__pycache__/
