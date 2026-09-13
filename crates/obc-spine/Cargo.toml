@@ -83,6 +83,12 @@ serialport = { version = "4", default-features = false, optional = true }
 tracing = { version = "0.1", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 
+# `test-util` gives the gateway supervisor's test a clock it can drive
+# (`start_paused`): the reopen backoff is 1, 2, 4 … 30 s and the test walks
+# through three attempts in a few milliseconds of real time.
+[dev-dependencies]
+tokio = { version = "1.42", features = ["test-util"] }
+
 # The two serial transports are behind the same flag they were behind in the
 # tree, and the flag came with them: four `#[cfg(feature = "hardware")]` blocks
 # across lora_gateway and lora_mesh, and no use of either crate outside them.

@@ -37,6 +37,7 @@
 use async_trait::async_trait;
 use obc_memory::world::{Origin, WorldMemory};
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 /// One received frame as reported by a gateway `SPINE ◄` console line.
 #[derive(Debug, Clone, PartialEq)]
@@ -720,6 +721,388 @@ pub trait CommandSink: Send + Sync {
     async fn send_command(&self, cmd: &NodeCommand) -> anyhow::Result<()>;
 }
 
+// ── The host's link to the base station: a fact, a handle, a supervisor ──────────
+//
+// On 2026-09-13 the brain lost its base station's serial port eleven minutes
+// after opening it (`os error 22`, a surprise-removed USB device), ran headless
+// for fourteen more, and the only place that said so was one WARN line. The
+// mesh supervisor, deaf, presumed both nodes lost while they beaconed normally;
+// the posture policy's sends failed with "serial I/O thread has exited"; a
+// person restarted the process and everything came back — which is the proof
+// that the fix is cheap. OBC-Prime `docs/SPINE-LOSS.md` is the design; this is
+// it. Three parts, hardware-free so they are tested where the serial port is
+// not: the link has a fact (`spine.gateway`), the sink survives an outage
+// (the writer sits behind a handle the supervisor swaps), and the port is
+// reopened with bounded backoff for as long as the process lives.
+
+/// Outbound command queue into the single serial I/O thread.
+pub type SerialWriterHandle = tokio::sync::mpsc::Sender<String>;
+
+/// What the serial I/O thread hands the RX loop: a console line, or the
+/// reason it is stopping. The reason travels in-band so the loss is recorded
+/// with the error that caused it rather than as a bare closed channel.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConsoleEvent {
+    Line(String),
+    /// The I/O thread is exiting; the port is gone until reopened.
+    Closed(String),
+}
+
+/// Inbound console events from the single serial I/O thread.
+pub type ConsoleLines = tokio::sync::mpsc::Receiver<ConsoleEvent>;
+
+/// The one entity that says whether the brain can hear the mesh right now.
+/// One fact, not one per station: it describes the host's serial link; the
+/// stations' own liveness stays in `mesh.gw-XX` and `spine.auth.gw-XX`.
+pub const GATEWAY_FACT: &str = "spine.gateway";
+
+/// Longest wait between reopen attempts.
+pub const REOPEN_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Wait before reopen attempt number `attempt` (1-based): 1 s, 2 s, 4 s, …,
+/// capped at [`REOPEN_BACKOFF_MAX`]. No attempt limit anywhere — a body that
+/// runs unattended does not give up on its own spine because a hub blinked at
+/// 3 a.m.
+pub fn reopen_backoff(attempt: u32) -> std::time::Duration {
+    let secs = 1u64 << attempt.saturating_sub(1).min(5);
+    std::time::Duration::from_secs(secs).min(REOPEN_BACKOFF_MAX)
+}
+
+/// The state of the host's serial link to the base station, as recorded in
+/// the [`GATEWAY_FACT`] fact on every transition and every reopen attempt.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GatewayLink {
+    /// The port is open and the I/O thread is running. `attempts` is how many
+    /// reopen attempts the last outage took (0 for the first open), so an
+    /// outage is legible from the fact history alone.
+    Open { since_ms: u64, attempts: u32 },
+    /// The I/O thread exited with `error`; nothing has been tried yet.
+    Lost { since_ms: u64, error: String },
+    /// `attempts` reopens have failed since the loss; the next is due at
+    /// `next_attempt_ms`. `error` is the most recent failure.
+    Reopening {
+        since_ms: u64,
+        error: String,
+        attempts: u32,
+        next_attempt_ms: u64,
+    },
+}
+
+impl GatewayLink {
+    pub fn state(&self) -> &'static str {
+        match self {
+            GatewayLink::Open { .. } => "open",
+            GatewayLink::Lost { .. } => "lost",
+            GatewayLink::Reopening { .. } => "reopening",
+        }
+    }
+
+    /// When this state began.
+    pub fn since_ms(&self) -> u64 {
+        match self {
+            GatewayLink::Open { since_ms, .. }
+            | GatewayLink::Lost { since_ms, .. }
+            | GatewayLink::Reopening { since_ms, .. } => *since_ms,
+        }
+    }
+
+    /// The error behind a loss, if the link is not open.
+    pub fn error(&self) -> Option<&str> {
+        match self {
+            GatewayLink::Open { .. } => None,
+            GatewayLink::Lost { error, .. } | GatewayLink::Reopening { error, .. } => Some(error),
+        }
+    }
+
+    /// What a caller that needs the link gets told while it is down — the same
+    /// words as the fact, so a `descending.<node>` error and world memory agree.
+    pub fn refusal(&self) -> String {
+        match self {
+            GatewayLink::Open { .. } => "gateway open".to_string(),
+            GatewayLink::Lost { error, .. } => format!("gateway lost: {error}"),
+            GatewayLink::Reopening {
+                error, attempts: 0, ..
+            } => format!("gateway reopening: {error}"),
+            GatewayLink::Reopening {
+                error, attempts, ..
+            } => format!("gateway reopening ({attempts} failed so far): {error}"),
+        }
+    }
+
+    fn to_json(&self, port: &str) -> Value {
+        let mut v = json!({ "state": self.state(), "port": port, "since_ms": self.since_ms() });
+        match self {
+            GatewayLink::Open { attempts, .. } => {
+                v["attempts"] = json!(attempts);
+            }
+            GatewayLink::Lost { error, .. } => {
+                v["error"] = json!(error);
+                v["attempts"] = json!(0);
+            }
+            GatewayLink::Reopening {
+                error,
+                attempts,
+                next_attempt_ms,
+                ..
+            } => {
+                v["error"] = json!(error);
+                v["attempts"] = json!(attempts);
+                v["next_attempt_ms"] = json!(next_attempt_ms);
+            }
+        }
+        v
+    }
+
+    /// Write this state as the [`GATEWAY_FACT`] fact.
+    pub fn record(&self, world: &WorldMemory, port: &str, now_ms: u64) {
+        let _ = world.observe_as(
+            GATEWAY_FACT,
+            self.to_json(port),
+            now_ms,
+            now_ms,
+            SOURCE,
+            Origin::Observed,
+        );
+    }
+
+    /// The link state world memory currently holds, if a gateway has ever
+    /// written one. `None` means no serial gateway is part of this body.
+    pub fn read(world: &WorldMemory) -> Option<GatewayLink> {
+        let f = world.current(GATEWAY_FACT).ok().flatten()?;
+        let v = &f.value;
+        let since_ms = v
+            .get("since_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(f.valid_from);
+        let error = v
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let attempts = v.get("attempts").and_then(Value::as_u64).unwrap_or(0) as u32;
+        match v.get("state").and_then(Value::as_str)? {
+            "open" => Some(GatewayLink::Open { since_ms, attempts }),
+            "lost" => Some(GatewayLink::Lost { since_ms, error }),
+            "reopening" => Some(GatewayLink::Reopening {
+                since_ms,
+                error,
+                attempts,
+                next_attempt_ms: v
+                    .get("next_attempt_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// The sink's view of the link: the current writer (into the I/O thread that
+/// owns the port) and the link state. The supervisor replaces the writer on
+/// every reopen, so the `Arc<dyn CommandSink>` handed out at startup keeps
+/// working across outages.
+pub struct GatewayHandle {
+    inner: std::sync::RwLock<(Option<SerialWriterHandle>, GatewayLink)>,
+}
+
+impl GatewayHandle {
+    /// A handle around a freshly opened port.
+    pub fn open(writer: SerialWriterHandle, now_ms: u64) -> Self {
+        Self {
+            inner: std::sync::RwLock::new((
+                Some(writer),
+                GatewayLink::Open {
+                    since_ms: now_ms,
+                    attempts: 0,
+                },
+            )),
+        }
+    }
+
+    /// The link as the handle last heard it.
+    pub fn link(&self) -> GatewayLink {
+        self.inner.read().unwrap().1.clone()
+    }
+
+    fn set(&self, writer: Option<SerialWriterHandle>, link: GatewayLink) {
+        *self.inner.write().unwrap() = (writer, link);
+    }
+
+    fn writer(&self) -> Result<SerialWriterHandle, String> {
+        let g = self.inner.read().unwrap();
+        match (&g.0, &g.1) {
+            (Some(w), GatewayLink::Open { .. }) => Ok(w.clone()),
+            (_, link) => Err(link.refusal()),
+        }
+    }
+}
+
+/// Outbound [`CommandSink`] over the base-station Heltec's console: queues each
+/// command (newline-framed) into the serial I/O thread, which writes it on the
+/// one true handle; the station then transmits it over LoRa. While the link is
+/// lost or reopening the send fails fast with the link state — the same words
+/// as the [`GATEWAY_FACT`] fact — and nothing is queued: the gateway does not
+/// retry what it was asked to send while down; the caller decides.
+pub struct SerialCommandSink {
+    handle: Arc<GatewayHandle>,
+}
+
+impl SerialCommandSink {
+    pub fn new(handle: Arc<GatewayHandle>) -> Self {
+        Self { handle }
+    }
+}
+
+#[async_trait]
+impl CommandSink for SerialCommandSink {
+    async fn send_command(&self, cmd: &NodeCommand) -> anyhow::Result<()> {
+        let writer = self.handle.writer().map_err(|why| anyhow::anyhow!(why))?;
+        writer
+            .send(cmd.encode())
+            .await
+            .map_err(|_| anyhow::anyhow!("serial I/O thread has exited"))?;
+        Ok(())
+    }
+}
+
+/// RX loop: take console lines off the reader-thread channel, verify each
+/// received frame under the deployment root, and bridge the verified ones
+/// into world memory. Runs until the reader thread exits, and returns why
+/// (the I/O error it reported, or a note that it ended without one). `auth`
+/// is borrowed, not consumed: the supervisor runs this again on every reopen
+/// with the same per-station windows, so a reopen admits no replay of what
+/// was accepted before the loss.
+pub async fn run_gateway_rx<F>(
+    mut lines: ConsoleLines,
+    auth: &mut LoraAuth,
+    world: Arc<WorldMemory>,
+    now_ms: F,
+) -> String
+where
+    F: Fn() -> u64 + Send,
+{
+    while let Some(event) = lines.recv().await {
+        let line = match event {
+            ConsoleEvent::Line(line) => line,
+            ConsoleEvent::Closed(why) => return why,
+        };
+        // Raw-line visibility: silence must never again be ambiguous between
+        // "no bytes" and "bytes that don't parse" (bench lesson, 2026-07-17).
+        // Debug level — enable with RUST_LOG=debug when diagnosing.
+        tracing::debug!(
+            "[lora_gateway] raw: {}",
+            line.chars().take(110).collect::<String>()
+        );
+        let Some(frame) = parse_gateway_line(&line) else {
+            continue;
+        };
+        let now = now_ms();
+        match auth.admit(&frame, &world, now) {
+            Ok(()) => {
+                if let Some(ing) = ingest_frame(&frame, &world, now) {
+                    tracing::info!(
+                        node = %ing.node_id,
+                        msg = %ing.msg_type,
+                        rssi = ing.rssi_dbm,
+                        ctr = frame.ctr,
+                        "LoRa gateway → world memory (verified)"
+                    );
+                }
+            }
+            Err(why) => tracing::warn!(
+                station = %LoraAuth::station(frame.src),
+                ctr = frame.ctr,
+                rssi = frame.rssi_dbm,
+                "[lora_gateway] REJECTED frame: {} — payload not ingested",
+                why.as_str()
+            ),
+        }
+    }
+    "serial I/O thread ended without reporting an error".to_string()
+}
+
+/// Own the base-station link for the life of the process. Runs the RX loop
+/// on `first`; when the I/O thread exits records `lost` with its error, then
+/// reopens with [`reopen_backoff`] until it succeeds — recording `reopening`
+/// before each attempt and `open` after, swapping the writer in `handle` so
+/// the sink keeps working — and runs the RX loop again with the same `auth`.
+/// Never returns.
+///
+/// `open` is whatever produces a `(lines, writer)` pair: `open_split` on
+/// hardware, a pair of channels in tests. It is awaited, so a blocking open
+/// can be moved off the runtime by the caller.
+pub async fn supervise_gateway<O, Fut, F>(
+    port: String,
+    first: ConsoleLines,
+    mut open: O,
+    mut auth: LoraAuth,
+    world: Arc<WorldMemory>,
+    handle: Arc<GatewayHandle>,
+    now_ms: F,
+) where
+    O: FnMut() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<(ConsoleLines, SerialWriterHandle)>>,
+    F: Fn() -> u64 + Send + Clone,
+{
+    let mut lines = first;
+    loop {
+        let error = run_gateway_rx(lines, &mut auth, Arc::clone(&world), now_ms.clone()).await;
+
+        // The I/O thread is gone. Say so before trying anything.
+        let lost_at = now_ms();
+        let link = GatewayLink::Lost {
+            since_ms: lost_at,
+            error: error.clone(),
+        };
+        handle.set(None, link.clone());
+        link.record(&world, &port, lost_at);
+        tracing::warn!(port = %port, "[lora_gateway] link lost — reopening with backoff");
+
+        let mut attempts: u32 = 0;
+        let mut last_error = error;
+        lines = loop {
+            attempts += 1;
+            let wait = reopen_backoff(attempts);
+            let now = now_ms();
+            let link = GatewayLink::Reopening {
+                since_ms: lost_at,
+                error: last_error.clone(),
+                attempts: attempts - 1,
+                next_attempt_ms: now + wait.as_millis() as u64,
+            };
+            handle.set(None, link.clone());
+            link.record(&world, &port, now);
+            tokio::time::sleep(wait).await;
+            match open().await {
+                Ok((rd, wr)) => {
+                    let now = now_ms();
+                    let link = GatewayLink::Open {
+                        since_ms: now,
+                        attempts,
+                    };
+                    handle.set(Some(wr), link.clone());
+                    link.record(&world, &port, now);
+                    tracing::info!(
+                        port = %port,
+                        outage_ms = now.saturating_sub(lost_at),
+                        attempts,
+                        "[lora_gateway] link reopened"
+                    );
+                    break rd;
+                }
+                Err(e) => {
+                    last_error = format!("{e:#}");
+                    tracing::warn!(
+                        port = %port,
+                        attempt = attempts,
+                        "[lora_gateway] reopen failed: {last_error}"
+                    );
+                }
+            }
+        };
+    }
+}
+
 // ── Serial console reader (real hardware; `--features hardware`) ─────────────────
 //
 // Opens the base-station Heltec's USB console and drives [`ingest_gateway_line`]
@@ -732,16 +1115,11 @@ pub trait CommandSink: Send + Sync {
 // port streamed happily. Boring beats async here.
 #[cfg(feature = "hardware")]
 mod serial {
-    use super::{ingest_frame, parse_gateway_line, CommandSink, LoraAuth, NodeCommand};
+    use super::{ConsoleEvent, ConsoleLines, SerialWriterHandle};
     use anyhow::Context;
-    use obc_memory::world::WorldMemory;
     use std::io::{Read, Write};
-    use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::mpsc;
-
-    /// Outbound command queue into the single serial I/O thread.
-    pub type SerialWriterHandle = mpsc::Sender<String>;
 
     /// Minimum spacing between consecutive commands written to the base console.
     ///
@@ -756,10 +1134,7 @@ mod serial {
     /// with `os error 22` (ERROR_BAD_COMMAND) while the original reads fine —
     /// bench-caught 2026-07-17 when the first over-the-air command never left
     /// the PC.
-    pub fn open_split(
-        port: &str,
-        baud: u32,
-    ) -> anyhow::Result<(mpsc::Receiver<String>, SerialWriterHandle)> {
+    pub fn open_split(port: &str, baud: u32) -> anyhow::Result<(ConsoleLines, SerialWriterHandle)> {
         let mut serial = serialport::new(port, baud)
             .timeout(Duration::from_millis(250))
             .open()
@@ -786,7 +1161,7 @@ mod serial {
 
         // Single I/O thread, single handle: interleave 250 ms-timeout reads with
         // draining the outbound command queue. Read timeouts are the idle path.
-        let (line_tx, line_rx) = mpsc::channel::<String>(256);
+        let (line_tx, line_rx) = mpsc::channel::<ConsoleEvent>(256);
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<String>(32);
         std::thread::Builder::new()
             .name("lora-gateway-io".into())
@@ -830,7 +1205,7 @@ mod serial {
                                     if !line.is_empty() {
                                         let s = String::from_utf8_lossy(&line).into_owned();
                                         line.clear();
-                                        if line_tx.blocking_send(s).is_err() {
+                                        if line_tx.blocking_send(ConsoleEvent::Line(s)).is_err() {
                                             return; // receiver dropped — shut down
                                         }
                                     }
@@ -844,7 +1219,11 @@ mod serial {
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
                         Err(e) => {
+                            // The port is gone (2026-09-13: `os error 22`, a
+                            // surprise-removed device). Say why on the way out
+                            // so the supervisor records the loss with its cause.
                             tracing::warn!("[lora_gateway] serial read error: {e}");
+                            let _ = line_tx.blocking_send(ConsoleEvent::Closed(e.to_string()));
                             return;
                         }
                     }
@@ -854,80 +1233,10 @@ mod serial {
 
         Ok((line_rx, cmd_tx))
     }
-
-    /// RX loop: take console lines off the reader-thread channel, verify each
-    /// received frame under the deployment root, and bridge the verified ones
-    /// into world memory. Runs until the reader thread exits.
-    pub async fn run_gateway_rx<F>(
-        mut lines: mpsc::Receiver<String>,
-        mut auth: LoraAuth,
-        world: Arc<WorldMemory>,
-        now_ms: F,
-    ) where
-        F: Fn() -> u64 + Send,
-    {
-        while let Some(line) = lines.recv().await {
-            // Raw-line visibility: silence must never again be ambiguous between
-            // "no bytes" and "bytes that don't parse" (bench lesson, 2026-07-17).
-            // Debug level — enable with RUST_LOG=debug when diagnosing.
-            tracing::debug!(
-                "[lora_gateway] raw: {}",
-                line.chars().take(110).collect::<String>()
-            );
-            let Some(frame) = parse_gateway_line(&line) else {
-                continue;
-            };
-            let now = now_ms();
-            match auth.admit(&frame, &world, now) {
-                Ok(()) => {
-                    if let Some(ing) = ingest_frame(&frame, &world, now) {
-                        tracing::info!(
-                            node = %ing.node_id,
-                            msg = %ing.msg_type,
-                            rssi = ing.rssi_dbm,
-                            ctr = frame.ctr,
-                            "LoRa gateway → world memory (verified)"
-                        );
-                    }
-                }
-                Err(why) => tracing::warn!(
-                    station = %LoraAuth::station(frame.src),
-                    ctr = frame.ctr,
-                    rssi = frame.rssi_dbm,
-                    "[lora_gateway] REJECTED frame: {} — payload not ingested",
-                    why.as_str()
-                ),
-            }
-        }
-    }
-
-    /// Outbound [`CommandSink`] over the base-station Heltec's console: queues each
-    /// command (newline-framed) into the serial I/O thread, which writes it on the
-    /// one true handle; the station then transmits it over LoRa.
-    pub struct SerialCommandSink {
-        writer: SerialWriterHandle,
-    }
-
-    impl SerialCommandSink {
-        pub fn new(writer: SerialWriterHandle) -> Self {
-            Self { writer }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl CommandSink for SerialCommandSink {
-        async fn send_command(&self, cmd: &NodeCommand) -> anyhow::Result<()> {
-            self.writer
-                .send(cmd.encode())
-                .await
-                .map_err(|_| anyhow::anyhow!("serial I/O thread has exited"))?;
-            Ok(())
-        }
-    }
 }
 
 #[cfg(feature = "hardware")]
-pub use serial::{open_split, run_gateway_rx, SerialCommandSink};
+pub use serial::open_split;
 
 #[cfg(test)]
 mod tests {
@@ -1445,5 +1754,227 @@ mod tests {
             "trailing newline ignored"
         );
         let _ = std::fs::remove_file(dir);
+    }
+
+    // ── A lost spine (2026-09-13) ────────────────────────────────────────────
+
+    #[test]
+    fn reopen_backoff_doubles_from_one_second_and_stops_at_thirty() {
+        let secs: Vec<u64> = (1..=9).map(|n| reopen_backoff(n).as_secs()).collect();
+        assert_eq!(secs, vec![1, 2, 4, 8, 16, 30, 30, 30, 30]);
+        assert_eq!(
+            reopen_backoff(0).as_secs(),
+            1,
+            "a zeroth attempt is the first"
+        );
+        assert_eq!(
+            reopen_backoff(u32::MAX).as_secs(),
+            30,
+            "no overflow, no unbounded wait"
+        );
+    }
+
+    #[test]
+    fn the_gateway_fact_round_trips_every_state() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        assert_eq!(GatewayLink::read(&world), None, "no gateway, no fact");
+        for link in [
+            GatewayLink::Open {
+                since_ms: 10,
+                attempts: 0,
+            },
+            GatewayLink::Lost {
+                since_ms: 20,
+                error: "os error 22".into(),
+            },
+            GatewayLink::Reopening {
+                since_ms: 20,
+                error: "port busy".into(),
+                attempts: 3,
+                next_attempt_ms: 28_000,
+            },
+            GatewayLink::Open {
+                since_ms: 30_000,
+                attempts: 4,
+            },
+        ] {
+            link.record(&world, "COM3", link.since_ms());
+            assert_eq!(GatewayLink::read(&world), Some(link.clone()));
+            let f = world.current(GATEWAY_FACT).unwrap().unwrap();
+            assert_eq!(f.value["port"], json!("COM3"));
+            assert_eq!(f.value["state"], json!(link.state()));
+            assert_eq!(f.source, SOURCE);
+            assert_eq!(f.origin, Origin::Observed);
+        }
+        let history = world.history(GATEWAY_FACT).unwrap();
+        let states: Vec<&str> = history
+            .iter()
+            .map(|f| f.value["state"].as_str().unwrap())
+            .collect();
+        assert_eq!(states, vec!["open", "lost", "reopening", "open"]);
+        assert_eq!(
+            history[3].value["attempts"],
+            json!(4),
+            "the outage is legible from the history"
+        );
+    }
+
+    /// A fake port: each open hands the test the sender side, so it can feed
+    /// lines and "pull the cable" by sending `Closed`.
+    struct FakePort {
+        opens: Arc<std::sync::Mutex<Vec<tokio::sync::mpsc::Sender<ConsoleEvent>>>>,
+        cmds: Arc<std::sync::Mutex<Vec<tokio::sync::mpsc::Receiver<String>>>>,
+        /// How many opens fail before one succeeds, per outage.
+        fail_first: Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    impl FakePort {
+        fn open(&self) -> anyhow::Result<(ConsoleLines, SerialWriterHandle)> {
+            use std::sync::atomic::Ordering;
+            let left = self.fail_first.load(Ordering::SeqCst);
+            if left > 0 {
+                self.fail_first.store(left - 1, Ordering::SeqCst);
+                anyhow::bail!("failed to open LoRa gateway console COM3: Access is denied");
+            }
+            let (line_tx, line_rx) = tokio::sync::mpsc::channel(16);
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(16);
+            self.opens.lock().unwrap().push(line_tx);
+            self.cmds.lock().unwrap().push(cmd_rx);
+            Ok((line_rx, cmd_tx))
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_sink_survives_an_outage_and_the_fact_history_tells_it() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let port = FakePort {
+            opens: Default::default(),
+            cmds: Default::default(),
+            fail_first: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        };
+        let (first_rx, first_wr) = port.open().unwrap();
+        // The outage to come: two reopens refused (the port still held), the third succeeds.
+        port.fail_first
+            .store(2, std::sync::atomic::Ordering::SeqCst);
+        // A clock the test drives: tokio's paused time, in ms from an epoch.
+        let t0 = tokio::time::Instant::now();
+        let now_ms = move || 1_000_000 + t0.elapsed().as_millis() as u64;
+        let handle = Arc::new(GatewayHandle::open(first_wr, now_ms()));
+        GatewayLink::Open {
+            since_ms: now_ms(),
+            attempts: 0,
+        }
+        .record(&world, "COM3", now_ms());
+        let sink: Arc<dyn CommandSink> = Arc::new(SerialCommandSink::new(Arc::clone(&handle)));
+
+        let opens = Arc::clone(&port.opens);
+        let cmds = Arc::clone(&port.cmds);
+        let fail_first = Arc::clone(&port.fail_first);
+        let auth = LoraAuth::new(ROOT).unwrap();
+        let w = Arc::clone(&world);
+        let h = Arc::clone(&handle);
+        tokio::spawn(async move {
+            let port = FakePort {
+                opens,
+                cmds,
+                fail_first,
+            };
+            supervise_gateway(
+                "COM3".into(),
+                first_rx,
+                move || {
+                    let r = port.open();
+                    async move { r }
+                },
+                auth,
+                w,
+                h,
+                now_ms,
+            )
+            .await;
+        });
+
+        let cmd = NodeCommand::new("obc-esp32-s3-001", "a1", "capabilities", json!({}));
+        // Before the loss: a send lands in the first port's command queue.
+        sink.send_command(&cmd).await.unwrap();
+        assert_eq!(
+            port.cmds.lock().unwrap()[0].try_recv().unwrap(),
+            cmd.encode()
+        );
+
+        // Pull the cable: the I/O thread reports why and exits.
+        let first_lines = port.opens.lock().unwrap()[0].clone();
+        first_lines
+            .send(ConsoleEvent::Closed("os error 22".into()))
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        // `lost` is recorded and the first reopen is scheduled in the same breath.
+        let link = GatewayLink::read(&world).unwrap();
+        assert!(
+            matches!(&link, GatewayLink::Reopening { error, attempts: 0, .. } if error == "os error 22"),
+            "{link:?}"
+        );
+        // During it: the send fails fast, with the link state, and queues nothing.
+        let err = sink.send_command(&cmd).await.unwrap_err().to_string();
+        assert_eq!(err, "gateway reopening: os error 22");
+
+        // 1 s: first reopen fails; 2 s more: second fails; 4 s more: third succeeds.
+        tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+        let err = sink.send_command(&cmd).await.unwrap_err().to_string();
+        assert!(
+            err.starts_with("gateway reopening (1 failed so far): failed to open"),
+            "{err}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(2_100)).await;
+        assert!(matches!(
+            GatewayLink::read(&world).unwrap(),
+            GatewayLink::Reopening { attempts: 2, .. }
+        ));
+        tokio::time::sleep(std::time::Duration::from_millis(4_100)).await;
+        let open = GatewayLink::read(&world).unwrap();
+        assert!(
+            matches!(open, GatewayLink::Open { attempts: 3, .. }),
+            "{open:?}"
+        );
+        assert_eq!(port.opens.lock().unwrap().len(), 2, "one reopen succeeded");
+
+        // After: the *same* sink delivers into the new port.
+        sink.send_command(&cmd).await.unwrap();
+        assert_eq!(
+            port.cmds.lock().unwrap()[1].try_recv().unwrap(),
+            cmd.encode()
+        );
+        // And the new port's lines are verified and ingested with the same auth.
+        let line = signed_line(ROOT, 0x40, 30, KEEPALIVE);
+        let second_lines = port.opens.lock().unwrap()[1].clone();
+        second_lines.send(ConsoleEvent::Line(line)).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        assert!(world.current("mesh.gw-40").unwrap().is_some());
+
+        let states: Vec<String> = world
+            .history(GATEWAY_FACT)
+            .unwrap()
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}:{}",
+                    f.value["state"].as_str().unwrap(),
+                    f.value["attempts"]
+                )
+            })
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                "open:0",
+                "lost:0",
+                "reopening:0",
+                "reopening:1",
+                "reopening:2",
+                "open:3"
+            ]
+        );
     }
 }

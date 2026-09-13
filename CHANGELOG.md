@@ -5,6 +5,64 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A lost spine is recorded, reopened, and never mistaken for lost nodes (2026-09-13)
+
+At 18:56:33Z the brain's base-station port went away (`os error 22`, a
+surprise-removed device; cause still unknown). The I/O thread returned, the RX
+loop ended on one `WARN`, the mesh supervisor — deaf — presumed both nodes
+lost at 120 s while they beaconed normally, the posture policy's sends failed
+with "serial I/O thread has exited", and a person restarted the process
+fourteen minutes later. OBC-Prime `docs/SPINE-LOSS.md` is the design; this is
+it, in three parts, all hardware-free and unit-tested:
+
+- **The link has a fact.** `spine.gateway` (source `lora-gateway`, observed):
+  `open | lost | reopening` with `port`, `since_ms`, `error`, `attempts`,
+  `next_attempt_ms`, written on every transition and every attempt, so an
+  outage is legible from the history alone (`open:0 → lost → reopening:0 →
+  reopening:1 → … → open:3`). `status` prints it above the node lines;
+  `mesh_status` carries it as `spine`.
+- **Unobservable is not offline.** `MeshHealth::Unobservable`; `decide` now
+  takes the spine's state (`SpineView`, read from that fact — a body with no
+  serial gateway is always observable). While the link is down every node is
+  `unobservable` with the link's reason, once per outage: no escalation, no
+  recovery probe, no offline clock, an existing escalation neither renewed
+  nor cleared, and `hydrate_limits` waits. After the reopen a node unheard
+  since before the outage is offline *from the reopen*, not from its last
+  beacon — the host was not listening, so it cannot claim the node was gone.
+- **Reopen with backoff, forever.** `supervise_gateway` owns the port for
+  the life of the process: runs the RX loop, and when the I/O thread exits
+  (it now says why, in-band: `ConsoleEvent::Closed`) records `lost` and
+  reopens at 1, 2, 4, …, 30 s with no attempt limit, recording each. The
+  writer sits behind a `GatewayHandle` the supervisor swaps, so the
+  `SerialCommandSink` handed to `mesh_command`, the posture policy and the
+  supervisor at startup keeps working across outages; while down, a send
+  fails fast with the link state in the same words as the fact ("gateway
+  reopening (2 failed so far): …") and queues nothing. The same `LoraAuth`
+  runs every reopen, so the per-station windows carry over and a reopen
+  admits no replay of what was accepted before the loss.
+
+Unchanged, on purpose: the posture policy retries on the next turn as it
+did; the startup refusal for `[descending]` with no gateway is still a hard
+error — the *first* open is synchronous and final, a port lost later is the
+supervisor's — and `mesh_command`'s reply-awaited retry.
+
+Measured: the supervisor's own test walks an outage through two refused
+reopens and a third that succeeds under a paused clock, with the sink
+delivering before and after on the same `Arc`; the decision core's tests
+pin unobservable-not-escalated against the exact view that escalates when
+the spine is up, and the offline clock restarting at the reopen. Not yet
+measured: on the bench (SPINE-LOSS.md §5: pull the base's USB, wait past
+`escalate_after_ms`, replug; then a DTR reset for the auth resume) — the
+bench base is the live brain's, and the other session holds the node.
+
+### Changed (`obc-spine`)
+
+- `run_gateway_rx` borrows `&mut LoraAuth` and returns the close reason;
+  `open_split` returns `ConsoleLines` (`Receiver<ConsoleEvent>`);
+  `SerialCommandSink::new` takes an `Arc<GatewayHandle>`. `run_gateway_rx`
+  and the sink are no longer behind the `hardware` feature — only
+  `open_split` is. `tokio/test-util` as a dev-dependency for the paused clock.
+
 ## Unreleased — A reset no longer costs the node its rules (2026-09-13)
 
 Host-pushed reflex rules persist in NVS (`firmware/obc-esp32-s3/src/rules_store.rs`):

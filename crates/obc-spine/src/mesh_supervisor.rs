@@ -44,6 +44,12 @@ pub enum MeshHealth {
     Degraded,
     /// No mesh message within the staleness window.
     Offline,
+    /// The host cannot hear the mesh at all — the base station's serial link
+    /// is lost — so nothing can be said about this node. Not offline: a check
+    /// that could not run must not fail like a check that did (DECISIONS
+    /// 2026-09-12). On 2026-09-13 the brain lost its port and, deaf, presumed
+    /// both nodes lost while they beaconed normally.
+    Unobservable,
 }
 
 impl MeshHealth {
@@ -52,6 +58,7 @@ impl MeshHealth {
             MeshHealth::Online => "online",
             MeshHealth::Degraded => "degraded",
             MeshHealth::Offline => "offline",
+            MeshHealth::Unobservable => "unobservable",
         }
     }
 
@@ -60,7 +67,39 @@ impl MeshHealth {
             "online" => Some(Self::Online),
             "degraded" => Some(Self::Degraded),
             "offline" => Some(Self::Offline),
+            "unobservable" => Some(Self::Unobservable),
             _ => None,
+        }
+    }
+}
+
+/// Whether the host can hear the mesh right now — the gateway link, as an
+/// input to [`decide`]. Read from the `spine.gateway` fact the gateway
+/// supervisor writes; a body with no serial gateway (wired spine, tests) has
+/// no such fact and is observable.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpineView {
+    /// Messages can arrive. `since_ms` is when the link (re)opened: a node
+    /// unheard since before an outage is offline from the reopen, not from
+    /// its last beacon, so the outage never counts toward its escalation.
+    Observable { since_ms: u64 },
+    /// Nothing can arrive; every node is unobservable with this reason.
+    Unobservable { reason: String },
+}
+
+impl SpineView {
+    /// The view a body with no gateway link fact has.
+    pub const ALWAYS: SpineView = SpineView::Observable { since_ms: 0 };
+
+    /// From the gateway's own fact in world memory.
+    pub fn from_world(world: &WorldMemory) -> SpineView {
+        use crate::lora_gateway::GatewayLink;
+        match GatewayLink::read(world) {
+            None => SpineView::ALWAYS,
+            Some(GatewayLink::Open { since_ms, .. }) => SpineView::Observable { since_ms },
+            Some(link) => SpineView::Unobservable {
+                reason: link.refusal(),
+            },
         }
     }
 }
@@ -116,15 +155,34 @@ pub enum MeshDecision {
     ClearEscalation { node: String },
 }
 
-/// Pure decision core: from per-node views + now + config, produce the actions to apply.
-/// Health is emitted only when it *changes* (no churn); recovery only for offline nodes
-/// when `recover` is configured and the per-node rate limit has elapsed.
+/// Pure decision core: from per-node views + now + config + the state of the host's
+/// own link to the mesh, produce the actions to apply. Health is emitted only when it
+/// *changes* (no churn); recovery only for offline nodes when `recover` is configured
+/// and the per-node rate limit has elapsed. While the spine is unobservable every
+/// node is `unobservable` — no escalation, no probe, no offline clock — and an
+/// existing escalation is neither cleared nor renewed: nothing is known.
 pub fn decide(
     views: &[MeshNodeView],
     now_ms: u64,
     cfg: &MeshSupervisorConfig,
+    spine: &SpineView,
 ) -> Vec<MeshDecision> {
     let mut out = Vec::new();
+    let observable_since = match spine {
+        SpineView::Observable { since_ms } => *since_ms,
+        SpineView::Unobservable { reason } => {
+            for v in views {
+                if v.prev_health != Some(MeshHealth::Unobservable) {
+                    out.push(MeshDecision::Health {
+                        node: v.node.clone(),
+                        status: MeshHealth::Unobservable.as_str(),
+                        reason: reason.clone(),
+                    });
+                }
+            }
+            return out;
+        }
+    };
     for v in views {
         let age = now_ms.saturating_sub(v.last_seen_ms);
         let (status, reason) = if age > cfg.stale_ms {
@@ -149,11 +207,14 @@ pub fn decide(
         if status == MeshHealth::Offline {
             // Continuous-offline duration: if it was already offline, the health fact's
             // valid_from marks when it began; if it went offline this tick, that's ~now.
+            // Never earlier than the link's own (re)open: the host has not been
+            // listening for longer than that, so it cannot claim the node was.
             let offline_since = if v.prev_health == Some(MeshHealth::Offline) {
                 v.health_since_ms.unwrap_or(now_ms)
             } else {
                 now_ms
-            };
+            }
+            .max(observable_since);
             let offline_for = now_ms.saturating_sub(offline_since);
             let escalate_now =
                 cfg.escalate_after_ms > 0 && !v.escalated && offline_for >= cfg.escalate_after_ms;
@@ -400,7 +461,8 @@ pub fn status_json(world: &WorldMemory) -> serde_json::Value {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
 
-    let (mut online, mut degraded, mut offline, mut escalated) = (0u64, 0u64, 0u64, 0u64);
+    let (mut online, mut degraded, mut offline, mut unobservable, mut escalated) =
+        (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut nodes = Vec::with_capacity(views.len());
     for v in &views {
         let health = v.prev_health.map(|h| h.as_str()).unwrap_or("unknown");
@@ -408,6 +470,7 @@ pub fn status_json(world: &WorldMemory) -> serde_json::Value {
             "online" => online += 1,
             "degraded" => degraded += 1,
             "offline" => offline += 1,
+            "unobservable" => unobservable += 1,
             _ => {}
         }
         if v.escalated {
@@ -434,14 +497,23 @@ pub fn status_json(world: &WorldMemory) -> serde_json::Value {
         }));
     }
 
+    // The host's own link, so a reader of the status sees "the brain cannot hear
+    // the mesh" as a state of the brain, not as every node going quiet at once.
+    let spine = match SpineView::from_world(world) {
+        SpineView::Observable { .. } => json!({ "observable": true }),
+        SpineView::Unobservable { reason } => json!({ "observable": false, "reason": reason }),
+    };
+
     json!({
         "summary": {
             "nodes": views.len(),
             "online": online,
             "degraded": degraded,
             "offline": offline,
+            "unobservable": unobservable,
             "escalated": escalated,
         },
+        "spine": spine,
         "nodes": nodes,
         "escalations": recent_escalations(world, 10),
     })
@@ -457,7 +529,8 @@ pub async fn tick(
     now_ms: u64,
 ) -> usize {
     let views = snapshot(world);
-    let decisions = decide(&views, now_ms, cfg);
+    let spine = SpineView::from_world(world);
+    let decisions = decide(&views, now_ms, cfg, &spine);
     let mut applied = 0;
 
     // Every fact written below is a *conclusion*, and every one of them has inputs the
@@ -838,6 +911,11 @@ pub async fn hydrate_limits(
     now_ms: u64,
 ) -> usize {
     let Some(sink) = sink else { return 0 };
+    // Nothing can be pushed through a lost link; the boot evidence keeps, and the
+    // first tick after the reopen pushes it.
+    if let SpineView::Unobservable { .. } = SpineView::from_world(world) {
+        return 0;
+    }
     let views = boot_snapshot(world);
     let mut sent = 0;
     for push in limits_to_push(&views, limits, now_ms) {
@@ -913,6 +991,16 @@ mod tests {
     use super::*;
     use crate::lora_gateway::SOURCE;
     use std::sync::Mutex;
+
+    /// Every test written before the spine had a state ran with the host able to
+    /// hear the mesh; this keeps them saying so explicitly.
+    fn decide(
+        views: &[MeshNodeView],
+        now_ms: u64,
+        cfg: &MeshSupervisorConfig,
+    ) -> Vec<MeshDecision> {
+        super::decide(views, now_ms, cfg, &SpineView::ALWAYS)
+    }
 
     fn cfg(recover: Option<&str>) -> MeshSupervisorConfig {
         MeshSupervisorConfig {
@@ -1170,6 +1258,154 @@ mod tests {
         assert!(d
             .iter()
             .any(|x| matches!(x, MeshDecision::ClearEscalation { .. })));
+    }
+
+    // ── A lost spine (2026-09-13) ────────────────────────────────────────────
+
+    fn lost() -> SpineView {
+        SpineView::Unobservable {
+            reason: "gateway lost: os error 22".into(),
+        }
+    }
+
+    #[test]
+    fn with_the_spine_lost_a_node_past_the_threshold_is_unobservable_not_escalated() {
+        // The 2026-09-13 outage: the same view that escalates today…
+        let v = offline_view("n", 1_000);
+        let today = super::decide(
+            std::slice::from_ref(&v),
+            30_000,
+            &esc_cfg(),
+            &SpineView::ALWAYS,
+        );
+        assert!(today
+            .iter()
+            .any(|x| matches!(x, MeshDecision::Escalate { .. })));
+        // …yields one health change and nothing else while the host is deaf.
+        let d = super::decide(&[v], 30_000, &esc_cfg(), &lost());
+        assert_eq!(
+            d,
+            vec![MeshDecision::Health {
+                node: "n".into(),
+                status: "unobservable",
+                reason: "gateway lost: os error 22".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn an_unobservable_node_is_not_re_reported_probed_or_cleared_while_the_spine_is_down() {
+        let mut v = offline_view("n", 1_000);
+        v.prev_health = Some(MeshHealth::Unobservable);
+        v.escalated = true; // escalated before the loss: stays that way, unknown
+        v.last_recovery_ms = None; // a probe would be due — there is nothing to send it on
+        let d = super::decide(&[v], 1_000_000, &esc_cfg(), &lost());
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn the_offline_clock_restarts_at_the_reopen_not_at_the_last_beacon() {
+        // Unheard since 1_000; the link reopened at 300_000 after a five-minute
+        // outage; now is 305_000. Offline for 5 s from the reopen — not 304 s —
+        // so no escalation at a 20 s threshold, and the recovery probe runs.
+        let mut v = offline_view("n", 1_000);
+        v.prev_health = Some(MeshHealth::Unobservable);
+        let d = super::decide(
+            &[v],
+            305_000,
+            &esc_cfg(),
+            &SpineView::Observable { since_ms: 300_000 },
+        );
+        assert!(
+            d.iter().any(|x| matches!(
+                x,
+                MeshDecision::Health {
+                    status: "offline",
+                    ..
+                }
+            )),
+            "{d:?}"
+        );
+        assert!(!d.iter().any(|x| matches!(x, MeshDecision::Escalate { .. })));
+        assert!(d.iter().any(|x| matches!(x, MeshDecision::Recover { .. })));
+        // Even a view that was already `offline` before the reopen counts from the reopen.
+        let d = super::decide(
+            &[offline_view("n", 1_000)],
+            305_000,
+            &esc_cfg(),
+            &SpineView::Observable { since_ms: 300_000 },
+        );
+        assert!(!d.iter().any(|x| matches!(x, MeshDecision::Escalate { .. })));
+    }
+
+    #[tokio::test]
+    async fn tick_reads_the_spine_from_the_gateway_fact_and_writes_unobservable_once() {
+        use crate::lora_gateway::GatewayLink;
+        let world = WorldMemory::open_in_memory().unwrap();
+        world
+            .observe_as(
+                "mesh.n",
+                json!({ "last_type": "beacon" }),
+                1_000,
+                1_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+        let c = esc_cfg();
+        let mock = Arc::new(MockSink {
+            sent: Mutex::new(Vec::new()),
+        });
+        let sink: Arc<dyn CommandSink> = mock.clone();
+
+        GatewayLink::Lost {
+            since_ms: 2_000,
+            error: "os error 22".into(),
+        }
+        .record(&world, "COM3", 2_000);
+        tick(&world, Some(&sink), &c, 30_000).await;
+        tick(&world, Some(&sink), &c, 35_000).await;
+        let health = world.history("mesh.n.health").unwrap();
+        assert_eq!(health.len(), 1, "one fact per outage, not one per tick");
+        assert_eq!(health[0].value["status"], json!("unobservable"));
+        assert!(health[0].value["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("gateway lost"));
+        assert!(
+            world.current("mesh.n.escalation").unwrap().is_none(),
+            "a deaf host presumes nothing"
+        );
+        assert_eq!(mock.sent.lock().unwrap().len(), 0);
+
+        // Reopened: the node reads offline from the reopen, then online on its beacon.
+        GatewayLink::Open {
+            since_ms: 40_000,
+            attempts: 3,
+        }
+        .record(&world, "COM3", 40_000);
+        tick(&world, Some(&sink), &c, 41_000).await;
+        let h = world.current("mesh.n.health").unwrap().unwrap();
+        assert_eq!(h.value["status"], json!("offline"));
+        assert!(world.current("mesh.n.escalation").unwrap().is_none());
+        world
+            .observe_as(
+                "mesh.n",
+                json!({ "last_type": "beacon" }),
+                42_000,
+                42_000,
+                SOURCE,
+                Origin::Observed,
+            )
+            .unwrap();
+        tick(&world, Some(&sink), &c, 43_000).await;
+        assert_eq!(
+            world.current("mesh.n.health").unwrap().unwrap().value["status"],
+            json!("online")
+        );
+        let status = status_json(&world);
+        assert_eq!(status["spine"]["observable"], json!(true));
+        assert_eq!(status["summary"]["unobservable"], json!(0));
     }
 
     #[tokio::test]

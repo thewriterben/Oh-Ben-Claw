@@ -936,39 +936,83 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 "LoRa gateway: verifying station frames under the spine root \
                  (compare with the stations' boot logs)"
             );
+            // The first open is synchronous and its failure is final for this
+            // process: `[descending]` below refuses to start without a sink, and
+            // a port that cannot be opened at boot is a configuration question.
+            // A port lost *later* is not — that is the supervisor's job.
             match oh_ben_claw::spine::lora_gateway::open_split(&gw.port, gw.baud) {
                 Ok((rd, wr)) => {
+                    let now_ms = || {
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0)
+                    };
+                    let handle = Arc::new(oh_ben_claw::spine::lora_gateway::GatewayHandle::open(
+                        wr,
+                        now_ms(),
+                    ));
                     // Inbound: mesh node messages -> world memory (needs a store).
                     match &world_mem {
                         Some(world) => {
+                            // The link's own fact, from the first open on.
+                            oh_ben_claw::spine::lora_gateway::GatewayLink::Open {
+                                since_ms: now_ms(),
+                                attempts: 0,
+                            }
+                            .record(world, &gw.port, now_ms());
+                            // The supervisor owns the port for the life of the
+                            // process: it runs the RX loop, records `spine.gateway`
+                            // on every transition, and reopens with backoff after
+                            // a loss (SPINE-LOSS.md, 2026-09-13: the brain ran
+                            // headless for fourteen minutes after `os error 22`).
                             let world_rx = Arc::clone(world);
+                            let handle_rx = Arc::clone(&handle);
+                            let (port, baud) = (gw.port.clone(), gw.baud);
+                            let reopen = {
+                                let port = port.clone();
+                                move || {
+                                    let port = port.clone();
+                                    async move {
+                                        // `open_split` blocks ~1.5 s holding the lines
+                                        // low; keep that off the runtime's workers.
+                                        tokio::task::spawn_blocking(move || {
+                                            oh_ben_claw::spine::lora_gateway::open_split(
+                                                &port, baud,
+                                            )
+                                        })
+                                        .await
+                                        .map_err(anyhow::Error::from)?
+                                    }
+                                }
+                            };
                             tokio::spawn(async move {
-                                let now_ms = || {
-                                    std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .map(|d| d.as_millis() as u64)
-                                        .unwrap_or(0)
-                                };
-                                oh_ben_claw::spine::lora_gateway::run_gateway_rx(
-                                    rd, auth, world_rx, now_ms,
+                                oh_ben_claw::spine::lora_gateway::supervise_gateway(
+                                    port, rd, reopen, auth, world_rx, handle_rx, now_ms,
                                 )
                                 .await;
-                                tracing::warn!("LoRa gateway RX loop ended (serial link closed)");
                             });
-                            info!("LoRa gateway: inbound mesh -> world memory active (verified)");
+                            info!(
+                                "LoRa gateway: inbound mesh -> world memory active (verified); \
+                                 the link is supervised and reopened on loss"
+                            );
                         }
                         None => {
+                            // No store: nothing to ingest into and nowhere to record
+                            // the link's state, so no supervisor either — a loss
+                            // here is final, as it was before 2026-09-13.
                             drop(rd);
                             tracing::warn!(
                                 "[lora_gateway] inbound disabled ([perception].world_memory is \
-                                 off); outbound mesh_command still active"
+                                 off); outbound mesh_command still active, link not supervised"
                             );
                         }
                     }
                     // Outbound: expose `mesh_command` so the agent can command a node
                     // over LoRa. The node gates execution on its own Track 0.
-                    let sink: Arc<dyn oh_ben_claw::spine::lora_gateway::CommandSink> =
-                        Arc::new(oh_ben_claw::spine::lora_gateway::SerialCommandSink::new(wr));
+                    let sink: Arc<dyn oh_ben_claw::spine::lora_gateway::CommandSink> = Arc::new(
+                        oh_ben_claw::spine::lora_gateway::SerialCommandSink::new(handle),
+                    );
                     mesh_sink = Some(Arc::clone(&sink));
                     let mut tool = oh_ben_claw::tools::builtin::mesh::MeshCommandTool::new(sink);
                     // Reply-awaited retry needs the world to read replies from;
@@ -3630,6 +3674,36 @@ async fn run_status(config: &Config) -> Result<()> {
         });
         if let Ok(world) = oh_ben_claw::memory::world::WorldMemory::open(&world_path) {
             let views = oh_ben_claw::spine::mesh_supervisor::snapshot(&world);
+            // The host's own link first: "the brain cannot hear the mesh" is a
+            // state of the brain, and every node line below is conditional on it.
+            if let Some(link) = oh_ben_claw::spine::lora_gateway::GatewayLink::read(&world) {
+                let f = world
+                    .current(oh_ben_claw::spine::lora_gateway::GATEWAY_FACT)
+                    .ok()
+                    .flatten();
+                let port = f
+                    .as_ref()
+                    .and_then(|f| f.value.get("port").and_then(|p| p.as_str()))
+                    .unwrap_or("-")
+                    .to_string();
+                match &link {
+                    oh_ben_claw::spine::lora_gateway::GatewayLink::Open { attempts, .. } => {
+                        println!(
+                            "\nSpine link: {port} open{}",
+                            if *attempts > 0 {
+                                format!(" (reopened after {attempts} attempt(s))")
+                            } else {
+                                String::new()
+                            }
+                        )
+                    }
+                    other => println!(
+                        "\nSpine link: {port} {} — {}",
+                        other.state(),
+                        other.refusal()
+                    ),
+                }
+            }
             if !views.is_empty() {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

@@ -31,7 +31,8 @@ use oh_ben_claw::agent::posture::{Posture, PostureConfig, PosturePolicy, Posture
 use oh_ben_claw::memory::mushroom::Assessment;
 use oh_ben_claw::memory::world::WorldMemory;
 use oh_ben_claw::spine::lora_gateway::{
-    open_split, run_gateway_rx, CommandSink, LoraAuth, NodeCommand, SerialCommandSink,
+    open_split, run_gateway_rx, CommandSink, GatewayHandle, LoraAuth, NodeCommand,
+    SerialCommandSink,
 };
 use serde_json::Value;
 
@@ -122,8 +123,12 @@ async fn a_novel_objective_lights_the_led_and_a_familiar_one_clears_it() {
     let world = Arc::new(WorldMemory::open_in_memory().unwrap());
     let (rx, wr) = open_split(&port, 115_200).expect("base station console");
     let w = Arc::clone(&world);
-    let _rx_task = tokio::spawn(async move { run_gateway_rx(rx, auth, w, now_ms).await });
-    let sink: Arc<dyn CommandSink> = Arc::new(SerialCommandSink::new(wr));
+    let _rx_task = tokio::spawn(async move {
+        let mut auth = auth;
+        run_gateway_rx(rx, &mut auth, w, now_ms).await
+    });
+    let handle = Arc::new(GatewayHandle::open(wr, now_ms()));
+    let sink: Arc<dyn CommandSink> = Arc::new(SerialCommandSink::new(handle));
 
     let cfg = PostureConfig {
         enabled: true,

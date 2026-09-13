@@ -65,7 +65,10 @@ async fn listen(root: &str) -> (Vec<serde_json::Value>, Vec<String>) {
         }
     };
     let w = Arc::clone(&world);
-    let task = tokio::spawn(async move { run_gateway_rx(rx, auth, w, now_ms).await });
+    let task = tokio::spawn(async move {
+        let mut auth = auth;
+        run_gateway_rx(rx, &mut auth, w, now_ms).await
+    });
     tokio::time::sleep(LISTEN).await;
     task.abort();
 
