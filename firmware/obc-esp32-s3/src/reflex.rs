@@ -236,7 +236,27 @@ impl Condition {
         }
     }
 
-    /// Every (entity, `tau_s`) baseline this condition asks for.
+    /// Every entity this condition reads, depth-first, first occurrence only.
+    /// This order is the wire order of a report's `ev` array, so it is a
+    /// contract, not a convenience: the host recovers what each number is
+    /// from the rule it pushed, by position.
+    pub fn collect_entities_ordered(&self, out: &mut Vec<String>) {
+        match self {
+            Condition::Sensor { entity, .. }
+            | Condition::SensorSlot { entity, .. }
+            | Condition::SensorBaseline { entity, .. }
+            | Condition::GpioEq { entity, .. } => {
+                if !out.iter().any(|e| e == entity) {
+                    out.push(entity.clone());
+                }
+            }
+            Condition::And { all } => all.iter().for_each(|c| c.collect_entities_ordered(out)),
+            Condition::Or { any } => any.iter().for_each(|c| c.collect_entities_ordered(out)),
+        }
+    }
+
+    /// Every (entity, `tau_s`) baseline this condition asks for, depth-first,
+    /// first occurrence only — the wire order of a report's `bl` array.
     fn collect_baselines(&self, set: &mut Vec<(String, u64)>) {
         match self {
             Condition::SensorBaseline { entity, tau_s, .. } => {
@@ -373,11 +393,61 @@ impl ReflexRule {
     }
 }
 
-/// A reflex that fired this tick.
+/// A reflex that fired this tick, with the evidence it fired on.
+///
+/// `ev` and `bl` are the transition log: the readings of every entity the
+/// rule's condition reads, in [`Condition::collect_entities_ordered`] order,
+/// and the baselines of every `SensorBaseline` leaf, in condition order —
+/// what a later vetting stage (or a person labelling false fires) needs
+/// from the moment of the fire, and nothing else. Arrays, not maps: the
+/// report rides a 228-byte LoRa line, an entity name is ~24 bytes and a
+/// number ~6, and the rule id already names the rule the host holds. An
+/// entity absent from the snapshot is `null` in its slot, so positions
+/// stay aligned.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FiredReflex {
     pub rule_id: String,
     pub action: Action,
+    pub ev: Vec<Option<f64>>,
+    pub bl: Vec<f64>,
+}
+
+impl FiredReflex {
+    fn from_rule(
+        rule: &ReflexRule,
+        snapshot: &HashMap<String, f64>,
+        baselines: &Baselines,
+    ) -> Self {
+        let mut entities = Vec::new();
+        rule.when.collect_entities_ordered(&mut entities);
+        let mut keys = Vec::new();
+        rule.when.collect_baselines(&mut keys);
+        Self {
+            rule_id: rule.id.clone(),
+            action: rule.then.clone(),
+            // Three decimals on the wire, for both. A baseline is an average
+            // and prints at full f64 width; a reading widened from the
+            // sensor's f32 prints as `34.29999923706055` (bench, 2026-09-13
+            // — 13 bytes of a 228-byte line on digits the sensor never had).
+            // 1e-3 is below every quantum here: die temperature ~1 °C, DHT22
+            // 0.1 °C / 0.1 %RH, link silence 1 ms. Evaluation uses the
+            // snapshot's own values; only the copy that rides the mesh is
+            // rounded.
+            ev: entities
+                .iter()
+                .map(|e| snapshot.get(e).map(|v| wire(*v)))
+                .collect(),
+            bl: keys
+                .iter()
+                .filter_map(|k| baselines.get(k).map(|b| wire(b.value)))
+                .collect(),
+        }
+    }
+}
+
+/// A value as it rides the mesh: three decimals.
+fn wire(v: f64) -> f64 {
+    (v * 1000.0).round() / 1000.0
 }
 
 /// Evaluates [`ReflexRule`]s against sensor snapshots with per-rule debounce.
@@ -463,10 +533,7 @@ impl ReflexEngine {
         self.rules
             .iter()
             .filter(|rule| rule.when.eval(snapshot, &self.mods, &self.baselines))
-            .map(|rule| FiredReflex {
-                rule_id: rule.id.clone(),
-                action: rule.then.clone(),
-            })
+            .map(|rule| FiredReflex::from_rule(rule, snapshot, &self.baselines))
             .collect()
     }
 
@@ -536,10 +603,7 @@ impl ReflexEngine {
             if rule.fire_on_change {
                 self.fired_this_run.insert(rule.id.clone(), true);
             }
-            fired.push(FiredReflex {
-                rule_id: rule.id.clone(),
-                action: rule.then.clone(),
-            });
+            fired.push(FiredReflex::from_rule(rule, snapshot, &self.baselines));
         }
         fired
     }
@@ -797,6 +861,71 @@ mod tests {
         );
         assert!(eng.set_rules(vec![baseline_rule(f64::NAN, 5.0)]).is_err());
         assert!(eng.set_rules(vec![baseline_rule(-2.0, 0.5)]).is_ok());
+    }
+
+    #[test]
+    fn a_fire_carries_its_evidence_in_rule_order() {
+        // The transition log. `ev` is every entity the condition reads, depth-
+        // first, first occurrence only, `null` where the snapshot lacks one;
+        // `bl` is every baseline leaf's baseline in the same walk.
+        let mut eng = ReflexEngine::new(vec![rule(
+            "both",
+            Condition::Or {
+                any: vec![
+                    Condition::And {
+                        all: vec![
+                            Condition::Sensor {
+                                entity: "a".into(),
+                                op: Cmp::Gt,
+                                value: 0.0,
+                            },
+                            Condition::GpioEq {
+                                entity: "armed".into(),
+                                value: 1,
+                            },
+                        ],
+                    },
+                    Condition::SensorBaseline {
+                        entity: "t".into(),
+                        op: Cmp::Gt,
+                        offset: 2.0,
+                        tau_s: 10.0,
+                    },
+                    Condition::Sensor {
+                        entity: "a".into(), // a repeat: reported once
+                        op: Cmp::Lt,
+                        value: 100.0,
+                    },
+                ],
+            },
+            Action::Escalate {
+                reason: "either".into(),
+            },
+            0,
+        )]);
+        eng.evaluate(&snap(&[("t", 20.0)]), 0);
+        let fired = eng.evaluate(&snap(&[("a", 5.0), ("t", 30.0)]), 1_000);
+        assert_eq!(fired.len(), 1);
+        assert_eq!(
+            fired[0].ev,
+            vec![Some(5.0), None, Some(30.0)],
+            "a, armed, t"
+        );
+        let b = ((20.0 + (1.0 - (-0.1f64).exp()) * 10.0) * 1000.0).round() / 1000.0;
+        assert_eq!(fired[0].bl, vec![b], "to three decimals on the wire");
+        assert_eq!(
+            serde_json::to_value(&fired[0]).unwrap()["ev"],
+            serde_json::json!([5.0, null, 30.0])
+        );
+        // A scratch tick carries the same evidence, against the live baseline.
+        let scratch = eng.evaluate_scratch(&snap(&[("a", 1.0)]));
+        assert_eq!(scratch[0].ev, vec![Some(1.0), None, None]);
+        assert_eq!(scratch[0].bl, vec![b]);
+        // A reading widened from the sensor's f32 rides as the sensor read it.
+        let widened = f64::from(34.3f32);
+        assert_eq!(format!("{widened}"), "34.29999923706055");
+        let scratch = eng.evaluate_scratch(&snap(&[("a", widened)]));
+        assert_eq!(scratch[0].ev[0], Some(34.3));
     }
 
     #[test]

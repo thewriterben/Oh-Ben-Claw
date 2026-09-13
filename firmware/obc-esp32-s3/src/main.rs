@@ -925,15 +925,32 @@ fn main() -> anyhow::Result<()> {
                         Err(e) => error = Some(e.to_string()),
                     }
                 }
-                let report = serde_json::json!({
+                // `ev`/`bl`: what the rule fired on — the readings of the
+                // entities it reads and the baselines it compares against, by
+                // position in the rule (see `reflex::FiredReflex`). This is the
+                // transition log a later vetting stage trains on; it rides in
+                // every report from the day the rule does, and costs ~12 bytes
+                // a value against the 228-byte line
+                // (`tests/spine_payload_budget.rs` measures the two built-in
+                // shapes).
+                let mut report = serde_json::json!({
                     "type": "reflex",
                     "node_id": NODE_ID,
                     "rule_id": fired.rule_id,
                     "action": serde_json::to_value(&fired.action).unwrap_or(serde_json::Value::Null),
                     "applied": applied,
-                    "error": error,
                     "ts_ms": now,
+                    "ev": fired.ev,
                 });
+                // `error` only when there is one: `"error":null` was 13 bytes of
+                // every report, and with the evidence aboard the escalate shape
+                // sat 7 bytes under the line (`spine_payload_budget`).
+                if let Some(e) = error {
+                    report["error"] = serde_json::json!(e);
+                }
+                if !fired.bl.is_empty() {
+                    report["bl"] = serde_json::json!(fired.bl);
+                }
                 let spine_msg = report.to_string();
                 send_line(&mut usb, &spine_msg);
                 mirror_spine(&mut spine_uart, &spine_msg);
@@ -1189,12 +1206,19 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                             Err(e) => error = Some(e.to_string()),
                         }
                     }
-                    reports.push(serde_json::json!({
-                    "rule_id": f.rule_id,
-                    "action": serde_json::to_value(&f.action).unwrap_or(serde_json::Value::Null),
-                    "applied": applied,
-                    "error": error,
-                }));
+                    let mut report = serde_json::json!({
+                        "rule_id": f.rule_id,
+                        "action": serde_json::to_value(&f.action).unwrap_or(serde_json::Value::Null),
+                        "applied": applied,
+                        "ev": f.ev,
+                    });
+                    if let Some(e) = error {
+                        report["error"] = serde_json::json!(e);
+                    }
+                    if !f.bl.is_empty() {
+                        report["bl"] = serde_json::json!(f.bl);
+                    }
+                    reports.push(report);
                 }
                 Ok(serde_json::json!({ "node_id": NODE_ID, "fired": reports }).to_string())
             }

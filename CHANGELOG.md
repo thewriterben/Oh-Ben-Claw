@@ -5,6 +5,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Every reflex report carries the evidence it fired on (2026-09-13)
+
+A node's `type: reflex` report gains `ev` — one number per entity the rule's
+condition reads, depth-first, first occurrence only, `null` where the
+snapshot lacked one — and `bl`, the baseline behind each `sensor_baseline`
+leaf. The transition log, from the day a rule ships: what a later vetting
+stage trains on, or a person labels false fires from. The host stores every
+report whole as `mesh.<node>.reflex`; nothing there changed.
+
+Arrays by position, not maps by name: the report rides a 228-byte line, an
+entity name is ~24 bytes and a number ~6, and the rule id names the rule.
+Three decimals on the wire (a reading widened from f32 printed as
+`34.29999923706055` on the first run; 1e-3 is below every sensor quantum
+here); `error` only when there is one (`"error":null` was 13 bytes of every
+report, and with the evidence aboard the escalate shape had 7 bytes left).
+`spine_payload_budget` measures the three report shapes; the escalate report
+with one `ev` value is now the tightest mesh payload at 208 B, 20 spare, and
+the gate names it. §A5f re-run 12/12 with `ev` on every report
+(`results/bench_die_rule-20260913-122058.json`). Walkthrough §A5k.
+
+That closes step 1 of the WILD port: detector wired to the right input
+(link contact), persistence vet (`hold_ms`), history-relative threshold
+(`sensor_baseline`), and a log of every fire. What is not built, on purpose:
+any model, any IMU, a rate condition, `offset` on a slot — each waits for a
+concrete use.
+
 ## Unreleased — `sensor_baseline`: a threshold on the signal's own history (2026-09-13)
 
 `Condition::SensorBaseline { entity, op, offset, tau_s }`, host and node,

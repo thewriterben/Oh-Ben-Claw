@@ -750,6 +750,34 @@ report (`results/bench_baseline_rule-20260913-120857.json`). A flat signal
 is weak evidence for a rule about departures; the warm phase is the one
 that proves it acts, and it needs a hand on the board.
 
+### A5k. Every reflex report carries the evidence it fired on
+
+**What it proves:** that the transition log exists from the day the rule
+does. A node's `type: reflex` report now carries `ev` — one number per
+entity the rule's condition reads, in the condition's depth-first order,
+`null` where the snapshot lacked one — and, for a `sensor_baseline` rule,
+`bl`, the baseline it compared against. This is what a later vetting stage
+(the CNN+GRU WILD runs on the 0.5 s before each candidate, or a person
+labelling false fires by hand) needs from the moment of the fire; the host
+already stores every report whole as `mesh.<node>.reflex`, so nothing on
+the host changed.
+
+Arrays by position, not maps by name, because the report rides a 228-byte
+LoRa line: an entity name is ~24 bytes, a number ~6, and the rule id
+already names the rule the host holds. Values ride at three decimals — a
+reading widened from the sensor's f32 printed as `34.29999923706055` on
+the first run, 13 bytes of digits the sensor never had — and `error` rides
+only when there is one: `"error":null` was 13 bytes of every report, and
+with the evidence aboard the escalate shape sat 7 bytes under the line.
+`tests/spine_payload_budget.rs` now measures the three report shapes; the
+escalate report with one `ev` value is the tightest thing on the mesh at
+208 B, 20 spare, and the gate names it.
+
+**Run 2026-09-13:** §A5f's script, 12/12; each `die-cool` / `die-hot`
+report carries its `ev` (`[34.3]`, `[33.3]` — the die cooled a degree
+mid-run) and no `error` key
+(`results/bench_die_rule-20260913-122058.json`).
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**

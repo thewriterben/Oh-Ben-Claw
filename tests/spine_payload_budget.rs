@@ -281,6 +281,66 @@ fn census() -> Vec<Row> {
         carriage: Carriage::Mesh,
     });
 
+    // The node's own reflex reports (`firmware/obc-esp32-s3/src/main.rs`, the
+    // autonomous tick), which since 2026-09-13 carry the evidence they fired
+    // on: `ev`, one number per entity the rule reads, and `bl`, one per
+    // baseline leaf. Arrays by position, not maps by name — an entity name is
+    // ~24 bytes and would have put the escalate shape over the line. The
+    // shapes below are the two built-in rules and the bench's baseline rule,
+    // spelled the way the firmware spells them (`serde_json::json!`, sorted
+    // keys), with the longest values each field takes in practice. `error`
+    // rides only when there is one (it was `"error":null`, 13 bytes of every
+    // report, until the evidence needed the room), and a baseline is sent
+    // to three decimals.
+    let reflex_report = |rule_id: &str,
+                         action: serde_json::Value,
+                         ev: serde_json::Value,
+                         bl: Option<serde_json::Value>| {
+        let mut r = json!({
+            "type": "reflex",
+            "node_id": NODE,
+            "rule_id": rule_id,
+            "action": action,
+            "applied": true,
+            "ts_ms": 4_294_967_295u64,
+            "ev": ev,
+        });
+        if let Some(bl) = bl {
+            r["bl"] = bl;
+        }
+        r.to_string().len()
+    };
+    rows.push(Row {
+        name: "reflex report: die-hot + ev",
+        bytes: reflex_report(
+            "die-hot",
+            json!({"type": "gpio_write", "node_id": "self", "pin": 21, "value": 0}),
+            json!([34.3]),
+            None,
+        ),
+        carriage: Carriage::Mesh,
+    });
+    rows.push(Row {
+        name: "reflex report: link-offline + ev",
+        bytes: reflex_report(
+            "safe-link-offline",
+            json!({"type": "escalate", "reason": "host link lost — entering offline safing"}),
+            json!([30546.0]),
+            None,
+        ),
+        carriage: Carriage::Mesh,
+    });
+    rows.push(Row {
+        name: "reflex report: die-rising + ev + bl",
+        bytes: reflex_report(
+            "die-rising",
+            json!({"type": "gpio_write", "node_id": "self", "pin": 21, "value": 0}),
+            json!([36.3]),
+            Some(json!([34.123])),
+        ),
+        carriage: Carriage::Mesh,
+    });
+
     rows
 }
 
@@ -372,9 +432,17 @@ fn the_tightest_mesh_payload_has_room() {
         .filter(|r| r.carriage == Carriage::Mesh)
         .max_by_key(|r| r.bytes)
         .expect("the census is not empty");
-    assert_eq!(
-        tightest.name, "set_limits, two pins",
-        "the tightest mesh payload changed; re-read the margin before trusting it"
+    // Re-read 2026-09-13, when the reflex reports gained their evidence: the
+    // escalate-shaped report with one `ev` value is now the tightest thing on
+    // the mesh, 4 bytes tighter than the two-pin `set_limits`, and it got
+    // there only after `"error":null` left the report. Both are named so a
+    // third contender trips this line and gets its margin read too.
+    assert!(
+        tightest.name == "set_limits, two pins"
+            || tightest.name == "reflex report: link-offline + ev",
+        "the tightest mesh payload changed ({} at {} B); re-read the margin before trusting it",
+        tightest.name,
+        tightest.bytes
     );
     let spare = MESH_LINE_BUDGET - tightest.bytes;
     println!(
@@ -384,7 +452,7 @@ fn the_tightest_mesh_payload_has_room() {
     assert!(
         spare >= 16,
         "the tightest mesh payload has only {spare} bytes spare; a field added to \
-         SafetyLimit will push Track 0 configuration off the mesh"
+         SafetyLimit or to the node's reflex report will push it off the mesh"
     );
 }
 
