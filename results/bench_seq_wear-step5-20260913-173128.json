@@ -1,0 +1,50 @@
+{
+  "step": 5,
+  "port": "COM7",
+  "station": "gw-40",
+  "events": [
+    {
+      "at": "17:30:21",
+      "event": "baseline",
+      "pass": true,
+      "detail": "mesh.gw-40 last_type=gw_keepalive health=offline escalation=cleared"
+    },
+    {
+      "at": "17:30:21",
+      "event": "resumed",
+      "pass": true,
+      "detail": "fault injected at 17:25:58 in an earlier run; station-side events recorded there"
+    },
+    {
+      "at": "17:30:21",
+      "event": "brain reads the station offline (spine up, so offline \u2014 not unobservable)",
+      "pass": true,
+      "detail": "health={'reason': 'no mesh message for 94578 ms', 'status': 'offline', 'ts_ms': 1789342149794} after 264 s"
+    },
+    {
+      "at": "17:31:12",
+      "event": "brain escalates the silent station",
+      "pass": true,
+      "detail": "escalation={'reason': 'offline for 120001 ms \u2014 presumed lost', 'status': 'escalated', 'ts_ms': 1789342269795}"
+    },
+    {
+      "at": "17:31:13",
+      "event": "reset restores the counter above the persisted ceiling",
+      "pass": true,
+      "detail": "boot line count=18784 nvs=(132, 624, 756)"
+    },
+    {
+      "at": "17:31:28",
+      "event": "station transmits again",
+      "pass": true,
+      "detail": "2 frames in 15 s after the reset"
+    },
+    {
+      "at": "17:31:28",
+      "event": "brain clears the escalation on its return",
+      "pass": true,
+      "detail": "escalation={'status': 'cleared', 'ts_ms': 1789342284801}"
+    }
+  ],
+  "pass": true
+}

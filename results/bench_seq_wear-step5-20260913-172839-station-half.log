@@ -1,0 +1,37 @@
+﻿[17:25:54] PASS baseline: mesh.gw-40 last_type=gw_keepalive health=online escalation=cleared
+[17:25:58] PASS fault injected: station acknowledged the poison
+[17:27:39] PASS transmit refused within RESERVE frames: 20 frames transmitted after the fault before refusal; refused after 104 s
+[17:28:39] PASS station silent after refusal: 0 frames transmitted in the 60 s after refusal
+python : Traceback (most recent call last):
+At C:\Users\Benji\AppData\Roaming\Claude\local-agent-mode-sessions\3c4783bb-b2a9-4f0e-9e80-94f6e6d608ab\92216e10-f432-4
+007-a573-c30304dff63a\local_23771222-a649-4297-a2ea-27cd20d51f9f\outputs\run_step5.ps1:3 char:1
++ python -X utf8 -u scripts/bench_seq_wear.py --port COM7 --station gw- ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "F:\Documents\GitHub\Oh-Ben-Claw\scripts\bench_seq_wear.py", line 284, in <module>
+    main()
+    ~~~~^^
+  File "F:\Documents\GitHub\Oh-Ben-Claw\scripts\bench_seq_wear.py", line 279, in main
+    ok = step4(a) if a.step == "step4" else step5(a)
+                                            ~~~~~^^^
+  File "F:\Documents\GitHub\Oh-Ben-Claw\scripts\bench_seq_wear.py", line 247, in step5
+    offline = watch_world(lambda c: (lambda h: h if h and h.get("status") == "offline" else None)(current(c, 
+f"mesh.{a.station}.health")[0]), a.watch)
+  File "F:\Documents\GitHub\Oh-Ben-Claw\scripts\bench_seq_wear.py", line 237, in watch_world
+    c = world()
+  File "F:\Documents\GitHub\Oh-Ben-Claw\scripts\bench_seq_wear.py", line 105, in world
+    shutil.copy(src + suf, os.path.join(tmp, "world.db" + suf))
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\shutil.py", line 489, in copy
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\shutil.py", line 341, in copyfile
+    _copyfileobj_readinto(fsrc, fdst, min(file_size, COPY_BUFSIZE))
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\shutil.py", line 239, in _copyfileobj_readinto
+    n = fsrc_readinto(mv)
+PermissionError: [Errno 13] Permission denied
+exit 1
+DONE

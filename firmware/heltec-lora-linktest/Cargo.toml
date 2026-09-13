@@ -38,6 +38,13 @@ bench-low-power = []
 # the frame after any received frame, reliably. A relay is a role
 # (heltec-relay); a station with a host plugged in should not play it.
 no-relay = []
+# Bench only: the console line `{"bench":"nvs_fault"}` poisons the counter
+# store so every NVS read and write fails from then on — SPINE-REPLAY.md §6
+# step 5 ("NVS failure stops transmission") without corrupting a real
+# partition. The fault is at the `CeilingStore` boundary, which is where the
+# firmware decides to fail closed; a reset clears it. Never in a field build:
+# the boot log names it.
+bench-nvs-fault = []
 
 [build-dependencies]
 embuild = "0.33"

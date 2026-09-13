@@ -913,6 +913,40 @@ into the host's unchanged windows. Not run separately: §5's DTR reset of
 a station across a reopen; the pull *is* a base reset, and the
 station-reset property itself is A5d's reboot-gap run.
 
+### A5o. The counter ceiling under a crash loop and a dead store
+
+**What it proves:** SPINE-REPLAY.md §6 steps 4 and 5, the two left after
+the ceiling scheme's first bench (A5d ran 1–3). Step 4: a station in a
+boot loop never reuses a counter and pays exactly one ceiling write per
+boot — the counter resumes 32 higher every time. Step 5: a station whose
+NVS fails stops transmitting rather than run on a counter it cannot back,
+the brain reads it as offline and presumes it lost, and a reset brings it
+back above the last persisted ceiling.
+
+**Measured with** `scripts/bench_seq_wear.py` on the bridge (COM7; the
+brain keeps the base). Step 4 resets the station through the CP2102 (RTS
+with DTR low) and reads the boot line. Step 5 needs a `bench-nvs-fault`
+build: `{"bench":"nvs_fault"}` on the console poisons the store.
+
+```powershell
+python scripts\bench_seq_wear.py --port COM7 --station gw-40 step4 --resets 10 --interval 4
+python scripts\bench_seq_wear.py --port COM7 --station gw-40 step5 --watch 300
+```
+
+**Run 2026-09-13 17:22–17:31: PASS.** Step 4, 40 resets over two runs:
+Δ = 32 on every boot, 40 writes inferred, no repeat
+(`results/bench_seq_wear-step4-20260913-172317.json`, `…-172501.json`).
+`nvs_get_stats().free_entries` stayed at 624 throughout — it does not see
+a rewrite of an existing key, so flash wear is still inferred, not
+measured. Step 5: 20 frames after the fault (the numbers already
+authorised), then `transmit refused` and 60 s of silence; brain: `offline`
+at 94.6 s, `presumed lost` 120 s later (a Telegram escalation, correctly);
+reset → `resumed at 18784` = the last ceiling persisted before the fault,
+frames again in 15 s, escalation cleared 15 s after that
+(`results/bench_seq_wear-step5-20260913-173128.json`). The first step-5
+run's station half died on a WAL checkpoint while copying `world.db`; the
+script now retries, and `--fault-at` resumes the brain half.
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**

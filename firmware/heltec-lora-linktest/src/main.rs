@@ -101,18 +101,55 @@ impl KeyRing {
 /// counter, `spine/rx_XX` for the receive window of each source heard. See
 /// `SeqCounter` and `ReplayWindow` in `spine.rs` for why ceilings, not
 /// positions, and why the two round in opposite directions.
-struct NvsCeiling(EspNvs<NvsDefault>);
+struct NvsCeiling {
+    nvs: EspNvs<NvsDefault>,
+    /// Bench fault (`bench-nvs-fault` builds only): once set, every read and
+    /// write fails, as a full or worn partition would. Cleared by a reset.
+    poisoned: bool,
+}
+
+impl NvsCeiling {
+    fn new(nvs: EspNvs<NvsDefault>) -> Self {
+        Self {
+            nvs,
+            poisoned: false,
+        }
+    }
+}
 
 impl CeilingStore for NvsCeiling {
     fn read(&mut self, key: &str) -> Result<u32, StoreError> {
-        self.0
+        if self.poisoned {
+            return Err(StoreError);
+        }
+        self.nvs
             .get_u32(key)
             .map(|v| v.unwrap_or(0))
             .map_err(|_| StoreError)
     }
     fn write(&mut self, key: &str, value: u32) -> Result<(), StoreError> {
-        self.0.set_u32(key, value).map_err(|_| StoreError)
+        if self.poisoned {
+            return Err(StoreError);
+        }
+        self.nvs.set_u32(key, value).map_err(|_| StoreError)
     }
+}
+
+/// What the default NVS partition holds, for the boot log: entries used and
+/// free. A `set_u32` on an existing key does not change `used` (one entry per
+/// key) but consumes a fresh slot on the page until the page is reclaimed, so
+/// `free` is the wear observable SPINE-REPLAY.md §6 step 4 asks for — read
+/// at every boot, it says what a boot loop actually costs the partition.
+fn nvs_stats() -> Option<(usize, usize, usize)> {
+    let mut stats = esp_idf_svc::sys::nvs_stats_t::default();
+    // SAFETY: plain ESP-IDF call; a null partition name means the default
+    // partition, and `stats` is a valid out-pointer for the call's duration.
+    let err = unsafe { esp_idf_svc::sys::nvs_get_stats(core::ptr::null(), &mut stats) };
+    (err == esp_idf_svc::sys::ESP_OK).then_some((
+        stats.used_entries,
+        stats.free_entries,
+        stats.total_entries,
+    ))
 }
 
 /// Why a received frame was refused. One reason per line on the console, so
@@ -373,15 +410,26 @@ fn main() -> anyhow::Result<()> {
     // rather than run on a counter that repeats or a window that forgets.
     let mut ceiling =
         match EspDefaultNvsPartition::take().and_then(|p| EspNvs::new(p, "spine", true)) {
-            Ok(nvs) => Some(NvsCeiling(nvs)),
+            Ok(nvs) => Some(NvsCeiling::new(nvs)),
             Err(e) => {
                 error!("NVS unavailable ({e}): no counter backing — TRANSMIT AND RECEIVE DISABLED");
                 None
             }
         };
+    if cfg!(feature = "bench-nvs-fault") {
+        warn!("BENCH build: console line {{\"bench\":\"nvs_fault\"}} poisons the NVS store (never field)");
+    }
     let mut counter = match ceiling.as_mut().map(SeqCounter::boot) {
         Some(Ok(c)) => {
-            info!("frame counter resumed at {} (ceiling persisted)", c.count());
+            // Count *and* partition state, so a boot loop's cost is measured
+            // at the boot that pays it (SPINE-REPLAY.md §6 step 4).
+            match nvs_stats() {
+                Some((used, free, total)) => info!(
+                    "frame counter resumed at {} (ceiling persisted); nvs entries used={used} free={free} total={total}",
+                    c.count()
+                ),
+                None => info!("frame counter resumed at {} (ceiling persisted)", c.count()),
+            }
             windows.insert(node, ReplayWindow::resume(c.count()));
             Some(c)
         }
@@ -480,6 +528,20 @@ fn main() -> anyhow::Result<()> {
         // plugged into this Heltec can command a node reachable only over LoRa.
         while let Ok(cmd) = cmd_rx.try_recv() {
             if cmd.is_empty() {
+                continue;
+            }
+            // Bench fault injection (SPINE-REPLAY.md §6 step 5). Consumed here,
+            // never transmitted: from this line on the store fails every read
+            // and write, the counter refuses the next extension and this
+            // station goes quiet, and the receive windows refuse to move.
+            if cfg!(feature = "bench-nvs-fault") && cmd == r#"{"bench":"nvs_fault"}"# {
+                match ceiling.as_mut() {
+                    Some(store) => {
+                        store.poisoned = true;
+                        warn!("BENCH: NVS store poisoned — every read/write fails from now; expect TRANSMIT REFUSED within {} frames", SeqCounter::RESERVE);
+                    }
+                    None => warn!("BENCH: no store to poison (NVS was already unavailable)"),
+                }
                 continue;
             }
             match send_spine!(radio, seq, buf, cmd.as_bytes()) {

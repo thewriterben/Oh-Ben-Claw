@@ -5,6 +5,51 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The counter ceiling under a crash loop and a dead store (SPINE-REPLAY §6 steps 4–5) (2026-09-13)
+
+The two bench steps that were left when the ceiling scheme shipped on
+2026-09-13 morning (steps 1–3, seven resets, gaps of 31). Both on the bridge
+station (gw-40, COM7), which the live brain does not hold, with
+`scripts/bench_seq_wear.py`; walkthrough §A5o.
+
+**Step 4 — a crash loop is survivable.** 40 host-driven resets (RTS with DTR
+low) at 2–4 s intervals, reading the boot line each time: the counter
+resumed **exactly 32 higher on every boot** — min 32, max 32, never a
+repeat — which is one ceiling write per boot and the most a crash can cost,
+as `SeqCounter::RESERVE` says (`results/bench_seq_wear-step4-…-172317.json`,
+`…-172501.json`). What was *not* measured: flash consumption. The boot line
+now prints `nvs_get_stats` (`used`/`free`/`total` entries) so the partition
+could be watched at the boot that pays, and `free` stayed at 624 through all
+40 writes — the statistic does not see a rewrite of an existing key. Wear
+stays inferred from the counter (one entry write per boot; at the design's
+fastest rate that is one per ~2 s of boot loop), not observed.
+
+**Step 5 — NVS failure stops transmission.** The bridge was flashed with the
+new `bench-nvs-fault` feature: the console line `{"bench":"nvs_fault"}`
+poisons the `CeilingStore` so every read and write fails, as a full or worn
+partition would — at the boundary where the firmware decides to fail closed,
+without corrupting a real partition. After the fault the station sent the
+**20 numbers it had already been authorised**, refused the next extension
+(`counter lost its NVS backing — transmit refused`, 104 s after the fault),
+and sent nothing for the 60 s watched. The brain read it `offline` 94.6 s
+after its last frame and `presumed lost` 120 s after that — offline, not
+unobservable: the spine was up, and this station really was gone. A reset
+cleared the RAM-only fault; the counter resumed at 18784, the last ceiling
+persisted *before* the fault, so no number was reused; the escalation
+cleared 15 s later (`results/bench_seq_wear-step5-…-173128.json`).
+
+The receive side fails closed under the same fault (`Refused::Store`), seen
+in the console during the outage; not scored by the script.
+
+### Changed (firmware `heltec-lora-linktest`)
+
+- `NvsCeiling` carries a bench `poisoned` flag; `bench-nvs-fault` feature and
+  console command as above; the boot log names the feature. Boot line gains
+  `nvs entries used=… free=… total=…`.
+- **Both bench stations now carry bench features** (base:
+  `bench-low-power,no-relay`; bridge: `bench-low-power,bench-nvs-fault`) —
+  reflash without them before any field use.
+
 ## Unreleased — A lost spine is recorded, reopened, and never mistaken for lost nodes (2026-09-13)
 
 At 18:56:33Z the brain's base-station port went away (`os error 22`, a
