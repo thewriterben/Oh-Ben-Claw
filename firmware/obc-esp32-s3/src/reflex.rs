@@ -143,6 +143,17 @@ pub enum Condition {
         max: f64,
         default: f64,
     },
+    /// True when `value op (baseline + offset)`, `baseline` being the engine's
+    /// time-aware exponential moving average of the entity with time constant
+    /// `tau_s` — a distance from where the signal has been, not a place on
+    /// the scale. Mirror of the host's; the first sample is the baseline, and
+    /// an entity never seen makes the leaf false.
+    SensorBaseline {
+        entity: String,
+        op: Cmp,
+        offset: f64,
+        tau_s: f64,
+    },
     GpioEq {
         entity: String,
         value: i64,
@@ -155,14 +166,57 @@ pub enum Condition {
     },
 }
 
+/// A time-aware EMA of one entity (mirror of the host `Baseline`):
+/// `b += (1 − e^(−dt/τ))·(v − b)` with `dt` the real time since the last
+/// update, so τ is seconds of signal, not ticks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Baseline {
+    pub value: f64,
+    pub at_ms: u64,
+}
+
+impl Baseline {
+    fn update(&mut self, v: f64, now_ms: u64, tau_s: f64) {
+        let dt_s = now_ms.saturating_sub(self.at_ms) as f64 / 1000.0;
+        let alpha = 1.0 - (-dt_s / tau_s).exp();
+        self.value += alpha * (v - self.value);
+        self.at_ms = now_ms;
+    }
+}
+
+/// Baselines by (entity, `tau_s` bits) — the same key the host uses.
+pub type Baselines = HashMap<(String, u64), Baseline>;
+
+fn baseline_key(entity: &str, tau_s: f64) -> (String, u64) {
+    (entity.to_string(), tau_s.to_bits())
+}
+
 impl Condition {
     /// Evaluate against a snapshot of entity → numeric value, with the node's
-    /// current modulation levels resolving any slot-bound thresholds.
-    pub fn eval(&self, snapshot: &HashMap<String, f64>, mods: &Modulations) -> bool {
+    /// current modulation levels resolving any slot-bound thresholds and its
+    /// baselines resolving any history-bound ones.
+    pub fn eval(
+        &self,
+        snapshot: &HashMap<String, f64>,
+        mods: &Modulations,
+        baselines: &Baselines,
+    ) -> bool {
         match self {
             Condition::Sensor { entity, op, value } => {
                 snapshot.get(entity).is_some_and(|v| op.test(*v, *value))
             }
+            Condition::SensorBaseline {
+                entity,
+                op,
+                offset,
+                tau_s,
+            } => match (
+                snapshot.get(entity),
+                baselines.get(&baseline_key(entity, *tau_s)),
+            ) {
+                (Some(v), Some(b)) => op.test(*v, b.value + offset),
+                _ => false,
+            },
             Condition::SensorSlot {
                 entity,
                 op,
@@ -177,8 +231,23 @@ impl Condition {
             Condition::GpioEq { entity, value } => snapshot
                 .get(entity)
                 .is_some_and(|v| Cmp::Eq.test(*v, *value as f64)),
-            Condition::And { all } => all.iter().all(|c| c.eval(snapshot, mods)),
-            Condition::Or { any } => any.iter().any(|c| c.eval(snapshot, mods)),
+            Condition::And { all } => all.iter().all(|c| c.eval(snapshot, mods, baselines)),
+            Condition::Or { any } => any.iter().any(|c| c.eval(snapshot, mods, baselines)),
+        }
+    }
+
+    /// Every (entity, `tau_s`) baseline this condition asks for.
+    fn collect_baselines(&self, set: &mut Vec<(String, u64)>) {
+        match self {
+            Condition::SensorBaseline { entity, tau_s, .. } => {
+                let k = baseline_key(entity, *tau_s);
+                if !set.contains(&k) {
+                    set.push(k);
+                }
+            }
+            Condition::And { all } => all.iter().for_each(|c| c.collect_baselines(set)),
+            Condition::Or { any } => any.iter().for_each(|c| c.collect_baselines(set)),
+            Condition::Sensor { .. } | Condition::SensorSlot { .. } | Condition::GpioEq { .. } => {}
         }
     }
 
@@ -187,6 +256,22 @@ impl Condition {
     /// rather than silently never modulating.
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Condition::SensorBaseline {
+                entity,
+                offset,
+                tau_s,
+                ..
+            } => {
+                if !(tau_s.is_finite() && *tau_s > 0.0) {
+                    return Err(format!(
+                        "baseline on {entity}: tau_s {tau_s} must be finite and > 0"
+                    ));
+                }
+                if !offset.is_finite() {
+                    return Err(format!("baseline on {entity}: offset must be finite"));
+                }
+                Ok(())
+            }
             Condition::SensorSlot {
                 slot,
                 min,
@@ -311,6 +396,10 @@ pub struct ReflexEngine {
     true_since: HashMap<String, u64>,
     /// Descending modulation levels; RAM only, reboot returns rules to defaults.
     mods: Modulations,
+    /// The baselines the rules ask for, advanced each autonomous tick from
+    /// the snapshot before any rule is judged. Evidence history, not rule
+    /// state: kept across a rule push, like the modulation levels.
+    baselines: Baselines,
 }
 
 impl ReflexEngine {
@@ -322,6 +411,7 @@ impl ReflexEngine {
             fired_this_run: HashMap::new(),
             true_since: HashMap::new(),
             mods: Modulations::default(),
+            baselines: Baselines::new(),
         }
     }
 
@@ -368,9 +458,11 @@ impl ReflexEngine {
     /// `last_fire` on the real uptime clock). Debounce/rate are intentionally
     /// ignored here — a single isolated tick has no history to suppress.
     pub fn evaluate_scratch(&self, snapshot: &HashMap<String, f64>) -> Vec<FiredReflex> {
+        // Baselines are read as they stand and not advanced: a bench tick is a
+        // question about this snapshot, not a sample of the signal.
         self.rules
             .iter()
-            .filter(|rule| rule.when.eval(snapshot, &self.mods))
+            .filter(|rule| rule.when.eval(snapshot, &self.mods, &self.baselines))
             .map(|rule| FiredReflex {
                 rule_id: rule.id.clone(),
                 action: rule.then.clone(),
@@ -378,12 +470,37 @@ impl ReflexEngine {
             .collect()
     }
 
+    /// The baseline held for `entity` at `tau_s`, if a rule asks for one and
+    /// the entity has been seen.
+    pub fn baseline(&self, entity: &str, tau_s: f64) -> Option<Baseline> {
+        self.baselines.get(&baseline_key(entity, tau_s)).copied()
+    }
+
     /// Evaluate all rules against `snapshot` at `now_ms`, honouring debounce/
     /// rate, recording fire times. Returns the reflexes that fired.
     pub fn evaluate(&mut self, snapshot: &HashMap<String, f64>, now_ms: u64) -> Vec<FiredReflex> {
+        // Advance every baseline the rules ask for from this tick's readings
+        // before any rule is judged: the first sample of an entity is its
+        // baseline, so a rule cannot fire on the tick that started its history.
+        let mut keys = Vec::new();
+        for rule in &self.rules {
+            rule.when.collect_baselines(&mut keys);
+        }
+        for key in keys {
+            if let Some(&v) = snapshot.get(&key.0) {
+                let tau_s = f64::from_bits(key.1);
+                self.baselines
+                    .entry(key)
+                    .and_modify(|b| b.update(v, now_ms, tau_s))
+                    .or_insert(Baseline {
+                        value: v,
+                        at_ms: now_ms,
+                    });
+            }
+        }
         let mut fired = Vec::new();
         for rule in &self.rules {
-            if !rule.when.eval(snapshot, &self.mods) {
+            if !rule.when.eval(snapshot, &self.mods, &self.baselines) {
                 // The run of truth is over; the next true is a new event, and
                 // a new hold.
                 if rule.fire_on_change {
@@ -567,6 +684,129 @@ mod tests {
         assert_eq!(eng.evaluate(&hot, 4_000).len(), 1);
     }
 
+    // ── SensorBaseline (mirror of the host's known answers) ─────────────
+
+    fn baseline_rule(offset: f64, tau_s: f64) -> ReflexRule {
+        rule(
+            "rising",
+            Condition::SensorBaseline {
+                entity: "t".into(),
+                op: Cmp::Gt,
+                offset,
+                tau_s,
+            },
+            Action::Escalate {
+                reason: "rising".into(),
+            },
+            0,
+        )
+    }
+
+    #[test]
+    fn the_first_sample_is_the_baseline_and_a_step_above_it_fires() {
+        let mut eng = ReflexEngine::new(vec![baseline_rule(2.0, 10.0)]);
+        for t in 0..10u64 {
+            assert!(eng.evaluate(&snap(&[("t", 20.0)]), t * 1_000).is_empty());
+        }
+        assert!((eng.baseline("t", 10.0).unwrap().value - 20.0).abs() < 1e-12);
+        assert_eq!(eng.evaluate(&snap(&[("t", 25.0)]), 10_000).len(), 1);
+        let expected = 20.0 + (1.0 - (-0.1f64).exp()) * 5.0;
+        assert!((eng.baseline("t", 10.0).unwrap().value - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_slow_drift_never_fires_because_the_baseline_follows_it() {
+        // A ramp of 0.01 °C/s over 1000 s, five offsets' worth of climb, and
+        // not one fire: the EMA lags a ramp by s·(1−α)/α ≈ s·τ. A fixed
+        // threshold would have fired at 200 s and stayed fired.
+        let mut eng = ReflexEngine::new(vec![baseline_rule(2.0, 10.0)]);
+        for t in 0..=1000u64 {
+            let v = 20.0 + 0.01 * t as f64;
+            assert!(
+                eng.evaluate(&snap(&[("t", v)]), t * 1_000).is_empty(),
+                "t={t}"
+            );
+        }
+        let alpha = 1.0 - (-0.1f64).exp();
+        let lag = 30.0 - eng.baseline("t", 10.0).unwrap().value;
+        assert!((lag - 0.01 * (1.0 - alpha) / alpha).abs() < 1e-9, "{lag}");
+        assert_eq!(eng.evaluate(&snap(&[("t", 35.0)]), 1_001_000).len(), 1);
+    }
+
+    #[test]
+    fn the_time_constant_is_seconds_not_ticks() {
+        // The node ticks at 1 Hz and the host at whatever its interval is;
+        // the same signal gives the same baseline at the same instant.
+        let mut fast = ReflexEngine::new(vec![baseline_rule(2.0, 10.0)]);
+        let mut slow = ReflexEngine::new(vec![baseline_rule(2.0, 10.0)]);
+        // Both sample t = 10 (the last 20), so both date the step to the same
+        // instant — a sample stands for the interval that ends at it.
+        let v = |t: u64| if t <= 10 { 20.0 } else { 25.0 };
+        for t in 0..=20u64 {
+            fast.evaluate(&snap(&[("t", v(t))]), t * 1_000);
+            if t % 2 == 0 {
+                slow.evaluate(&snap(&[("t", v(t))]), t * 1_000);
+            }
+        }
+        let expected = 25.0 - 5.0 * (-1.0f64).exp();
+        assert!((fast.baseline("t", 10.0).unwrap().value - expected).abs() < 1e-12);
+        assert!((slow.baseline("t", 10.0).unwrap().value - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_scratch_tick_reads_the_baseline_and_does_not_move_it() {
+        let mut eng = ReflexEngine::new(vec![baseline_rule(2.0, 10.0)]);
+        eng.evaluate(&snap(&[("t", 20.0)]), 0);
+        assert_eq!(
+            eng.evaluate_scratch(&snap(&[("t", 25.0)])).len(),
+            1,
+            "judged against the live baseline"
+        );
+        assert_eq!(
+            eng.baseline("t", 10.0).unwrap().value,
+            20.0,
+            "a bench question is not a sample"
+        );
+        assert!(
+            ReflexEngine::new(vec![baseline_rule(2.0, 10.0)])
+                .evaluate_scratch(&snap(&[("t", 25.0)]))
+                .is_empty(),
+            "no history at all: false, like any missing evidence"
+        );
+    }
+
+    #[test]
+    fn baselines_survive_a_rule_push_like_modulation_levels() {
+        let mut eng = ReflexEngine::new(vec![baseline_rule(2.0, 10.0)]);
+        eng.evaluate(&snap(&[("t", 20.0)]), 0);
+        eng.set_rules(vec![baseline_rule(2.0, 10.0)]).unwrap();
+        assert_eq!(
+            eng.evaluate(&snap(&[("t", 25.0)]), 1_000).len(),
+            1,
+            "the history belongs to the entity, not the rule"
+        );
+    }
+
+    #[test]
+    fn a_baseline_rule_the_node_cannot_run_is_refused_at_the_door() {
+        let mut eng = ReflexEngine::default();
+        let err = eng.set_rules(vec![baseline_rule(2.0, 0.0)]).unwrap_err();
+        assert!(
+            err.contains("rule rising") && err.contains("tau_s"),
+            "{err}"
+        );
+        assert!(eng.set_rules(vec![baseline_rule(f64::NAN, 5.0)]).is_err());
+        assert!(eng.set_rules(vec![baseline_rule(-2.0, 0.5)]).is_ok());
+    }
+
+    #[test]
+    fn baseline_condition_round_trips_the_host_json() {
+        let json = r#"{"type":"sensor_baseline","entity":"t","op":"gt","offset":3.0,"tau_s":60.0}"#;
+        let c: Condition = serde_json::from_str(json).unwrap();
+        assert_eq!(c, baseline_rule(3.0, 60.0).when);
+        assert_eq!(serde_json::to_string(&c).unwrap(), json);
+    }
+
     #[test]
     fn hold_ms_round_trips_the_host_json_and_defaults_to_zero() {
         let js = r#"{"id":"r","when":{"type":"sensor","entity":"x","op":"gt","value":0.0},"then":{"type":"escalate","reason":"r"}}"#;
@@ -711,9 +951,9 @@ mod tests {
             value: 28.0,
         };
         let m = Modulations::default();
-        assert!(cond.eval(&snap(&[("sensor.temp", 30.0)]), &m));
-        assert!(!cond.eval(&snap(&[("sensor.temp", 20.0)]), &m));
-        assert!(!cond.eval(&snap(&[]), &m)); // missing entity → false
+        assert!(cond.eval(&snap(&[("sensor.temp", 30.0)]), &m, &Baselines::new()));
+        assert!(!cond.eval(&snap(&[("sensor.temp", 20.0)]), &m, &Baselines::new()));
+        assert!(!cond.eval(&snap(&[]), &m, &Baselines::new())); // missing entity → false
     }
 
     // ── Descending modulation ───────────────────────────────────────────
@@ -850,8 +1090,8 @@ mod tests {
             ],
         };
         let m = Modulations::default();
-        assert!(c.eval(&snap(&[("a", 2.0), ("c", 1.0)]), &m));
-        assert!(!c.eval(&snap(&[("a", 2.0), ("c", 0.0)]), &m));
+        assert!(c.eval(&snap(&[("a", 2.0), ("c", 1.0)]), &m, &Baselines::new()));
+        assert!(!c.eval(&snap(&[("a", 2.0), ("c", 0.0)]), &m, &Baselines::new()));
     }
 
     #[test]

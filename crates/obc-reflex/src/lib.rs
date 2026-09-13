@@ -130,6 +130,30 @@ pub enum Condition {
         max: f64,
         default: f64,
     },
+    /// Compare a reading against **its own recent history**: true when
+    /// `value op (baseline + offset)`, where `baseline` is an exponential moving
+    /// average of the entity with time constant `tau_s`, kept by the engine and
+    /// advanced every tick the entity is present (time-aware, so a host ticking at
+    /// one cadence and a node at another agree). The threshold is a *distance from
+    /// where the signal has been*, not a place on the scale — invariant to slow
+    /// drift and to where a sensor happens to sit.
+    ///
+    /// Offset, not ratio: WILD (Zhao et al. 2026) thresholds a power envelope at
+    /// k × its baseline mean, which is right for a positive quantity; °C and most
+    /// sensor scales are not ratio-scaled, and `baseline + 3` reads the same at
+    /// 20 °C as at 40 °C where `1.15 × baseline` does not.
+    ///
+    /// The first sample *is* the baseline, so the leaf is false until the signal
+    /// has moved; with no baseline yet (the entity has never been seen) it is
+    /// false, like any leaf with missing evidence. `SensorBaseline` rules are
+    /// evaluated only through an engine, which owns the state — a bare
+    /// [`Condition::eval`] has no history and answers false.
+    SensorBaseline {
+        entity: String,
+        op: Cmp,
+        offset: f64,
+        tau_s: f64,
+    },
     /// A GPIO/entity equals an integer value.
     GpioEq { entity: String, value: i64 },
     /// A fact's (optionally nested) string value equals `equals`. With `field`,
@@ -150,13 +174,79 @@ pub enum Condition {
     Or { any: Vec<Condition> },
 }
 
+/// A time-aware exponential moving average of one entity: the engine-owned
+/// state behind [`Condition::SensorBaseline`].
+///
+/// `b += (1 − e^(−dt/τ)) · (v − b)`, with `dt` the real time since the last
+/// update, so the time constant is a property of the signal and not of the tick:
+/// a missed tick, a slower cadence, a host ticking at one rate and a node at
+/// another all leave τ meaning the same seconds. A sample stands for the
+/// interval that ends at it, so for a signal that holds between samples this is
+/// the exact continuous EMA at the sample instants — and one sample after a
+/// long gap stands for the whole gap, which is the right reading of a gap: a
+/// hole in the evidence is not a step in the signal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Baseline {
+    /// The current average.
+    pub value: f64,
+    /// When it was last advanced (ms).
+    pub at_ms: u64,
+}
+
+impl Baseline {
+    /// Start a baseline at the first sample.
+    pub fn new(value: f64, at_ms: u64) -> Self {
+        Self { value, at_ms }
+    }
+
+    /// Advance to `now_ms` with sample `v` under time constant `tau_s`.
+    pub fn update(&mut self, v: f64, now_ms: u64, tau_s: f64) {
+        let dt_s = now_ms.saturating_sub(self.at_ms) as f64 / 1000.0;
+        let alpha = 1.0 - (-dt_s / tau_s).exp();
+        self.value += alpha * (v - self.value);
+        self.at_ms = now_ms;
+    }
+}
+
+/// The key a baseline lives under: an entity and a time constant. Two rules
+/// asking for the same pair share one; different `tau_s` are different
+/// histories. Keyed on the bits so `f64` can be a map key.
+pub type BaselineKey = (String, u64);
+
+/// Baselines by key — what an engine passes into evaluation.
+pub type Baselines = HashMap<BaselineKey, Baseline>;
+
+/// The key for `entity` at `tau_s`.
+pub fn baseline_key(entity: &str, tau_s: f64) -> BaselineKey {
+    (entity.to_string(), tau_s.to_bits())
+}
+
 impl Condition {
-    /// Evaluate against a [`Snapshot`].
+    /// Evaluate against a [`Snapshot`] with no baseline history — every
+    /// [`Condition::SensorBaseline`] leaf is false. Engines call
+    /// [`Condition::eval_with`].
     pub fn eval(&self, snap: &Snapshot) -> bool {
+        self.eval_with(snap, &Baselines::new())
+    }
+
+    /// Evaluate against a [`Snapshot`] and the engine's [`Baselines`].
+    pub fn eval_with(&self, snap: &Snapshot, baselines: &Baselines) -> bool {
         match self {
             Condition::Sensor { entity, op, value } => {
                 snap.nums.get(entity).is_some_and(|v| op.test(*v, *value))
             }
+            Condition::SensorBaseline {
+                entity,
+                op,
+                offset,
+                tau_s,
+            } => match (
+                snap.nums.get(entity),
+                baselines.get(&baseline_key(entity, *tau_s)),
+            ) {
+                (Some(v), Some(b)) => op.test(*v, b.value + offset),
+                _ => false,
+            },
             Condition::SensorSlot {
                 entity,
                 op,
@@ -185,8 +275,8 @@ impl Condition {
                 };
                 s == Some(equals.as_str())
             }),
-            Condition::And { all } => all.iter().all(|c| c.eval(snap)),
-            Condition::Or { any } => any.iter().any(|c| c.eval(snap)),
+            Condition::And { all } => all.iter().all(|c| c.eval_with(snap, baselines)),
+            Condition::Or { any } => any.iter().any(|c| c.eval_with(snap, baselines)),
         }
     }
 
@@ -194,6 +284,7 @@ impl Condition {
     pub fn collect_entities(&self, set: &mut HashSet<String>) {
         match self {
             Condition::Sensor { entity, .. }
+            | Condition::SensorBaseline { entity, .. }
             | Condition::SensorSlot { entity, .. }
             | Condition::GpioEq { entity, .. }
             | Condition::State { entity, .. } => {
@@ -201,6 +292,22 @@ impl Condition {
             }
             Condition::And { all } => all.iter().for_each(|c| c.collect_entities(set)),
             Condition::Or { any } => any.iter().for_each(|c| c.collect_entities(set)),
+        }
+    }
+
+    /// Collect every baseline this condition asks for: the (entity, `tau_s`)
+    /// pairs an engine has to keep advancing.
+    pub fn collect_baselines(&self, set: &mut HashSet<BaselineKey>) {
+        match self {
+            Condition::SensorBaseline { entity, tau_s, .. } => {
+                set.insert(baseline_key(entity, *tau_s));
+            }
+            Condition::And { all } => all.iter().for_each(|c| c.collect_baselines(set)),
+            Condition::Or { any } => any.iter().for_each(|c| c.collect_baselines(set)),
+            Condition::Sensor { .. }
+            | Condition::SensorSlot { .. }
+            | Condition::GpioEq { .. }
+            | Condition::State { .. } => {}
         }
     }
 
@@ -226,6 +333,22 @@ impl Condition {
                     return Err(format!(
                         "slot {slot}: default level {default} not in [0, 1]"
                     ));
+                }
+                Ok(())
+            }
+            Condition::SensorBaseline {
+                entity,
+                offset,
+                tau_s,
+                ..
+            } => {
+                if !(tau_s.is_finite() && *tau_s > 0.0) {
+                    return Err(format!(
+                        "baseline on {entity}: tau_s {tau_s} must be finite and > 0"
+                    ));
+                }
+                if !offset.is_finite() {
+                    return Err(format!("baseline on {entity}: offset must be finite"));
                 }
                 Ok(())
             }
@@ -376,6 +499,10 @@ pub struct ReflexEngine {
     /// `hold_ms`" is `now − true_since`. Only rules with a non-zero hold are entered,
     /// for the same reason as `last_evidence`: a rule that does not ask pays nothing.
     true_since: Mutex<HashMap<String, u64>>,
+    /// The baselines every `SensorBaseline` leaf in the rule set asks for, advanced
+    /// at each `evaluate` from the snapshot before the rules are judged. Evidence
+    /// history, not rule state — it belongs to the entity.
+    baselines: Mutex<Baselines>,
     trusted: obc_memory::world::OriginSet,
 }
 
@@ -409,6 +536,7 @@ impl ReflexEngine {
             last_fire: Mutex::new(HashMap::new()),
             last_evidence: Mutex::new(HashMap::new()),
             true_since: Mutex::new(HashMap::new()),
+            baselines: Mutex::new(Baselines::new()),
             trusted: obc_memory::world::OriginSet::EVIDENCE,
         }
     }
@@ -428,13 +556,40 @@ impl ReflexEngine {
         self.rules.len()
     }
 
+    /// The baseline this engine holds for `entity` at `tau_s`, if any rule has
+    /// asked for one and the entity has been seen.
+    pub fn baseline(&self, entity: &str, tau_s: f64) -> Option<Baseline> {
+        self.baselines
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&baseline_key(entity, tau_s))
+            .copied()
+    }
+
     /// Evaluate all rules against `snapshot` at `now_ms`; returns the actions to
     /// perform (respecting debounce/rate), and records fire times.
     pub fn evaluate(&self, snapshot: &Snapshot, now_ms: u64) -> Vec<FiredReflex> {
+        // Advance every baseline the rules ask for, from this tick's readings,
+        // before any rule is judged: the first sample of an entity *is* its
+        // baseline, so a rule cannot fire on the tick that started its history.
+        let mut baselines = self.baselines.lock().unwrap_or_else(|p| p.into_inner());
+        let mut keys = HashSet::new();
+        for rule in &self.rules {
+            rule.when.collect_baselines(&mut keys);
+        }
+        for key in keys {
+            if let Some(&v) = snapshot.nums.get(&key.0) {
+                let tau_s = f64::from_bits(key.1);
+                baselines
+                    .entry(key)
+                    .and_modify(|b| b.update(v, now_ms, tau_s))
+                    .or_insert_with(|| Baseline::new(v, now_ms));
+            }
+        }
         let mut guard = self.last_fire.lock().unwrap_or_else(|p| p.into_inner());
         let mut fired = Vec::new();
         for rule in &self.rules {
-            if !rule.when.eval(snapshot) {
+            if !rule.when.eval_with(snapshot, &baselines) {
                 if rule.hold_ms > 0 {
                     // The run of truth is over; the next true starts the hold again.
                     self.true_since
@@ -1228,6 +1383,165 @@ mod tests {
             "a new row is new evidence and the hold is long satisfied — fires again (host semantics; \
              the node, which has no ids, fires once per run of truth)"
         );
+    }
+
+    // ── SensorBaseline: a threshold relative to the signal's own history ──
+
+    fn baseline_rule(offset: f64, tau_s: f64) -> ReflexRule {
+        ReflexRule {
+            id: "rising".to_string(),
+            when: Condition::SensorBaseline {
+                entity: "t".to_string(),
+                op: Cmp::Gt,
+                offset,
+                tau_s,
+            },
+            then: Action::Escalate {
+                reason: "rising".to_string(),
+            },
+            debounce_ms: 0,
+            max_rate_hz: None,
+            fire_on_change: false,
+            hold_ms: 0,
+        }
+    }
+
+    #[test]
+    fn the_first_sample_is_the_baseline_and_a_step_above_it_fires() {
+        // τ = 10 s, offset 2. Ten seconds at 20 °C, then 25 °C. On the step tick
+        // the baseline has already moved a little toward 25 — α = 1 − e^(−1/10) —
+        // and the reading is still well above it.
+        let e = ReflexEngine::new(vec![baseline_rule(2.0, 10.0)]);
+        for t in 0..10u64 {
+            assert!(
+                e.evaluate(&snap(&[("t", 20.0)]), t * 1_000).is_empty(),
+                "steady at 20: nothing at t={t}"
+            );
+        }
+        let b = e.baseline("t", 10.0).unwrap();
+        assert!(
+            (b.value - 20.0).abs() < 1e-12,
+            "a constant signal is its own baseline"
+        );
+        assert_eq!(
+            e.evaluate(&snap(&[("t", 25.0)]), 10_000).len(),
+            1,
+            "the step fires"
+        );
+        let b = e.baseline("t", 10.0).unwrap();
+        let expected = 20.0 + (1.0 - (-0.1f64).exp()) * 5.0;
+        assert!(
+            (b.value - expected).abs() < 1e-12,
+            "{} vs {expected}",
+            b.value
+        );
+    }
+
+    #[test]
+    fn a_slow_drift_never_fires_because_the_baseline_follows_it() {
+        // The invariance the rule exists for. A ramp of 0.01 °C/s climbs 10 °C
+        // over 1000 s — five times the offset — and never fires, because an EMA
+        // tracking a ramp lags it by a constant: s·(1−α)/α per sample step, which
+        // is ≈ s·τ (0.095 °C here, against s·τ = 0.1). A fixed threshold at 22
+        // would have fired at t = 200 s and stayed fired.
+        let e = ReflexEngine::new(vec![baseline_rule(2.0, 10.0)]);
+        for t in 0..=1000u64 {
+            let v = 20.0 + 0.01 * t as f64;
+            assert!(
+                e.evaluate(&snap(&[("t", v)]), t * 1_000).is_empty(),
+                "drift fired at t={t}, v={v}"
+            );
+        }
+        let b = e.baseline("t", 10.0).unwrap();
+        let lag = 30.0 - b.value;
+        let alpha = 1.0 - (-0.1f64).exp();
+        let expected = 0.01 * (1.0 - alpha) / alpha;
+        assert!(
+            (lag - expected).abs() < 1e-9,
+            "steady-state lag {lag} vs {expected}"
+        );
+        // …and a step on top of the drift still fires at once.
+        assert_eq!(e.evaluate(&snap(&[("t", 35.0)]), 1_001_000).len(), 1);
+    }
+
+    #[test]
+    fn the_time_constant_is_seconds_not_ticks() {
+        // Two engines see the same signal — 20 °C through t = 10 s, 25 °C after —
+        // one ticked every second, one every two. Both sample t = 10 (the last
+        // 20) and t = 20, so both attribute the step to the same instant, and at
+        // t = 20 s both hold the exact continuous answer 25 − 5·e^(−1): the tick
+        // cadence did not change τ. (A sample stands for the interval that ends
+        // at it — a step is dated to the sample before the first one that shows
+        // it — so two cadences agree exactly when they share that sample.)
+        let fast = ReflexEngine::new(vec![baseline_rule(2.0, 10.0)]);
+        let slow = ReflexEngine::new(vec![baseline_rule(2.0, 10.0)]);
+        let v = |t: u64| if t <= 10 { 20.0 } else { 25.0 };
+        for t in 0..=20u64 {
+            fast.evaluate(&snap(&[("t", v(t))]), t * 1_000);
+            if t % 2 == 0 {
+                slow.evaluate(&snap(&[("t", v(t))]), t * 1_000);
+            }
+        }
+        let expected = 25.0 - 5.0 * (-1.0f64).exp();
+        for (name, e) in [("1 Hz", &fast), ("0.5 Hz", &slow)] {
+            let b = e.baseline("t", 10.0).unwrap().value;
+            assert!((b - expected).abs() < 1e-12, "{name}: {b} vs {expected}");
+        }
+    }
+
+    #[test]
+    fn a_missing_reading_neither_fires_nor_moves_the_baseline() {
+        let e = ReflexEngine::new(vec![baseline_rule(2.0, 10.0)]);
+        e.evaluate(&snap(&[("t", 20.0)]), 0);
+        assert!(e.evaluate(&snap(&[]), 1_000).is_empty());
+        assert_eq!(
+            e.baseline("t", 10.0).unwrap().at_ms,
+            0,
+            "not advanced on absence"
+        );
+        // Seen again after a 10 s gap at 25: one update with dt = 10 s = τ, not
+        // ten with dt = 1. That one sample stands for the whole gap, so the
+        // baseline absorbs 63 % of the step — 23.16 — and the reading is 1.84
+        // above it, under the offset: no fire. A gap in the evidence is not a
+        // step in the signal.
+        assert!(e.evaluate(&snap(&[("t", 25.0)]), 10_000).is_empty());
+        let expected = 20.0 + (1.0 - (-1.0f64).exp()) * 5.0;
+        assert!((e.baseline("t", 10.0).unwrap().value - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_bare_eval_has_no_history_and_answers_false() {
+        // Only an engine owns baselines. The pure `eval` is what the `And`/`Or`
+        // tests use; a baseline leaf there is false, like any missing evidence.
+        assert!(!baseline_rule(2.0, 10.0).when.eval(&snap(&[("t", 100.0)])));
+    }
+
+    #[test]
+    fn a_baseline_rule_the_node_would_refuse_fails_validation() {
+        let mut r = baseline_rule(2.0, 0.0);
+        assert!(r.validate().unwrap_err().contains("tau_s"));
+        r = baseline_rule(2.0, f64::NAN);
+        assert!(r.validate().is_err());
+        r = baseline_rule(f64::INFINITY, 10.0);
+        assert!(r.validate().unwrap_err().contains("offset"));
+        assert!(
+            baseline_rule(-2.0, 0.5).validate().is_ok(),
+            "a falling rule is fine"
+        );
+    }
+
+    #[test]
+    fn baseline_condition_serializes_to_the_node_wire_form() {
+        let c = baseline_rule(3.0, 60.0).when;
+        let json = serde_json::to_string(&c).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"sensor_baseline","entity":"t","op":"gt","offset":3.0,"tau_s":60.0}"#
+        );
+        assert_eq!(serde_json::from_str::<Condition>(&json).unwrap(), c);
+        let mut ents = HashSet::new();
+        c.collect_entities(&mut ents);
+        assert!(ents.contains("t"), "the snapshot has to fetch the entity");
     }
 
     #[test]

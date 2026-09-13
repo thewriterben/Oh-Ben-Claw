@@ -714,6 +714,42 @@ cost the truthful rule carries: a node whose host is quiet goes offline
 30 s after its last command and reports each transition — the host does
 not send keepalives to nodes, so command silence *is* host silence here.
 
+### A5j. A threshold on the signal's own history: `sensor_baseline`
+
+**What it proves:** that a node can ask "has this reading *departed* from
+where it has been?" rather than "is it past a number?" —
+`Condition::SensorBaseline { entity, op, offset, tau_s }` is true when
+`value op baseline + offset`, the baseline being the engine's time-aware
+exponential moving average of the entity (τ in seconds of signal, not
+ticks: α = 1 − e^(−dt/τ) from the real elapsed time, so a missed tick or a
+different cadence leaves τ meaning the same thing; host and node agree to
+1e-12 in the unit tests). Offset rather than ratio, because °C is not a
+ratio scale. The first sample is the baseline, so the leaf is false until
+the signal has moved; a slow drift never fires, since the baseline follows
+it (a 0.01 °C/s ramp for 1000 s — five offsets of climb — fires nothing,
+against a fixed threshold that would have fired at 200 s: `a_slow_drift_
+never_fires_because_the_baseline_follows_it`, host and firmware). This is
+the shape of WILD's detector — threshold relative to the baseline mean —
+in the form that fits a sensor scale.
+
+**Measured with** `scripts/bench_baseline_rule.py`: pushes `die-rising`
+(die temperature > baseline(τ 60 s) + 2 °C, `hold_ms` 3000,
+`fire_on_change`, LED on) over USB and watches. *Steady* (unattended): 90 s
+in which the rule must not fire. *Warm* (`--warm`, attended): the operator
+warms the module — a thumb on the XIAO's metal can does it in ~20 s — and
+the rule must fire exactly once, `applied: true`, and not again while the
+die stays warm; a fixed 36 °C threshold on a die that sits at 34 °C in this
+room and at 38 °C in a warm one cannot say that.
+
+```powershell
+python scripts\bench_baseline_rule.py --node COM6 --steady 90 --warm
+```
+
+**Run 2026-09-13, steady only: PASS** — die 34.3 °C for the whole 90 s, no
+report (`results/bench_baseline_rule-20260913-120857.json`). A flat signal
+is weak evidence for a rule about departures; the warm phase is the one
+that proves it acts, and it needs a hand on the board.
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**

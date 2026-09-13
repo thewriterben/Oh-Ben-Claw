@@ -5,6 +5,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — `sensor_baseline`: a threshold on the signal's own history (2026-09-13)
+
+`Condition::SensorBaseline { entity, op, offset, tau_s }`, host and node,
+same JSON: true when `value op baseline + offset`, the baseline being the
+engine's time-aware exponential moving average of the entity. The threshold
+is a distance from where the signal has been, not a place on the scale —
+invariant to slow drift and to where a sensor happens to sit. Offset rather
+than ratio (WILD thresholds a power envelope at k × baseline; °C is not a
+ratio scale). τ is seconds of signal, not ticks: α = 1 − e^(−dt/τ) from the
+real elapsed time, so host and node cadences agree, and one sample after a
+gap stands for the whole gap — a hole in the evidence is not a step in the
+signal. The first sample is the baseline; an entity never seen makes the
+leaf false; a bare `Condition::eval` (mission guards) has no history and
+answers false. Baselines belong to the entity — kept across a rule push,
+like modulation levels; a bench `reflex_tick` reads them and does not move
+them. `validate` refuses `tau_s` not finite and > 0.
+
+Known answers, host and firmware: a step above the baseline fires on its
+tick; a 0.01 °C/s ramp for 1000 s never fires (EMA lag s·(1−α)/α ≈ s·τ);
+1 Hz and 0.5 Hz engines hold the same baseline to 1e-12.
+
+`scripts/bench_baseline_rule.py` pushes `die-rising` (die > baseline(60 s) +
+2 °C, hold 3 s) — steady phase PASS, 90 s at 34.3 °C with no fire
+(`results/bench_baseline_rule-20260913-120857.json`); the attended `--warm`
+phase (a thumb on the module) is the one that proves it acts. Walkthrough
+§A5j.
+
 ## Unreleased — `hold_ms`: a reflex can ask "is it still true?" (2026-09-13)
 
 The third question a rule can ask, beside rate (`debounce_ms`: has enough
