@@ -68,13 +68,25 @@ like everything else, and gets the frame tag when step 4 does.
   exists to strike. The `<!-- unwired: -->` marker goes with it;
   `scripts/check_tree.py` is green.
 
+### Bench procedure
+
+`docs/HARDWARE-TEST-WALKTHROUGH.md` §A5b: the first slot-bound rule (the A5
+overheat rule with its threshold on slot 3 over 40–80 °C), then eight serial
+steps — default fires, descend to 1.0 silences it while the built-in safing
+warn still fires, descend to 0.0 fires it on a reading no built-in reacts
+to, a bad pair refuses and leaves `active` untouched, clear restores the
+default, a slot-16 rule is refused at the door, and a reboot forgets the
+level. Every tick is a synthetic snapshot; no sensor needed. The firmware
+compiles for `xtensa-esp32s3-espidf` (`cargo build`, 2026-09-13, one
+pre-existing `board::describe` unused warning) — the walkthrough's JSON has
+not yet been sent to a board.
+
 ### Not claimed
 
-That a node has a slot-bound rule yet — the built-in safing rules bind none,
-and `bodies/` in OBC-Prime ships none. The first one belongs to a real
-behaviour on the bench. And the correlation id is still a UUID; shortening it
-is step 4's job, and `descend` was measured with it in place so that step
-loses nothing here.
+That the procedure above has been run: no node carries this firmware yet, so
+`descend` has never executed on hardware, only in host-side tests. And the
+correlation id is still a UUID; shortening it is step 4's job, and `descend`
+was measured with it in place so that step loses nothing here.
 
 ---
 

@@ -259,6 +259,77 @@ Fire it deterministically with a synthetic snapshot (works even without a real s
 
 **PASS A5:** the `overheat` reflex fires and `applied:true`.
 
+### A5b. Descending modulation (the spinal tier)
+
+*Needs firmware from 2026-09-13 or later (`descend` in `main.rs`); reflash
+first if the node predates it.* Same rule as A5, but its threshold is bound to
+**slot 3** over a range the rule owns (40–80 °C), default level 0.5 — so it
+starts at 60 °C, exactly where A5 had it. Nothing here needs a sensor: every
+tick is a synthetic snapshot, so the pass/fail is deterministic. The built-in
+`safe-overtemp-warn` (≥ 60) and `-critical` (≥ 75) rules still run ahead of
+yours; the lines below say what to look for so they do not confuse the read.
+
+**(a) Push the slot-bound rule** (one line):
+```json
+{"id":"24","cmd":"set_reflex_rules","args":{"rules":[{"id":"overheat","when":{"type":"sensor_slot","entity":"sensor.temperature","op":"gt","slot":3,"min":40.0,"max":80.0,"default":0.5},"then":{"type":"gpio_write","node_id":"self","pin":3,"value":0},"debounce_ms":1000}]}}
+→ ok:true, "loaded":1
+```
+**(b) Default level = 60 °C, as A5:**
+```json
+{"id":"25","cmd":"reflex_tick","args":{"snapshot":{"sensor.temperature":65.0}}}
+→ "fired" lists safe-overtemp-warn AND "overheat" (applied:true)
+```
+**(c) Descend slot 3 to 1.0 → threshold 80 °C.** Same reading, your rule now
+stays quiet while the built-in warn still fires — the brain moved *your*
+threshold and could not touch the safing one:
+```json
+{"id":"26","cmd":"descend","args":{"m":[[3,1.0]]}}
+→ ok:true, {"applied":1,"active":[[3,1.0]]}
+{"id":"27","cmd":"reflex_tick","args":{"snapshot":{"sensor.temperature":65.0}}}
+→ "fired" lists safe-overtemp-warn only — NO "overheat"
+```
+**(d) Descend to 0.0 → threshold 40 °C.** A reading no built-in reacts to now
+fires your rule:
+```json
+{"id":"28","cmd":"descend","args":{"m":[[3,0.0]]}}
+→ ok:true, "active":[[3,0.0]]
+{"id":"29","cmd":"reflex_tick","args":{"snapshot":{"sensor.temperature":45.0}}}
+→ "fired" lists "overheat" only (applied:true)
+```
+**(e) A bad message changes nothing.** All-or-nothing: the good pair in the
+first line does not land either. Check `active` afterwards:
+```json
+{"id":"30","cmd":"descend","args":{"m":[[3,0.5],[16,0.5]]}}
+→ ok:false, error:"descend refused: slot 16 out of range (max 15)"
+{"id":"31","cmd":"descend","args":{"m":[[3,1.5]]}}
+→ ok:false, error:"descend refused: slot 3: level 1.5 not in [0, 1]"
+{"id":"32","cmd":"descend","args":{"m":[]}}
+→ ok:true, "active":[[3,0.0]]        (still 0.0 from (d) — nothing above landed)
+```
+**(f) Clear → back to the rule's default (60 °C):**
+```json
+{"id":"33","cmd":"descend","args":{"clear":true}}
+→ ok:true, "active":[]
+{"id":"34","cmd":"reflex_tick","args":{"snapshot":{"sensor.temperature":65.0}}}
+→ "overheat" fires again (with safe-overtemp-warn)
+```
+**(g) A rule the node cannot hold is refused at the door** — and the rule set
+is left as it was (rule count unchanged, (f) still behaves):
+```json
+{"id":"35","cmd":"set_reflex_rules","args":{"rules":[{"id":"bad","when":{"type":"sensor_slot","entity":"sensor.temperature","op":"gt","slot":16,"min":0.0,"max":1.0,"default":0.5},"then":{"type":"escalate","reason":"x"},"debounce_ms":0}]}}
+→ ok:false, error:"set_reflex_rules refused: rule bad: slot 16 out of range (max 15)"
+```
+**(h) Reboot** and repeat (b): the level is RAM-only, so a fresh boot is back
+at the default. That is the safe posture, and it is the one thing on this list
+worth seeing rather than reading.
+
+**PASS A5b:** (b) fires, (c) does not, (d) fires, (e) refuses both and `active`
+is unchanged, (f) fires again, (g) refuses, (h) fires after reboot. What this
+proves: the brain moves a threshold inside a range the rule owns, never an
+actuator, and a reboot or a bad message leaves the node exactly as safe as it
+was. What it does not prove: the same over LoRa — that is `mesh_command`
+with `command = "descend"` through the Heltec bridge, Part B.
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**
