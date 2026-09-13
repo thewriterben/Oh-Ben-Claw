@@ -5,6 +5,79 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The spinal tier: the brain modulates, the node acts (2026-09-13)
+
+Step 3 of `docs/CONNECTOME-2026-09.md`. What the LIF fly measured
+(`experiments/lif-fly/RESULTS.md`) — a behaviour is a sparse, graded pattern over
+descending channels, and different behaviours recruit different channels —
+is now the shape of the message the host sends a node.
+
+### Added
+
+- **`Condition::SensorSlot`** (host `obc-reflex` and the node's `reflex.rs`,
+  same wire form) — a sensor threshold bound to a modulation **slot** instead
+  of a literal: the threshold is `min + level·(max − min)`, the rule owns the
+  physical range and a `default` level, and the node holds the level. On the
+  host it evaluates at `default`: modulation is a node-side concept, and a
+  rule that runs on the host has no descending path to be modulated by. A slot
+  the node cannot hold (≥ 16) or a default outside `[0, 1]` fails validation —
+  on the host at config load, on the node at `set_reflex_rules` — with the
+  rule named. `tests/firmware_node_gates.rs` pins the host's `MAX_SLOTS` to the
+  firmware's and the host's JSON to what the node loads.
+- **`descend`, a node command** — `{"m":[[slot,level],…]}`, levels in `[0, 1]`,
+  only the slots being changed, applied all-or-nothing (a bad pair changes
+  nothing, and says which pair); `{"clear":true}` first returns every slot to
+  its rule's default. Levels live in RAM: a reboot is the safe posture. What a
+  modulated rule then actuates still passes the Track 0 gate — modulation
+  moves thresholds, never limits. `NodeCommand::descend` builds it host-side
+  and refuses what the node would refuse before a frame is spent;
+  `mesh_command` routes `command = "descend"` through it, so the model gets
+  the reason rather than a `sent: true` for a message the node dropped.
+- **Two rows in the payload census, and a measurement.** `descend` with two
+  slots fits one frame with the 36-byte UUID still in it, under today's budget
+  and the auth tag's. `descend` with every slot does **not** — 279 bytes — and
+  the first draft of this entry said it did. The census caught it, which is
+  what the census is for. The message is sparse by design (the fly touches
+  ~5% of its channels per behaviour), the host refuses the over-budget shape,
+  and `how_many_slots_a_descend_can_carry` now asserts the guarantee that is
+  true: at least half the table (8 of 16) in one frame under the auth tag,
+  and prints the actual ceiling.
+
+### Why this is not blocked on spine auth
+
+`docs/CONNECTOME-2026-09.md` §2.2 said it was. Reading `SPINE-AUTH.md` again:
+steps 1, 2 and 5 are done — MQTT and P2P calls are signed, `require_pairing`
+gates, `[security] require_frame_auth` exists — and what remains is the LoRa
+frame tag (step 4) and the node's replay counter (step 3, needs a board). A
+descending modulation is *safer* than what already crosses that link:
+`gpio_write` names an actuator; `descend` moves a threshold inside a range a
+rule owns, and every actuation that follows is bounded by the node's own
+limit table, the one boundary that survives host compromise. That is the fly's
+"supervisory, not essential" made literal. It lands now, gated by Track 0
+like everything else, and gets the frame tag when step 4 does.
+
+### Removed
+
+- **`crates/obc-movement/src/feedback.rs`** (`PController`, `ClosedLoopServo`)
+  — parked since the crate was extracted, disclosed in `ROADMAP.md` as
+  "complete and parked" pending a bench-validated feedback source. The spinal
+  tier put the closed loop where the fly keeps it: on the node, against its
+  own sensors, inside the gate. A host-side controller chasing a position
+  from world memory is the layer this change routes around, and a complete
+  component the architecture has routed around is what the unwired list
+  exists to strike. The `<!-- unwired: -->` marker goes with it;
+  `scripts/check_tree.py` is green.
+
+### Not claimed
+
+That a node has a slot-bound rule yet — the built-in safing rules bind none,
+and `bodies/` in OBC-Prime ships none. The first one belongs to a real
+behaviour on the bench. And the correlation id is still a UUID; shortening it
+is step 4's job, and `descend` was measured with it in place so that step
+loses nothing here.
+
+---
+
 ## Unreleased — The MCP and A2A servers drive the same browser as the agent (2026-09-12)
 
 ### Fixed

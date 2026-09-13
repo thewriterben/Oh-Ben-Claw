@@ -768,7 +768,7 @@ Oh-Ben-Claw/
 │   ├── obc-mcp/              # Model Context Protocol client/server (dual-mode)
 │   ├── obc-memory/           # Bitemporal world memory (the embodied substrate)
 │   ├── obc-mission/          # Mission sequencer, advancing across restarts
-│   ├── obc-movement/         # Track 0-bounded actuation (feedback.rs parked - ROADMAP)
+│   ├── obc-movement/         # Track 0-bounded actuation
 │   ├── obc-navigation/       # Localization, SLAM, mapping, A*+costmap, particle filter
 │   ├── obc-observability/    # The agent watching itself: spans + counters
 │   ├── obc-paths/            # Config/data directory resolution

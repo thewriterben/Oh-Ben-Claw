@@ -49,6 +49,42 @@ mod safing;
 
 use safety::SafetyGate;
 
+/// The node's slot count and the host's are the same number in two workspaces
+/// that cannot link. `NodeCommand::descend` refuses by the host's; the node
+/// refuses by its own; they must agree or a message one accepts, the other
+/// drops.
+#[test]
+fn the_host_and_the_node_agree_on_how_many_modulation_slots_there_are() {
+    assert_eq!(reflex::MAX_SLOTS, obc_reflex::MAX_SLOTS);
+}
+
+/// The host's `SensorSlot` wire form is exactly what the node deserializes —
+/// the pair of tests in each module pins the JSON, this pins them to each other.
+#[test]
+fn a_slot_rule_the_host_emits_is_the_rule_the_node_loads() {
+    let host = obc_reflex::Condition::SensorSlot {
+        entity: "sensor.temp".into(),
+        op: obc_reflex::Cmp::Gt,
+        slot: 3,
+        min: 20.0,
+        max: 60.0,
+        default: 0.5,
+    };
+    let json = serde_json::to_string(&host).unwrap();
+    let node: reflex::Condition = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        node,
+        reflex::Condition::SensorSlot {
+            entity: "sensor.temp".into(),
+            op: reflex::Cmp::Gt,
+            slot: 3,
+            min: 20.0,
+            max: 60.0,
+            default: 0.5,
+        }
+    );
+}
+
 /// The property the whole safety case rests on, asserted here rather than only
 /// inside the module: a gate seeded with an allow-list refuses a pin outside
 /// it. `bodies/benchtop` in OBC-Prime allows pins 3 and 7; the bench procedure

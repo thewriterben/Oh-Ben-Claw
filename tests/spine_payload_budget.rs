@@ -105,6 +105,14 @@ fn one_limit() -> serde_json::Value {
     limit_for(vec![3])
 }
 
+/// Every modulation slot the node has, at three-decimal levels — the widest
+/// `descend` the host could try to send.
+fn every_slot() -> Vec<(u8, f64)> {
+    (0..obc_reflex::MAX_SLOTS as u8)
+        .map(|s| (s, 0.123 + f64::from(s) * 0.05))
+        .collect()
+}
+
 fn two_pin_limit() -> serde_json::Value {
     limit_for(vec![3, 4])
 }
@@ -185,6 +193,31 @@ fn census() -> Vec<Row> {
             "temperature": 21.5, "humidity": 48.2, "battery_soc": 91.0, "pressure": 1013.2
         }}),
         Carriage::Mesh,
+    );
+
+    // The spinal tier's descending modulation. The common shape — a behaviour
+    // touches a few slots; the fly's descending population is ~4–5% of its
+    // channels (`experiments/lif-fly/RESULTS.md`) — and the full table, which
+    // the first draft of this row claimed would fit and does not: 279 bytes.
+    // The message is sparse by design, `NodeCommand::descend` refuses the
+    // over-budget shape host-side, and `how_many_slots_a_descend_can_carry`
+    // below measures the real ceiling instead of asserting a belief.
+    let two =
+        NodeCommand::descend(NODE, UUID, &[(3, 0.5), (7, 1.0)], false).expect("valid descend");
+    push(
+        "descend, two slots",
+        UUID,
+        "descend",
+        two.args,
+        Carriage::Mesh,
+    );
+    let all = NodeCommand::descend(NODE, UUID, &every_slot(), true).expect("valid descend");
+    push(
+        "descend, every slot + clear",
+        UUID,
+        "descend",
+        all.args,
+        Carriage::TooBig("sparse by design; the full table is not one message"),
     );
 
     // The config-push commands, which is where the census stops being
@@ -400,6 +433,41 @@ fn the_tightest_mesh_payload_is_at_the_edge() {
         "the tightest mesh payload no longer sits exactly on the v2 budget \
          ({} bytes); update the note in SPINE-AUTH.md rather than this number",
         tightest.bytes
+    );
+}
+
+/// How many slots one `descend` can carry — measured, since the first draft of
+/// the census asserted "all sixteen" and was wrong by 39 bytes. The guarantee
+/// worth holding is that *half the table* fits under the auth tag, with the
+/// UUID still in the frame: a behaviour on the bench touches one to three
+/// slots, so eight is headroom, not a limit anyone will meet. If this drops
+/// below eight, the slot count or the correlation id has to give.
+#[test]
+fn how_many_slots_a_descend_can_carry() {
+    let all = every_slot();
+    let fits = |budget: usize| {
+        (0..=all.len())
+            .rev()
+            .find(|&n| {
+                NodeCommand::descend(NODE, UUID, &all[..n], true)
+                    .expect("valid descend")
+                    .encoded_len()
+                    <= budget
+            })
+            .unwrap_or(0)
+    };
+    let (today, v2) = (fits(MESH_LINE_BUDGET), fits(V2_BUDGET));
+    println!(
+        "descend carries {today} slots in today's frame, {v2} under the auth tag (of {})",
+        all.len()
+    );
+    assert!(
+        v2 >= obc_reflex::MAX_SLOTS / 2,
+        "only {v2} slots fit under the auth tag"
+    );
+    assert!(
+        today < all.len(),
+        "the full table now fits a frame — reclassify its census row"
     );
 }
 

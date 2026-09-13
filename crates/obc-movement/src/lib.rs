@@ -18,8 +18,6 @@
 //! movement *acts and records into* memory — closing the perceive→remember→
 //! reflex→act loop on the actuation side.
 
-pub mod feedback;
-
 use async_trait::async_trait;
 use obc_memory::world::WorldMemory;
 use obc_safety::limits::{SafetyGate, SafetyViolation};

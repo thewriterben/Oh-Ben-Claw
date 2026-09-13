@@ -42,7 +42,11 @@ impl Tool for MeshCommandTool {
          Addresses a single node by id and delivers a node command (e.g. 'gpio_write', \
          'sensor_read', 'capabilities') with optional args. The node executes it under its \
          own on-MCU Track 0 safety gate; the reply, if any, returns over the mesh into world \
-         memory. Use when a node is reachable only over LoRa."
+         memory. Use when a node is reachable only over LoRa. Prefer 'descend' over \
+         'gpio_write' when a node has slot-bound reflex rules: args {\"m\": [[slot, level], ...]} \
+         with levels in [0, 1] moves the node's reflex thresholds within the ranges its rules \
+         own, and the node keeps acting on its own sensors; {\"clear\": true} returns every \
+         slot to its rule's default."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -99,7 +103,28 @@ impl Tool for MeshCommandTool {
         let cmd_args = args.get("args").cloned().unwrap_or_else(|| json!({}));
         let id = uuid::Uuid::new_v4().to_string();
 
-        let node_cmd = NodeCommand::new(&node_id, &id, &command, cmd_args);
+        // `descend` is built through its own constructor so a bad slot or
+        // level is refused here, with the reason, rather than on the node.
+        let node_cmd = if command == "descend" {
+            let pairs: Vec<(u8, f64)> = match cmd_args.get("m") {
+                Some(m) => match serde_json::from_value(m.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return Ok(ToolResult::err(format!(
+                            "descend: 'args.m' must be a list of [slot, level] pairs: {e}"
+                        )))
+                    }
+                },
+                None => Vec::new(),
+            };
+            let clear = cmd_args.get("clear").and_then(Value::as_bool) == Some(true);
+            match NodeCommand::descend(&node_id, &id, &pairs, clear) {
+                Ok(c) => c,
+                Err(e) => return Ok(ToolResult::err(format!("mesh_command not sent: {e}"))),
+            }
+        } else {
+            NodeCommand::new(&node_id, &id, &command, cmd_args)
+        };
 
         // Refuse rather than report a send the mesh cannot make. The bridge's
         // line framer discards an over-budget line whole, so this used to return

@@ -1694,6 +1694,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             info!(count = vrules.len(), "vision-driven reflex rules appended");
             rules.extend(vrules);
         }
+        // A rule binding a modulation slot no node can hold fails here, at
+        // startup, rather than on the node when it is pushed.
+        for r in &config.reflex.rules {
+            if let Err(e) = r.validate() {
+                anyhow::bail!("[reflex] rules: {e}");
+            }
+        }
         // ClawCam analytics reflexes ("today is weird"): only meaningful when
         // the analytics poll is feeding `clawcam.analytics.*` facts.
         if let Some(cp) = &config.perception.clawcam_poll {

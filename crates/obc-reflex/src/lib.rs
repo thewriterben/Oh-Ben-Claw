@@ -114,6 +114,22 @@ impl Snapshot {
 pub enum Condition {
     /// Compare a sensor/entity numeric value (e.g. `living_room.temp > 28`).
     Sensor { entity: String, op: Cmp, value: f64 },
+    /// Like `Sensor`, but the threshold is bound to a node **modulation slot**:
+    /// `min + level·(max − min)`, where `level ∈ [0, 1]` is whatever the node
+    /// last received on its `descend` command, or `default` if nothing. This
+    /// is the spinal tier's handle — the brain moves a threshold inside a
+    /// range the rule owns; it never names an actuator. The host evaluates
+    /// this at `default`: modulation is a node-side concept, and a rule that
+    /// runs on the host has no descending path to be modulated by. See
+    /// `firmware/obc-esp32-s3/src/reflex.rs` for the node half.
+    SensorSlot {
+        entity: String,
+        op: Cmp,
+        slot: u8,
+        min: f64,
+        max: f64,
+        default: f64,
+    },
     /// A GPIO/entity equals an integer value.
     GpioEq { entity: String, value: i64 },
     /// A fact's (optionally nested) string value equals `equals`. With `field`,
@@ -141,6 +157,19 @@ impl Condition {
             Condition::Sensor { entity, op, value } => {
                 snap.nums.get(entity).is_some_and(|v| op.test(*v, *value))
             }
+            Condition::SensorSlot {
+                entity,
+                op,
+                min,
+                max,
+                default,
+                ..
+            } => {
+                let threshold = min + default.clamp(0.0, 1.0) * (max - min);
+                snap.nums
+                    .get(entity)
+                    .is_some_and(|v| op.test(*v, threshold))
+            }
             Condition::GpioEq { entity, value } => snap
                 .nums
                 .get(entity)
@@ -165,6 +194,7 @@ impl Condition {
     pub fn collect_entities(&self, set: &mut HashSet<String>) {
         match self {
             Condition::Sensor { entity, .. }
+            | Condition::SensorSlot { entity, .. }
             | Condition::GpioEq { entity, .. }
             | Condition::State { entity, .. } => {
                 set.insert(entity.clone());
@@ -173,7 +203,42 @@ impl Condition {
             Condition::Or { any } => any.iter().for_each(|c| c.collect_entities(set)),
         }
     }
+
+    /// Reject a slot binding no node can hold. The same check the node runs
+    /// when rules are pushed (`set_reflex_rules`), applied here at config load
+    /// so a bad rule fails the host at startup rather than the node at push.
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Condition::SensorSlot {
+                slot,
+                min,
+                max,
+                default,
+                ..
+            } => {
+                if *slot as usize >= MAX_SLOTS {
+                    return Err(format!("slot {slot} out of range (max {})", MAX_SLOTS - 1));
+                }
+                if !(min.is_finite() && max.is_finite()) {
+                    return Err(format!("slot {slot}: min/max must be finite"));
+                }
+                if !(*default >= 0.0 && *default <= 1.0) {
+                    return Err(format!(
+                        "slot {slot}: default level {default} not in [0, 1]"
+                    ));
+                }
+                Ok(())
+            }
+            Condition::And { all } => all.iter().try_for_each(Condition::validate),
+            Condition::Or { any } => any.iter().try_for_each(Condition::validate),
+            Condition::Sensor { .. } | Condition::GpioEq { .. } | Condition::State { .. } => Ok(()),
+        }
+    }
 }
+
+/// Modulation slots a node holds — pinned to the firmware's `MAX_SLOTS` by
+/// `tests/firmware_node_gates.rs`.
+pub const MAX_SLOTS: usize = 16;
 
 /// The action a fired reflex performs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -242,6 +307,13 @@ pub struct ReflexRule {
 }
 
 impl ReflexRule {
+    /// Reject a rule the node side would refuse (see [`Condition::validate`]).
+    pub fn validate(&self) -> Result<(), String> {
+        self.when
+            .validate()
+            .map_err(|e| format!("reflex rule {}: {e}", self.id))
+    }
+
     /// The minimum interval (ms) between fires implied by `debounce_ms` + `max_rate_hz`.
     fn min_interval_ms(&self) -> u64 {
         let rate_ms = self
@@ -1135,6 +1207,62 @@ mod tests {
         let fired = e.evaluate(&snap(&[("sensor.temperature", 30.0)]), 1_000);
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].rule_id, "fan-on-hot");
+    }
+
+    fn slot_cond(slot: u8, default: f64) -> Condition {
+        Condition::SensorSlot {
+            entity: "sensor.temperature".to_string(),
+            op: Cmp::Gt,
+            slot,
+            min: 20.0,
+            max: 60.0,
+            default,
+        }
+    }
+
+    #[test]
+    fn a_slot_bound_threshold_evaluates_at_its_default_on_the_host() {
+        // 20 + 0.5·40 = 40 °C: the host has no descending path, so the rule
+        // holds its default — the same answer a freshly booted node gives.
+        let c = slot_cond(3, 0.5);
+        assert!(c.eval(&snap(&[("sensor.temperature", 45.0)])));
+        assert!(!c.eval(&snap(&[("sensor.temperature", 35.0)])));
+        assert!(!c.eval(&snap(&[])));
+        let mut ents = HashSet::new();
+        c.collect_entities(&mut ents);
+        assert!(ents.contains("sensor.temperature"));
+    }
+
+    #[test]
+    fn a_slot_the_node_cannot_hold_fails_validation_and_names_the_rule() {
+        let mut r = fan_rule();
+        r.when = slot_cond(16, 0.5);
+        let err = r.validate().unwrap_err();
+        assert!(
+            err.contains("fan-on-hot") && err.contains("slot 16"),
+            "{err}"
+        );
+        r.when = Condition::Or {
+            any: vec![slot_cond(1, 1.5)],
+        };
+        assert!(r.validate().unwrap_err().contains("not in [0, 1]"));
+        r.when = slot_cond(15, 1.0);
+        assert!(r.validate().is_ok());
+        assert!(
+            fan_rule().validate().is_ok(),
+            "a literal threshold has nothing to validate"
+        );
+    }
+
+    #[test]
+    fn slot_condition_serializes_to_the_node_wire_form() {
+        let json = serde_json::to_string(&slot_cond(3, 0.5)).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"sensor_slot","entity":"sensor.temperature","op":"gt","slot":3,"min":20.0,"max":60.0,"default":0.5}"#
+        );
+        let back: Condition = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, slot_cond(3, 0.5));
     }
 
     #[test]

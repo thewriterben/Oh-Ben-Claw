@@ -607,7 +607,12 @@ fn main() -> anyhow::Result<()> {
     }
     // Load the built-in safing rules so the node self-protects from boot, even
     // before (or without) any host-pushed rule set or spine connection.
-    agent_state.reflex.set_rules(safing::default_safing_rules());
+    // The built-ins bind no slots, so this cannot fail; if it ever does, a
+    // node with no self-protection must not boot quietly.
+    agent_state
+        .reflex
+        .set_rules(safing::default_safing_rules())
+        .expect("built-in safing rules validate");
     log::info!("on-MCU safing rules loaded ({} built-in)", agent_state.reflex.rule_count());
     // System prompt prepended to every LLM request.
     agent_state.push_message(
@@ -990,8 +995,34 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
             // node never loses self-protection when the host replaces its set.
             let merged = safing::with_defaults(rules);
             let total = merged.len();
-            state.reflex.set_rules(merged);
+            state
+                .reflex
+                .set_rules(merged)
+                .map_err(|e| anyhow::anyhow!("set_reflex_rules refused: {e}"))?;
             Ok(serde_json::json!({ "loaded": n, "total": total, "builtin_safing": total - n }).to_string())
+        }
+
+        // The spinal tier: the brain modulates this node's reflexes rather than
+        // naming its actuators. `{"m":[[slot,level],...]}` — levels in [0, 1],
+        // sparse (only the slots being changed), all-or-nothing. Whatever a
+        // modulated rule then does still passes the Track 0 gate. Levels are
+        // RAM-only: a reboot returns every rule to its own default.
+        "descend" => {
+            // `{"clear":true}` first drops every level (defaults), then any
+            // pairs in the same message are applied on top.
+            if req.args.get("clear").and_then(|v| v.as_bool()) == Some(true) {
+                state.reflex.clear_modulations();
+            }
+            let pairs: Vec<(u8, f64)> = match req.args.get_mut("m") {
+                Some(v) => serde_json::from_value(v.take())?,
+                None => Vec::new(),
+            };
+            let applied = state
+                .reflex
+                .descend(&pairs)
+                .map_err(|e| anyhow::anyhow!("descend refused: {e}"))?;
+            let active = state.reflex.modulations().active();
+            Ok(serde_json::json!({ "applied": applied, "active": active }).to_string())
         }
 
         // Phase 18: evaluate reflexes against a sensor snapshot. Fired
