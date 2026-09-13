@@ -1,0 +1,96 @@
+{
+  "label": "",
+  "stamp": "20260913-114342",
+  "firmware": "0.1.0",
+  "passed": true,
+  "step2_offline_seen": true,
+  "step2_states": [
+    [
+      30.88,
+      "offline"
+    ]
+  ],
+  "step3_online_seen": true,
+  "step3_reply": true,
+  "step3_states": [
+    [
+      7.25,
+      "online"
+    ]
+  ],
+  "step4_offline_recurred": false,
+  "step4_replies": 9,
+  "step4_sent": 13,
+  "step4_states": [],
+  "watch_usb": true,
+  "usb_states": {
+    "step2": [
+      "offline"
+    ],
+    "step3": [
+      "online"
+    ],
+    "step4": []
+  },
+  "lines": [
+    " 0.86 \u001b[0;32mI (5703919) heltec_lora_linktest: SPINE \u25c4 src=40 seq=229 ctr=13029 mac=03d8af7ecfbaca1c rssi=-53 dBm snr=13 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":229}\u001b[0m",
+    " 2.83 \u001b[0;32mI (5705939) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=127\u001b[0m",
+    " 6.91 \u001b[0;32mI (5709949) heltec_lora_linktest: SPINE \u25c4 src=40 seq=230 ctr=13030 mac=f6037f64ea0a9afc rssi=-53 dBm snr=13 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":230}\u001b[0m",
+    " 8.89 \u001b[0;32mI (5711969) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=128\u001b[0m",
+    "12.84 \u001b[0;32mI (5715979) heltec_lora_linktest: SPINE \u25c4 src=40 seq=231 ctr=13031 mac=1e16e707c5313566 rssi=-53 dBm snr=13 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":231}\u001b[0m",
+    "14.32 \u001b[0;32mI (5717369) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=129\u001b[0m",
+    "19.52 \u001b[0;32mI (5722619) heltec_lora_linktest: SPINE \u25c4 src=40 seq=232 ctr=13032 mac=91a9aa3c565a7486 rssi=-53 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":232}\u001b[0m",
+    "20.88 \u001b[0;32mI (5724009) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=130\u001b[0m",
+    "24.83 \u001b[0;32mI (5727849) heltec_lora_linktest: SPINE \u25c4 src=40 seq=234 ctr=13034 mac=2637a756e11bd794 rssi=-53 dBm snr=13 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":234}\u001b[0m",
+    "26.81 \u001b[0;32mI (5729869) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=131\u001b[0m",
+    "30.88 \u001b[0;32mI (5733939) heltec_lora_linktest: SPINE \u25c4 src=40 seq=235 ctr=13035 mac=b9dcbe764c110e16 rssi=-53 dBm snr=13 dB : {\"node_id\":\"obc-esp32-s3-001\",\"silence_ms\":30439,\"state\":\"offline\",\"ts_ms\"",
+    "31.25 \u001b[0;32mI (5734309) heltec_lora_linktest: SPINE \u25c4 src=40 seq=236 ctr=13036 mac=a14b39c8429f12d5 rssi=-53 dBm snr=13 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"esc",
+    "31.38 \u001b[0;32mI (5734469) heltec_lora_linktest: SPINE \u25c4 src=40 seq=237 ctr=13037 mac=93e8d7af4295331a rssi=-53 dBm snr=13 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":237}\u001b[0m",
+    "32.12 \u001b[0;32mI (5735239) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=132\u001b[0m",
+    "37.43 \u001b[0;32mI (5740489) heltec_lora_linktest: SPINE \u25c4 src=40 seq=238 ctr=13038 mac=9129917eafdf0148 rssi=-53 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":238}\u001b[0m",
+    "38.79 \u001b[0;32mI (5741879) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=133\u001b[0m",
+    "42.87 \u001b[0;32mI (5745889) heltec_lora_linktest: SPINE \u25c4 src=40 seq=239 ctr=13039 mac=d8592190df00ec46 rssi=-53 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":239}\u001b[0m",
+    "44.23 \u001b[0;32mI (5747279) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=134\u001b[0m",
+    " 0.61 \u001b[0;32mI (5748839) heltec_lora_linktest: SPINE \u25ba (console) seq=135 (92 B) {\"id\":\"lc213530\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 1.60 \u001b[0;32mI (5749829) heltec_lora_linktest: SPINE \u25c4 src=40 seq=240 ctr=13040 mac=ab1f6099de3078a7 rssi=-53 dBm snr=12 dB : {\"id\":\"lc213530\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"0\",\"type",
+    " 7.25 \u001b[0;32mI (5750029) heltec_lora_linktest: SPINE \u25c4 src=40 seq=241 ctr=13041 mac=4a53376d036ebe9f rssi=-53 dBm snr=13 dB : {\"node_id\":\"obc-esp32-s3-001\",\"silence_ms\":30,\"state\":\"online\",\"ts_ms\":558",
+    " 0.62 \u001b[0;32mI (5751459) heltec_lora_linktest: SPINE \u25ba (console) seq=136 (92 B) {\"id\":\"lc213561\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 3.83 \u001b[0;32mI (5754649) heltec_lora_linktest: SPINE \u25c4 src=40 seq=243 ctr=13043 mac=c38f0778b015b3cb rssi=-52 dBm snr=12 dB : {\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":61088,\"type\":\"beacon\"}\u001b[0m",
+    " 4.57 \u001b[0;32mI (5755429) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=137\u001b[0m",
+    " 6.05 \u001b[0;32mI (5756969) heltec_lora_linktest: SPINE \u25c4 src=40 seq=244 ctr=13044 mac=17781fdcd3c49082 rssi=-53 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":244}\u001b[0m",
+    " 0.62 \u001b[0;32mI (5761489) heltec_lora_linktest: SPINE \u25ba (console) seq=138 (92 B) {\"id\":\"lc213662\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 1.61 \u001b[0;32mI (5762489) heltec_lora_linktest: SPINE \u25c4 src=40 seq=245 ctr=13045 mac=6aa824019b03262d rssi=-53 dBm snr=13 dB : {\"id\":\"lc213662\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"0\",\"type",
+    " 9.12 \u001b[0;32mI (5762639) heltec_lora_linktest: SPINE \u25c4 src=40 seq=246 ctr=13046 mac=40d7d9f1c1028aab rssi=-53 dBm snr=13 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":246}\u001b[0m",
+    " 0.49 \u001b[0;32mI (5764059) heltec_lora_linktest: SPINE \u25ba (console) seq=139 (92 B) {\"id\":\"lc213683\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 2.10 \u001b[0;32mI (5765679) heltec_lora_linktest: SPINE \u25c4 src=40 seq=247 ctr=13047 mac=148ea375ee7c63f9 rssi=-53 dBm snr=12 dB : {\"id\":\"lc213683\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"0\",\"type",
+    " 0.25 \u001b[0;32mI (5767109) heltec_lora_linktest: SPINE \u25ba (console) seq=140 (92 B) {\"id\":\"lc213724\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 1.86 \u001b[0;32mI (5768719) heltec_lora_linktest: SPINE \u25c4 src=40 seq=248 ctr=13048 mac=f024576861a8c3da rssi=-53 dBm snr=13 dB : {\"id\":\"lc213724\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"0\",\"type",
+    " 9.25 \u001b[0;32mI (5768869) heltec_lora_linktest: SPINE \u25c4 src=40 seq=249 ctr=13049 mac=aa84206fdd8b51f4 rssi=-53 dBm snr=13 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":249}\u001b[0m",
+    " 0.49 \u001b[0;32mI (5770289) heltec_lora_linktest: SPINE \u25ba (console) seq=141 (92 B) {\"id\":\"lc213755\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 2.10 \u001b[0;32mI (5771899) heltec_lora_linktest: SPINE \u25c4 src=40 seq=250 ctr=13050 mac=fc42bfb8be04fc82 rssi=-53 dBm snr=12 dB : {\"id\":\"lc213755\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"0\",\"type",
+    " 0.37 \u001b[0;32mI (5773329) heltec_lora_linktest: SPINE \u25ba (console) seq=142 (92 B) {\"id\":\"lc213786\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 1.36 \u001b[0;32mI (5774319) heltec_lora_linktest: SPINE \u25c4 src=40 seq=251 ctr=13051 mac=85da75fe991f2262 rssi=-52 dBm snr=12 dB : {\"id\":\"lc213786\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"0\",\"type",
+    " 9.12 \u001b[0;32mI (5774479) heltec_lora_linktest: SPINE \u25c4 src=40 seq=252 ctr=13052 mac=60c1aa4309ff4504 rssi=-51 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":252}\u001b[0m",
+    " 0.37 \u001b[0;32mI (5775899) heltec_lora_linktest: SPINE \u25ba (console) seq=143 (92 B) {\"id\":\"lc213807\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 2.10 \u001b[0;32mI (5777519) heltec_lora_linktest: SPINE \u25c4 src=40 seq=253 ctr=13053 mac=eeb149b481aacfce rssi=-53 dBm snr=12 dB : {\"id\":\"lc213807\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"0\",\"type",
+    " 0.25 \u001b[0;32mI (5778949) heltec_lora_linktest: SPINE \u25ba (console) seq=144 (92 B) {\"id\":\"lc213848\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 1.24 \u001b[0;32mI (5779899) heltec_lora_linktest: SPINE \u25c4 src=40 seq=254 ctr=13054 mac=28c6c312d81384cc rssi=-52 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":254}\u001b[0m",
+    " 1.98 \u001b[0;32mI (5780689) heltec_lora_linktest: SPINE \u25c4 src=40 seq=255 ctr=13055 mac=0f6ee85228a1e3cc rssi=-53 dBm snr=12 dB : {\"id\":\"lc213848\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"0\",\"type",
+    " 0.37 \u001b[0;32mI (5782119) heltec_lora_linktest: SPINE \u25ba (console) seq=145 (92 B) {\"id\":\"lc213879\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 1.97 \u001b[0;32mI (5783739) heltec_lora_linktest: SPINE \u25c4 src=40 seq=0 ctr=13056 mac=4e4a4de4722c08d6 rssi=-53 dBm snr=12 dB : {\"id\":\"lc213879\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"0\",\"type\":",
+    " 0.37 \u001b[0;32mI (5785179) heltec_lora_linktest: SPINE \u25ba (console) seq=146 (93 B) {\"id\":\"lc2139010\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 0.99 \u001b[0;32mI (5785869) heltec_lora_linktest: SPINE \u25c4 src=40 seq=2 ctr=13058 mac=b825bbb6743665fa rssi=-53 dBm snr=12 dB : {\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":92008,\"type\":\"beacon\"}\u001b[0m",
+    " 4.20 \u001b[0;32mI (5789129) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=147\u001b[0m",
+    " 6.43 \u001b[0;32mI (5791279) heltec_lora_linktest: SPINE \u25c4 src=40 seq=3 ctr=13059 mac=4f3d9747529d56f8 rssi=-52 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":3}\u001b[0m",
+    " 9.64 \u001b[0;32mI (5794539) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=148\u001b[0m",
+    " 0.62 \u001b[0;32mI (5795489) heltec_lora_linktest: SPINE \u25ba (console) seq=149 (93 B) {\"id\":\"lc2140011\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 1.60 \u001b[0;32mI (5796499) heltec_lora_linktest: SPINE \u25c4 src=40 seq=4 ctr=13060 mac=b5d6714c706b92f8 rssi=-52 dBm snr=12 dB : {\"id\":\"lc2140011\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"0\",\"type\"",
+    " 0.37 \u001b[0;32mI (5797939) heltec_lora_linktest: SPINE \u25ba (console) seq=150 (93 B) {\"id\":\"lc2140212\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 4.82 \u001b[0;32mI (5802409) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=151\u001b[0m",
+    " 5.69 \u001b[0;32mI (5803309) heltec_lora_linktest: SPINE \u25c4 src=40 seq=6 ctr=13062 mac=314e2a3407403b15 rssi=-53 dBm snr=13 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":6}\u001b[0m",
+    " 0.87 \u001b[0;32mI (5808469) heltec_lora_linktest: SPINE \u25ba (console) seq=152 (93 B) {\"id\":\"lc2141213\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"gpio_read\",\"args\":{\"pin\":21}}\u001b[0m",
+    " 4.70 \u001b[0;32mI (5812319) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=153\u001b[0m",
+    " 6.92 \u001b[0;32mI (5814459) heltec_lora_linktest: SPINE \u25c4 src=40 seq=8 ctr=13064 mac=86d527fd05e6a13a rssi=-53 dBm snr=13 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":8}\u001b[0m",
+    " 8.90 \u001b[0;32mI (5816459) heltec_lora_linktest: SPINE \u25c4 src=40 seq=9 ctr=13065 mac=c81d3d468104f0b1 rssi=-53 dBm snr=12 dB : {\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":122528,\"type\":\"beacon\"}\u001b[0m"
+  ]
+}

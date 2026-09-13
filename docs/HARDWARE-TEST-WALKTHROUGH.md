@@ -661,6 +661,47 @@ expecting edge semantics) is **12/12**, every transition reported once and
 within 3 s, nothing reported while holding
 (`results/bench_die_rule-20260913-101610.json`).
 
+### A5i. Link silence counts mesh contact
+
+**What it proves:** that `safe-link-offline` measures the link it names.
+Until this, the node's silence clock was reset by USB bytes only
+(`main.rs`, the USB intake) — the spine-UART intake that receives mesh
+commands never touched it. So a node with USB closed, commanded over the
+authenticated LoRa link, measured silence from the moment USB closed and
+held "host link lost" for good; A5h's edge-triggering made that *quiet*,
+not true. A mesh command that parses as a request addressed to us now
+resets the clock.
+
+Where the reset sits matters. The bridge forwards **every** verified frame
+to the node's UART, the base's own 5 s `gw_keepalive` included, and that
+frame has no `to`, so `command_targets_us` accepts it as broadcast. The
+first attempt reset the clock there, and the node never went offline at
+all — station liveness counted as the host. The reset is on a line
+`handle_request` accepted: a command is host contact, a keepalive is not.
+
+**Measured with** `scripts/bench_link_contact.py`: open the node over USB
+and close it (silence starts), listen for the offline edge that ~30 s of
+silence should still produce, send one mesh command and expect `online`,
+then a command every 10 s for 60 s and expect no `offline`. `--watch-usb`
+keeps the node's USB open and drained — no bytes sent, so silence still
+accrues — and records the node's own `link_state` lines beside the mesh's,
+which tells "never went offline" from "the mesh lost the report".
+
+```powershell
+python scripts\bench_link_contact.py --node COM6 --base COM3 --watch-usb
+```
+
+**Run 2026-09-13.** Baseline firmware: offline at 30.5 s, then a command
+answered and **no** `online` ever, on either side. Reset at
+`command_targets_us`: no `offline` in 45 s of silence on either side (the
+keepalives were contact). Reset on an accepted request: `offline` at
+**30.9 s** (USB and mesh agree), `online` after the first command (USB at
+once, the mesh copy 7 s later), 60 s of commands with no `offline` —
+**PASS** (`results/bench_link_contact-20260913-114342.json`). Note the
+cost the truthful rule carries: a node whose host is quiet goes offline
+30 s after its last command and reports each transition — the host does
+not send keepalives to nodes, so command silence *is* host silence here.
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**

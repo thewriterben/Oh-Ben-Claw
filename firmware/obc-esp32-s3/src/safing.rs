@@ -140,11 +140,13 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             debounce_ms: 10_000,
             max_rate_hz: None,
             // Once per loss, not every 10 s for as long as the host is away.
-            // For a node on the mesh "no USB host" is the normal state, and
-            // this rule re-firing was 4 frames a minute of the same news
+            // This rule re-firing was 4 frames a minute of the same news
             // (bench, 2026-09-13); the `link_state` report already says
             // offline/online on the change. The cuts (battery, overtemp)
-            // keep re-asserting on purpose.
+            // keep re-asserting on purpose. (Until later that day the
+            // silence clock counted USB bytes only, so a mesh-commanded
+            // node was "offline" from boot — the quieting hid that; the
+            // main loop now counts a targeted mesh command as contact.)
             fire_on_change: true,
         },
         // Over-temperature critical: shed heat-producing loads by cutting the

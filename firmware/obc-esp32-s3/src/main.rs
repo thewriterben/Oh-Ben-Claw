@@ -708,8 +708,9 @@ fn main() -> anyhow::Result<()> {
     // means lost. Kept well under the host `stale_ms` (set stale_ms ≥ ~3× this).
     const BEACON_INTERVAL_MS: u64 = 30_000;
     let mut last_beacon_ms: u64 = 0;
-    // Link watchdog: time of last host contact. If the host goes silent past the
-    // safing timeout, the built-in `safe-link-offline` rule fires (on-MCU offline
+    // Link watchdog: time of last host contact on *either* link — a USB byte or a
+    // mesh command addressed to us. If the host goes silent past the safing
+    // timeout, the built-in `safe-link-offline` rule fires (on-MCU offline
     // safing), independent of battery safing.
     let mut last_host_contact_ms: u64 = now_ms();
     // Emit link/power status only when it *changes* (not every tick), so the serial
@@ -797,6 +798,21 @@ fn main() -> anyhow::Result<()> {
                                 if let Ok(s) = std::str::from_utf8(&uart_line) {
                                     if command_targets_us(s) {
                                         if let Ok(resp) = handle_request(s, &mut agent_state) {
+                                            // A command that reached us over the mesh is host
+                                            // contact. Until 2026-09-13 only USB bytes counted
+                                            // (above), so a node with USB closed, commanded
+                                            // over the authenticated LoRa link, measured
+                                            // silence from boot and reported "host link lost"
+                                            // — the detector was wired to one of its two
+                                            // inputs. Counted here, on a line that parsed as
+                                            // a request, and not at `command_targets_us`: the
+                                            // bridge forwards *every* verified frame to this
+                                            // UART, the base's own 5 s `gw_keepalive` included,
+                                            // and that has no `to`, so it "targets us" — it is
+                                            // station liveness, not the host, and counting it
+                                            // meant the node never went offline at all
+                                            // (bench_link_contact, 2026-09-13, first attempt).
+                                            last_host_contact_ms = now_ms();
                                             // Stamp the reply with identity so the host
                                             // bridge keys it as `mesh.<node>.cmd_result`
                                             // (correlatable by the echoed `id`), not a

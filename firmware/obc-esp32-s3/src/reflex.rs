@@ -258,6 +258,9 @@ pub struct ReflexRule {
     /// all. Measured 2026-09-13: two holding slot rules with `debounce_ms`
     /// 10 000 put a 200-byte report on the mesh every 10 s each, and under
     /// that chatter the base's commands reached the bridge 4 times in 6.
+    /// (One of the holding rules was `safe-link-offline`, and it was holding
+    /// because the silence clock ignored the mesh — fixed the same day in
+    /// the main loop; the edge behaviour here is still right for the rest.)
     #[serde(default)]
     pub fire_on_change: bool,
 }

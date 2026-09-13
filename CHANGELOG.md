@@ -5,6 +5,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — `safe-link-offline` measures the link it names (2026-09-13)
+
+The node's link-silence clock was reset by USB bytes only; the spine-UART
+intake that receives mesh commands never touched it. A node with USB closed,
+commanded over the authenticated LoRa link, measured silence from the moment
+USB closed and held "host link lost" for good — the 09-13 edge-triggering
+made that quiet, not true. A mesh line that `handle_request` accepts as a
+request now resets the clock.
+
+Not at `command_targets_us`: the bridge forwards every verified frame to the
+node's UART, the base's own 5 s `gw_keepalive` included, and that has no `to`
+so it "targets us". Resetting there (the first attempt) meant the node never
+went offline at all — station liveness counted as the host. A command is
+host contact; a keepalive is not.
+
+Measured with the new `scripts/bench_link_contact.py` (`--watch-usb` records
+the node's own `link_state` beside the mesh's): offline at 30.9 s of silence
+on both sides, online after the first mesh command, 60 s of commands with no
+offline — PASS (`results/bench_link_contact-20260913-114342.json`).
+Walkthrough §A5i. The truthful rule carries a cost the quiet one hid: the
+host sends no keepalives to nodes, so a quiet host means offline 30 s after
+its last command, reported on each transition.
+
+Found while porting WILD's (Zhao et al. 2026, bioRxiv 2026.08.25.747153)
+detector → vet → act loop to the node: the first thing to vet turned out to
+be a detector wired to one of its two inputs.
+
 ## Unreleased — The mushroom body can tell a new objective from a reworded one (2026-09-13)
 
 The fix the measurement below asked for. Three changes to
