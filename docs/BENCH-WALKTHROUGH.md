@@ -366,7 +366,8 @@ world_memory = true
 
 [mesh_supervisor]
 enabled = true
-stale_ms = 30000
+stale_ms = 90000                # >= 3x the node beacon (30 s). At 30000 this
+                                # flapped the node every 2-5 min (2026-09-13)
 tick_ms = 5000
 recover = "capabilities"        # auto-ping an offline node
 escalate_after_ms = 120000      # 2 min continuously offline => presumed lost

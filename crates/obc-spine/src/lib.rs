@@ -808,9 +808,17 @@ fn default_mesh_escalated_probe_interval_ms() -> u64 {
 fn default_mesh_recovery_interval_ms() -> u64 {
     30_000
 }
+/// Three node beacon intervals (the node beacons every 30 s). Was 60 000 —
+/// two intervals, which one lost beacon turns into a false "offline".
 fn default_mesh_stale_ms() -> u64 {
-    60_000
+    3 * NODE_BEACON_INTERVAL_MS
 }
+
+/// The node's liveness beacon cadence, as `firmware/obc-esp32-s3/src/main.rs`
+/// sets `BEACON_INTERVAL_MS`. Stated here because the supervisor's staleness
+/// threshold is a multiple of it and the firmware constant is not importable
+/// (it is a local of the main loop). If the firmware changes it, change this.
+pub const NODE_BEACON_INTERVAL_MS: u64 = 30_000;
 fn default_mesh_tick_ms() -> u64 {
     5_000
 }
@@ -902,6 +910,16 @@ pub struct MeshSupervisorConfig {
     #[serde(default)]
     pub enabled: bool,
     /// A node with no mesh message newer than this (ms) is considered offline.
+    ///
+    /// Keep it at least three node beacon intervals — the node beacons every
+    /// 30 s (`BEACON_INTERVAL_MS` in `firmware/obc-esp32-s3/src/main.rs`), so
+    /// 90 000 — because at exactly one interval the supervisor and the node
+    /// flap each other: a beacon that lands a second late makes the node
+    /// "offline", the recovery probe counts as host contact on the node, the
+    /// reply makes it "healthy", and 30 s later it repeats. Measured live on
+    /// 2026-09-13 with 30 000: 11 recovery probes and 12 link-state
+    /// transitions in 17 minutes, and one System 2 wake for a node that was
+    /// never gone. The default is [`default_mesh_stale_ms`].
     #[serde(default = "default_mesh_stale_ms")]
     pub stale_ms: u64,
     /// Supervisor tick cadence (ms).

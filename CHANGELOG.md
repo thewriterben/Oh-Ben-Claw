@@ -5,6 +5,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The supervisor's staleness is three beacons, and the live check passed (2026-09-13)
+
+Read from the running brain's `world.db` after its 13:10 restart with
+`[descending]` enabled: **the body's posture reached the node live** —
+novelty 0.372 on a fruit-fly question → slot 0 = 0.15 → `applied 1` first
+attempt (12:52:39); a familiar objective cleared it at 13:10:41. The loop
+the connectome thread was aiming at, closed in the running system.
+
+Also in that log: the deployed `[mesh_supervisor] stale_ms = 30000` against
+a 30 s node beacon flapped the node every 2–5 min (11 recovery probes, 12
+link-state transitions in 17 min, one System 2 wake for a node that was
+never gone), and the probes were, by accident, the only host keepalive the
+node received. `MeshSupervisorConfig::stale_ms` documents the ≥ 3× rule; the
+default is now `3 * NODE_BEACON_INTERVAL_MS` (90 s; was 60 s); the host's
+copy of the beacon interval is pinned to the firmware's source text in
+`tests/firmware_node_gates.rs`; `config.example.toml` gains the
+`[mesh_supervisor]` block with the reason; `docs/BENCH-WALKTHROUGH.md`'s
+sample no longer says 30000. Live config set to 90000, task restarted
+13:31:24 — 12 beacons and no health, recovery or link-state entry in the
+5.7 min after. Decided for now: a mesh node's "host link" means "commanded
+recently" and is not read as a fault; no host keepalive until something on
+the node consumes it. `docs/WILD-2026-09.md` §5.1.
+
 ## Unreleased — Every reflex report carries the evidence it fired on (2026-09-13)
 
 A node's `type: reflex` report gains `ev` — one number per entity the rule's

@@ -58,6 +58,37 @@ fn the_host_and_the_node_agree_on_how_many_modulation_slots_there_are() {
     assert_eq!(reflex::MAX_SLOTS, obc_reflex::MAX_SLOTS);
 }
 
+/// The node's beacon cadence lives as a local `const` inside the firmware's
+/// main loop, so the host's copy (`obc_spine::NODE_BEACON_INTERVAL_MS`) cannot
+/// be imported — it is pinned to the *source text* instead. The supervisor's
+/// default staleness is a multiple of it; on 2026-09-13 a deployed
+/// `stale_ms` of one beacon interval flapped the node every 2–5 minutes.
+#[test]
+fn the_hosts_copy_of_the_node_beacon_interval_is_what_the_firmware_says() {
+    let main_rs = include_str!("../firmware/obc-esp32-s3/src/main.rs");
+    let line = main_rs
+        .lines()
+        .find(|l| {
+            l.trim_start()
+                .starts_with("const BEACON_INTERVAL_MS: u64 = ")
+        })
+        .expect("firmware main.rs declares BEACON_INTERVAL_MS");
+    let value: u64 = line
+        .split('=')
+        .nth(1)
+        .unwrap()
+        .trim()
+        .trim_end_matches(';')
+        .replace('_', "")
+        .parse()
+        .unwrap();
+    assert_eq!(value, obc_spine::NODE_BEACON_INTERVAL_MS, "{line}");
+    assert!(
+        obc_spine::MeshSupervisorConfig::default().stale_ms >= 3 * value,
+        "the default staleness must be at least three beacons, or a late beacon is an outage"
+    );
+}
+
 /// The host's `SensorSlot` wire form is exactly what the node deserializes —
 /// the pair of tests in each module pins the JSON, this pins them to each other.
 #[test]

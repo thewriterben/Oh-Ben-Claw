@@ -360,6 +360,22 @@ nodes = [{ node_id = "obc-esp32-s3-001", slots = [0] }]
 reply_timeout_ms = 8000
 reply_retries = 2
 
+# ── Mesh supervisor ──────────────────────────────────────────────────────────
+# Turns mesh facts into a per-node health view and, with `recover`, probes a
+# node that has gone quiet. `stale_ms` must be at least THREE node beacon
+# intervals (the node beacons every 30 s → 90000, the default). At one
+# interval the supervisor and the node flap each other: a beacon a second
+# late is an "offline", the recovery probe counts as host contact on the
+# node, the reply is "healthy", and 30 s later it repeats — measured live
+# 2026-09-13 at 30000: 11 probes and 12 link-state transitions in 17 min,
+# and a System 2 wake for a node that was never gone.
+# [mesh_supervisor]
+# enabled = true
+# stale_ms = 90000
+# tick_ms = 5000
+# recover = "capabilities"
+# escalate_after_ms = 120000
+
 # System 2: escalations wake the model, novelty-gated so a standing condition
 # does not wake it forever.
 [system2]
