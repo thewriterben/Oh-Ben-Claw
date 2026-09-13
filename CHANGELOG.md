@@ -5,6 +5,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A reset no longer costs the node its rules (2026-09-13)
+
+Host-pushed reflex rules persist in NVS (`firmware/obc-esp32-s3/src/rules_store.rs`):
+`set_reflex_rules` writes the record and answers `persisted: true` (or
+`false` with the reason); the next boot restores it, through the same
+validation a push gets, tagged with firmware version and schema — a record
+from another firmware is announced `stale` and cleared, an unparseable one
+`corrupt` and cleared. The boot announcement carries
+`"rules":{"source":"nvs"|"none"|"stale"|"corrupt","loaded":N}`. Rules
+persist and limits do not, on purpose: limits are actuator authority and
+stay deny-all at boot for the host to re-push (they fit a mesh frame);
+rules carry no authority and do not fit one. Decision recorded in
+OBC-Prime `docs/DECISIONS.md` (2026-09-13).
+
+`ReflexEngine::rearm`, called when `set_limits` applies a new policy: an
+edge-triggered rule that fired into the deny-all gate at boot had spent its
+edge and had nothing left to fire when limits landed a minute later. A new
+policy is a new world for the rules; every standing condition gets one more
+report under it.
+
+`scripts/bench_rules_persist.py --live`: PASS — `persisted: true`; after an
+RTS reset `reflex_tick` fires `die-cool` from NVS with no host push; 3.4 s
+`applied: false, safety: pin 21 not in allow-list`; 62 s the host's limits
+land and `die-cool` reports `applied: true`
+(`results/bench_rules_persist-20260913-162616.json`). A node reset now ends
+with the node whole with nobody touching it. Walkthrough §A5m.
+
 ## Unreleased — A node that boots gets its limits back; the base could not carry them (2026-09-13)
 
 The 2026-08-22 decision, finished. The node boots deny-all and announces it

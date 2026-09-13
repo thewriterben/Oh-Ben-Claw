@@ -111,6 +111,9 @@ use serde::{Deserialize, Serialize};
 /// On-MCU reflex mirror (Phase 18, System 1 at the edge).
 mod reflex;
 
+/// Host-pushed reflex rules across a reboot (NVS-backed since 2026-09-13).
+mod rules_store;
+
 /// On-MCU safing mirror (Phase 18) — built-in battery self-protection.
 mod safing;
 
@@ -295,6 +298,39 @@ struct AgentState {
     /// `None` ⇒ the entity is absent from the snapshot, never stubbed — a
     /// rule on a made-up temperature would be a made-up rule.
     die_temp: Option<esp_idf_svc::hal::temp_sensor::TempSensorDriver<'static>>,
+    /// Where host-pushed reflex rules live across a reboot (NVS, namespace
+    /// `reflex`). `None` when the partition could not be opened: rules then
+    /// live in RAM as they did before 2026-09-13, and `set_reflex_rules` says
+    /// so in its reply (`persisted: false`).
+    rules_store: Option<NvsRules>,
+}
+
+/// The NVS behind `rules_store::Store`.
+struct NvsRules(esp_idf_svc::nvs::EspNvs<esp_idf_svc::nvs::NvsDefault>);
+
+impl rules_store::Store for NvsRules {
+    fn load(&mut self) -> Option<Vec<u8>> {
+        let mut buf = vec![0u8; rules_store::MAX_BYTES];
+        match self.0.get_blob(rules_store::KEY, &mut buf) {
+            Ok(Some(bytes)) => Some(bytes.to_vec()),
+            Ok(None) => None,
+            Err(e) => {
+                log::warn!("rules store: read failed ({e}); starting with built-in rules only");
+                None
+            }
+        }
+    }
+    fn save(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.0
+            .set_blob(rules_store::KEY, bytes)
+            .map_err(|e| e.to_string())
+    }
+    fn clear(&mut self) -> Result<(), String> {
+        self.0
+            .remove(rules_store::KEY)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
 }
 
 impl AgentState {
@@ -311,6 +347,7 @@ impl AgentState {
             dht_last_read_ms: 0,
             dht_last: None,
             die_temp: None,
+            rules_store: None,
         }
     }
 
@@ -555,21 +592,72 @@ fn main() -> anyhow::Result<()> {
         stack_headroom()
     );
 
+    // Host-pushed reflex rules come back from NVS (see `rules_store` for why
+    // rules persist and limits do not). Built-in safing rules are always
+    // present; a restored set is merged after them exactly as a push is.
+    let restored = {
+        let store = esp_idf_svc::nvs::EspDefaultNvsPartition::take()
+            .and_then(|p| esp_idf_svc::nvs::EspNvs::new(p, rules_store::NAMESPACE, true));
+        match store {
+            Ok(nvs) => {
+                let mut nvs = NvsRules(nvs);
+                let loaded = rules_store::boot(&mut nvs, FIRMWARE_VERSION);
+                agent_state.rules_store = Some(nvs);
+                loaded
+            }
+            Err(e) => {
+                log::warn!("rules store: NVS unavailable ({e}); rules will not survive a reboot");
+                rules_store::Loaded::None
+            }
+        }
+    };
+    let host_rules = match &restored {
+        rules_store::Loaded::Rules(r) => r.clone(),
+        _ => Vec::new(),
+    };
+    // The built-ins bind no slots, so this cannot fail; a restored set already
+    // passed `validate` in `rules_store::boot`. If it ever does fail, a node
+    // with no self-protection must not boot quietly.
+    agent_state
+        .reflex
+        .set_rules(safing::with_defaults(host_rules))
+        .expect("built-in safing rules validate");
+    log::info!(
+        "on-MCU reflex rules loaded: {} total, {} restored from {} ({})",
+        agent_state.reflex.rule_count(),
+        restored.count(),
+        restored.source(),
+        match &restored {
+            rules_store::Loaded::Stale {
+                firmware_version, ..
+            } => format!("stored by firmware {firmware_version}; cleared"),
+            rules_store::Loaded::Corrupt(why) => format!("{why}; cleared"),
+            _ => String::new(),
+        }
+    );
+
     // Say, on the wire and not only in the log, that this node has no policy.
     //
     // A host that pushed a limit table before the reset is still holding it and
     // has no other way to learn that the node is not. Failing closed without
     // saying so is still a host and a node disagreeing about what is enforced,
     // which is the disagreement this whole exercise exists to remove.
+    //
+    // `rules` says what came back from NVS — `nvs` with a count, `none`,
+    // `stale` or `corrupt` — so the host can tell "restored" from "started
+    // empty" without asking.
     {
         let announcement = format!(
             concat!(
                 r#"{{"type":"policy_state","node_id":"{}","boot_id":{},"#,
                 r#""policy":"deny-all","reason":"boot","#,
+                r#""rules":{{"source":"{}","loaded":{}}},"#,
                 r#""detail":"no pin can be driven until set_limits arrives"}}"#
             ),
             NODE_ID,
-            boot_id()
+            boot_id(),
+            restored.source(),
+            restored.count()
         );
         send_line(&mut usb, &announcement);
         mirror_spine(&mut spine_uart, &announcement);
@@ -673,16 +761,9 @@ fn main() -> anyhow::Result<()> {
     }
     // Load the built-in safing rules so the node self-protects from boot, even
     // before (or without) any host-pushed rule set or spine connection.
-    // The built-ins bind no slots, so this cannot fail; if it ever does, a
-    // node with no self-protection must not boot quietly.
-    agent_state
-        .reflex
-        .set_rules(safing::default_safing_rules())
-        .expect("built-in safing rules validate");
-    log::info!(
-        "on-MCU safing rules loaded ({} built-in)",
-        agent_state.reflex.rule_count()
-    );
+    // (The reflex rules — built-in safing plus whatever NVS restored — were
+    // loaded before the boot announcement above, so the announcement could
+    // say what came back.)
     // System prompt prepended to every LLM request.
     agent_state.push_message(
         "system",
@@ -1107,6 +1188,12 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                     None => Vec::new(),
                 };
                 let applied = state.safety.apply_pushed(limits, NODE_ID);
+                if applied {
+                    // A new policy is a new world for the rules: a standing
+                    // condition whose write the old gate refused gets to fire
+                    // once more under the new one (see `ReflexEngine::rearm`).
+                    state.reflex.rearm();
+                }
                 let policy = state.safety.policy();
 
                 let mut out = String::with_capacity(160);
@@ -1157,16 +1244,32 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                 let n = rules.len();
                 // Keep the built-in safing rules in front of host-pushed rules so a
                 // node never loses self-protection when the host replaces its set.
-                let merged = safing::with_defaults(rules);
+                let merged = safing::with_defaults(rules.clone());
                 let total = merged.len();
                 state
                     .reflex
                     .set_rules(merged)
                     .map_err(|e| anyhow::anyhow!("set_reflex_rules refused: {e}"))?;
-                Ok(
-                    serde_json::json!({ "loaded": n, "total": total, "builtin_safing": total - n })
-                        .to_string(),
-                )
+                // Applied, and now kept: the host's rules survive this node's next
+                // reboot (`rules_store`). Only the host's — the built-ins are code.
+                // A store that refuses is reported, not hidden: `persisted: false`
+                // with the reason means "these rules die with the next reset".
+                let persisted = match state.rules_store.as_mut() {
+                    Some(store) => rules_store::encode(FIRMWARE_VERSION, &rules)
+                        .and_then(|bytes| rules_store::Store::save(store, &bytes)),
+                    None => Err("NVS unavailable at boot".to_string()),
+                };
+                let mut reply = serde_json::json!({
+                    "loaded": n,
+                    "total": total,
+                    "builtin_safing": total - n,
+                    "persisted": persisted.is_ok(),
+                });
+                if let Err(why) = persisted {
+                    log::warn!("set_reflex_rules: applied but not persisted: {why}");
+                    reply["persist_error"] = serde_json::json!(why);
+                }
+                Ok(reply.to_string())
             }
 
             // The spinal tier: the brain modulates this node's reflexes rather than

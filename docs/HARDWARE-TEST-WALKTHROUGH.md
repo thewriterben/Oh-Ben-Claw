@@ -833,6 +833,51 @@ recorded, none transmitted.
 > pushed, visibly (`applied: false`, `safety: pin 21 not in allow-list`),
 > until the config lists 21. That is the feature working.
 
+### A5m. A reset no longer costs the node its rules
+
+**What it proves:** the other half of A5l. Host-pushed reflex rules now
+persist in NVS (`firmware/obc-esp32-s3/src/rules_store.rs`, namespace
+`reflex`, key `rules`): `set_reflex_rules` writes them and answers
+`persisted: true` (or `false` with the reason), and the next boot restores
+them, validated by the same check a push gets and tagged with the firmware
+version and a schema number — a record from another firmware is announced
+as `stale` and cleared, an unparseable one as `corrupt` and cleared. The
+boot announcement says what came back: `"rules":{"source":"nvs","loaded":2}`.
+
+Why rules persist and limits do not: limits are actuator *authority*, and
+the 2026-08-22 decision that a reset must never widen policy stands — the
+host holds them and re-pushes them (A5l), and they fit a mesh frame. Rules
+carry no authority (every write still passes the Track 0 gate) and do *not*
+fit a mesh frame, so the host cannot re-push them in the field. A rule set
+that survives its own node's reboot is System 1 keeping its own promise.
+
+One more thing the bench forced: an edge-triggered rule that fired into the
+deny-all gate at boot had spent its edge, so when the host's limits landed a
+minute later it had nothing left to fire — the LED stayed wrong until the
+die crossed the threshold again. `set_limits` now *rearms* the engine
+(`ReflexEngine::rearm`): a new policy is a new world for the rules, and
+every standing condition gets one more report under it.
+
+**Measured with** `scripts/bench_rules_persist.py --live`: push the die rules
+(`persisted: true`), reset the node (RTS pulse), reopen USB, `reflex_tick`
+a cold snapshot (`die-cool` must fire from the restored set, with no host
+push), then wait for the node to become whole on its own — the brain's
+limits arrive over the mesh and the restored rule fires `applied: true`.
+
+```powershell
+python scripts\bench_rules_persist.py --node COM6 --live --within 150
+```
+
+**Run 2026-09-13 16:26: PASS** — `persisted: true`; after the reset
+`reflex_tick` fired `die-cool` from NVS; at 3.4 s `die-cool` reported
+`applied: false, safety: pin 21 not in allow-list` (deny-all, correct); at
+**62 s** the host's limits landed, the engine rearmed, and `die-cool`
+reported `applied: true` (`results/bench_rules_persist-20260913-162616.json`).
+The run before it (`…-162245`) is the pre-rearm evidence: the same 3.4 s
+refusal and then nothing for 150 s. A node reset now ends with the node
+whole — rules from its own flash, limits from the host — with nobody touching
+it.
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**

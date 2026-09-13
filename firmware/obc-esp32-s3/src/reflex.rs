@@ -496,10 +496,25 @@ impl ReflexEngine {
                 .map_err(|e| format!("rule {}: {e}", r.id))?;
         }
         self.rules = rules;
+        self.rearm();
+        Ok(())
+    }
+
+    /// Forget every rule's fire history — debounce, edge, hold — so each
+    /// standing condition fires once more, as if the rules had just been
+    /// loaded. Called when the Track 0 policy changes.
+    ///
+    /// Why: an edge-triggered rule that fired while the gate was deny-all has
+    /// spent its edge on a write the gate refused. On 2026-09-13 the restored
+    /// `die-cool` fired 3 s after boot — `applied: false, safety: pin 21 not
+    /// in allow-list`, correctly — and then, when the host's limits landed a
+    /// minute later, had nothing left to fire: the LED stayed wrong until the
+    /// die crossed the threshold again. A new policy is a new world for the
+    /// rules; every condition that holds under it gets its one report.
+    pub fn rearm(&mut self) {
         self.last_fire.clear();
         self.fired_this_run.clear();
         self.true_since.clear();
-        Ok(())
     }
 
     pub fn rule_count(&self) -> usize {
@@ -731,6 +746,33 @@ mod tests {
             "a new run, a new hold"
         );
         assert_eq!(eng.evaluate(&hot, 63_000).len(), 1);
+    }
+
+    #[test]
+    fn a_new_policy_rearms_a_spent_edge() {
+        // Bench 2026-09-13: die-cool fired once at boot into a deny-all gate,
+        // then had nothing left to fire when limits arrived a minute later.
+        let mut eng = ReflexEngine::new(vec![hot_rule(true, 10_000)]);
+        let hot = snap(&[("sensor.t", 60.0)]);
+        assert_eq!(
+            eng.evaluate(&hot, 0).len(),
+            1,
+            "the edge, spent on a refused write"
+        );
+        assert!(
+            eng.evaluate(&hot, 20_000).is_empty(),
+            "holding: nothing, however long"
+        );
+        eng.rearm(); // limits landed
+        assert_eq!(
+            eng.evaluate(&hot, 21_000).len(),
+            1,
+            "the standing condition fires once more under the new policy"
+        );
+        assert!(
+            eng.evaluate(&hot, 40_000).is_empty(),
+            "and then holds again"
+        );
     }
 
     #[test]

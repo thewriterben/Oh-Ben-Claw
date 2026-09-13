@@ -1,0 +1,63 @@
+{
+  "stamp": "20260913-162245",
+  "node": "COM6",
+  "push": {
+    "id": "push#1",
+    "ok": true,
+    "result": {
+      "builtin_safing": 6,
+      "loaded": 2,
+      "persisted": true,
+      "total": 8
+    }
+  },
+  "boot_id_before": 273918235,
+  "boot_id_after": 2494452948,
+  "tick": {
+    "id": "tick#2",
+    "ok": true,
+    "result": {
+      "fired": [
+        {
+          "action": {
+            "node_id": "self",
+            "pin": 21,
+            "type": "gpio_write",
+            "value": 1
+          },
+          "applied": false,
+          "error": "safety: pin 21 not in allow-list",
+          "ev": [
+            20.0
+          ],
+          "rule_id": "die-cool"
+        }
+      ],
+      "node_id": "obc-esp32-s3-001"
+    }
+  },
+  "live_reports": [
+    {
+      "action": {
+        "node_id": "self",
+        "pin": 21,
+        "type": "gpio_write",
+        "value": 1
+      },
+      "applied": false,
+      "error": "safety: pin 21 not in allow-list",
+      "ev": [
+        34.3
+      ],
+      "node_id": "obc-esp32-s3-001",
+      "rule_id": "die-cool",
+      "ts_ms": 4228,
+      "type": "reflex"
+    }
+  ],
+  "persisted": true,
+  "reset_ok": true,
+  "restored": true,
+  "whole": false,
+  "passed": false
+}

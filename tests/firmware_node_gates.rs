@@ -47,6 +47,12 @@ mod safety;
 #[allow(dead_code)]
 mod safing;
 
+// Host-pushed rules across a reboot (2026-09-13): the record, its version
+// guard, and the boot verdict. Same arrangement — pure module, tests run here.
+#[path = "../firmware/obc-esp32-s3/src/rules_store.rs"]
+#[allow(dead_code)]
+mod rules_store;
+
 use safety::SafetyGate;
 
 /// The node's slot count and the host's are the same number in two workspaces
