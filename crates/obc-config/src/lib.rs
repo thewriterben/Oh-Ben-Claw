@@ -1653,6 +1653,25 @@ pub struct LoraGatewayConfig {
     /// Baud rate of the Heltec console (ESP-IDF default 115200).
     #[serde(default = "default_lora_baud")]
     pub baud: u32,
+    /// How long `mesh_command` waits for a node's reply to one attempt, in
+    /// ms, before resending. A node answers in 1–2 s over one hop. Default
+    /// 8000. Applies only with world memory on (replies land there) and only
+    /// to commands safe to send twice.
+    #[serde(default = "default_mesh_reply_timeout_ms")]
+    pub reply_timeout_ms: u64,
+    /// Resends after an unanswered attempt. Default 2. The mesh has no ACK
+    /// and a plain collision loses about one frame in five (bench,
+    /// 2026-09-12); 0 restores fire-and-forget.
+    #[serde(default = "default_mesh_reply_retries")]
+    pub reply_retries: u32,
+}
+
+fn default_mesh_reply_timeout_ms() -> u64 {
+    8_000
+}
+
+fn default_mesh_reply_retries() -> u32 {
+    2
 }
 
 /// The task scheduler (`[scheduler]`, 2026-09-11): timers the agent sets for
@@ -3154,6 +3173,10 @@ enabled = false
 [[perception.expiry]]
 prefix = "incident."
 max_age_ms = 1000
+[lora_gateway]
+port = "COM3"
+reply_timeout_ms = 8000
+reply_retries = 2
 [self_improvement.mushroom]
 enabled = true
 seed = 7

@@ -956,10 +956,31 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     let sink: Arc<dyn oh_ben_claw::spine::lora_gateway::CommandSink> =
                         Arc::new(oh_ben_claw::spine::lora_gateway::SerialCommandSink::new(wr));
                     mesh_sink = Some(Arc::clone(&sink));
-                    all_tools.push(Box::new(
-                        oh_ben_claw::tools::builtin::mesh::MeshCommandTool::new(sink),
-                    ));
-                    info!("LoRa gateway: outbound mesh_command tool active");
+                    let mut tool = oh_ben_claw::tools::builtin::mesh::MeshCommandTool::new(sink);
+                    // Reply-awaited retry needs the world to read replies from;
+                    // without world memory the tool stays fire-and-forget and
+                    // says so.
+                    match &world_mem {
+                        Some(world) => {
+                            tool = tool.with_reply_wait(
+                                oh_ben_claw::tools::builtin::mesh::ReplyWait {
+                                    world: Arc::clone(world),
+                                    timeout_ms: gw.reply_timeout_ms,
+                                    retries: gw.reply_retries,
+                                },
+                            );
+                            info!(
+                                timeout_ms = gw.reply_timeout_ms,
+                                retries = gw.reply_retries,
+                                "LoRa gateway: outbound mesh_command tool active, reply-awaited"
+                            );
+                        }
+                        None => info!(
+                            "LoRa gateway: outbound mesh_command tool active, fire-and-forget \
+                             (no world memory to read replies from)"
+                        ),
+                    }
+                    all_tools.push(Box::new(tool));
                 }
                 Err(e) => tracing::warn!("[lora_gateway] failed to open {}: {e}", gw.port),
             }

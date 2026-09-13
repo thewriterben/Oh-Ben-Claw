@@ -57,14 +57,27 @@ the more useful half of this entry.
   `probe_push.py`. Kept: each one names a failure mode the next person
   will meet.
 
-### Not claimed, and what it implies
+### `mesh_command` waits for the answer now
 
 The mesh has no ACK. With both fixes in, a plain half-duplex collision still
 takes about one command or reply in five (`b1` needed its second attempt).
-The bench script retries; the host's `mesh_command` sink does not, and
-should — that is the next change on this path. And the base-reboot de-dup
-trap is a protocol fault, not a bench one: `SPINE-REPLAY.md`'s boot-safe
-counter is the fix, and this is a second reason to build it.
+The bench script retried; the host's `mesh_command` did not — it reported
+`sent: true` for a frame that may never have arrived, from a tool classed
+physical/high-blast. Now, when world memory is on and the command is one
+that is safe to send twice (`RETRY_SAFE`: `descend`, `capabilities`,
+`announce`, `gpio_read`, `sensor_read`, `gpio_write`), the tool polls for
+the node's reply — the `mesh.<node>.cmd_result` fact the bridge writes,
+matched by id — and resends with a fresh id on silence. The result carries
+`answered`, `attempts`, the node's `ok`/`result`/`error`, and the reply's
+RSSI; a node's refusal comes back as the tool's error with the node's
+reason; silence after every attempt is an error that says the command may
+or may not have executed. `[lora_gateway] reply_timeout_ms` (8000) and
+`reply_retries` (2; 0 restores fire-and-forget). A test pins a reply line
+captured verbatim from the base console to the fact the tool polls.
+
+The base-reboot de-dup trap remains a protocol fault, not a bench one:
+`SPINE-REPLAY.md`'s boot-safe counter is the fix, and this is a second
+reason to build it.
 
 Also found and not fixed: gw-40 had the Heltec factory demo on it, not this
 firmware. A lit OLED is the tell — `heltec-lora-linktest` never drives it.

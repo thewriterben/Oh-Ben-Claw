@@ -626,6 +626,32 @@ mod tests {
 
     const REFLEX_LINE: &str = "SPINE ◄ src=28 seq=30 rssi=-42 dBm : {\"type\":\"reflex\",\"node_id\":\"obc-esp32-s3-001\",\"rule\":\"safe-link-offline\"}";
 
+    /// A `cmd_result` heard over the air lands as the fact `mesh_command`'s
+    /// reply-wait polls, with the command's id on it. The line is verbatim from
+    /// the base console on 2026-09-12 (`results/bench_descend_lora-20260912-233135.json`,
+    /// step b2) — ANSI colour and all, since that is what the serial port hands
+    /// the host.
+    #[test]
+    fn a_real_reply_line_becomes_the_fact_the_tool_waits_for() {
+        let line = "\u{1b}[0;32mI (147833) heltec_lora_linktest: SPINE ◄ src=40 seq=51 rssi=-50 dBm snr=12 dB : \
+                    {\"id\":\"b2\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"{\\\"active\\\":[[3,0.0]],\\\"applied\\\":1}\",\"type\":\"cmd_result\"}\u{1b}[0m";
+        let world = WorldMemory::open_in_memory().unwrap();
+        let ing = ingest_gateway_line(line, &world, 1_000).expect("a ◄ line with JSON ingests");
+        assert_eq!(ing.node_id, "obc-esp32-s3-001");
+        assert_eq!(ing.msg_type, "cmd_result");
+        let fact = world
+            .current("mesh.obc-esp32-s3-001.cmd_result")
+            .unwrap()
+            .expect("the reply fact exists");
+        assert_eq!(fact.value["id"], json!("b2"));
+        assert_eq!(fact.value["ok"], json!(true));
+        assert_eq!(fact.value["_mesh"]["rssi_dbm"], json!(-50));
+        // The node's `result` is a JSON document inside a string; the tool
+        // hands it on as-is, and a consumer parses it once more.
+        let inner: Value = serde_json::from_str(fact.value["result"].as_str().unwrap()).unwrap();
+        assert_eq!(inner["active"], json!([[3, 0.0]]));
+    }
+
     #[test]
     fn a_descend_encodes_sparse_pairs_the_node_parses() {
         let c =

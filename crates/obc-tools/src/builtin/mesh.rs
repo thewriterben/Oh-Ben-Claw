@@ -22,12 +22,65 @@ use std::sync::Arc;
 /// Tool: send a command to a node over the LoRa mesh (off-grid return path).
 pub struct MeshCommandTool {
     sink: Arc<dyn CommandSink>,
+    reply: Option<ReplyWait>,
 }
+
+/// Wait for the node's answer, resending when it does not come.
+///
+/// The mesh has no acknowledgement at any layer. Measured on the bench on
+/// 2026-09-12 with the radio defects fixed: a plain half-duplex collision
+/// still loses about one command or reply in five. The node's reply, when it
+/// arrives, is ingested by the gateway bridge as the world-memory fact
+/// `mesh.<node_id>.cmd_result` carrying the command's `id`; this polls for it
+/// and, on silence, sends again with a fresh id — accepting a late answer to
+/// any attempt, since every retried command is idempotent (see
+/// [`RETRY_SAFE`]). Before this the tool reported `sent: true` for a frame
+/// that may never have arrived, which for a tool classed physical/high-blast
+/// is the wrong thing to be confident about.
+pub struct ReplyWait {
+    /// Where the gateway bridge writes `mesh.<node>.cmd_result`.
+    pub world: Arc<WorldMemory>,
+    /// How long to wait for one attempt's reply. A node answers in 1–2 s over
+    /// one LoRa hop; 8 s leaves room for a relay.
+    pub timeout_ms: u64,
+    /// Resends after the first attempt goes unanswered.
+    pub retries: u32,
+}
+
+/// Commands safe to send twice: applying them again yields the same node
+/// state, so a lost reply can be retried without a second effect. Anything
+/// not listed is sent once and reported as sent, as before.
+pub const RETRY_SAFE: &[&str] = &[
+    "descend",
+    "capabilities",
+    "announce",
+    "gpio_read",
+    "sensor_read",
+    "gpio_write",
+];
 
 impl MeshCommandTool {
     /// Build the tool over a command sink (the serial link to the base-station Heltec).
     pub fn new(sink: Arc<dyn CommandSink>) -> Self {
-        Self { sink }
+        Self { sink, reply: None }
+    }
+
+    /// Await the node's reply through world memory and retry on silence.
+    pub fn with_reply_wait(mut self, wait: ReplyWait) -> Self {
+        self.reply = Some(wait);
+        self
+    }
+
+    /// The `cmd_result` fact for `node_id` whose `id` is one of `ids`, if it
+    /// has arrived. Latest fact only: the bridge supersedes the entity on
+    /// every reply, and an older reply's id would not be in `ids`.
+    fn reply_for(world: &WorldMemory, node_id: &str, ids: &[String]) -> Option<Value> {
+        let fact = world
+            .current(&format!("mesh.{node_id}.cmd_result"))
+            .ok()
+            .flatten()?;
+        let id = fact.value.get("id").and_then(Value::as_str)?;
+        ids.iter().any(|i| i == id).then(|| fact.value.clone())
     }
 }
 
@@ -141,6 +194,16 @@ impl Tool for MeshCommandTool {
             )));
         }
 
+        // Reply-awaited retry, when the world is reachable and the command
+        // can safely be sent twice.
+        if let Some(wait) = &self.reply {
+            if RETRY_SAFE.contains(&command.as_str()) {
+                return self
+                    .send_awaiting_reply(wait, node_cmd, &node_id, &command)
+                    .await;
+            }
+        }
+
         match self.sink.send_command(&node_cmd).await {
             Ok(()) => Ok(ToolResult::ok(
                 json!({
@@ -155,6 +218,78 @@ impl Tool for MeshCommandTool {
             )),
             Err(e) => Ok(ToolResult::err(format!("mesh_command send failed: {e}"))),
         }
+    }
+}
+
+impl MeshCommandTool {
+    async fn send_awaiting_reply(
+        &self,
+        wait: &ReplyWait,
+        first: NodeCommand,
+        node_id: &str,
+        command: &str,
+    ) -> anyhow::Result<ToolResult> {
+        const POLL_MS: u64 = 100;
+        let base_id = first.id.clone();
+        let mut ids: Vec<String> = Vec::new();
+        for attempt in 0..=wait.retries {
+            let cmd = if attempt == 0 {
+                first.clone()
+            } else {
+                NodeCommand::new(
+                    first.to.clone(),
+                    format!("{base_id}r{attempt}"),
+                    first.cmd.clone(),
+                    first.args.clone(),
+                )
+            };
+            ids.push(cmd.id.clone());
+            if let Err(e) = self.sink.send_command(&cmd).await {
+                return Ok(ToolResult::err(format!("mesh_command send failed: {e}")));
+            }
+            let deadline =
+                tokio::time::Instant::now() + std::time::Duration::from_millis(wait.timeout_ms);
+            while tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(POLL_MS)).await;
+                if let Some(reply) = Self::reply_for(&wait.world, node_id, &ids) {
+                    let ok = reply.get("ok").and_then(Value::as_bool).unwrap_or(false);
+                    let out = json!({
+                        "sent": true,
+                        "answered": true,
+                        "attempts": attempt + 1,
+                        "id": reply.get("id"),
+                        "to": node_id,
+                        "command": command,
+                        "ok": ok,
+                        "result": reply.get("result"),
+                        "error": reply.get("error"),
+                        "rssi_dbm": reply.pointer("/_mesh/rssi_dbm"),
+                    });
+                    return Ok(if ok {
+                        ToolResult::ok(out.to_string())
+                    } else {
+                        ToolResult::err(out.to_string())
+                    });
+                }
+            }
+        }
+        Ok(ToolResult::err(
+            json!({
+                "sent": true,
+                "answered": false,
+                "attempts": wait.retries + 1,
+                "to": node_id,
+                "command": command,
+                "error": format!(
+                    "no reply from {node_id} after {} attempt(s) of {} ms each — the node may be \
+                     out of range, powered off, or the frames collided; the command may or may \
+                     not have executed",
+                    wait.retries + 1,
+                    wait.timeout_ms
+                ),
+            })
+            .to_string(),
+        ))
     }
 }
 
@@ -201,6 +336,160 @@ impl Tool for MeshStatusTool {
 mod tests {
     use super::*;
     use obc_memory::world::{Origin, WorldMemory};
+    use std::sync::Mutex;
+
+    /// A mesh that answers from the `answer_from`-th send onward (1-based) by
+    /// writing the node's reply into world memory the way the gateway bridge
+    /// does, and drops every send before that — a lost frame or a lost reply
+    /// look identical to the host, and that is the point.
+    struct LossySink {
+        world: Arc<WorldMemory>,
+        sent: Mutex<Vec<NodeCommand>>,
+        answer_from: usize,
+    }
+
+    #[async_trait]
+    impl CommandSink for LossySink {
+        async fn send_command(&self, cmd: &NodeCommand) -> anyhow::Result<()> {
+            let n = {
+                let mut s = self.sent.lock().unwrap();
+                s.push(cmd.clone());
+                s.len()
+            };
+            if n >= self.answer_from {
+                self.world
+                    .observe_as(
+                        &format!("mesh.{}.cmd_result", cmd.to),
+                        json!({
+                            "id": cmd.id, "node_id": cmd.to, "ok": true,
+                            "result": "{\"active\":[[3,1.0]],\"applied\":1}",
+                            "type": "cmd_result", "_mesh": {"rssi_dbm": -51}
+                        }),
+                        n as u64,
+                        n as u64,
+                        obc_spine::lora_gateway::SOURCE,
+                        Origin::Observed,
+                    )
+                    .unwrap();
+            }
+            Ok(())
+        }
+    }
+
+    fn tool(answer_from: usize, retries: u32) -> (MeshCommandTool, Arc<LossySink>) {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let sink = Arc::new(LossySink {
+            world: Arc::clone(&world),
+            sent: Mutex::new(Vec::new()),
+            answer_from,
+        });
+        let t = MeshCommandTool::new(Arc::clone(&sink) as Arc<dyn CommandSink>).with_reply_wait(
+            ReplyWait {
+                world,
+                timeout_ms: 250,
+                retries,
+            },
+        );
+        (t, sink)
+    }
+
+    fn descend_args() -> Value {
+        json!({ "node_id": "n1", "command": "descend", "args": { "m": [[3, 1.0]] } })
+    }
+
+    #[tokio::test]
+    async fn a_lost_first_frame_is_resent_and_the_answer_reported_with_the_attempt_count() {
+        let (t, sink) = tool(2, 2);
+        let res = t.execute(descend_args()).await.unwrap();
+        assert!(res.is_ok(), "{}", res.output());
+        let v: Value = serde_json::from_str(res.output()).unwrap();
+        assert_eq!(v["answered"], json!(true));
+        assert_eq!(v["attempts"], json!(2));
+        assert_eq!(v["ok"], json!(true));
+        assert_eq!(v["rssi_dbm"], json!(-51));
+        let sent = sink.sent.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        assert_ne!(sent[0].id, sent[1].id, "every attempt carries its own id");
+        assert!(
+            sent[1].id.starts_with(&sent[0].id),
+            "…derived from the first"
+        );
+        assert_eq!(sent[0].args, sent[1].args, "same idempotent command");
+    }
+
+    #[tokio::test]
+    async fn silence_after_every_attempt_is_an_error_not_a_sent_true() {
+        let (t, sink) = tool(usize::MAX, 2);
+        let res = t.execute(descend_args()).await.unwrap();
+        assert!(!res.is_ok());
+        let v: Value = serde_json::from_str(res.error.as_deref().unwrap()).unwrap();
+        assert_eq!(v["answered"], json!(false));
+        assert_eq!(v["attempts"], json!(3));
+        assert!(v["error"]
+            .as_str()
+            .unwrap()
+            .contains("may or may not have executed"));
+        assert_eq!(sink.sent.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_command_that_is_not_safe_to_repeat_is_sent_once() {
+        let (t, sink) = tool(usize::MAX, 2);
+        let res = t
+            .execute(
+                json!({ "node_id": "n1", "command": "set_reflex_rules", "args": { "rules": [] } }),
+            )
+            .await
+            .unwrap();
+        assert!(res.is_ok());
+        let v: Value = serde_json::from_str(res.output()).unwrap();
+        assert_eq!(v["sent"], json!(true));
+        assert!(
+            v.get("answered").is_none(),
+            "no reply wait for a non-idempotent command"
+        );
+        assert_eq!(sink.sent.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_from_the_node_comes_back_as_an_error_with_the_reason() {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        struct Refuser(Arc<WorldMemory>);
+        #[async_trait]
+        impl CommandSink for Refuser {
+            async fn send_command(&self, cmd: &NodeCommand) -> anyhow::Result<()> {
+                self.0
+                    .observe_as(
+                        &format!("mesh.{}.cmd_result", cmd.to),
+                        json!({ "id": cmd.id, "ok": false, "error": "descend refused: slot 16 out of range (max 15)",
+                                "type": "cmd_result", "_mesh": {"rssi_dbm": -50} }),
+                        1, 1, obc_spine::lora_gateway::SOURCE, Origin::Observed,
+                    )
+                    .unwrap();
+                Ok(())
+            }
+        }
+        let t = MeshCommandTool::new(Arc::new(Refuser(Arc::clone(&world)))).with_reply_wait(
+            ReplyWait {
+                world,
+                timeout_ms: 250,
+                retries: 2,
+            },
+        );
+        let res = t
+            .execute(json!({ "node_id": "n1", "command": "descend", "args": { "m": [[3, 0.5]] } }))
+            .await
+            .unwrap();
+        assert!(!res.is_ok());
+        let v: Value = serde_json::from_str(res.error.as_deref().unwrap()).unwrap();
+        assert_eq!(v["answered"], json!(true));
+        assert_eq!(
+            v["attempts"],
+            json!(1),
+            "a refusal is an answer, not silence"
+        );
+        assert!(v["error"].as_str().unwrap().contains("slot 16"));
+    }
 
     #[tokio::test]
     async fn mesh_status_summarizes_node_health() {
