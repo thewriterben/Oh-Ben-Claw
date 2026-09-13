@@ -312,6 +312,21 @@ max_escalations_per_min = 6
 # then = { type = "gpio_write", node_id = "obc-esp32-s3-001", pin = 21, value = 1 }
 # debounce_ms = 10000
 
+# ── Descending posture ───────────────────────────────────────────────────────
+# The brain's one deterministic reason to move a slot (walkthrough §A5g): the
+# mushroom body's novelty. An objective with no close precedent lowers the
+# listed slots to novel_level before the model has said a word; a familiar one
+# clears them back to the rules' defaults. Sent on change only, confirmed by
+# the node's reply (resent on silence), recorded as `descending.<node>`.
+# Needs [lora_gateway] and [self_improvement.mushroom] enabled = true; refused
+# at load otherwise.
+[descending]
+enabled = false
+novel_level = 0.15               # 30 + 0.15·40 = 36 °C on the die-temperature rule above
+nodes = [{ node_id = "obc-esp32-s3-001", slots = [0] }]
+reply_timeout_ms = 8000
+reply_retries = 2
+
 # System 2: escalations wake the model, novelty-gated so a standing condition
 # does not wake it forever.
 [system2]

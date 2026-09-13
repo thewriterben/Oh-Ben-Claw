@@ -2867,6 +2867,39 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     if let Some(k) = experience_k {
         agent = agent.with_experience_retrieval(k);
     }
+    // Descending posture: the mushroom body's novelty moves the nodes' reflex
+    // slots. Config validation has already required a gateway and a body;
+    // what is checked here is that they actually came up.
+    if config.descending.enabled {
+        match (&mesh_sink, &trajectory_store) {
+            (Some(sink), Some(_)) => {
+                let policy = oh_ben_claw::agent::posture::PosturePolicy::new(
+                    config.descending.clone(),
+                    Arc::clone(sink),
+                    world_mem.clone(),
+                );
+                info!(
+                    nodes = ?config
+                        .descending
+                        .nodes
+                        .iter()
+                        .map(|n| format!("{}:{:?}", n.node_id, n.slots))
+                        .collect::<Vec<_>>(),
+                    novel_level = config.descending.novel_level,
+                    "Descending posture policy active: novel objectives lower the slots"
+                );
+                agent = agent.with_posture_policy(Arc::new(policy));
+            }
+            (None, _) => anyhow::bail!(
+                "[descending] is enabled but the LoRa gateway did not open (needs the \
+                 `hardware` feature and the port); the policy would have nowhere to send"
+            ),
+            (_, None) => anyhow::bail!(
+                "[descending] is enabled but the trajectory store did not open, so there \
+                 is no mushroom body to assess with"
+            ),
+        }
+    }
     if let Some(trust) = &trust_scorer {
         agent = agent.with_trust(Arc::clone(trust));
     }

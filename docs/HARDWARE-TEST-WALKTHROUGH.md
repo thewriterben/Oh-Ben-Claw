@@ -571,6 +571,63 @@ needed its second attempt (collision, as usual).
 > whole"}` / `"request not understood: …"`) rather than met with silence.
 > `scripts/probe_linelen.py` is the tool if a line ever goes quiet again.
 
+### A5g. The brain's novelty reaches the node: descending posture
+
+**What it proves:** the loop the connectome thread was aiming at, closed on
+hardware. `obc_agent::posture::PosturePolicy` turns the mushroom body's
+assessment of each objective into a posture — *cautious* when the objective
+has no close precedent, the rules' *defaults* when it is familiar — and
+sends it down the spine as `descend` before the model has said a word: the
+fly's MB→DN bias. Sent on change only, confirmed by the node's reply
+(resent on silence, recorded on `descending.<node>` with `answered`,
+`attempts`, the node's `active` table). On the bench body that means: a
+novel objective lowers slot 0 to `novel_level` (0.15 → 36 °C on the
+die-temperature rule), which lights the LED at a 38 °C die; a familiar one
+clears it and the LED goes out.
+
+**What it does not prove:** that a *real* assessment did it. The test feeds
+the policy the two assessments the mushroom body would produce; producing
+them from real episodes needs `[self_improvement] semantic = true` and a
+body that has seen some objectives, which the bench brain has not been run
+with yet. The policy → mesh → node → reflex → pin path is what is measured.
+
+**Preconditions.** A5f run first (its rules and the pin-21 limit are loaded
+on the node and the slot is cleared); base on COM3; die temperature in the
+36–50 °C band (38 °C on the bench).
+
+```powershell
+$env:OBC_BASE_PORT = 'COM3'
+$env:OBC_SPINE_ROOT = (Get-Content $env:USERPROFILE\.obc\spine_root)
+cargo test --features hardware --test posture_live -- --ignored --nocapture
+```
+
+**Run 2026-09-13: pass** (from a cleared slot, LED off). Novel objective →
+`descend [[0,0.15]]` sent, node's reply confirmed by the policy on the first
+attempt, LED read back **0** (on) over the mesh; familiar objective →
+`descend {clear}` confirmed, LED **1** (off); a second familiar turn sent
+nothing. An earlier run needed the policy's own retry when the first frame
+was lost, which is what the retry is for: under this bench's chatter (a
+holding rule reporting every 10 s, keepalives, relays) the base's commands
+reached the bridge 4 times in 6 in a spot check — the edge-triggering gap
+from §A5f is now a link-load problem too.
+
+> **It found the biggest node defect of the day before it could run.** The
+> first attempt got no reply to anything over the mesh — not even
+> `gpio_read` — while `bench_spine_auth.py observe` showed the link
+> perfect. `scripts/probe_mesh_cmd.py --bridge COM5` showed the bridge
+> receiving the command and handing it to the node's UART; nothing came
+> back. `scripts/probe_usb_drain.py` settled it: with a reader on the node's
+> USB port every command was answered; without one, none. The XIAO's
+> USB-Serial-JTAG stalls every write when the cable is plugged in and
+> nothing reads, and `send_line` waited **2 s** per line for the host to
+> drain — so a holding reflex report every 10 s, the beacon and safing
+> reports parked the main loop for seconds at a time, the UART intake
+> starved, and the mesh node was deaf whenever a laptop was merely
+> *attached*. A5b–A5f never saw it because every one of those scripts held
+> the port open and read it. Fixed: `send_line` gives up inside ~50 ms (a
+> connected host drains a 4 KiB ring far faster than that) and the UART RX
+> ring is 2 KiB. A mesh node must never wait on its USB.
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**

@@ -1965,6 +1965,12 @@ pub struct Config {
     /// Phase 18 dual-system reflexes (System 1).
     #[serde(default)]
     pub reflex: ReflexConfig,
+    /// Descending posture (`[descending]`): the mushroom body's novelty
+    /// signal moving nodes' reflex slots — cautious on an unfamiliar
+    /// objective, the rules' defaults on a familiar one. Owned by
+    /// `obc_agent::posture`.
+    #[serde(default)]
+    pub descending: obc_agent::posture::PostureConfig,
     /// Phase 18 slow reasoner (System 2): escalation-driven, novelty-gated
     /// LLM wakes.
     #[serde(default)]
@@ -2334,6 +2340,22 @@ impl Config {
         }
         if self.gateway.port == 0 {
             anyhow::bail!("gateway.port must be > 0");
+        }
+
+        // Descending posture: moving slots on nodes the mesh cannot reach is
+        // the silent kind of nothing.
+        self.descending.validate()?;
+        if self.descending.enabled && self.lora_gateway.is_none() {
+            anyhow::bail!(
+                "[descending] is enabled but there is no [lora_gateway]: the posture policy \
+                 sends `descend` over the mesh and has no other way to reach a node"
+            );
+        }
+        if self.descending.enabled && !self.self_improvement.mushroom.enabled {
+            anyhow::bail!(
+                "[descending] is enabled but [self_improvement.mushroom] is not: the policy \
+                 acts on the mushroom body's novelty and there is none"
+            );
         }
 
         // Validate security
@@ -3190,6 +3212,10 @@ port = "COM3"
 reply_timeout_ms = 8000
 reply_retries = 2
 spine_root_file = "~/.obc/spine_root"
+[descending]
+enabled = true
+novel_level = 0.15
+nodes = [{ node_id = "obc-esp32-s3-001", slots = [0] }]
 [self_improvement.mushroom]
 enabled = true
 seed = 7

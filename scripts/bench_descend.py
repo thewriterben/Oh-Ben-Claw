@@ -157,7 +157,12 @@ def main() -> int:
         import serial  # noqa: PLC0415
         for attempt in range(20):
             try:
-                node.ser = serial.Serial(node.port, 115200, timeout=2)
+                s = serial.Serial()
+                s.port, s.baudrate, s.timeout = node.port, 115200, 2
+                s.dtr = s.rts = False  # a default open can reset the S3 again
+                s.open()
+                s.dtr = s.rts = False
+                node.ser = s
                 break
             except serial.SerialException:
                 time.sleep(0.5)

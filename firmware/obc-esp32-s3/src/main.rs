@@ -482,7 +482,12 @@ fn main() -> anyhow::Result<()> {
         Option::<esp_idf_svc::hal::gpio::AnyIOPin>::None,
         Option::<esp_idf_svc::hal::gpio::AnyIOPin>::None,
         &esp_idf_svc::hal::uart::config::Config::new()
-            .baudrate(esp_idf_svc::hal::units::Hertz(115_200)),
+            .baudrate(esp_idf_svc::hal::units::Hertz(115_200))
+            // The driver's RX ring, up from the 256-byte default: the bridge
+            // forwards every frame it hears down this wire, and a command
+            // must survive whatever else arrives while the main loop is
+            // busy for a moment.
+            .rx_fifo_size(2048),
     )
     .ok();
     #[cfg(feature = "board-waveshare-21")]
@@ -1472,13 +1477,22 @@ fn send_line(usb: &mut UsbSerialDriver, line: &str) {
     let mut off = 0;
     let mut stalls = 0u32;
     while off < bytes.len() {
-        match usb.write(&bytes[off..], 100) {
+        match usb.write(&bytes[off..], 10) {
             Ok(0) => {
-                // No progress this round (tx buffer full / host draining). Retry a
-                // bounded number of times so large replies (e.g. `capabilities`)
-                // get out, but give up after ~2 s if the host has truly gone.
+                // No progress this round: the 4 KiB TX ring is full because no
+                // host is reading. A connected host drains it at USB speed, so
+                // a few tens of milliseconds is all a genuine reader ever
+                // needs; give up well inside that and drop the line.
+                //
+                // This used to wait ~2 s (20 × 100 ms), and that made the
+                // node DEAF TO THE MESH whenever its USB cable was plugged in
+                // with nothing reading it (bench, 2026-09-13): every report
+                // — a holding reflex every 10 s, the beacon, safing — parked
+                // the main loop for 2 s, the UART intake between them starved,
+                // and mesh commands the bridge had delivered to UART1 were
+                // never answered. A mesh node must never wait on its USB.
                 stalls += 1;
-                if stalls > 20 {
+                if stalls > 4 {
                     return;
                 }
             }

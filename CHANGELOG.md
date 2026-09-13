@@ -5,6 +5,67 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Descending posture: the brain's novelty reaches the node (2026-09-13)
+
+The loop the connectome thread was aiming at, closed on hardware. The
+mushroom body's assessment of each objective now moves the nodes' reflex
+slots before the model has said a word — cautious (slots at `novel_level`)
+when the objective has no close precedent, the rules' defaults when it is
+familiar — the fly's MB→DN bias as a deterministic policy, no model call,
+no randomness. On the bench body: a novel objective lowers slot 0 to 36 °C
+and the die-temperature rule lights the LED; a familiar one clears it.
+Bench (walkthrough §A5g, `tests/posture_live.rs` on the production path —
+`SerialCommandSink`, `run_gateway_rx` with `LoraAuth`, world memory):
+novel → `descend [[0,0.15]]` confirmed by the node's reply, LED on;
+familiar → clear confirmed, LED off; a second familiar turn sends nothing.
+
+### Added
+
+- `obc_agent::posture` — `PostureConfig` (`[descending]`: `enabled`,
+  `novel_level`, `nodes = [{ node_id, slots }]`, `reply_timeout_ms`,
+  `reply_retries`), `Posture::for_assessment`, `PosturePolicy::apply`.
+  Sends `descend` on posture *change* only; confirms each send in the
+  background against the node's `cmd_result` in world memory, resending
+  with a fresh id on silence; records `descending.<node>` (`posture`,
+  `novelty`, `objective`, `id`, `sent`, `answered`, `attempts`, the node's
+  `result`). A refused or unanswered send is not remembered as a posture:
+  the next turn sends again.
+- `Agent::with_posture_policy`; `process` assesses the objective once and
+  hands the assessment to both the experience block and the policy (one
+  embedding, two consumers — the "double embed per turn" item, half closed:
+  `similar()` still embeds on its own).
+- Config: `[descending]` is refused at load when enabled without a
+  `[lora_gateway]` or without `[self_improvement.mushroom]`; at startup
+  when either failed to come up. `config.example.toml` carries it, off.
+- `scripts/probe_mesh_cmd.py`, `probe_mesh_listen.py`, `probe_usb_drain.py`.
+
+### Fixed (firmware `obc-esp32-s3`)
+
+- **A mesh node was deaf whenever a USB cable was attached with nothing
+  reading it.** `send_line` waited ~2 s per line for the host to drain the
+  USB-Serial-JTAG ring; a holding reflex report every 10 s, the beacon and
+  the safing reports parked the main loop for seconds, the UART intake
+  starved, and commands the bridge had delivered to UART1 went unanswered.
+  Every bench script so far had held the port open and read it, which is
+  why A5b–A5f never saw it. `send_line` now gives up inside ~50 ms; the
+  UART RX ring is 2 KiB. Measured: 0/3 mesh replies with the port closed
+  before, 2/3 (one collision) after.
+
+### Fixed (scripts)
+
+- `bench_run.Node` and the probes open the node's USB with DTR/RTS held
+  low. The S3's USB-JTAG implements the auto-reset in silicon; a default
+  pyserial open/close reset the node and lost every pushed rule and limit —
+  the reason the rules were gone minutes after §A5f passed.
+
+### Not claimed
+
+- A real assessment driving it. `posture_live` feeds the two assessments
+  the body would produce; producing them from real episodes needs the
+  brain run with `semantic = true` and a body that has seen objectives.
+- Anything beyond "novel → cautious": what else should move a slot
+  (outcome priors, escalations, time of day) is unwritten, on purpose.
+
 ## Unreleased — The first real slot-bound rule (2026-09-13)
 
 The spinal tier acting on a real quantity. The XIAO's on-die temperature

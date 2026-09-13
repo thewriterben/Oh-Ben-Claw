@@ -93,6 +93,7 @@ mod skill_replay;
 // as `AgentEvent::Token`, with `Thinking`, `ToolCall` and `ToolResult` emitted
 // from inside the loop as they happen rather than reconstructed afterwards.
 pub mod context;
+pub mod posture;
 pub mod routing;
 pub mod scheduled;
 pub mod system2;
@@ -181,6 +182,12 @@ pub struct Agent {
     /// similar past successful episodes — so the model prefers a verified
     /// recipe over reasoning from scratch.
     experience_k: Option<usize>,
+    /// The descending posture policy (`posture.rs`): when attached, each
+    /// turn's mushroom-body assessment also moves the configured nodes'
+    /// reflex slots — cautious when the objective is novel, the rules'
+    /// defaults when it is familiar. Needs a trajectory store with a body;
+    /// without one there is no assessment and the policy is never asked.
+    posture: Option<Arc<posture::PosturePolicy>>,
     /// Parity item 3: a second, cloud brain chosen per turn. `None` means
     /// every turn uses `provider`, as before 2026-09-11.
     routing: Option<Routing>,
@@ -298,6 +305,7 @@ impl Agent {
             trust: None,
             approval: None,
             experience_k: None,
+            posture: None,
             routing: None,
             notes: None,
             skill_usage: None,
@@ -381,6 +389,12 @@ impl Agent {
     /// relevant learned skills and `k` similar past successes into the prompt.
     pub fn with_experience_retrieval(mut self, k: usize) -> Self {
         self.experience_k = Some(k.max(1));
+        self
+    }
+
+    /// Attach the descending posture policy (see [`posture`]).
+    pub fn with_posture_policy(mut self, policy: Arc<posture::PosturePolicy>) -> Self {
+        self.posture = Some(policy);
         self
     }
 
@@ -741,7 +755,24 @@ impl Agent {
             // A failed summary must not cost the turn; the raw window still works.
             tracing::warn!(session_id = %session_id, error = %e, "compaction failed; using raw history");
         }
-        let mut messages = self.build_context_for(session_id, Some(user_message))?;
+        // The mushroom body's assessment of this objective, once: it goes
+        // into the prompt (experience block) and, when a posture policy is
+        // attached, down the spine to the nodes' reflex slots before the
+        // model has said a word — the fly's MB→DN bias, not a plan.
+        let assessment = self.assess(user_message);
+        if let (Some(policy), Some(a)) = (&self.posture, &assessment) {
+            let applied = policy.apply(a, user_message, now_ms()).await;
+            if let Some(obs) = &self.obs {
+                if !applied.sent.is_empty() {
+                    obs.metrics.counter("descending_posture_sent_total").inc();
+                }
+                if !applied.failed.is_empty() {
+                    obs.metrics.counter("descending_posture_failed_total").inc();
+                }
+            }
+        }
+        let mut messages =
+            self.build_context_with(session_id, Some(user_message), assessment.as_ref())?;
 
         let max_iterations = self.config.max_tool_iterations.min(MAX_TOOL_ITERATIONS);
         let mut tool_calls_made = Vec::new();
@@ -1141,14 +1172,30 @@ impl Agent {
     /// block saying so even when nothing else is known (that *is* the
     /// information — the reasoner should verify before acting rather than
     /// pattern-match), and a familiar one gets the outcome prior of its kind.
+    #[cfg(test)]
     fn experience_block(&self, objective: &str, k: usize) -> Option<String> {
+        let assessment = self.assess(objective);
+        self.experience_block_with(objective, k, assessment.as_ref())
+    }
+
+    /// The mushroom body's view of `objective`, if the trajectory store has
+    /// one. Computed once per turn in [`process`](Self::process) and shared
+    /// by the experience block and the posture policy — one embedding, two
+    /// consumers.
+    fn assess(&self, objective: &str) -> Option<obc_memory::mushroom::Assessment> {
+        self.trajectory
+            .as_ref()
+            .and_then(|t| t.assess(objective, now_ms()))
+    }
+
+    fn experience_block_with(
+        &self,
+        objective: &str,
+        k: usize,
+        assessment: Option<&obc_memory::mushroom::Assessment>,
+    ) -> Option<String> {
         use obc_memory::trajectory::lexical_score;
         const MIN_SCORE: f32 = 0.2;
-
-        let assessment = self
-            .trajectory
-            .as_ref()
-            .and_then(|t| t.assess(objective, now_ms()));
 
         // Relevant learned skills currently registered as tools.
         let mut skills: Vec<(f32, String, String)> = {
@@ -1173,7 +1220,7 @@ impl Agent {
             .and_then(|t| t.similar(objective, k).ok())
             .unwrap_or_default();
 
-        let novel = assessment.as_ref().is_some_and(|a| a.novel);
+        let novel = assessment.is_some_and(|a| a.novel);
         if skills.is_empty() && episodes.is_empty() && !novel {
             return None;
         }
@@ -1181,7 +1228,7 @@ impl Agent {
         let mut block = String::from(
             "[Learned experience — verified results from this agent's past successful runs]\n",
         );
-        if let Some(a) = &assessment {
+        if let Some(a) = assessment {
             if a.novel {
                 if let Some(obs) = &self.obs {
                     obs.metrics.counter("mushroom_novel_objectives_total").inc();
@@ -1242,7 +1289,7 @@ impl Agent {
     /// exercise directly.
     #[cfg(test)]
     fn build_context(&self, session_id: &str) -> Result<Vec<ChatMessage>> {
-        self.build_context_for(session_id, None)
+        self.build_context_with(session_id, None, None)
     }
 
     /// The prompt for one turn, in cache-stable order:
@@ -1260,10 +1307,11 @@ impl Agent {
     /// system prompt. The world state is still its own system message, not
     /// spliced into the prompt: the prompt is who the agent is; this is what is
     /// true right now, and the boundary stays visible in a transcript.
-    fn build_context_for(
+    fn build_context_with(
         &self,
         session_id: &str,
         objective: Option<&str>,
+        assessment: Option<&obc_memory::mushroom::Assessment>,
     ) -> Result<Vec<ChatMessage>> {
         let system = match self.notes.as_ref().and_then(|n| n.render()) {
             Some(notes) => format!("{}\n\n{notes}", self.config.system_prompt.trim_end()),
@@ -1283,7 +1331,7 @@ impl Agent {
         // Phase 16 P1: verified experience (learned skills + similar past
         // successes) for this objective.
         if let (Some(k), Some(objective)) = (self.experience_k, objective) {
-            if let Some(block) = self.experience_block(objective, k) {
+            if let Some(block) = self.experience_block_with(objective, k, assessment) {
                 if let Some(obs) = &self.obs {
                     obs.metrics
                         .counter("experience_blocks_injected_total")
@@ -2324,7 +2372,9 @@ mod context_order_and_compaction_tests {
             vec![],
         )
         .with_world_context(world, world_context::WorldContextConfig::default());
-        let ctx = agent.build_context_for(&session, Some("the ask")).unwrap();
+        let ctx = agent
+            .build_context_with(&session, Some("the ask"), None)
+            .unwrap();
         let contents: Vec<&str> = ctx.iter().map(|m| m.content.as_str()).collect();
         assert_eq!(contents[0], AgentConfig::default().system_prompt);
         assert_eq!(&contents[1..3], &["earlier", "reply"]);

@@ -76,6 +76,19 @@ Wired at two points: the ClawCam ingest path (novelty score attached to each det
 3. Spinal tier + descending modulation channel on the ESP32 nodes (§2.2). After spine auth. Research output: an explicit insect-DN model of the LLM↔actuator interface, which no one has published.
 4. Ring-attractor heading (§2.3), only when a node moves.
 
+> **Where it stands, 2026-09-13.** 1, 2 and 3 are built and measured
+> (`CHANGELOG.md`, walkthrough §A5b–A5g). 3 went further than written: the
+> spinal tier is on the air behind authenticated frames, the first
+> slot-bound rule runs on a real quantity (the node's own die temperature),
+> and the MB→DN link is closed as a deterministic policy —
+> `obc_agent::posture`: the mushroom body's novelty lowers a node's
+> thresholds before the model has said a word, and a familiar objective
+> restores them. Bench: novel → LED on, familiar → LED off, over LoRa, node
+> reply confirmed. What is *not* measured is the mushroom body on real
+> episodes — the brain has still not been run with `semantic = true` — so
+> the assessment feeding the policy on the bench was the one the body
+> would produce, not one it did. 4 waits for a moving node.
+
 ## 5. What I could not verify
 
 The Cell paper full text would not fetch; the 166,700 figure is from the abstract and Janelia page. FlyModel's headline numbers come from a search summary, not the PDF. Stone 2017's paper doesn't say whether the Arduino or the phone ran the network. Community repos (flypoke, flybrain, fly-brain) are unreviewed and their timings self-reported. The 2026 arXiv controller papers (FlyGM, FLYNN, NeuroVLA, TypeGo) are preprints with author-reported results, and 2604.04033 is direct counter-evidence to the first two. The ESP32 cost figure in §2.3 is arithmetic, not a measurement.

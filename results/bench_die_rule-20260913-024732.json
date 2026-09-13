@@ -1,0 +1,337 @@
+{
+  "node": "COM6",
+  "base": "COM3",
+  "stamp": "20260913-024732",
+  "die_temperature_c": 38.3,
+  "levels": {
+    "above": 0.357,
+    "below": 0.057
+  },
+  "misses": [],
+  "steps": [
+    {
+      "step": "read-die-temperature",
+      "via": "usb",
+      "cmd": "sensor_read",
+      "args": {
+        "sensor": "esp32",
+        "field": "die_temperature"
+      },
+      "expect": "a number, plausibly 20\u201370 \u00b0C",
+      "ok": true,
+      "reply": {
+        "id": "read-die-temperature#1",
+        "ok": true,
+        "result": 38.3
+      }
+    },
+    {
+      "step": "allow-led-pin",
+      "via": "usb",
+      "cmd": "set_limits",
+      "args": {
+        "limits": [
+          {
+            "node_id": "obc-esp32-s3-001",
+            "tool": "gpio_write",
+            "allowed_pins": [
+              21
+            ],
+            "value_min": 0,
+            "value_max": 1,
+            "min_interval_ms": 500
+          }
+        ]
+      },
+      "expect": "applied, pin 21 allowed",
+      "ok": true,
+      "reply": {
+        "id": "allow-led-pin#2",
+        "ok": true,
+        "result": {
+          "applied": true,
+          "allowed_pins": [
+            21
+          ],
+          "value_min": 0,
+          "value_max": 1,
+          "min_interval_ms": 500,
+          "boot_id": 171292657
+        }
+      }
+    },
+    {
+      "step": "push-die-rules",
+      "via": "usb",
+      "cmd": "set_reflex_rules",
+      "args": {
+        "rules": [
+          {
+            "id": "die-hot",
+            "when": {
+              "type": "sensor_slot",
+              "entity": "sensor.die_temperature",
+              "op": "gt",
+              "slot": 0,
+              "min": 30.0,
+              "max": 70.0,
+              "default": 0.5
+            },
+            "then": {
+              "type": "gpio_write",
+              "node_id": "self",
+              "pin": 21,
+              "value": 0
+            },
+            "debounce_ms": 10000
+          },
+          {
+            "id": "die-cool",
+            "when": {
+              "type": "sensor_slot",
+              "entity": "sensor.die_temperature",
+              "op": "le",
+              "slot": 0,
+              "min": 30.0,
+              "max": 70.0,
+              "default": 0.5
+            },
+            "then": {
+              "type": "gpio_write",
+              "node_id": "self",
+              "pin": 21,
+              "value": 1
+            },
+            "debounce_ms": 10000
+          }
+        ]
+      },
+      "expect": "loaded 2",
+      "ok": true,
+      "reply": {
+        "id": "push-die-rules#3",
+        "ok": true,
+        "result": {
+          "builtin_safing": 6,
+          "loaded": 2,
+          "total": 8
+        }
+      }
+    },
+    {
+      "step": "slot-above",
+      "via": "lora",
+      "cmd": "descend",
+      "args": {
+        "clear": true,
+        "m": [
+          [
+            0,
+            0.357
+          ]
+        ]
+      },
+      "expect": "active [[0,0.357]]",
+      "ok": true,
+      "reply": {
+        "id": "slot-abover1",
+        "node_id": "obc-esp32-s3-001",
+        "ok": true,
+        "result": {
+          "active": [
+            [
+              0,
+              0.357
+            ]
+          ],
+          "applied": 1
+        },
+        "type": "cmd_result",
+        "_attempts": 2
+      }
+    },
+    {
+      "step": "led-off-when-cool",
+      "via": "observe",
+      "ok": true,
+      "led": "1",
+      "reports": [
+        {
+          "action": {
+            "node_id": "self",
+            "pin": 21,
+            "type": "gpio_write",
+            "value": 1
+          },
+          "applied": true,
+          "error": null,
+          "node_id": "obc-esp32-s3-001",
+          "rule_id": "die-cool",
+          "ts_ms": 72839,
+          "type": "reflex"
+        }
+      ],
+      "seconds": 8.0
+    },
+    {
+      "step": "slot-below",
+      "via": "lora",
+      "cmd": "descend",
+      "args": {
+        "m": [
+          [
+            0,
+            0.057
+          ]
+        ]
+      },
+      "expect": "active [[0,0.057]]",
+      "ok": true,
+      "reply": {
+        "id": "slot-belowr1",
+        "node_id": "obc-esp32-s3-001",
+        "ok": true,
+        "result": {
+          "active": [
+            [
+              0,
+              0.057
+            ]
+          ],
+          "applied": 1
+        },
+        "type": "cmd_result",
+        "_attempts": 2
+      }
+    },
+    {
+      "step": "led-on-when-hot",
+      "via": "observe",
+      "ok": true,
+      "led": "0",
+      "reports": [
+        {
+          "action": {
+            "node_id": "self",
+            "pin": 21,
+            "type": "gpio_write",
+            "value": 0
+          },
+          "applied": true,
+          "error": null,
+          "node_id": "obc-esp32-s3-001",
+          "rule_id": "die-hot",
+          "ts_ms": 95458,
+          "type": "reflex"
+        }
+      ],
+      "seconds": 10.3
+    },
+    {
+      "step": "slot-above-again",
+      "via": "lora",
+      "cmd": "descend",
+      "args": {
+        "m": [
+          [
+            0,
+            0.357
+          ]
+        ]
+      },
+      "expect": "active [[0,0.357]]",
+      "ok": true,
+      "reply": {
+        "id": "slot-above-againr1",
+        "node_id": "obc-esp32-s3-001",
+        "ok": true,
+        "result": {
+          "active": [
+            [
+              0,
+              0.357
+            ]
+          ],
+          "applied": 1
+        },
+        "type": "cmd_result",
+        "_attempts": 2
+      }
+    },
+    {
+      "step": "led-off-again",
+      "via": "observe",
+      "ok": true,
+      "led": "1",
+      "reports": [
+        {
+          "action": {
+            "node_id": "self",
+            "pin": 21,
+            "type": "gpio_write",
+            "value": 1
+          },
+          "applied": true,
+          "error": null,
+          "node_id": "obc-esp32-s3-001",
+          "rule_id": "die-cool",
+          "ts_ms": 118448,
+          "type": "reflex"
+        }
+      ],
+      "seconds": 10.3
+    },
+    {
+      "step": "clear",
+      "via": "lora",
+      "cmd": "descend",
+      "args": {
+        "clear": true
+      },
+      "expect": "active []",
+      "ok": true,
+      "reply": {
+        "id": "clear",
+        "node_id": "obc-esp32-s3-001",
+        "ok": true,
+        "result": {
+          "active": [],
+          "applied": 0
+        },
+        "type": "cmd_result",
+        "_attempts": 1
+      }
+    },
+    {
+      "step": "read-die-temperature-after",
+      "via": "usb",
+      "cmd": "sensor_read",
+      "args": {
+        "sensor": "esp32",
+        "field": "die_temperature"
+      },
+      "expect": "still a number",
+      "ok": true,
+      "reply": {
+        "id": "read-die-temperature-after#18",
+        "ok": true,
+        "result": 38.3
+      }
+    }
+  ],
+  "unsolicited": [
+    "{\"node_id\":\"obc-esp32-s3-001\",\"silence_ms\":270,\"state\":\"online\",\"ts_ms\":51609,\"type\":\"link_state\"}",
+    "{\"action\":{\"node_id\":\"self\",\"pin\":21,\"type\":\"gpio_write\",\"value\":1},\"applied\":true,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"die-cool\",\"ts_ms\":51609,\"type\":\"reflex\"}",
+    "{\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":61158,\"type\":\"beacon\"}",
+    "{\"action\":{\"node_id\":\"self\",\"pin\":21,\"type\":\"gpio_write\",\"value\":1},\"applied\":true,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"die-cool\",\"ts_ms\":62228,\"type\":\"reflex\"}",
+    "{\"action\":{\"node_id\":\"self\",\"pin\":21,\"type\":\"gpio_write\",\"value\":1},\"applied\":true,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"die-cool\",\"ts_ms\":72839,\"type\":\"reflex\"}",
+    "{\"action\":{\"node_id\":\"self\",\"pin\":21,\"type\":\"gpio_write\",\"value\":1},\"applied\":true,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"die-cool\",\"ts_ms\":83449,\"type\":\"reflex\"}",
+    "{\"action\":{\"node_id\":\"self\",\"pin\":21,\"type\":\"gpio_write\",\"value\":0},\"applied\":true,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"die-hot\",\"ts_ms\":84684,\"type\":\"reflex\"}",
+    "{\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":91998,\"type\":\"beacon\"}",
+    "{\"action\":{\"node_id\":\"self\",\"pin\":21,\"type\":\"gpio_write\",\"value\":0},\"applied\":true,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"die-hot\",\"ts_ms\":95458,\"type\":\"reflex\"}",
+    "{\"action\":{\"node_id\":\"self\",\"pin\":21,\"type\":\"gpio_write\",\"value\":0},\"applied\":true,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"die-hot\",\"ts_ms\":106108,\"type\":\"reflex\"}",
+    "{\"action\":{\"node_id\":\"self\",\"pin\":21,\"type\":\"gpio_write\",\"value\":1},\"applied\":true,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"die-cool\",\"ts_ms\":107344,\"type\":\"reflex\"}",
+    "{\"action\":{\"node_id\":\"self\",\"pin\":21,\"type\":\"gpio_write\",\"value\":1},\"applied\":true,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"die-cool\",\"ts_ms\":118448,\"type\":\"reflex\"}",
+    "{\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":122818,\"type\":\"beacon\"}"
+  ]
+}

@@ -100,7 +100,21 @@ class Node:
             )
 
         self.port = port or self._detect(serial)
-        self.ser = serial.Serial(self.port, BAUD, timeout=2)
+        # Open with DTR and RTS held low, as the Heltec scripts do. The
+        # ESP32-S3's native USB-Serial-JTAG implements the auto-reset circuit
+        # in silicon: RTS asserted while DTR is not resets the chip, and a
+        # default pyserial open (both asserted) followed by a close (both
+        # dropped, in an order Windows chooses) reproduced exactly that —
+        # the node rebooted, and with it lost every rule and limit the run
+        # had pushed (bench, 2026-09-13: the die-temperature rules were gone
+        # minutes after §A5f passed). Held low, open and close touch nothing.
+        self.ser = serial.Serial()
+        self.ser.port, self.ser.baudrate, self.ser.timeout = self.port, BAUD, 2
+        self.ser.dtr = False
+        self.ser.rts = False
+        self.ser.open()
+        self.ser.dtr = False
+        self.ser.rts = False
         time.sleep(0.3)
         self.ser.reset_input_buffer()
 
