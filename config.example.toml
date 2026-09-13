@@ -327,18 +327,23 @@ max_escalations_per_min = 6
 # `fire_on_change` makes the node report once per transition rather than
 # once per `debounce_ms` while the condition holds (on the host the same
 # field judges by fact ids; on the node, by the condition's own truth).
+# `hold_ms` is the persistence vet: the die reading is quantised to ~1 °C
+# and ticked at 1 Hz, so at the threshold it flickers across a tick at a
+# time; the rule must see its condition hold for three ticks before it acts.
 # [[reflex.rules]]
 # id = "die-hot"
 # when = { type = "sensor_slot", entity = "sensor.die_temperature", op = "gt", slot = 0, min = 30.0, max = 70.0, default = 0.5 }
 # then = { type = "gpio_write", node_id = "obc-esp32-s3-001", pin = 21, value = 0 }
 # debounce_ms = 10000
 # fire_on_change = true
+# hold_ms = 3000
 # [[reflex.rules]]
 # id = "die-cool"
 # when = { type = "sensor_slot", entity = "sensor.die_temperature", op = "le", slot = 0, min = 30.0, max = 70.0, default = 0.5 }
 # then = { type = "gpio_write", node_id = "obc-esp32-s3-001", pin = 21, value = 1 }
 # debounce_ms = 10000
 # fire_on_change = true
+# hold_ms = 3000
 
 # ── Descending posture ───────────────────────────────────────────────────────
 # The brain's one deterministic reason to move a slot (walkthrough §A5g): the

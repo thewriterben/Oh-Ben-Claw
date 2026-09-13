@@ -304,6 +304,29 @@ pub struct ReflexRule {
     /// missing evidence identity is not evidence of sameness.
     #[serde(default)]
     pub fire_on_change: bool,
+    /// The condition must have held, without a break, for at least this long before
+    /// the rule may fire. Zero (the default) means a single true tick is enough.
+    ///
+    /// The third of three questions a rule can ask, distinct from the other two.
+    /// `debounce_ms` asks "has enough time passed since I last fired?" — a rate.
+    /// `fire_on_change` asks "did anything happen?" — an edge. This asks "is it
+    /// still true?" — persistence. A reading that crosses a threshold for one
+    /// sample and drops back is a transient, and a transient is exactly what a
+    /// one-tick rule fires on: a 1 °C quantised die temperature flickering across
+    /// its slot threshold, a link-silence reading at the edge of its timeout.
+    ///
+    /// This is the duration criterion of an event detector: WILD (Zhao et al.
+    /// 2026) accepts a ripple only if the power envelope stays over threshold for
+    /// 20–600 ms, and it is the cheapest vetting stage there is — no model, no
+    /// window, one timestamp per rule. Continuity is judged at tick resolution:
+    /// the condition is "still true" if every tick since it became true said so,
+    /// and the engine cannot see between ticks.
+    ///
+    /// Composes with the other two. With `fire_on_change`, the one fire per run
+    /// comes once the hold has elapsed; a run shorter than the hold fires nothing.
+    /// Debounce applies on top, as it always did.
+    #[serde(default)]
+    pub hold_ms: u64,
 }
 
 impl ReflexRule {
@@ -347,6 +370,12 @@ pub struct ReflexEngine {
     /// `last_fire` so a rule that does not opt in pays nothing and behaves exactly as
     /// before.
     last_evidence: Mutex<HashMap<String, Vec<i64>>>,
+    /// Per rule with a `hold_ms`: the tick at which its condition last became true.
+    ///
+    /// Present while the condition holds, removed the tick it drops, so "held for
+    /// `hold_ms`" is `now − true_since`. Only rules with a non-zero hold are entered,
+    /// for the same reason as `last_evidence`: a rule that does not ask pays nothing.
+    true_since: Mutex<HashMap<String, u64>>,
     trusted: obc_memory::world::OriginSet,
 }
 
@@ -379,6 +408,7 @@ impl ReflexEngine {
             rules,
             last_fire: Mutex::new(HashMap::new()),
             last_evidence: Mutex::new(HashMap::new()),
+            true_since: Mutex::new(HashMap::new()),
             trusted: obc_memory::world::OriginSet::EVIDENCE,
         }
     }
@@ -405,7 +435,24 @@ impl ReflexEngine {
         let mut fired = Vec::new();
         for rule in &self.rules {
             if !rule.when.eval(snapshot) {
+                if rule.hold_ms > 0 {
+                    // The run of truth is over; the next true starts the hold again.
+                    self.true_since
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .remove(&rule.id);
+                }
                 continue;
+            }
+            if rule.hold_ms > 0 {
+                // Persistence, before rate and edge: a condition that has not yet held
+                // long enough is not a candidate at all, whatever the clock or the
+                // evidence say. `entry` keeps the tick the run began; the check reads it.
+                let mut since = self.true_since.lock().unwrap_or_else(|p| p.into_inner());
+                let began = *since.entry(rule.id.clone()).or_insert(now_ms);
+                if now_ms.saturating_sub(began) < rule.hold_ms {
+                    continue;
+                }
             }
             let min_interval = rule.min_interval_ms();
             if min_interval > 0 {
@@ -884,6 +931,7 @@ mod tests {
             debounce_ms: 0,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         };
         let e = ReflexEngine::new(vec![rule]);
         let ents = e.referenced_entities();
@@ -1028,6 +1076,7 @@ mod tests {
             debounce_ms: 0,
             max_rate_hz: None,
             fire_on_change: true,
+            hold_ms: 0,
         }
     }
 
@@ -1093,6 +1142,105 @@ mod tests {
             e.tick(&w, 2_000).unwrap().len(),
             1,
             "still critical, still says so"
+        );
+    }
+
+    fn rule_with_hold(hold_ms: u64, fire_on_change: bool) -> ReflexRule {
+        ReflexRule {
+            id: "held".to_string(),
+            when: Condition::Sensor {
+                entity: "x".to_string(),
+                op: Cmp::Gt,
+                value: 0.0,
+            },
+            then: Action::Escalate {
+                reason: "held".to_string(),
+            },
+            debounce_ms: 0,
+            max_rate_hz: None,
+            fire_on_change,
+            hold_ms,
+        }
+    }
+
+    #[test]
+    fn a_transient_does_not_satisfy_a_hold() {
+        // The persistence question. One true tick is a candidate for a rule with
+        // no hold; for a rule that asks for 3 s it is a transient until it has
+        // been true, without a break, for 3 s of ticks.
+        let e = ReflexEngine::new(vec![rule_with_hold(3_000, false)]);
+        let on = snap(&[("x", 1.0)]);
+        let off = snap(&[("x", 0.0)]);
+        assert!(
+            e.evaluate(&on, 0).is_empty(),
+            "first true tick starts the hold"
+        );
+        assert!(e.evaluate(&off, 1_000).is_empty(), "a drop resets it");
+        assert!(
+            e.evaluate(&on, 2_000).is_empty(),
+            "true again: a new run from 2 s"
+        );
+        assert!(e.evaluate(&on, 4_000).is_empty(), "2 s into the new run");
+        assert_eq!(e.evaluate(&on, 5_000).len(), 1, "3 s held: fires");
+        assert_eq!(
+            e.evaluate(&on, 6_000).len(),
+            1,
+            "no edge flag, no debounce: keeps firing while held, as before"
+        );
+    }
+
+    #[test]
+    fn a_rule_with_no_hold_fires_on_its_first_true_tick() {
+        // The default, and every rule written before the field existed.
+        let e = ReflexEngine::new(vec![rule_with_hold(0, false)]);
+        assert_eq!(e.evaluate(&snap(&[("x", 1.0)]), 0).len(), 1);
+    }
+
+    #[test]
+    fn hold_composes_with_fire_on_change() {
+        // Edge and persistence together: one fire per run, and only for a run
+        // that outlasts the hold. A short run fires nothing at all.
+        use obc_memory::world::{Origin, WorldMemory};
+        let w = WorldMemory::open_in_memory().unwrap();
+        let e = ReflexEngine::new(vec![rule_with_hold(2_000, true)]);
+        let observe = |v: f64, t: u64| {
+            w.observe_as("x", json!(v), t, t, "bench", Origin::Observed)
+                .unwrap()
+        };
+        observe(1.0, 0);
+        assert!(e.tick(&w, 0).unwrap().is_empty(), "hold starts");
+        observe(0.0, 1_000);
+        assert!(e.tick(&w, 1_000).unwrap().is_empty(), "a 1 s run: nothing");
+        observe(1.0, 2_000);
+        assert!(e.tick(&w, 2_000).unwrap().is_empty());
+        observe(1.0, 3_000);
+        assert!(e.tick(&w, 3_000).unwrap().is_empty(), "1 s in");
+        observe(1.0, 4_000);
+        assert_eq!(e.tick(&w, 4_000).unwrap().len(), 1, "2 s held: fires");
+        assert!(
+            e.tick(&w, 4_500).unwrap().is_empty(),
+            "same row, still held: the host's edge is evidence identity, and nothing new was observed"
+        );
+        observe(1.0, 5_000);
+        assert_eq!(
+            e.tick(&w, 5_000).unwrap().len(),
+            1,
+            "a new row is new evidence and the hold is long satisfied — fires again (host semantics; \
+             the node, which has no ids, fires once per run of truth)"
+        );
+    }
+
+    #[test]
+    fn hold_ms_is_optional_on_the_wire() {
+        // A rule written before the field existed still parses, and holds nothing.
+        let js = r#"{"id":"r","when":{"type":"sensor","entity":"x","op":"gt","value":0.0},"then":{"type":"escalate","reason":"r"}}"#;
+        let r: ReflexRule = serde_json::from_str(js).unwrap();
+        assert_eq!(r.hold_ms, 0);
+        let js = serde_json::to_string(&rule_with_hold(1_500, false)).unwrap();
+        assert!(js.contains("\"hold_ms\":1500"), "{js}");
+        assert_eq!(
+            serde_json::from_str::<ReflexRule>(&js).unwrap().hold_ms,
+            1_500
         );
     }
 
@@ -1177,6 +1325,7 @@ mod tests {
             debounce_ms: 0,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         };
         let e = ReflexEngine::new(vec![rule]);
         assert_eq!(e.tick(&world, 2_000).unwrap().len(), 1);
@@ -1198,6 +1347,7 @@ mod tests {
             debounce_ms: 500,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         }
     }
 
@@ -1340,6 +1490,7 @@ mod tests {
             debounce_ms: 0,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         };
         let e = ReflexEngine::new(vec![rule]);
         let fired = e.evaluate(&snap(&[("motion", 1.0)]), 1);
@@ -1558,6 +1709,7 @@ mod tests {
             debounce_ms: 0,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         };
         let sink = Arc::new(MockSink::default());
         let sink_dyn: Arc<dyn ActionSink> = sink.clone();

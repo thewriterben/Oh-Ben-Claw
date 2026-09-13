@@ -114,6 +114,7 @@ fn the_die_temperature_rules_fire_the_way_the_bench_expects() {
         // Edge-triggered on the node since 2026-09-13: one report per
         // transition, not one per debounce interval while holding.
         fire_on_change: true,
+        hold_ms: 0,
     };
     let host_rules = vec![
         rule("die-hot", obc_reflex::Cmp::Gt, 0),

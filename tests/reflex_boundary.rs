@@ -53,6 +53,7 @@ fn fan_rule() -> ReflexRule {
         debounce_ms: 500,
         max_rate_hz: None,
         fire_on_change: false,
+        hold_ms: 0,
     }
 }
 

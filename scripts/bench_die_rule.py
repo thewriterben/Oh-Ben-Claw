@@ -41,6 +41,11 @@ LED_PIN = 21
 SLOT = 0
 T_MIN, T_MAX = 30.0, 70.0
 DEBOUNCE_MS = 10_000
+# The die reading is quantised to ~1 °C and the node ticks once a second, so a
+# reading sitting at the threshold flickers across it a tick at a time. A
+# rule must see its condition hold for this long before it acts (node
+# `hold_ms`, 2026-09-13) — the persistence vet. Three ticks at 1 Hz.
+HOLD_MS = 3_000
 
 
 def rule(rid: str, op: str, value: int) -> dict:
@@ -60,6 +65,7 @@ def rule(rid: str, op: str, value: int) -> dict:
         # One report per transition, not one per debounce interval while
         # holding (node edge-triggering, 2026-09-13).
         "fire_on_change": True,
+        "hold_ms": HOLD_MS,
     }
 
 

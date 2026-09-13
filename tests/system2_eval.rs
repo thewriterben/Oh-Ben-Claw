@@ -51,6 +51,7 @@ fn overheat_rule(i: usize) -> ReflexRule {
         debounce_ms: 0,
         max_rate_hz: None,
         fire_on_change: false,
+        hold_ms: 0,
     }
 }
 

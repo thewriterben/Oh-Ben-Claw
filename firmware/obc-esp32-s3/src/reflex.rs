@@ -263,6 +263,18 @@ pub struct ReflexRule {
     /// the main loop; the edge behaviour here is still right for the rest.)
     #[serde(default)]
     pub fire_on_change: bool,
+    /// The condition must have held, without a break, for at least this long
+    /// before the rule may fire; zero (default) means one true tick is enough.
+    /// Persistence, the third question beside rate (`debounce_ms`) and edge
+    /// (`fire_on_change`), and the cheapest vetting stage there is: a reading
+    /// that crosses a threshold for one tick and drops back is a transient,
+    /// and at 1 °C quantisation the die temperature does exactly that at its
+    /// slot threshold. Same field and semantics as the host's; judged at
+    /// tick resolution (1 s here). With `fire_on_change`, the one fire per
+    /// run comes once the hold has elapsed; a run shorter than the hold
+    /// fires nothing.
+    #[serde(default)]
+    pub hold_ms: u64,
 }
 
 impl ReflexRule {
@@ -294,6 +306,9 @@ pub struct ReflexEngine {
     /// Per `fire_on_change` rule: whether it fired for the condition's
     /// current run of truth. Cleared when the condition drops.
     fired_this_run: HashMap<String, bool>,
+    /// Per `hold_ms` rule: the tick its condition last became true. Present
+    /// while it holds, removed the tick it drops.
+    true_since: HashMap<String, u64>,
     /// Descending modulation levels; RAM only, reboot returns rules to defaults.
     mods: Modulations,
 }
@@ -305,6 +320,7 @@ impl ReflexEngine {
             rules,
             last_fire: HashMap::new(),
             fired_this_run: HashMap::new(),
+            true_since: HashMap::new(),
             mods: Modulations::default(),
         }
     }
@@ -322,6 +338,7 @@ impl ReflexEngine {
         self.rules = rules;
         self.last_fire.clear();
         self.fired_this_run.clear();
+        self.true_since.clear();
         Ok(())
     }
 
@@ -367,11 +384,23 @@ impl ReflexEngine {
         let mut fired = Vec::new();
         for rule in &self.rules {
             if !rule.when.eval(snapshot, &self.mods) {
-                // The run of truth is over; the next true is a new event.
+                // The run of truth is over; the next true is a new event, and
+                // a new hold.
                 if rule.fire_on_change {
                     self.fired_this_run.insert(rule.id.clone(), false);
                 }
+                if rule.hold_ms > 0 {
+                    self.true_since.remove(&rule.id);
+                }
                 continue;
+            }
+            if rule.hold_ms > 0 {
+                // Persistence before edge and rate: not held long enough is
+                // not a candidate, whatever the clock says.
+                let began = *self.true_since.entry(rule.id.clone()).or_insert(now_ms);
+                if now_ms.saturating_sub(began) < rule.hold_ms {
+                    continue;
+                }
             }
             if rule.fire_on_change && self.fired_this_run.get(&rule.id).copied().unwrap_or(false) {
                 continue; // still holding, already reported
@@ -452,6 +481,7 @@ mod tests {
             debounce_ms,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         }
     }
 
@@ -469,7 +499,84 @@ mod tests {
             debounce_ms,
             max_rate_hz: None,
             fire_on_change,
+            hold_ms: 0,
         }
+    }
+
+    #[test]
+    fn a_transient_does_not_satisfy_a_hold() {
+        // The die temperature is quantised to ~1 °C and the reflex tick is 1 s:
+        // a reading that sits at its slot threshold flickers across it for a
+        // tick at a time. With a hold, a flicker is not a fire.
+        let mut hold = hot_rule(false, 0);
+        hold.hold_ms = 3_000;
+        let mut eng = ReflexEngine::new(vec![hold]);
+        let hot = snap(&[("sensor.t", 60.0)]);
+        let cool = snap(&[("sensor.t", 40.0)]);
+        assert!(eng.evaluate(&hot, 0).is_empty(), "the hold starts");
+        assert!(eng.evaluate(&cool, 1_000).is_empty(), "a drop resets it");
+        assert!(eng.evaluate(&hot, 2_000).is_empty(), "a new run from 2 s");
+        assert!(eng.evaluate(&hot, 4_000).is_empty(), "2 s in");
+        assert_eq!(eng.evaluate(&hot, 5_000).len(), 1, "3 s held: fires");
+        assert_eq!(
+            eng.evaluate(&hot, 6_000).len(),
+            1,
+            "no edge, no debounce: keeps firing while held, as before"
+        );
+    }
+
+    #[test]
+    fn hold_composes_with_the_edge() {
+        // One fire per run, and only for a run that outlasts the hold.
+        let mut r = hot_rule(true, 0);
+        r.hold_ms = 2_000;
+        let mut eng = ReflexEngine::new(vec![r]);
+        let hot = snap(&[("sensor.t", 60.0)]);
+        let cool = snap(&[("sensor.t", 40.0)]);
+        assert!(eng.evaluate(&hot, 0).is_empty());
+        assert!(
+            eng.evaluate(&cool, 1_000).is_empty(),
+            "a 1 s run fires nothing at all"
+        );
+        assert!(eng.evaluate(&hot, 2_000).is_empty());
+        assert!(eng.evaluate(&hot, 3_000).is_empty());
+        assert_eq!(eng.evaluate(&hot, 4_000).len(), 1, "2 s held: the one fire");
+        for t in 5..60u64 {
+            assert!(eng.evaluate(&hot, t * 1_000).is_empty(), "holding at {t}s");
+        }
+        assert!(eng.evaluate(&cool, 60_000).is_empty());
+        assert!(
+            eng.evaluate(&hot, 61_000).is_empty(),
+            "a new run, a new hold"
+        );
+        assert_eq!(eng.evaluate(&hot, 63_000).len(), 1);
+    }
+
+    #[test]
+    fn set_rules_resets_the_hold() {
+        let mut r = hot_rule(false, 0);
+        r.hold_ms = 2_000;
+        let mut eng = ReflexEngine::new(vec![r.clone()]);
+        let hot = snap(&[("sensor.t", 60.0)]);
+        assert!(eng.evaluate(&hot, 0).is_empty());
+        eng.set_rules(vec![r]).unwrap();
+        assert!(
+            eng.evaluate(&hot, 2_000).is_empty(),
+            "a fresh rule set starts its holds from its own first tick"
+        );
+        assert_eq!(eng.evaluate(&hot, 4_000).len(), 1);
+    }
+
+    #[test]
+    fn hold_ms_round_trips_the_host_json_and_defaults_to_zero() {
+        let js = r#"{"id":"r","when":{"type":"sensor","entity":"x","op":"gt","value":0.0},"then":{"type":"escalate","reason":"r"}}"#;
+        let r: ReflexRule = serde_json::from_str(js).unwrap();
+        assert_eq!(r.hold_ms, 0);
+        let js = r#"{"id":"r","when":{"type":"sensor","entity":"x","op":"gt","value":0.0},"then":{"type":"escalate","reason":"r"},"hold_ms":1500}"#;
+        assert_eq!(
+            serde_json::from_str::<ReflexRule>(js).unwrap().hold_ms,
+            1_500
+        );
     }
 
     #[test]
@@ -561,6 +668,7 @@ mod tests {
             debounce_ms: 0,
             max_rate_hz: None,
             fire_on_change: true,
+            hold_ms: 0,
         }]);
         let t38 = snap(&[("sensor.t", 38.0)]);
         assert!(eng.evaluate(&t38, 0).is_empty(), "38 < 50");

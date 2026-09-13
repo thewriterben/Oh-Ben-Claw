@@ -81,6 +81,7 @@ pub fn vision_security_rules(opts: &VisionRuleOptions) -> Vec<ReflexRule> {
             // "the battery is still critical" is worth repeating, and suppressing it
             // because the reading has not changed is exactly backwards.
             fire_on_change: true,
+            hold_ms: 0,
         });
         if let Some(node) = &opts.capture_node {
             rules.push(ReflexRule {
@@ -95,6 +96,7 @@ pub fn vision_security_rules(opts: &VisionRuleOptions) -> Vec<ReflexRule> {
                 // Same reasoning: re-capturing on a detection already captured is a
                 // camera command issued for nothing.
                 fire_on_change: true,
+                hold_ms: 0,
             });
         }
     }
@@ -177,6 +179,7 @@ pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
             debounce_ms: opts.debounce_ms,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         },
         ReflexRule {
             id: "vision-anomaly-spike".to_string(),
@@ -198,6 +201,7 @@ pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
             debounce_ms: opts.debounce_ms,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         },
         ReflexRule {
             id: "vision-calibration-drift".to_string(),
@@ -220,6 +224,7 @@ pub fn vision_analytics_rules(opts: &AnalyticsRuleOptions) -> Vec<ReflexRule> {
             debounce_ms: opts.debounce_ms,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         },
     ]
 }

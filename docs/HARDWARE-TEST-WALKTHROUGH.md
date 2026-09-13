@@ -545,9 +545,10 @@ report with `applied: true`. The brain does the same thing with
 **What it does not prove:** that the brain has a reason to move it. The
 modulation path is proven end to end on a real quantity; *when* the reasoner
 should lower a node's thresholds (novelty from the mushroom body, say) is
-the next feature, not this one. Also: a holding rule re-fires every
-`debounce_ms` (10 s here), so the node reports every 10 s while the
-condition holds — edge-triggering on the node is a known gap.
+the next feature, not this one. (When first run, a holding rule re-fired
+every `debounce_ms` — 10 s here — so the node reported every 10 s while the
+condition held; A5h closed that the same day, and the hold below vets the
+transition itself.)
 
 **Preconditions.** Node on COM6 with this firmware (die sensor +
 `MAX_LINE_LEN` 2048 — see the box), base on COM3 with A5d's build.
@@ -570,6 +571,17 @@ needed its second attempt (collision, as usual).
 > (`{"ok":false,"error":"command line longer than 2048 bytes — discarded
 > whole"}` / `"request not understood: …"`) rather than met with silence.
 > `scripts/probe_linelen.py` is the tool if a line ever goes quiet again.
+
+**Run 2026-09-13, with `hold_ms` (12/12,
+`results/bench_die_rule-20260913-115412.json`).** The die rules now carry
+`hold_ms: 3000`: the reading is ~1 °C quantised and ticked at 1 Hz, so at
+the threshold it flickers across a tick at a time, and a rule must see its
+condition hold for three ticks before it acts — the persistence vet, the
+cheapest one there is (no model, no window, one timestamp per rule; WILD's
+ripple detector applies the same 20–600 ms duration criterion). Die
+33.3 °C; every transition still reported exactly once and `applied: true`,
+now **5 s** after the descend rather than 3 — the hold's cost, in the open.
+Nothing reported while holding. One descend needed its second attempt.
 
 ### A5g. The brain's novelty reaches the node: descending posture
 

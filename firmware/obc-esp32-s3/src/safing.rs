@@ -112,6 +112,7 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             debounce_ms: 5_000,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         },
         ReflexRule {
             id: "safe-battery-low".to_string(),
@@ -126,6 +127,7 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             debounce_ms: 5_000,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         },
         ReflexRule {
             id: "safe-link-offline".to_string(),
@@ -148,6 +150,7 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             // node was "offline" from boot — the quieting hid that; the
             // main loop now counts a targeted mesh command as contact.)
             fire_on_change: true,
+            hold_ms: 0,
         },
         // Over-temperature critical: shed heat-producing loads by cutting the
         // actuator-enable pin (same protective action as critical battery).
@@ -166,6 +169,7 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             debounce_ms: 5_000,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         },
         // Over-temperature warning: escalate a shed-load / cooling advisory before
         // it reaches the critical cut-off.
@@ -182,6 +186,7 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             debounce_ms: 5_000,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         },
         // High humidity: condensation risk on the electronics — escalate upward.
         ReflexRule {
@@ -197,6 +202,7 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             debounce_ms: 10_000,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         },
     ]
 }
@@ -345,6 +351,7 @@ mod tests {
             debounce_ms: 0,
             max_rate_hz: None,
             fire_on_change: false,
+            hold_ms: 0,
         }];
         let merged = with_defaults(host);
         let ids: Vec<&str> = merged.iter().map(|r| r.id.as_str()).collect();

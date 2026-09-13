@@ -87,6 +87,7 @@ fn one_rule() -> serde_json::Value {
         debounce_ms: 60_000,
         max_rate_hz: None,
         fire_on_change: false,
+        hold_ms: 0,
     })
     .expect("a ReflexRule serializes")
 }
@@ -245,7 +246,11 @@ fn census() -> Vec<Row> {
         ID,
         "set_reflex_rules",
         json!({ "rules": [one_rule()] }),
-        Carriage::TooBig("a single modest rule is already 104 bytes over"),
+        // 104 over with the UUID id; 90 with the short one; 102 since
+        // `hold_ms` (2026-09-13) — every rule field the host serializes rides
+        // in the push, defaults included. Rules go over serial, so this row
+        // is a measurement of how far from the mesh they are, not a bug.
+        Carriage::TooBig("a single modest rule is already 102 bytes over"),
     );
 
     // ── Node → host, the direction that reaches world memory ────────────────

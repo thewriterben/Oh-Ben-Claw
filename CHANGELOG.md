@@ -5,6 +5,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — `hold_ms`: a reflex can ask "is it still true?" (2026-09-13)
+
+The third question a rule can ask, beside rate (`debounce_ms`: has enough
+time passed?) and edge (`fire_on_change`: did anything happen?): persistence.
+`ReflexRule::hold_ms` — host and node, same JSON, `#[serde(default)]` so
+every existing rule is unchanged — requires the condition to have held
+without a break for that long before the rule may fire; a drop resets it.
+Judged at tick resolution. With `fire_on_change`, the one fire per run comes
+once the hold has elapsed, and a run shorter than the hold fires nothing.
+
+This is the duration criterion of an event detector (WILD accepts a ripple
+only if the envelope stays over threshold for 20–600 ms) and the cheapest
+vetting stage there is: no model, no window, one timestamp per rule. The
+die-temperature rules carry `hold_ms = 3000` (three 1 Hz ticks) in
+`scripts/bench_die_rule.py` and `config.example.toml`, because a ~1 °C
+quantised reading at its threshold flickers across a tick at a time. §A5f
+re-run: 12/12, each transition reported once, now 5 s after the descend
+rather than 3 — the hold's cost, visible
+(`results/bench_die_rule-20260913-115412.json`).
+
+`tests/spine_payload_budget.rs`: the one-rule push measures 102 bytes over
+the frame (its reason string said 104 — stale since the short id; every
+serialized field rides in the push, defaults included). Rules go over
+serial; the row measures distance, not a bug.
+
 ## Unreleased — `safe-link-offline` measures the link it names (2026-09-13)
 
 The node's link-silence clock was reset by USB bytes only; the spine-UART
