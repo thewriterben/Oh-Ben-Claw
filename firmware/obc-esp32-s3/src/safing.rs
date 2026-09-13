@@ -111,6 +111,7 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             },
             debounce_ms: 5_000,
             max_rate_hz: None,
+            fire_on_change: false,
         },
         ReflexRule {
             id: "safe-battery-low".to_string(),
@@ -124,6 +125,7 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             },
             debounce_ms: 5_000,
             max_rate_hz: None,
+            fire_on_change: false,
         },
         ReflexRule {
             id: "safe-link-offline".to_string(),
@@ -137,6 +139,13 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             },
             debounce_ms: 10_000,
             max_rate_hz: None,
+            // Once per loss, not every 10 s for as long as the host is away.
+            // For a node on the mesh "no USB host" is the normal state, and
+            // this rule re-firing was 4 frames a minute of the same news
+            // (bench, 2026-09-13); the `link_state` report already says
+            // offline/online on the change. The cuts (battery, overtemp)
+            // keep re-asserting on purpose.
+            fire_on_change: true,
         },
         // Over-temperature critical: shed heat-producing loads by cutting the
         // actuator-enable pin (same protective action as critical battery).
@@ -154,6 +163,7 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             },
             debounce_ms: 5_000,
             max_rate_hz: None,
+            fire_on_change: false,
         },
         // Over-temperature warning: escalate a shed-load / cooling advisory before
         // it reaches the critical cut-off.
@@ -169,6 +179,7 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             },
             debounce_ms: 5_000,
             max_rate_hz: None,
+            fire_on_change: false,
         },
         // High humidity: condensation risk on the electronics — escalate upward.
         ReflexRule {
@@ -183,6 +194,7 @@ pub fn default_safing_rules() -> Vec<ReflexRule> {
             },
             debounce_ms: 10_000,
             max_rate_hz: None,
+            fire_on_change: false,
         },
     ]
 }
@@ -247,6 +259,27 @@ mod tests {
         // host silent past the timeout → offline safing escalates
         let fired = eng.evaluate(&snap(&[(LINK_SILENCE_ENTITY, 35_000.0)]), 1_000);
         assert!(fired.iter().any(|f| f.rule_id == "safe-link-offline"));
+        // …once. A host that stays away is not news every ten seconds.
+        for t in 2..30u64 {
+            assert!(
+                eng.evaluate(
+                    &snap(&[(LINK_SILENCE_ENTITY, 35_000.0 + t as f64 * 10_000.0)]),
+                    t * 10_000
+                )
+                .iter()
+                .all(|f| f.rule_id != "safe-link-offline"),
+                "re-fired at {t}"
+            );
+        }
+        // The host comes back and goes away again: that is news.
+        assert!(eng
+            .evaluate(&snap(&[(LINK_SILENCE_ENTITY, 500.0)]), 400_000)
+            .iter()
+            .all(|f| f.rule_id != "safe-link-offline"));
+        assert!(eng
+            .evaluate(&snap(&[(LINK_SILENCE_ENTITY, 35_000.0)]), 440_000)
+            .iter()
+            .any(|f| f.rule_id == "safe-link-offline"));
         // a fresh link does not
         let mut eng2 = ReflexEngine::new(default_safing_rules());
         assert!(eng2
@@ -309,6 +342,7 @@ mod tests {
             },
             debounce_ms: 0,
             max_rate_hz: None,
+            fire_on_change: false,
         }];
         let merged = with_defaults(host);
         let ids: Vec<&str> = merged.iter().map(|r| r.id.as_str()).collect();

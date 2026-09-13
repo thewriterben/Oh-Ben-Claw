@@ -111,7 +111,9 @@ fn the_die_temperature_rules_fire_the_way_the_bench_expects() {
         },
         debounce_ms: 10_000,
         max_rate_hz: None,
-        fire_on_change: false,
+        // Edge-triggered on the node since 2026-09-13: one report per
+        // transition, not one per debounce interval while holding.
+        fire_on_change: true,
     };
     let host_rules = vec![
         rule("die-hot", obc_reflex::Cmp::Gt, 0),
@@ -149,16 +151,24 @@ fn the_die_temperature_rules_fire_the_way_the_bench_expects() {
         fired(&mut engine, 38.3, 1_000),
         vec![("die-cool".to_string(), 1)]
     );
+    // Holding at 50 °C for a minute: not one more report (this is the edge
+    // triggering; before it, one every 10 s).
+    for t in 2..60u64 {
+        assert!(
+            fired(&mut engine, 38.3, t * 1_000).is_empty(),
+            "re-fired at {t}s"
+        );
+    }
     // Threshold slid below the reading (level for 32 °C): hot, LED on.
     engine.descend(&[(0, 0.05)]).unwrap();
     assert_eq!(
-        fired(&mut engine, 38.3, 20_000),
+        fired(&mut engine, 38.3, 70_000),
         vec![("die-hot".to_string(), 0)]
     );
     // And above it again (44 °C): off. Only ever one rule at a time.
     engine.descend(&[(0, 0.35)]).unwrap();
     assert_eq!(
-        fired(&mut engine, 38.3, 40_000),
+        fired(&mut engine, 38.3, 90_000),
         vec![("die-cool".to_string(), 1)]
     );
     // Without the entity in the snapshot — sensor not running — nothing fires:

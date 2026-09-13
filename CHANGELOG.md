@@ -5,6 +5,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Edge-triggered reflexes on the node (2026-09-13)
+
+A holding rule no longer costs the mesh a frame every `debounce_ms`.
+`fire_on_change` on the node's `ReflexRule` fires once on the condition's
+false→true transition and not again until it has dropped and returned;
+debounce still applies on top. Same field and intent as the host's
+(`obc_reflex::ReflexRule::fire_on_change`), judged by the condition's own
+truth rather than fact ids, since a node's snapshot has none. The die
+rules and the built-in `safe-link-offline` carry it; the battery and
+over-temperature cuts do not, on purpose. Measured (walkthrough §A5h,
+`scripts/bench_chatter.py`, node unattended on the mesh): reflex reports
+8.6/min → 0.7/min, frames heard in 90 s 29 → 15, mesh commands answered
+3/6 → 6/6; the die-rule bench 12/12 with one report per transition.
+
+### Changed (firmware `obc-esp32-s3`)
+
+- `reflex::ReflexRule::fire_on_change` (default false: the old behaviour),
+  `ReflexEngine` tracks a per-rule run of truth; `set_rules` resets it so a
+  fresh rule set reports its standing conditions once. Five host-run tests.
+- `safe-link-offline` is `fire_on_change`: once per loss, not every 10 s
+  for as long as the host is away; `link_state` already reports the change.
+
+### Changed (host)
+
+- `config.example.toml` die rules and `scripts/bench_die_rule.py` set
+  `fire_on_change = true`; the bench expects one report per transition and
+  none while holding.
+- `scripts/bench_chatter.py` — frames per minute by kind and mesh command
+  delivery, for before/after numbers rather than impressions.
+
 ## Unreleased — Descending posture: the brain's novelty reaches the node (2026-09-13)
 
 The loop the connectome thread was aiming at, closed on hardware. The

@@ -628,6 +628,39 @@ from §A5f is now a link-load problem too.
 > connected host drains a 4 KiB ring far faster than that) and the UART RX
 > ring is 2 KiB. A mesh node must never wait on its USB.
 
+### A5h. Edge-triggered reflexes: what a holding rule costs the mesh
+
+**What it proves:** that a rule which merely keeps holding costs the link
+nothing. Until this, the node re-fired a holding rule every `debounce_ms`
+and put a ~200-byte report on the mesh each time; with the two die rules
+loaded that was one frame every 10 s, plus the built-in `safe-link-offline`
+escalation every 10 s for as long as no USB host was attached — which for a
+node on the mesh is always. `fire_on_change` on the node now fires a rule
+once on its condition's false→true transition and not again until the
+condition has dropped and returned (debounce still applies on top; the same
+field as the host's, judged by the only evidence the node has). The die
+rules and `safe-link-offline` carry it; the battery and over-temperature
+*cuts* deliberately do not, so a cut keeps re-asserting.
+
+**Measured with** `scripts/bench_chatter.py`: rules pushed, node's USB
+closed so it runs unattended, 90 s of everything the base hears by kind,
+then six `gpio_read`s over the mesh.
+
+```powershell
+python scripts\bench_chatter.py --node COM6 --base COM3 --seconds 90 --probes 6
+```
+
+**Run 2026-09-13.** Before (re-fire at debounce): the node's reflex reports
+were **8.6/min** — the die rule 5.3/min, `safe-link-offline` 3.3/min — 29
+frames heard in 90 s, and mesh commands answered **3/6**
+(`results/bench_chatter-20260913-101007.json`). After (edge-triggered die
+rules and link-offline): reflex reports **0.7/min** (the one link-offline
+report when the node's USB was closed, then nothing), 15 frames in 90 s,
+commands answered **6/6**. The functional run (§A5f's script, now
+expecting edge semantics) is **12/12**, every transition reported once and
+within 3 s, nothing reported while holding
+(`results/bench_die_rule-20260913-101610.json`).
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**

@@ -246,6 +246,20 @@ pub struct ReflexRule {
     pub debounce_ms: u64,
     #[serde(default)]
     pub max_rate_hz: Option<f64>,
+    /// Fire on the condition's false→true transition only; while it holds,
+    /// nothing, however many ticks pass. It fires again once the condition
+    /// has dropped and returned. Debounce still applies on top.
+    ///
+    /// The same field, and the same intent, as the host's `fire_on_change`
+    /// — "did anything happen?" rather than "has enough time passed?" — with
+    /// the only evidence this node has: the truth of its own condition. The
+    /// host judges by fact ids because its snapshots carry them; a value-only
+    /// snapshot never does, so the host's rule would not suppress here at
+    /// all. Measured 2026-09-13: two holding slot rules with `debounce_ms`
+    /// 10 000 put a 200-byte report on the mesh every 10 s each, and under
+    /// that chatter the base's commands reached the bridge 4 times in 6.
+    #[serde(default)]
+    pub fire_on_change: bool,
 }
 
 impl ReflexRule {
@@ -274,6 +288,9 @@ pub struct FiredReflex {
 pub struct ReflexEngine {
     rules: Vec<ReflexRule>,
     last_fire: HashMap<String, u64>,
+    /// Per `fire_on_change` rule: whether it fired for the condition's
+    /// current run of truth. Cleared when the condition drops.
+    fired_this_run: HashMap<String, bool>,
     /// Descending modulation levels; RAM only, reboot returns rules to defaults.
     mods: Modulations,
 }
@@ -284,6 +301,7 @@ impl ReflexEngine {
         Self {
             rules,
             last_fire: HashMap::new(),
+            fired_this_run: HashMap::new(),
             mods: Modulations::default(),
         }
     }
@@ -300,6 +318,7 @@ impl ReflexEngine {
         }
         self.rules = rules;
         self.last_fire.clear();
+        self.fired_this_run.clear();
         Ok(())
     }
 
@@ -345,17 +364,29 @@ impl ReflexEngine {
         let mut fired = Vec::new();
         for rule in &self.rules {
             if !rule.when.eval(snapshot, &self.mods) {
+                // The run of truth is over; the next true is a new event.
+                if rule.fire_on_change {
+                    self.fired_this_run.insert(rule.id.clone(), false);
+                }
                 continue;
+            }
+            if rule.fire_on_change && self.fired_this_run.get(&rule.id).copied().unwrap_or(false) {
+                continue; // still holding, already reported
             }
             let min_interval = rule.min_interval_ms();
             if min_interval > 0 {
                 if let Some(&last) = self.last_fire.get(&rule.id) {
                     if now_ms.saturating_sub(last) < min_interval {
+                        // Debounced: not fired for this run yet, so a
+                        // `fire_on_change` rule will fire once it elapses.
                         continue;
                     }
                 }
             }
             self.last_fire.insert(rule.id.clone(), now_ms);
+            if rule.fire_on_change {
+                self.fired_this_run.insert(rule.id.clone(), true);
+            }
             fired.push(FiredReflex {
                 rule_id: rule.id.clone(),
                 action: rule.then.clone(),
@@ -417,7 +448,148 @@ mod tests {
             then,
             debounce_ms,
             max_rate_hz: None,
+            fire_on_change: false,
         }
+    }
+
+    fn hot_rule(fire_on_change: bool, debounce_ms: u64) -> ReflexRule {
+        ReflexRule {
+            id: "hot".to_string(),
+            when: Condition::Sensor {
+                entity: "sensor.t".into(),
+                op: Cmp::Gt,
+                value: 50.0,
+            },
+            then: Action::Escalate {
+                reason: "hot".into(),
+            },
+            debounce_ms,
+            max_rate_hz: None,
+            fire_on_change,
+        }
+    }
+
+    #[test]
+    fn a_holding_condition_re_fires_at_the_debounce_by_default() {
+        // The behaviour every rule had before 2026-09-13, kept as the default:
+        // debounce is a rate limit, not an edge.
+        let mut eng = ReflexEngine::new(vec![hot_rule(false, 10_000)]);
+        let hot = snap(&[("sensor.t", 60.0)]);
+        let fired: Vec<u64> = (0..6)
+            .map(|i| i * 5_000)
+            .filter(|&t| !eng.evaluate(&hot, t).is_empty())
+            .collect();
+        assert_eq!(
+            fired,
+            vec![0, 10_000, 20_000],
+            "every debounce interval while holding"
+        );
+    }
+
+    #[test]
+    fn fire_on_change_fires_once_per_run_of_truth() {
+        let mut eng = ReflexEngine::new(vec![hot_rule(true, 0)]);
+        let hot = snap(&[("sensor.t", 60.0)]);
+        let cool = snap(&[("sensor.t", 40.0)]);
+        assert_eq!(eng.evaluate(&hot, 0).len(), 1, "the transition");
+        for t in 1..200u64 {
+            assert!(
+                eng.evaluate(&hot, t * 1_000).is_empty(),
+                "holding at t={t}s must not re-fire"
+            );
+        }
+        assert!(
+            eng.evaluate(&cool, 300_000).is_empty(),
+            "false fires nothing"
+        );
+        assert_eq!(
+            eng.evaluate(&hot, 301_000).len(),
+            1,
+            "true again is a new event"
+        );
+        assert!(eng.evaluate(&hot, 302_000).is_empty());
+    }
+
+    #[test]
+    fn fire_on_change_still_honours_the_debounce_on_the_transition() {
+        // Flapping around the threshold faster than the debounce fires once
+        // per debounce interval at most, and never while holding.
+        let mut eng = ReflexEngine::new(vec![hot_rule(true, 10_000)]);
+        let hot = snap(&[("sensor.t", 60.0)]);
+        let cool = snap(&[("sensor.t", 40.0)]);
+        assert_eq!(eng.evaluate(&hot, 0).len(), 1);
+        assert!(eng.evaluate(&cool, 1_000).is_empty());
+        assert!(
+            eng.evaluate(&hot, 2_000).is_empty(),
+            "a new run, but inside the debounce"
+        );
+        assert!(
+            eng.evaluate(&hot, 5_000).is_empty(),
+            "still holding, still inside"
+        );
+        assert_eq!(
+            eng.evaluate(&hot, 10_000).len(),
+            1,
+            "the run that started at 2 s fires once the debounce elapses"
+        );
+        assert!(
+            eng.evaluate(&hot, 30_000).is_empty(),
+            "and then holds silently"
+        );
+    }
+
+    #[test]
+    fn a_modulation_move_that_flips_the_condition_is_a_transition() {
+        // The descending path changes the threshold, not the reading; for an
+        // edge rule that is exactly the event worth one report.
+        let mut eng = ReflexEngine::new(vec![ReflexRule {
+            id: "slot-hot".into(),
+            when: Condition::SensorSlot {
+                entity: "sensor.t".into(),
+                op: Cmp::Gt,
+                slot: 0,
+                min: 30.0,
+                max: 70.0,
+                default: 0.5, // 50 °C
+            },
+            then: Action::Escalate {
+                reason: "hot".into(),
+            },
+            debounce_ms: 0,
+            max_rate_hz: None,
+            fire_on_change: true,
+        }]);
+        let t38 = snap(&[("sensor.t", 38.0)]);
+        assert!(eng.evaluate(&t38, 0).is_empty(), "38 < 50");
+        eng.descend(&[(0, 0.15)]).unwrap(); // 36 °C
+        assert_eq!(
+            eng.evaluate(&t38, 1_000).len(),
+            1,
+            "the threshold moved under it"
+        );
+        assert!(eng.evaluate(&t38, 2_000).is_empty());
+        eng.clear_modulations(); // back to 50
+        assert!(eng.evaluate(&t38, 3_000).is_empty());
+        eng.descend(&[(0, 0.15)]).unwrap();
+        assert_eq!(
+            eng.evaluate(&t38, 4_000).len(),
+            1,
+            "and again on the next move"
+        );
+    }
+
+    #[test]
+    fn set_rules_resets_the_edge_state() {
+        let mut eng = ReflexEngine::new(vec![hot_rule(true, 0)]);
+        let hot = snap(&[("sensor.t", 60.0)]);
+        assert_eq!(eng.evaluate(&hot, 0).len(), 1);
+        assert!(eng.evaluate(&hot, 1).is_empty());
+        eng.set_rules(vec![hot_rule(true, 0)]).unwrap();
+        assert_eq!(
+            eng.evaluate(&hot, 2).len(),
+            1,
+            "a fresh rule set reports its standing conditions once"
+        );
     }
 
     #[test]

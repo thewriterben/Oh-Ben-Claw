@@ -57,6 +57,9 @@ def rule(rid: str, op: str, value: int) -> dict:
         },
         "then": {"type": "gpio_write", "node_id": "self", "pin": LED_PIN, "value": value},
         "debounce_ms": DEBOUNCE_MS,
+        # One report per transition, not one per debounce interval while
+        # holding (node edge-triggering, 2026-09-13).
+        "fire_on_change": True,
     }
 
 
@@ -145,8 +148,16 @@ def main() -> int:
                 out.append(obj)
         return out
 
-    def wait_and_check(name, want_led: str, want_rule: str):
-        mark = len(node.unsolicited)
+    def wait_and_check(name, want_led: str, want_rule: str | None, mark: int | None = None):
+        """Wait for the LED to read `want_led` and, when `want_rule` is given,
+        for exactly one report of it: the rules are edge-triggered, so a
+        transition reports once and a condition that merely keeps holding
+        reports nothing (`want_rule=None`). `mark` is where in the node's
+        unsolicited lines to look from — take it *before* the descend that
+        causes the transition, because an edge rule reports within a second
+        of it, while the descend's own reply is still being awaited."""
+        if mark is None:
+            mark = len(node.unsolicited)
         t0 = time.time()
         led, seen = None, []
         while time.time() - t0 < args.settle:
@@ -158,14 +169,22 @@ def main() -> int:
                 if chunk.startswith("{"):
                     node.unsolicited.append(chunk)
             node.ser.timeout = 2
-            seen = [r for r in reports_since(mark) if r.get("rule_id") == want_rule]
+            seen = [r for r in reports_since(mark) if r.get("rule_id") in ("die-hot", "die-cool")]
             led = led_level()
-            if led == want_led and seen:
+            if led == want_led and (want_rule is None or any(r.get("rule_id") == want_rule for r in seen)):
+                # Linger one more second so a spurious second report would show.
+                time.sleep(1.5)
+                seen = [r for r in reports_since(mark) if r.get("rule_id") in ("die-hot", "die-cool")]
                 break
             time.sleep(1.0)
-        ok = led == want_led and bool(seen) and all(r.get("applied") is True for r in seen)
-        detail = f"LED pin {LED_PIN} reads {led} (want {want_led}); {len(seen)} '{want_rule}' report(s)" + \
-                 (f", applied={[r.get('applied') for r in seen]}" if seen else "")
+        if want_rule is None:
+            ok = led == want_led and not seen
+        else:
+            ok = (led == want_led and len(seen) == 1 and seen[0].get("rule_id") == want_rule
+                  and seen[0].get("applied") is True)
+        detail = (f"LED pin {LED_PIN} reads {led} (want {want_led}); "
+                  f"{len(seen)} die-rule report(s) (want {'none' if want_rule is None else 'one ' + want_rule})"
+                  + (f": {[(r.get('rule_id'), r.get('applied')) for r in seen]}" if seen else ""))
         print(f"[{'PASS' if ok else 'MISS'}] wait {name}: {detail}  ({time.time()-t0:.0f}s)")
         record.append({"step": name, "via": "observe", "ok": ok, "led": led, "reports": seen,
                        "seconds": round(time.time() - t0, 1)})
@@ -189,22 +208,28 @@ def main() -> int:
          lambda r: r.get("ok") is True and r["result"].get("applied") is True)
     step("push-die-rules", "set_reflex_rules", {"rules": RULES}, "loaded 2",
          lambda r: r.get("ok") is True and r["result"].get("loaded") == 2)
+    # A fresh rule set reports its standing condition once: cool at the
+    # default 50 °C, LED off.
+    wait_and_check("led-off-at-default", "1", "die-cool")
     via = "lora" if base else "usb"
 
-    # ── 3. Threshold above the reading: the LED must go (or stay) off ──────
+    # ── 3. Threshold above the reading: still cool — no transition, no report ─
+    mark = len(node.unsolicited)
     step("slot-above", "descend", {"clear": True, "m": [[SLOT, above]]}, f"active [[0,{above}]]",
          lambda r: r.get("ok") is True and r["result"].get("active") == [[SLOT, above]], via=via)
-    wait_and_check("led-off-when-cool", "1", "die-cool")
+    wait_and_check("led-off-when-cool", "1", None, mark)
 
     # ── 4. Threshold below the reading: the LED must come on ───────────────
+    mark = len(node.unsolicited)
     step("slot-below", "descend", {"m": [[SLOT, below]]}, f"active [[0,{below}]]",
          lambda r: r.get("ok") is True and r["result"].get("active") == [[SLOT, below]], via=via)
-    wait_and_check("led-on-when-hot", "0", "die-hot")
+    wait_and_check("led-on-when-hot", "0", "die-hot", mark)
 
     # ── 5. And back above: off again ───────────────────────────────────────
+    mark = len(node.unsolicited)
     step("slot-above-again", "descend", {"m": [[SLOT, above]]}, f"active [[0,{above}]]",
          lambda r: r.get("ok") is True and r["result"].get("active") == [[SLOT, above]], via=via)
-    wait_and_check("led-off-again", "1", "die-cool")
+    wait_and_check("led-off-again", "1", "die-cool", mark)
 
     # ── 6. Clear: back to the default 50 °C, whatever that means right now ─
     step("clear", "descend", {"clear": True}, "active []",
