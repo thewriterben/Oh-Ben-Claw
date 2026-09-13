@@ -61,21 +61,30 @@ The compute node and the radio are separate boards, bridged by a UART:
 
 ## Spine frame format
 
-Content-agnostic transport (`spine.rs`). Single frame:
+Content-agnostic transport (`spine.rs`). Single frame, authenticated since
+2026-09-13 (SPINE-AUTH.md step 4):
 
 ```
-[src:u8][seq:u8][ttl:u8][payload…]
+[src:u8][seq:u8][ttl:u8][ctr:u32 BE][payload…][mac:8]
 ```
 
-- `src` — originating node id (low byte of its MAC).
-- `seq` — per-source sequence (wraps); with `src`, de-dups relays.
+- `src` — originating station id (low byte of its MAC).
+- `seq` — low byte of `ctr`, kept for the log lines and the host parser.
 - `ttl` — remaining hop count for flood-relay (`SPINE_TTL` = 2; 0 = don't relay).
-- `payload` — the OBC message bytes (≤ 240 B).
+- `ctr` — the station's frame counter, persisted in NVS as a ceiling so a
+  reboot never reissues one (`SeqCounter`; SPINE-REPLAY.md §2).
+- `payload` — the OBC message bytes (≤ 228 B).
+- `mac` — first 8 bytes of HMAC-SHA256 over `src ‖ ctr ‖ payload` under the
+  station's key, derived from the deployment root (`OBC_SPINE_ROOT` at
+  build time). `ttl` is outside the tag so relays can decrement it.
 
-**De-dup / flood-relay:** a `SeenSet` ring records recently-seen `(src, seq)`. A node
-that hears a *new* frame forwards it to its UART, then rebroadcasts it with `ttl-1`
-(preserving the original `src`/`seq`). Any node that has already seen `(src, seq)`
-drops it — that's what stops relay loops.
+**Verify, judge, then forward:** a station verifies the tag under the key
+derived for `src`, then judges `ctr` against a per-source RFC 4303 window
+(`ReplayWindow`, persisted ceiling `h + 8`). Only then is the payload
+forwarded to the UART, logged as `SPINE ◄`, and rebroadcast with `ttl-1`
+(original `src`/`ctr`/tag preserved). A counter already accepted is dropped
+silently — that is a relay duplicate, and it is what stops relay loops. Any
+other refusal is one `SPINE ◄ REJECTED … : <reason>` line.
 
 ## Build & flash
 
@@ -255,5 +264,13 @@ JSON line into the base-station Heltec's serial monitor:
   **GPIO2**, and a **shared GND**.
 - **No RX between two radios** → confirm antennas are attached and, if the boards are
   touching, separate them ~1 m (a +22 dBm signal can desense a very close receiver).
-- **Relay storm (same seq relayed repeatedly)** → would indicate the `SeenSet` isn't
-  catching dups; expected behaviour is exactly one `⇒ relay` per `(src, seq)`.
+- **Relay storm (same ctr relayed repeatedly)** → would indicate the receive
+  window isn't catching dups; expected behaviour is exactly one `⇒ relay` per
+  `(src, ctr)`.
+- **`SPINE ◄ REJECTED … bad tag` on every frame from one station** → the two
+  boards were built with different `OBC_SPINE_ROOT`s. Compare the `root
+  fingerprint` in each boot log; rebuild and reflash the odd one.
+- **Two stations deaf to each other, keepalives ~70 ms apart on the consoles**
+  → keepalive lock-step (measured 2026-09-13; the interval now carries
+  jitter). Reset either station to break the phase; if it recurs, the jitter
+  is not in that build.

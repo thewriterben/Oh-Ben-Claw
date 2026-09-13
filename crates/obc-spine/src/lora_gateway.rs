@@ -412,13 +412,16 @@ impl NodeCommand {
 
 /// The longest command line the mesh can carry, in bytes.
 ///
-/// This is the node's `MAX_PAYLOAD` (`firmware/heltec-lora-linktest/src/spine.rs`),
-/// duplicated here because the firmware builds for xtensa and the host cannot
-/// link it. `tests/spine_payload_budget.rs` pins the two together — it includes
-/// the firmware source via `#[path]` and fails if they ever disagree, which is
-/// the same arrangement `tests/firmware_spine_framing.rs` already uses to run
-/// the framer's own tests on the host.
-pub const MESH_LINE_BUDGET: usize = 240;
+/// This is the station's `MAX_AUTH_PAYLOAD`
+/// (`firmware/heltec-lora-linktest/src/spine.rs`): the 240-byte radio budget
+/// less the 12 bytes an authenticated frame spends on `[ctr:u32][mac:8]`
+/// (SPINE-AUTH.md §3.2, on the wire since 2026-09-13). Duplicated here
+/// because the firmware builds for xtensa and the host cannot link it.
+/// `tests/spine_payload_budget.rs` pins the two together — it includes the
+/// firmware source via `#[path]` and fails if they ever disagree, which is the
+/// same arrangement `tests/firmware_spine_framing.rs` already uses to run the
+/// framer's own tests on the host.
+pub const MESH_LINE_BUDGET: usize = 228;
 
 /// A transport that delivers a [`NodeCommand`] toward the mesh. The serial
 /// implementation writes the encoded line to the base-station Heltec's console; tests

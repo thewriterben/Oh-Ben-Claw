@@ -1,0 +1,76 @@
+{
+  "mode": "observe",
+  "base": "COM3",
+  "bridge": "COM5",
+  "summary": {
+    "base": {
+      "rx": [
+        {
+          "src": "40",
+          "seq": 67,
+          "ctr": 835,
+          "rssi": -50,
+          "t": 11.71
+        }
+      ],
+      "rejected": [],
+      "tx": 5,
+      "resumed": null,
+      "fingerprint": null
+    },
+    "bridge": {
+      "rx": [],
+      "rejected": [],
+      "tx": 6,
+      "resumed": null,
+      "fingerprint": null
+    },
+    "_elapsed": 30.01
+  },
+  "checks": [
+    {
+      "name": "base received authenticated frames",
+      "ok": false,
+      "detail": "1 SPINE \u25c4 lines with ctr= in 30.01s, spans {'40': (835, 835, 1)}"
+    },
+    {
+      "name": "base counters strictly increasing per source, seq = ctr & 0xff",
+      "ok": true,
+      "detail": "{'40': (835, 835, 1)}"
+    },
+    {
+      "name": "base rejected nothing",
+      "ok": true,
+      "detail": "0 REJECTED lines"
+    },
+    {
+      "name": "bridge received authenticated frames",
+      "ok": false,
+      "detail": "0 SPINE \u25c4 lines with ctr= in 30.01s, spans {}"
+    },
+    {
+      "name": "bridge counters strictly increasing per source, seq = ctr & 0xff",
+      "ok": true,
+      "detail": "{}"
+    },
+    {
+      "name": "bridge rejected nothing",
+      "ok": true,
+      "detail": "0 REJECTED lines"
+    }
+  ],
+  "lines": [
+    "1789281953.13 base I (536809) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=74",
+    "1789281958.21 base I (541899) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=75",
+    "1789281960.44 base I (544109) heltec_lora_linktest: SPINE \u25c4 src=40 seq=67 ctr=835 rssi=-50 dBm snr=12 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"t",
+    "1789281963.66 base I (547369) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=76",
+    "1789281968.76 base I (552459) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=77",
+    "1789281973.84 base I (557549) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=78",
+    "1789281953.06 bridge I (245230) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=65",
+    "1789281958.15 bridge I (250320) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=66",
+    "1789281960.38 bridge I (252510) heltec_lora_linktest: SPINE \u25ba (uart) seq=67 (218 B) {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts_ms\":350478,\"type\":\"refl",
+    "1789281963.60 bridge I (255770) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=68",
+    "1789281968.69 bridge I (260860) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=69",
+    "1789281973.78 bridge I (265950) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=70"
+  ]
+}

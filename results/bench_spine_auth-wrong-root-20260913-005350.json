@@ -1,0 +1,172 @@
+{
+  "mode": "wrong-root",
+  "base": "COM3",
+  "bridge": "COM5",
+  "summary": {
+    "base": {
+      "rx": [],
+      "rejected": [
+        {
+          "src": "40",
+          "ctr": 962,
+          "rssi": -52,
+          "bytes": 218,
+          "why": "bad tag (wrong root, forged, or corrupt)",
+          "t": 2.16
+        },
+        {
+          "src": "40",
+          "ctr": 963,
+          "rssi": -53,
+          "bytes": 66,
+          "why": "bad tag (wrong root, forged, or corrupt)",
+          "t": 3.77
+        },
+        {
+          "src": "40",
+          "ctr": 966,
+          "rssi": -52,
+          "bytes": 66,
+          "why": "bad tag (wrong root, forged, or corrupt)",
+          "t": 21.0
+        },
+        {
+          "src": "40",
+          "ctr": 967,
+          "rssi": -51,
+          "bytes": 76,
+          "why": "bad tag (wrong root, forged, or corrupt)",
+          "t": 22.98
+        },
+        {
+          "src": "40",
+          "ctr": 968,
+          "rssi": -52,
+          "bytes": 66,
+          "why": "bad tag (wrong root, forged, or corrupt)",
+          "t": 27.69
+        },
+        {
+          "src": "40",
+          "ctr": 969,
+          "rssi": -51,
+          "bytes": 66,
+          "why": "bad tag (wrong root, forged, or corrupt)",
+          "t": 33.51
+        },
+        {
+          "src": "40",
+          "ctr": 970,
+          "rssi": -52,
+          "bytes": 66,
+          "why": "bad tag (wrong root, forged, or corrupt)",
+          "t": 39.47
+        }
+      ],
+      "tx": 7,
+      "resumed": null,
+      "fingerprint": null
+    },
+    "bridge": {
+      "rx": [],
+      "rejected": [
+        {
+          "src": "D8",
+          "ctr": 1729,
+          "rssi": -54,
+          "bytes": 66,
+          "why": "bad tag (wrong root, forged, or corrupt)",
+          "t": 2.96
+        },
+        {
+          "src": "D8",
+          "ctr": 1732,
+          "rssi": -54,
+          "bytes": 66,
+          "why": "bad tag (wrong root, forged, or corrupt)",
+          "t": 20.94
+        },
+        {
+          "src": "D8",
+          "ctr": 1733,
+          "rssi": -54,
+          "bytes": 66,
+          "why": "bad tag (wrong root, forged, or corrupt)",
+          "t": 26.88
+        },
+        {
+          "src": "D8",
+          "ctr": 1734,
+          "rssi": -55,
+          "bytes": 66,
+          "why": "bad tag (wrong root, forged, or corrupt)",
+          "t": 32.21
+        },
+        {
+          "src": "D8",
+          "ctr": 1735,
+          "rssi": -54,
+          "bytes": 66,
+          "why": "bad tag (wrong root, forged, or corrupt)",
+          "t": 38.66
+        }
+      ],
+      "tx": 9,
+      "resumed": null,
+      "fingerprint": null
+    },
+    "_elapsed": 40.04
+  },
+  "checks": [
+    {
+      "name": "base accepted nothing from the other station",
+      "ok": true,
+      "detail": "0 accepted"
+    },
+    {
+      "name": "base rejected the other station's frames as bad tags",
+      "ok": true,
+      "detail": "7 REJECTED, reasons: ['bad tag (wrong root, forged, or corrupt)']"
+    },
+    {
+      "name": "bridge accepted nothing from the other station",
+      "ok": true,
+      "detail": "0 accepted"
+    },
+    {
+      "name": "bridge rejected the other station's frames as bad tags",
+      "ok": true,
+      "detail": "5 REJECTED, reasons: ['bad tag (wrong root, forged, or corrupt)']"
+    }
+  ],
+  "lines": [
+    "1789282392.27 base W (194609) heltec_lora_linktest: SPINE \u25c4 REJECTED src=40 ctr=962 rssi=-52 dBm (218 B): bad tag (wrong root, forged, or corrupt)",
+    "1789282393.01 base I (195379) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=193",
+    "1789282393.88 base W (196159) heltec_lora_linktest: SPINE \u25c4 REJECTED src=40 ctr=963 rssi=-53 dBm (66 B): bad tag (wrong root, forged, or corrupt)",
+    "1789282399.58 base I (201889) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=194",
+    "1789282405.28 base I (207599) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=195",
+    "1789282410.98 base I (213309) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=196",
+    "1789282411.11 base W (213469) heltec_lora_linktest: SPINE \u25c4 REJECTED src=40 ctr=966 rssi=-52 dBm (66 B): bad tag (wrong root, forged, or corrupt)",
+    "1789282413.09 base W (215449) heltec_lora_linktest: SPINE \u25c4 REJECTED src=40 ctr=967 rssi=-51 dBm (76 B): bad tag (wrong root, forged, or corrupt)",
+    "1789282417.05 base I (219329) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=197",
+    "1789282417.80 base W (220099) heltec_lora_linktest: SPINE \u25c4 REJECTED src=40 ctr=968 rssi=-52 dBm (66 B): bad tag (wrong root, forged, or corrupt)",
+    "1789282422.26 base I (224599) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=198",
+    "1789282423.62 base W (225999) heltec_lora_linktest: SPINE \u25c4 REJECTED src=40 ctr=969 rssi=-51 dBm (66 B): bad tag (wrong root, forged, or corrupt)",
+    "1789282428.83 base I (231109) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=199",
+    "1789282429.57 base W (231879) heltec_lora_linktest: SPINE \u25c4 REJECTED src=40 ctr=970 rssi=-52 dBm (66 B): bad tag (wrong root, forged, or corrupt)",
+    "1789282392.33 bridge I (11170) heltec_lora_linktest: SPINE \u25ba (uart) seq=194 (218 B) {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts_ms\":782250,\"type\":\"refl",
+    "1789282393.07 bridge W (11950) heltec_lora_linktest: SPINE \u25c4 REJECTED src=D8 ctr=1729 rssi=-54 dBm (66 B): bad tag (wrong root, forged, or corrupt)",
+    "1789282393.81 bridge I (12720) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=195",
+    "1789282399.52 bridge I (18430) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=196",
+    "1789282405.22 bridge I (24140) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=197",
+    "1789282411.05 bridge W (29880) heltec_lora_linktest: SPINE \u25c4 REJECTED src=D8 ctr=1732 rssi=-54 dBm (66 B): bad tag (wrong root, forged, or corrupt)",
+    "1789282411.17 bridge I (30030) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=198",
+    "1789282413.15 bridge I (32020) heltec_lora_linktest: SPINE \u25ba (uart) seq=199 (76 B) {\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":782250,\"type\":\"beacon\"}",
+    "1789282416.99 bridge W (35900) heltec_lora_linktest: SPINE \u25c4 REJECTED src=D8 ctr=1733 rssi=-54 dBm (66 B): bad tag (wrong root, forged, or corrupt)",
+    "1789282417.74 bridge I (36670) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=200",
+    "1789282422.32 bridge W (41170) heltec_lora_linktest: SPINE \u25c4 REJECTED src=D8 ctr=1734 rssi=-55 dBm (66 B): bad tag (wrong root, forged, or corrupt)",
+    "1789282423.69 bridge I (42560) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=201",
+    "1789282428.77 bridge W (47680) heltec_lora_linktest: SPINE \u25c4 REJECTED src=D8 ctr=1735 rssi=-54 dBm (66 B): bad tag (wrong root, forged, or corrupt)",
+    "1789282429.51 bridge I (48450) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=202"
+  ]
+}

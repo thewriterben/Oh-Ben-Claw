@@ -1,0 +1,375 @@
+{
+  "mode": "reboot-gap",
+  "base": "COM3",
+  "bridge": "COM5",
+  "before": {
+    "base": {
+      "rx": [
+        {
+          "src": "40",
+          "seq": 228,
+          "ctr": 740,
+          "rssi": -55,
+          "t": 4.89
+        },
+        {
+          "src": "40",
+          "seq": 229,
+          "ctr": 741,
+          "rssi": -54,
+          "t": 5.88
+        },
+        {
+          "src": "40",
+          "seq": 230,
+          "ctr": 742,
+          "rssi": -56,
+          "t": 10.09
+        },
+        {
+          "src": "40",
+          "seq": 231,
+          "ctr": 743,
+          "rssi": -55,
+          "t": 15.66
+        },
+        {
+          "src": "40",
+          "seq": 232,
+          "ctr": 744,
+          "rssi": -55,
+          "t": 15.91
+        }
+      ],
+      "rejected": [],
+      "tx": 4,
+      "resumed": null,
+      "fingerprint": null
+    },
+    "bridge": {
+      "rx": [
+        {
+          "src": "D8",
+          "seq": 23,
+          "ctr": 1559,
+          "rssi": -58,
+          "t": 0.86
+        },
+        {
+          "src": "D8",
+          "seq": 24,
+          "ctr": 1560,
+          "rssi": -57,
+          "t": 6.07
+        },
+        {
+          "src": "D8",
+          "seq": 25,
+          "ctr": 1561,
+          "rssi": -60,
+          "t": 11.51
+        },
+        {
+          "src": "D8",
+          "seq": 26,
+          "ctr": 1562,
+          "rssi": -57,
+          "t": 16.59
+        }
+      ],
+      "rejected": [],
+      "tx": 5,
+      "resumed": null,
+      "fingerprint": null
+    },
+    "_elapsed": 20.07
+  },
+  "after": {
+    "base": {
+      "rx": [
+        {
+          "src": "40",
+          "seq": 1,
+          "ctr": 769,
+          "rssi": -56,
+          "t": 3.03
+        },
+        {
+          "src": "40",
+          "seq": 2,
+          "ctr": 770,
+          "rssi": -54,
+          "t": 6.49
+        },
+        {
+          "src": "40",
+          "seq": 5,
+          "ctr": 773,
+          "rssi": -55,
+          "t": 16.41
+        },
+        {
+          "src": "40",
+          "seq": 8,
+          "ctr": 776,
+          "rssi": -54,
+          "t": 26.93
+        },
+        {
+          "src": "40",
+          "seq": 11,
+          "ctr": 779,
+          "rssi": -55,
+          "t": 33.0
+        },
+        {
+          "src": "40",
+          "seq": 12,
+          "ctr": 780,
+          "rssi": -55,
+          "t": 37.59
+        },
+        {
+          "src": "40",
+          "seq": 15,
+          "ctr": 783,
+          "rssi": -55,
+          "t": 48.14
+        },
+        {
+          "src": "40",
+          "seq": 18,
+          "ctr": 786,
+          "rssi": -55,
+          "t": 58.07
+        },
+        {
+          "src": "40",
+          "seq": 20,
+          "ctr": 788,
+          "rssi": -56,
+          "t": 63.4
+        },
+        {
+          "src": "40",
+          "seq": 22,
+          "ctr": 790,
+          "rssi": -55,
+          "t": 68.86
+        },
+        {
+          "src": "40",
+          "seq": 29,
+          "ctr": 797,
+          "rssi": -55,
+          "t": 100.36
+        }
+      ],
+      "rejected": [],
+      "tx": 23,
+      "resumed": null,
+      "fingerprint": null
+    },
+    "bridge": {
+      "rx": [],
+      "rejected": [],
+      "tx": 33,
+      "resumed": 768,
+      "fingerprint": "c4cd"
+    },
+    "_elapsed": 120.01
+  },
+  "summary": {
+    "gap_frames": null,
+    "seconds_to_reaccept": null
+  },
+  "checks": [
+    {
+      "name": "bridge heard the base before the reset",
+      "ok": true,
+      "detail": "last base ctr accepted by bridge: 1562"
+    },
+    {
+      "name": "bridge resumed its receive window and re-accepted the base",
+      "ok": false,
+      "detail": "no base frame accepted by the bridge within 120 s of the reset"
+    },
+    {
+      "name": "bridge counter resumed above its last (never reissued)",
+      "ok": true,
+      "detail": "resumed at 768, base had last accepted bridge ctr 744"
+    },
+    {
+      "name": "base accepted the rebooted bridge's first frames",
+      "ok": true,
+      "detail": "bridge ctrs accepted by base after reset: [769, 770, 773, 776, 779, 780]"
+    },
+    {
+      "name": "no loud rejections across the reset (window gap is silent by design)",
+      "ok": true,
+      "detail": "0 REJECTED lines"
+    },
+    {
+      "name": "bridge boot log names the root fingerprint",
+      "ok": true,
+      "detail": "fingerprint c4cd"
+    }
+  ],
+  "lines": [
+    "1789281688.47 base I (272149) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=23",
+    "1789281692.44 base I (276159) heltec_lora_linktest: SPINE \u25c4 src=40 seq=228 ctr=740 rssi=-55 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":228}",
+    "1789281693.43 base I (277109) heltec_lora_linktest: SPINE \u25c4 src=40 seq=229 ctr=741 rssi=-54 dBm snr=12 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"",
+    "1789281693.55 base I (277279) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=24",
+    "1789281697.63 base I (281299) heltec_lora_linktest: SPINE \u25c4 src=40 seq=230 ctr=742 rssi=-56 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":230}",
+    "1789281699.00 base I (282689) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=25",
+    "1789281703.21 base I (286919) heltec_lora_linktest: SPINE \u25c4 src=40 seq=231 ctr=743 rssi=-55 dBm snr=11 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"",
+    "1789281703.46 base I (287089) heltec_lora_linktest: SPINE \u25c4 src=40 seq=232 ctr=744 rssi=-55 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":232}",
+    "1789281704.20 base I (287859) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=26",
+    "1789281709.36 base I (293109) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=27",
+    "1789281710.84 base I (294509) heltec_lora_linktest: SPINE \u25c4 src=40 seq=1 ctr=769 rssi=-56 dBm snr=13 dB : {\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":121768,\"type\":\"beacon\"}",
+    "1789281714.31 base I (297959) heltec_lora_linktest: SPINE \u25c4 src=40 seq=2 ctr=770 rssi=-54 dBm snr=11 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts",
+    "1789281714.44 base I (298129) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=28",
+    "1789281719.52 base I (303219) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=29",
+    "1789281724.22 base I (307889) heltec_lora_linktest: SPINE \u25c4 src=40 seq=5 ctr=773 rssi=-55 dBm snr=12 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts",
+    "1789281724.97 base I (308679) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=30",
+    "1789281730.05 base I (313769) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=31",
+    "1789281734.75 base I (318429) heltec_lora_linktest: SPINE \u25c4 src=40 seq=8 ctr=776 rssi=-54 dBm snr=11 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts",
+    "1789281735.49 base I (319229) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=32",
+    "1789281740.57 base I (324319) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=33",
+    "1789281740.82 base I (324469) heltec_lora_linktest: SPINE \u25c4 src=40 seq=11 ctr=779 rssi=-55 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":11}",
+    "1789281745.41 base I (329129) heltec_lora_linktest: SPINE \u25c4 src=40 seq=12 ctr=780 rssi=-55 dBm snr=12 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"t",
+    "1789281746.28 base I (329919) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=34",
+    "1789281751.36 base I (335009) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=35",
+    "1789281755.95 base I (339679) heltec_lora_linktest: SPINE \u25c4 src=40 seq=15 ctr=783 rssi=-55 dBm snr=12 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"t",
+    "1789281756.82 base I (340469) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=36",
+    "1789281761.91 base I (345559) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=37",
+    "1789281765.88 base I (349609) heltec_lora_linktest: SPINE \u25c4 src=40 seq=18 ctr=786 rssi=-55 dBm snr=12 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"t",
+    "1789281767.37 base I (351019) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=38",
+    "1789281771.22 base I (354869) heltec_lora_linktest: SPINE \u25c4 src=40 seq=20 ctr=788 rssi=-56 dBm snr=12 dB : {\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":182288,\"type\":\"beacon\"}",
+    "1789281772.58 base I (356259) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=39",
+    "1789281776.68 base I (360309) heltec_lora_linktest: SPINE \u25c4 src=40 seq=22 ctr=790 rssi=-55 dBm snr=12 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"t",
+    "1789281778.04 base I (361719) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=40",
+    "1789281783.12 base I (366809) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=41",
+    "1789281788.20 base I (371899) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=42",
+    "1789281793.29 base I (376989) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=43",
+    "1789281798.37 base I (382079) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=44",
+    "1789281803.46 base I (387169) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=45",
+    "1789281808.17 base I (391849) heltec_lora_linktest: SPINE \u25c4 src=40 seq=29 ctr=797 rssi=-55 dBm snr=12 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"t",
+    "1789281808.92 base I (392629) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=46",
+    "1789281814.00 base I (397719) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=47",
+    "1789281819.09 base I (402809) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=48",
+    "1789281824.16 base I (407899) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=49",
+    "1789281688.41 bridge I (231900) heltec_lora_linktest: SPINE \u25c4 src=D8 seq=23 ctr=1559 rssi=-58 dBm snr=12 dB : {\"node_id\":\"gw-D8\",\"type\":\"gw_keepalive\",\"seq\":23}",
+    "1789281688.66 bridge I (232030) heltec_lora_linktest: SPINE \u21d2 relay src=D8 seq=23 ttl=1",
+    "1789281692.50 bridge I (235900) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=228",
+    "1789281693.49 bridge I (236860) heltec_lora_linktest: SPINE \u25ba (uart) seq=229 (218 B) {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts_ms\":103918,\"type\":\"ref",
+    "1789281693.61 bridge I (237040) heltec_lora_linktest: SPINE \u25c4 src=D8 seq=24 ctr=1560 rssi=-57 dBm snr=12 dB : {\"node_id\":\"gw-D8\",\"type\":\"gw_keepalive\",\"seq\":24}",
+    "1789281693.74 bridge I (237170) heltec_lora_linktest: SPINE \u21d2 relay src=D8 seq=24 ttl=1",
+    "1789281697.57 bridge I (241040) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=230",
+    "1789281699.06 bridge I (242440) heltec_lora_linktest: SPINE \u25c4 src=D8 seq=25 ctr=1561 rssi=-60 dBm snr=12 dB : {\"node_id\":\"gw-D8\",\"type\":\"gw_keepalive\",\"seq\":25}",
+    "1789281699.18 bridge I (242570) heltec_lora_linktest: SPINE \u21d2 relay src=D8 seq=25 ttl=1",
+    "1789281703.27 bridge I (246660) heltec_lora_linktest: SPINE \u25ba (uart) seq=231 (218 B) {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts_ms\":114418,\"type\":\"ref",
+    "1789281703.39 bridge I (246830) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=232",
+    "1789281704.14 bridge I (247610) heltec_lora_linktest: SPINE \u25c4 src=D8 seq=26 ctr=1562 rssi=-57 dBm snr=12 dB : {\"node_id\":\"gw-D8\",\"type\":\"gw_keepalive\",\"seq\":26}",
+    "1789281704.26 bridge I (247740) heltec_lora_linktest: SPINE \u21d2 relay src=D8 seq=26 ttl=1",
+    "1789281707.93 bridge ESP-ROM:esp32s3-20210327",
+    "1789281707.93 bridge Build:Mar 27 2021",
+    "1789281707.93 bridge rst:0x1 (POWERON),boot:0x9 (SPI_FAST_FLASH_BOOT)",
+    "1789281707.93 bridge SPIWP:0xee",
+    "1789281707.93 bridge mode:DIO, clock div:2",
+    "1789281707.93 bridge load:0x3fce2820,len:0x158c",
+    "1789281707.93 bridge load:0x403c8700,len:0xd24",
+    "1789281707.93 bridge load:0x403cb700,len:0x2f34",
+    "1789281707.93 bridge entry 0x403c8924",
+    "1789281707.93 bridge I (29) boot: ESP-IDF v5.5.1-838-gd66ebb86d2e 2nd stage bootloader",
+    "1789281707.93 bridge I (30) boot: compile time Nov 26 2025 12:27:56",
+    "1789281707.93 bridge I (30) boot: Multicore bootloader",
+    "1789281707.93 bridge I (31) boot: chip revision: v0.2",
+    "1789281707.93 bridge I (34) boot: efuse block revision: v1.3",
+    "1789281707.93 bridge I (38) boot.esp32s3: Boot SPI Speed : 40MHz",
+    "1789281707.93 bridge I (42) boot.esp32s3: SPI Mode       : DIO",
+    "1789281707.93 bridge I (45) boot.esp32s3: SPI Flash Size : 8MB",
+    "1789281707.93 bridge I (49) boot: Enabling RNG early entropy source...",
+    "1789281707.93 bridge I (54) boot: Partition Table:",
+    "1789281707.93 bridge I (56) boot: ## Label            Usage          Type ST Offset   Length",
+    "1789281707.93 bridge I (63) boot:  0 nvs              WiFi data        01 02 00009000 00006000",
+    "1789281707.93 bridge I (69) boot:  1 phy_init         RF data          01 01 0000f000 00001000",
+    "1789281707.93 bridge I (76) boot:  2 factory          factory app      00 00 00010000 007f0000",
+    "1789281707.93 bridge I (82) boot: End of partition table",
+    "1789281707.93 bridge I (85) esp_image: segment 0: paddr=00010020 vaddr=3c070020 size=19358h (103256) map",
+    "1789281708.06 bridge I (118) esp_image: segment 1: paddr=00029380 vaddr=3fc95300 size=03444h ( 13380) load",
+    "1789281708.06 bridge I (122) esp_image: segment 2: paddr=0002c7cc vaddr=40374000 size=0384ch ( 14412) load",
+    "1789281708.06 bridge I (127) esp_image: segment 3: paddr=00030020 vaddr=42000020 size=6beb4h (442036) map",
+    "1789281708.18 bridge I (238) esp_image: segment 4: paddr=0009bedc vaddr=4037784c size=0da3ch ( 55868) load",
+    "1789281708.18 bridge I (261) boot: Loaded app from partition at offset 0x10000",
+    "1789281708.18 bridge I (261) boot: Disabling RNG early entropy source...",
+    "1789281708.18 bridge I (271) cpu_start: Multicore app",
+    "1789281708.18 bridge I (281) cpu_start: Pro cpu start user code",
+    "1789281708.18 bridge I (282) cpu_start: cpu freq: 160000000 Hz",
+    "1789281708.18 bridge I (282) app_init: Application information:",
+    "1789281708.18 bridge I (284) app_init: Project name:     libespidf",
+    "1789281708.18 bridge I (290) app_init: App version:      1",
+    "1789281708.18 bridge I (294) app_init: Compile time:     Sep 12 2026 22:39:38",
+    "1789281708.18 bridge I (300) app_init: ELF file SHA256:  a94087161...",
+    "1789281708.18 bridge I (305) app_init: ESP-IDF:          v5.3.2",
+    "1789281708.18 bridge I (310) efuse_init: Min chip rev:     v0.0",
+    "1789281708.18 bridge I (315) efuse_init: Max chip rev:     v0.99 ",
+    "1789281708.18 bridge I (320) efuse_init: Chip rev:         v0.2",
+    "1789281708.18 bridge I (325) heap_init: Initializing. RAM available for dynamic allocation:",
+    "1789281708.18 bridge I (332) heap_init: At 3FC99110 len 00050600 (321 KiB): RAM",
+    "1789281708.18 bridge I (338) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM",
+    "1789281708.30 bridge I (344) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM",
+    "1789281708.30 bridge I (350) heap_init: At 600FE100 len 00001EE8 (7 KiB): RTCRAM",
+    "1789281708.30 bridge I (358) spi_flash: detected chip: gd",
+    "1789281708.30 bridge I (361) spi_flash: flash io: dio",
+    "1789281708.30 bridge W (365) i2c: This driver is an old driver, please migrate your application code to adapt `driver/i2c_master.h`",
+    "1789281708.30 bridge I (375) sleep: Configure to isolate all GPIO pins in sleep state",
+    "1789281708.30 bridge I (382) sleep: Enable automatic switching of GPIO sleep configuration",
+    "1789281708.30 bridge I (390) main_task: Started on CPU0",
+    "1789281708.30 bridge I (410) main_task: Calling app_main()",
+    "1789281708.30 bridge I (410) heltec_lora_linktest: \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+    "1789281708.30 bridge I (420) heltec_lora_linktest: Heltec V3 OBC spine gateway \u2014 LoRa 915 MHz \u21c4 UART1 (compute uplink)",
+    "1789281708.30 bridge I (430) heltec_lora_linktest: spine auth: frame v2 (ctr:u32 + mac:8), payload budget 228 B, root fingerprint c4cd",
+    "1789281708.30 bridge I (440) uart: queue free spaces: 10",
+    "1789281708.30 bridge I (460) heltec_lora_linktest::sx1262: SX1262 TX power -9 dBm (bench-low-power build \u2014 not for the field)",
+    "1789281708.43 bridge I (470) heltec_lora_linktest::sx1262: SX1262 self-test: status=0xA2, syncword readback=0x1424 (expect 0x1424)",
+    "1789281708.43 bridge I (470) heltec_lora_linktest::sx1262:   \u2192 SPI + BUSY plumbing OK, radio configured.",
+    "1789281708.43 bridge I (480) heltec_lora_linktest: Gateway 40 \u2014 UART1(TX=4,RX=2) \u21c4 LoRa. Wire compute TX\u2192GPIO2, GND\u2194GND.",
+    "1789281708.43 bridge I (490) heltec_lora_linktest: Console origin: type/send a JSON command line here to transmit it over the mesh.",
+    "1789281708.43 bridge I (500) heltec_lora_linktest: \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+    "1789281708.43 bridge I (560) heltec_lora_linktest: frame counter resumed at 768 (ceiling persisted)",
+    "1789281710.78 bridge I (2920) heltec_lora_linktest: SPINE \u25ba (uart) seq=1 (76 B) {\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":121768,\"type\":\"beacon\"}",
+    "1789281714.25 bridge I (6370) heltec_lora_linktest: SPINE \u25ba (uart) seq=2 (218 B) {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts_ms\":124908,\"type\":\"reflex\"",
+    "1789281714.37 bridge I (6530) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=3",
+    "1789281719.45 bridge I (11620) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=4",
+    "1789281724.16 bridge I (16300) heltec_lora_linktest: SPINE \u25ba (uart) seq=5 (218 B) {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts_ms\":135328,\"type\":\"reflex",
+    "1789281725.03 bridge I (17080) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=6",
+    "1789281730.11 bridge I (22170) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=7",
+    "1789281734.69 bridge I (26840) heltec_lora_linktest: SPINE \u25ba (uart) seq=8 (218 B) {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts_ms\":145748,\"type\":\"reflex",
+    "1789281735.56 bridge I (27620) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=9",
+    "1789281740.63 bridge I (32720) heltec_lora_linktest: SPINE \u25ba (uart) seq=10 (76 B) {\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":152028,\"type\":\"beacon\"}",
+    "1789281740.76 bridge I (32870) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=11",
+    "1789281745.47 bridge I (37540) heltec_lora_linktest: SPINE \u25ba (uart) seq=12 (218 B) {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts_ms\":156198,\"type\":\"refle",
+    "1789281746.21 bridge I (38330) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=13",
+    "1789281751.30 bridge I (43420) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=14",
+    "1789281756.02 bridge I (48090) heltec_lora_linktest: SPINE \u25ba (uart) seq=15 (218 B) {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts_ms\":166628,\"type\":\"refle",
+    "1789281756.76 bridge I (48880) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=16",
+    "1789281761.85 bridge I (53970) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=17",
+    "1789281765.95 bridge I (58020) heltec_lora_linktest: SPINE \u25ba (uart) seq=18 (218 B) {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts_ms\":177048,\"type\":\"refle",
+    "1789281767.31 bridge I (59430) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=19",
+    "1789281771.15 bridge I (63280) heltec_lora_linktest: SPINE \u25ba (uart) seq=20 (76 B) {\"node_id\":\"obc-esp32-s3-001\",\"ts_ms\":182288,\"type\":\"beacon\"}",
+    "1789281772.52 bridge I (64670) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=21",
+    "1789281776.62 bridge I (68720) heltec_lora_linktest: SPINE \u25ba (uart) seq=22 (218 B) {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts_ms\":187498,\"type\":\"refle",
+    "1789281777.98 bridge I (70130) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=23",
+    "1789281783.06 bridge I (75220) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=24",
+    "1789281788.14 bridge I (80310) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=25",
+    "1789281793.23 bridge I (85400) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=26",
+    "1789281798.43 bridge I (90490) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=27",
+    "1789281803.52 bridge I (95580) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=28",
+    "1789281808.11 bridge I (100250) heltec_lora_linktest: SPINE \u25ba (uart) seq=29 (218 B) {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-offline\",\"ts_ms\":197918,\"type\":\"refl",
+    "1789281808.98 bridge I (101040) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=30",
+    "1789281814.06 bridge I (106130) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=31",
+    "1789281819.15 bridge I (111230) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=32",
+    "1789281824.22 bridge I (116320) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=33"
+  ]
+}

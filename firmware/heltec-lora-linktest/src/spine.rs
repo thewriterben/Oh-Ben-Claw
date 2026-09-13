@@ -5,119 +5,214 @@
 //! for source routing and de-duplication. This is the on-air format that the
 //! host-side `lora_mesh` spine transport mirrors.
 //!
-//! Wire format (single frame): `[src:u8][seq:u8][ttl:u8][payload…]`
-//!   - `src`  — originating node id (low byte of its MAC).
-//!   - `seq`  — per-source sequence number (wraps); with `src` it de-dups relays.
+//! Wire format v2 — `SPINE-AUTH.md` §3.2, on the air since 2026-09-13:
+//! `[src:u8][seq:u8][ttl:u8][ctr:u32 BE][payload…][mac:8]`
+//!   - `src`  — originating station id (low byte of its MAC).
+//!   - `seq`  — low byte of `ctr`, kept in the header so the log lines and the
+//!     host's parser (`seq=` field) read as they always have.
 //!   - `ttl`  — remaining hop count for flood-relay (mesh; 0 = don't relay).
-//!   - `payload` — the OBC message bytes (≤ [`MAX_PAYLOAD`]).
+//!   - `ctr`  — the sender's frame counter ([`SeqCounter`]), never reissued
+//!     across a reboot. Covered by the tag and judged by the receiver's
+//!     [`ReplayWindow`], which is also what de-duplicates flood relays.
+//!   - `payload` — the OBC message bytes (≤ [`MAX_AUTH_PAYLOAD`]).
+//!   - `mac`  — the first 8 bytes of HMAC-SHA256 over `src ‖ ctr ‖ payload`
+//!     under the sender's key (`auth.rs`). `ttl` is deliberately outside the
+//!     tag: relays decrement it in flight.
+//!
+//! Format v1 — `[src][seq][ttl][payload]`, no counter, no tag — was retired
+//! with this change rather than kept beside it. There is no permissive mode:
+//! an authentication layer with a fallback to no authentication is one an
+//! attacker turns off (`SPINE-AUTH.md` §4). A station receiving a v1 frame
+//! sees a tag that does not verify and drops it, logged.
 
 /// Conservative single-frame LoRa payload budget (SX1262 supports up to 255, but
 /// we leave headroom for the header and radio overhead).
 pub const MAX_PAYLOAD: usize = 240;
 /// Header length: src + seq + ttl.
 pub const HEADER: usize = 3;
+/// Bytes the v2 frame adds: `ctr:u32` + `mac:8`.
+pub const AUTH_OVERHEAD: usize = 4 + 8;
+/// Payload budget of an authenticated frame. The host's `MESH_LINE_BUDGET`
+/// must equal this; `tests/spine_payload_budget.rs` pins them together.
+pub const MAX_AUTH_PAYLOAD: usize = MAX_PAYLOAD - AUTH_OVERHEAD;
+/// Tag bytes on the wire (`auth::TAG_LEN`, restated here so this module stays
+/// free of the crypto crates and compiles in every harness).
+pub const MAC_LEN: usize = 8;
 
-/// A decoded spine frame borrowing its payload from the receive buffer.
-pub struct SpineFrame<'a> {
+/// A decoded authenticated frame. Decoding checks the *shape* only; the tag is
+/// the caller's to verify (`auth::verify`) and the counter the
+/// [`ReplayWindow`]'s to judge — this module holds no key.
+pub struct AuthFrame<'a> {
     pub src: u8,
     pub seq: u8,
     pub ttl: u8,
+    pub ctr: u32,
     pub payload: &'a [u8],
+    pub mac: [u8; MAC_LEN],
 }
 
-impl<'a> SpineFrame<'a> {
-    /// Serialize into `out` (cleared first).
+impl<'a> AuthFrame<'a> {
+    /// Serialize into `out` (cleared first). The payload is cut at
+    /// [`MAX_AUTH_PAYLOAD`] — the caller is expected to have refused anything
+    /// longer, since a cut payload would no longer match its tag.
     pub fn encode(&self, out: &mut Vec<u8>) {
         out.clear();
         out.push(self.src);
         out.push(self.seq);
         out.push(self.ttl);
-        let n = self.payload.len().min(MAX_PAYLOAD);
+        out.extend_from_slice(&self.ctr.to_be_bytes());
+        let n = self.payload.len().min(MAX_AUTH_PAYLOAD);
         out.extend_from_slice(&self.payload[..n]);
+        out.extend_from_slice(&self.mac);
     }
 
-    /// Parse a received frame. `None` if too short to hold a header.
+    /// Parse a received frame. `None` if too short to hold header, counter
+    /// and tag — which is also what a v1 frame shorter than 15 bytes is.
     pub fn decode(bytes: &'a [u8]) -> Option<Self> {
-        if bytes.len() < HEADER {
+        if bytes.len() < HEADER + AUTH_OVERHEAD {
             return None;
         }
+        let ctr = u32::from_be_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]);
+        let end = bytes.len() - MAC_LEN;
+        let mut mac = [0u8; MAC_LEN];
+        mac.copy_from_slice(&bytes[end..]);
         Some(Self {
             src: bytes[0],
             seq: bytes[1],
             ttl: bytes[2],
-            payload: &bytes[HEADER..],
+            ctr,
+            payload: &bytes[HEADER + 4..end],
+            mac,
         })
     }
 }
 
-/// A small fixed ring of recently-seen `(src, seq)` pairs for de-duplication —
-/// the seed of mesh flood-relay (drop a frame you've already handled, so relays
-/// don't loop). A linear scan over a tiny ring is plenty fast on the MCU.
-pub struct SeenSet {
-    ring: [(u8, u8); Self::CAP],
-    head: usize,
-    len: usize,
+/// The receiver's anti-replay window for one source — RFC 4303 §3.4.3, as
+/// `SPINE-REPLAY.md` §3 specifies: a highest-accepted counter `h` and a
+/// 64-bit bitmap of the 64 below it. Duplicates from flood relay and ordinary
+/// re-ordering are accepted exactly once; anything older than the window or
+/// already marked is refused.
+///
+/// Persistence rounds the *opposite* way from the sender's: the receiver
+/// persists a ceiling `h + M` and resumes *at* it, so a restart rejects up to
+/// `M` legitimate frames while the sender catches up rather than accepting a
+/// replay of anything in between.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplayWindow {
+    h: u32,
+    bitmap: u64,
+    /// The ceiling last persisted for this source; `h` never passes it
+    /// without the store first being moved.
+    persisted: u32,
 }
 
-impl SeenSet {
-    const CAP: usize = 32;
+/// What the window said about a counter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Replay {
+    /// Fresh: newer than anything seen, or inside the window and unmarked.
+    Accept,
+    /// Older than the window can judge.
+    TooOld,
+    /// Inside the window and already accepted once.
+    Seen,
+}
 
-    pub const fn new() -> Self {
+impl ReplayWindow {
+    /// Frames a receiver may reject after a restart while the sender catches
+    /// up — the persisted ceiling is `h + M`. Chosen for a tolerable gap, not
+    /// for symmetry with the sender's reserve: at one keepalive per 5 s this
+    /// is under a minute of silence after a bridge reboot.
+    pub const M: u32 = 8;
+    const WIDTH: u32 = 64;
+
+    /// Resume for one source from its persisted ceiling (0 if never heard).
+    /// Everything at or below the ceiling is treated as already seen — the
+    /// bitmap starts full, not empty — because the whole point of resuming
+    /// *at* the ceiling is that a restart accepts nothing it might have
+    /// accepted before.
+    pub fn resume(persisted_ceiling: u32) -> Self {
         Self {
-            ring: [(0, 0); Self::CAP],
-            head: 0,
-            len: 0,
+            h: persisted_ceiling,
+            bitmap: u64::MAX,
+            persisted: persisted_ceiling,
         }
     }
 
-    /// Returns `true` if `(src, seq)` was already recorded; otherwise records it
-    /// and returns `false`.
-    pub fn seen_or_insert(&mut self, src: u8, seq: u8) -> bool {
-        for i in 0..self.len {
-            let idx = (self.head + Self::CAP - 1 - i) % Self::CAP;
-            if self.ring[idx] == (src, seq) {
-                return true;
-            }
+    /// Judge `ctr`, and mark it if accepted. `store_needed` is `Some(ceiling)`
+    /// when the caller must persist a new ceiling for this source before the
+    /// frame is acted on; a failed write must be treated as a rejection.
+    pub fn accept(&mut self, ctr: u32) -> (Replay, Option<u32>) {
+        if ctr > self.h {
+            let shift = ctr - self.h;
+            self.bitmap = if shift >= Self::WIDTH {
+                0
+            } else {
+                self.bitmap << shift
+            };
+            self.bitmap |= 1;
+            self.h = ctr;
+            let need = if ctr >= self.persisted {
+                self.persisted = ctr.saturating_add(Self::M);
+                Some(self.persisted)
+            } else {
+                None
+            };
+            return (Replay::Accept, need);
         }
-        self.ring[self.head] = (src, seq);
-        self.head = (self.head + 1) % Self::CAP;
-        if self.len < Self::CAP {
-            self.len += 1;
+        let back = self.h - ctr;
+        if back >= Self::WIDTH {
+            return (Replay::TooOld, None);
         }
-        false
+        if self.bitmap & (1u64 << back) != 0 {
+            return (Replay::Seen, None);
+        }
+        self.bitmap |= 1u64 << back;
+        (Replay::Accept, None)
     }
 }
 
-// ── The sequence counter that survives a reboot ────────────────────────────
+// ── The frame counter that survives a reboot ───────────────────────────────
 //
-// `seq` de-duplicates flood relays: every station keeps a [`SeenSet`] of the
-// last 32 `(src, seq)` pairs it received. A station whose `seq` restarts at 0
-// on boot therefore reissues, for its first frames, exactly the pairs its
-// neighbours still hold — and they drop every one of them as a duplicate.
-// Measured 2026-09-12: after the base station was reset (a serial port opened
-// with DTR is enough), gw-40 silently dropped the next commands; four
-// recorded bench runs "sent" `descend` frames that never left the ring.
+// The counter is what makes the tag mean something over time: a receiver
+// accepts each `(src, ctr)` once, so a captured frame verifies and is still
+// refused. That only holds if the sender never reissues a counter — including
+// across a reboot, which is where a RAM counter fails. Measured 2026-09-12,
+// one layer down: the base station was reset (a serial port opened with DTR
+// is enough), its 8-bit `seq` restarted at 0, and gw-40's de-dup ring dropped
+// the next commands as duplicates; four recorded bench runs "sent" `descend`
+// frames that never left the ring. The cure was built for `seq` first and the
+// u32 counter now rides on it unchanged.
 //
-// `OBC-Prime/docs/SPINE-REPLAY.md` §2 specifies the cure for the counter the
-// authentication tag will carry, and it applies unchanged to this byte:
-// persist a *ceiling*, not a position. On boot, start at the ceiling and
-// authorise the next `RESERVE` before using any; extend before crossing. A
-// crash costs at most `RESERVE` numbers and never repeats one, and since the
-// neighbours' ring holds at most `RESERVE` of a source's recent numbers, a
-// rebooted station's first frames can never collide with it — including
-// across the 8-bit wrap, because the ring remembers 32 of 256, not all of them.
+// `OBC-Prime/docs/SPINE-REPLAY.md` §2: persist a *ceiling*, not a position.
+// On boot, start at the ceiling and authorise the next `RESERVE` before using
+// any; extend before crossing. A crash costs at most `RESERVE` numbers and
+// never repeats one. The receiver's window (§3, [`ReplayWindow`]) tolerates
+// the gap by construction: a skipped counter is simply one that never
+// arrives, and anything above its high-water mark is fresh.
 //
 // This is the pure half; the flash half is a [`CeilingStore`] the firmware
 // binds to NVS. Everything here is testable on the host, and is.
 
-/// Where the ceiling lives across a power cycle. NVS on the board; a cell in
-/// tests. Errors are the store's own (partition full, worn, absent); the
-/// counter treats any of them as a reason to stop issuing numbers.
+/// Where ceilings live across a power cycle. NVS on the board; a map in tests.
+/// Keyed, because one namespace holds the sender's counter (`seq_ceil`) and
+/// one receiver window per source (`rx_<src>`). Errors are the store's own
+/// (partition full, worn, absent); every user of this trait treats any of
+/// them as a reason to stop — the sender stops issuing numbers, the receiver
+/// rejects the frame.
 pub trait CeilingStore {
-    /// The persisted ceiling, or 0 if none has been written yet.
-    fn read(&mut self) -> Result<u32, StoreError>;
-    /// Persist a new ceiling. Must not return until it is durable.
-    fn write(&mut self, ceiling: u32) -> Result<(), StoreError>;
+    /// The persisted value under `key`, or 0 if none has been written yet.
+    fn read(&mut self, key: &str) -> Result<u32, StoreError>;
+    /// Persist `value` under `key`. Must not return until it is durable.
+    fn write(&mut self, key: &str, value: u32) -> Result<(), StoreError>;
+}
+
+/// NVS key of the sender's counter ceiling.
+pub const SEQ_CEILING_KEY: &str = "seq_ceil";
+
+/// NVS key of the receiver ceiling for frames from `src` (`rx_40`, `rx_d8`).
+/// NVS keys are at most 15 bytes; this is 5.
+pub fn rx_ceiling_key(src: u8) -> String {
+    format!("rx_{src:02x}")
 }
 
 /// The store could not be read or written. No payload: the response is the
@@ -125,8 +220,9 @@ pub trait CeilingStore {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StoreError;
 
-/// A per-source frame counter whose low byte is the wire `seq`, never
-/// reissued across reboots (see the module note above).
+/// This station's frame counter — the `ctr` in every frame it originates, with
+/// its low byte as the wire `seq` — never reissued across reboots (see the
+/// note above).
 pub struct SeqCounter {
     /// Frames issued so far, ever, on this key. `seq` is its low byte.
     count: u32,
@@ -139,17 +235,21 @@ pub struct SeqCounter {
 }
 
 impl SeqCounter {
-    /// Numbers authorised per store write. Equal to [`SeenSet::CAP`] on
-    /// purpose: the ring can remember at most this many of a source's recent
-    /// `seq`s, so a restart that skips ahead by up to this many clears it.
-    pub const RESERVE: u32 = SeenSet::CAP as u32;
+    /// Numbers authorised per store write: the most a crash can skip, and one
+    /// NVS write per this many frames. Chosen when this counter was the 8-bit
+    /// `seq` and had to clear a neighbour's 32-entry de-dup ring; that ring is
+    /// gone, and 32 stays because SPINE-REPLAY §6 steps 1–3 were run on the
+    /// bench at this value (gaps of 31 measured across seven resets) and the
+    /// wear budget it implies — one write per 32 frames, under a write every
+    /// 2.5 min at the keepalive rate — needs no improving.
+    pub const RESERVE: u32 = 32;
 
     /// Resume from the persisted ceiling and authorise the next block. Fails
     /// if the store cannot be read or written — do not transmit in that case.
     pub fn boot(store: &mut impl CeilingStore) -> Result<Self, StoreError> {
-        let hwm = store.read()?;
+        let hwm = store.read(SEQ_CEILING_KEY)?;
         let ceiling = hwm.checked_add(Self::RESERVE).ok_or(StoreError)?;
-        store.write(ceiling)?;
+        store.write(SEQ_CEILING_KEY, ceiling)?;
         Ok(Self {
             count: hwm,
             ceiling,
@@ -171,7 +271,7 @@ impl SeqCounter {
             // Extend BEFORE crossing. Persist-then-use loses numbers on a
             // crash; use-then-persist repeats them. Only one is survivable.
             let new_ceiling = self.ceiling.checked_add(Self::RESERVE).ok_or(StoreError)?;
-            if store.write(new_ceiling).is_err() {
+            if store.write(SEQ_CEILING_KEY, new_ceiling).is_err() {
                 self.failed = true;
                 return Err(StoreError);
             }
@@ -227,10 +327,13 @@ fn trim_ascii_ws(mut s: &[u8]) -> &[u8] {
 ///
 /// Both origins on this board — the USB console and the UART1 compute uplink —
 /// framed lines by hand, and both carried the same defect: a line that outgrew
-/// [`MAX_PAYLOAD`] had its overflow silently dropped and its *prefix* sent on as
+/// the budget had its overflow silently dropped and its *prefix* sent on as
 /// if it were the whole message. For JSON that produces a corrupt command which
 /// still transmits, still costs airtime, and still has to be parsed and rejected
 /// at the far end. Failing loudly and dropping the line is strictly better.
+///
+/// The budget is [`MAX_AUTH_PAYLOAD`]: every line this framer passes becomes
+/// the payload of one authenticated frame.
 ///
 /// Feed bytes with [`push`](Self::push); it yields [`Framed::Line`] exactly once
 /// per complete, in-budget line. The caller borrows that line to send it and does
@@ -249,7 +352,7 @@ pub enum Framed<'a> {
     Pending,
     /// A complete line, within budget.
     Line(&'a [u8]),
-    /// A line ended, but it exceeded [`MAX_PAYLOAD`] and was discarded.
+    /// A line ended, but it exceeded [`MAX_AUTH_PAYLOAD`] and was discarded.
     Overflow,
 }
 
@@ -280,7 +383,7 @@ impl LineFramer {
             self.emitted = true;
             return Framed::Line(&self.line);
         }
-        if self.line.len() < MAX_PAYLOAD {
+        if self.line.len() < MAX_AUTH_PAYLOAD {
             self.line.push(b);
         } else {
             self.overflowed = true;
@@ -295,10 +398,10 @@ mod tests {
 
     // ── SeqCounter: the properties SPINE-REPLAY.md §2 promises ─────────────
 
-    /// Flash, as a cell. `writes` counts durable writes; `fail_after` makes
+    /// Flash, as a map. `writes` counts durable writes; `fail_after` makes
     /// the Nth write fail, the way a full or worn partition would.
     struct Flash {
-        ceiling: u32,
+        cells: std::collections::BTreeMap<String, u32>,
         writes: usize,
         fail_after: Option<usize>,
     }
@@ -306,25 +409,206 @@ mod tests {
     impl Flash {
         fn new() -> Self {
             Self {
-                ceiling: 0,
+                cells: Default::default(),
                 writes: 0,
                 fail_after: None,
             }
         }
+        /// The sender's persisted ceiling.
+        fn ceiling(&self) -> u32 {
+            self.cells.get(SEQ_CEILING_KEY).copied().unwrap_or(0)
+        }
     }
 
     impl CeilingStore for Flash {
-        fn read(&mut self) -> Result<u32, StoreError> {
-            Ok(self.ceiling)
+        fn read(&mut self, key: &str) -> Result<u32, StoreError> {
+            Ok(self.cells.get(key).copied().unwrap_or(0))
         }
-        fn write(&mut self, ceiling: u32) -> Result<(), StoreError> {
+        fn write(&mut self, key: &str, value: u32) -> Result<(), StoreError> {
             if self.fail_after.is_some_and(|n| self.writes >= n) {
                 return Err(StoreError);
             }
-            self.ceiling = ceiling;
+            self.cells.insert(key.to_string(), value);
             self.writes += 1;
             Ok(())
         }
+    }
+
+    // ── AuthFrame: the v2 wire shape (SPINE-AUTH.md §3.2) ──────────────────
+
+    #[test]
+    fn an_auth_frame_round_trips_and_carries_its_counter_and_tag() {
+        let mut buf = Vec::new();
+        let mac = [1, 2, 3, 4, 5, 6, 7, 8];
+        AuthFrame {
+            src: 0xd8,
+            seq: 0x2b,
+            ttl: 1,
+            ctr: 0x0001_022b,
+            payload: b"{\"t\":\"hb\"}",
+            mac,
+        }
+        .encode(&mut buf);
+        assert_eq!(buf.len(), HEADER + AUTH_OVERHEAD + 10);
+        assert_eq!(&buf[..3], &[0xd8, 0x2b, 1]);
+        assert_eq!(&buf[3..7], &[0, 1, 2, 0x2b], "counter is big-endian");
+        let f = AuthFrame::decode(&buf).unwrap();
+        assert_eq!((f.src, f.seq, f.ttl, f.ctr), (0xd8, 0x2b, 1, 0x0001_022b));
+        assert_eq!(f.payload, b"{\"t\":\"hb\"}");
+        assert_eq!(f.mac, mac);
+    }
+
+    #[test]
+    fn a_v1_frame_or_a_runt_does_not_decode_as_v2() {
+        // Shorter than header + counter + tag: refused outright. A retired v1
+        // frame long enough to pass this check decodes to garbage that then
+        // fails the tag — which is the receiver's job, not the decoder's.
+        let v1: Vec<u8> = [0x40u8, 1, 0].iter().chain(b"{\"a\":1}").copied().collect();
+        assert!(v1.len() < HEADER + AUTH_OVERHEAD);
+        assert!(AuthFrame::decode(&v1).is_none());
+        assert!(AuthFrame::decode(&[0u8; HEADER + AUTH_OVERHEAD - 1]).is_none());
+        let empty = AuthFrame::decode(&[0u8; HEADER + AUTH_OVERHEAD]).unwrap();
+        assert!(empty.payload.is_empty());
+    }
+
+    #[test]
+    fn the_auth_budget_is_the_v1_budget_less_the_overhead() {
+        assert_eq!(MAX_AUTH_PAYLOAD, 228);
+        assert_eq!(MAC_LEN, 8);
+        let mut buf = Vec::new();
+        AuthFrame {
+            src: 1,
+            seq: 1,
+            ttl: 0,
+            ctr: 1,
+            payload: &[b'x'; MAX_AUTH_PAYLOAD],
+            mac: [0; MAC_LEN],
+        }
+        .encode(&mut buf);
+        assert_eq!(
+            buf.len(),
+            HEADER + MAX_PAYLOAD,
+            "a full v2 frame is exactly the v1 frame at its budget"
+        );
+        assert!(buf.len() <= 255, "and fits one SX1262 frame");
+    }
+
+    // ── ReplayWindow: RFC 4303 §3.4.3 as SPINE-REPLAY.md §3 specifies ─────
+
+    #[test]
+    fn a_fresh_counter_is_accepted_once_and_never_again() {
+        let mut w = ReplayWindow::resume(0);
+        assert_eq!(w.accept(1).0, Replay::Accept);
+        assert_eq!(w.accept(1).0, Replay::Seen, "relay duplicate");
+        assert_eq!(w.accept(2).0, Replay::Accept);
+        assert_eq!(w.accept(2).0, Replay::Seen);
+    }
+
+    #[test]
+    fn reordered_frames_inside_the_window_are_accepted_exactly_once() {
+        // A two-hop frame arriving after the direct one that followed it.
+        let mut w = ReplayWindow::resume(0);
+        assert_eq!(w.accept(10).0, Replay::Accept);
+        assert_eq!(w.accept(12).0, Replay::Accept);
+        assert_eq!(w.accept(11).0, Replay::Accept, "late but unseen");
+        assert_eq!(w.accept(11).0, Replay::Seen);
+        assert_eq!(w.accept(10).0, Replay::Seen);
+    }
+
+    #[test]
+    fn anything_older_than_the_window_is_refused_even_if_never_seen() {
+        let mut w = ReplayWindow::resume(0);
+        assert_eq!(w.accept(100).0, Replay::Accept);
+        assert_eq!(w.accept(37).0, Replay::Accept, "63 back: inside");
+        assert_eq!(w.accept(36).0, Replay::TooOld, "64 back: outside");
+        assert_eq!(w.accept(1).0, Replay::TooOld);
+    }
+
+    #[test]
+    fn a_large_jump_forgets_the_old_window() {
+        let mut w = ReplayWindow::resume(0);
+        assert_eq!(w.accept(5).0, Replay::Accept);
+        assert_eq!(w.accept(5 + 200).0, Replay::Accept);
+        // 5 is now far below the window; the bitmap must not have kept it as
+        // a stale bit at some wrapped position.
+        assert_eq!(w.accept(5).0, Replay::TooOld);
+        assert_eq!(w.accept(5 + 200 - 63).0, Replay::Accept);
+    }
+
+    #[test]
+    fn the_window_persists_a_ceiling_and_resumes_at_it() {
+        // Receiver persistence rounds up: after a restart, everything at or
+        // below the persisted ceiling is refused, so a replay of frames the
+        // receiver accepted just before it died has nowhere to land.
+        let mut flash = Flash::new();
+        let key = rx_ceiling_key(0x40);
+        let mut w = ReplayWindow::resume(flash.read(&key).unwrap());
+        let mut accepted = Vec::new();
+        for ctr in 1..=20u32 {
+            let (v, need) = w.accept(ctr);
+            assert_eq!(v, Replay::Accept);
+            if let Some(c) = need {
+                flash.write(&key, c).unwrap();
+            }
+            accepted.push(ctr);
+        }
+        let persisted = flash.read(&key).unwrap();
+        assert!(
+            persisted >= 20,
+            "ceiling {persisted} is below the true high-water mark"
+        );
+        assert!(
+            persisted <= 20 + ReplayWindow::M,
+            "ceiling {persisted} rounds up by more than M"
+        );
+        // Restart.
+        let mut w2 = ReplayWindow::resume(flash.read(&key).unwrap());
+        for ctr in accepted {
+            assert_ne!(
+                w2.accept(ctr).0,
+                Replay::Accept,
+                "replayed {ctr} after restart"
+            );
+        }
+        // The sender catches up: at most M legitimate frames are lost.
+        let first_ok = (21..).find(|&c| w2.accept(c).0 == Replay::Accept).unwrap();
+        assert!(
+            first_ok - 21 <= ReplayWindow::M,
+            "gap {} exceeds M",
+            first_ok - 21
+        );
+    }
+
+    #[test]
+    fn the_window_writes_once_per_m_frames_not_once_per_frame() {
+        let mut flash = Flash::new();
+        let key = rx_ceiling_key(0x40);
+        let mut w = ReplayWindow::resume(0);
+        for ctr in 1..=(ReplayWindow::M * 10) {
+            if let Some(c) = w.accept(ctr).1 {
+                flash.write(&key, c).unwrap();
+            }
+        }
+        assert_eq!(flash.writes as u32, 10);
+    }
+
+    #[test]
+    fn sender_and_receiver_ceilings_live_under_different_keys() {
+        // One namespace, two ceilings: they must not clobber each other.
+        let mut flash = Flash::new();
+        let mut c = SeqCounter::boot(&mut flash).unwrap();
+        let mut w = ReplayWindow::resume(0);
+        if let Some(x) = w.accept(1000).1 {
+            flash.write(&rx_ceiling_key(0x40), x).unwrap();
+        }
+        c.next(&mut flash).unwrap();
+        assert_eq!(flash.ceiling(), SeqCounter::RESERVE);
+        assert_eq!(
+            flash.read(&rx_ceiling_key(0x40)).unwrap(),
+            1000 + ReplayWindow::M
+        );
+        assert_ne!(rx_ceiling_key(0x40), rx_ceiling_key(0xd8));
+        assert!(rx_ceiling_key(0xd8).len() <= 15, "NVS key limit");
     }
 
     /// Issue `n` seqs and return their full counts.
@@ -382,16 +666,16 @@ mod tests {
         let mut flash = Flash::new();
         let c = SeqCounter::boot(&mut flash).unwrap();
         assert_eq!(flash.writes, 1, "boot authorises before issuing");
-        assert!(flash.ceiling >= c.count() + SeqCounter::RESERVE);
+        assert!(flash.ceiling() >= c.count() + SeqCounter::RESERVE);
         let mut c = c;
         for _ in 0..(SeqCounter::RESERVE * 3) {
             c.next(&mut flash).unwrap();
             // The persisted ceiling is always strictly above the count in use.
             assert!(
-                flash.ceiling > c.count(),
+                flash.ceiling() > c.count(),
                 "count {} reached ceiling {}",
                 c.count(),
-                flash.ceiling
+                flash.ceiling()
             );
         }
         // One write per RESERVE numbers, plus the boot write.
@@ -421,36 +705,44 @@ mod tests {
     }
 
     #[test]
-    fn a_rebooted_station_never_hits_its_neighbours_ring_even_across_the_wrap() {
-        // What the whole thing is for. A neighbour's SeenSet holds this
-        // source's last CAP seqs; the first CAP seqs after a reboot must miss
-        // every one of them — including when the count crosses a multiple
-        // of 256, where naive reasoning about "higher" breaks down.
-        for pre in [5usize, 20, 40, 250, 255, 256, 300, 510] {
+    fn a_rebooted_station_is_fresh_to_its_neighbours_window() {
+        // What the whole thing is for: a neighbour that has accepted this
+        // station's frames up to some counter must accept every frame it
+        // sends after a reboot — no counter is ever `Seen` or `TooOld`,
+        // however many frames went before and however many reboots.
+        for pre in [0usize, 5, 20, 40, 250, 256, 300, 510] {
             let mut flash = Flash::new();
             let mut c = SeqCounter::boot(&mut flash).unwrap();
-            let mut ring = SeenSet::new();
+            let mut w = ReplayWindow::resume(0);
             for _ in 0..pre {
-                let s = c.next(&mut flash).unwrap();
-                ring.seen_or_insert(0x40, s);
+                c.next(&mut flash).unwrap();
+                assert_eq!(w.accept(c.count()).0, Replay::Accept);
             }
-            // Reboot: a new counter from the same flash.
-            let mut c2 = SeqCounter::boot(&mut flash).unwrap();
-            for i in 0..SeenSet::CAP {
-                let s = c2.next(&mut flash).unwrap();
-                assert!(
-                    !ring.seen_or_insert(0x40, s),
-                    "after {pre} frames and a reboot, seq {s} (frame {i}) was still in the ring"
-                );
+            for reboot in 0..3 {
+                let mut c2 = SeqCounter::boot(&mut flash).unwrap();
+                for i in 0..(SeqCounter::RESERVE * 2) {
+                    c2.next(&mut flash).unwrap();
+                    assert_eq!(
+                        w.accept(c2.count()).0,
+                        Replay::Accept,
+                        "after {pre} frames and reboot {reboot}, frame {i} (ctr {}) was refused",
+                        c2.count()
+                    );
+                }
             }
         }
     }
 
     #[test]
-    fn the_reserve_is_the_ring_size() {
-        // If someone grows the ring, the reserve must grow with it, or a
-        // reboot can land inside it again. Tie them by name.
-        assert_eq!(SeqCounter::RESERVE as usize, SeenSet::CAP);
+    fn the_wire_seq_is_the_low_byte_of_the_counter() {
+        // The header's `seq` is what the log lines and the host's parser read;
+        // it must be the counter the tag covers, not a second number.
+        let mut flash = Flash::new();
+        let mut c = SeqCounter::boot(&mut flash).unwrap();
+        for _ in 0..300 {
+            let s = c.next(&mut flash).unwrap();
+            assert_eq!(s, c.count() as u8);
+        }
     }
 
     /// Feed a byte slice; collect the lines it yields and count the overflows.
@@ -489,7 +781,7 @@ mod tests {
         // The important half: no prefix escapes. A clipped JSON command is not a
         // shorter command, it is a corrupt one.
         let mut f = LineFramer::new();
-        let mut burst = vec![b'x'; MAX_PAYLOAD + 50];
+        let mut burst = vec![b'x'; MAX_AUTH_PAYLOAD + 50];
         burst.push(b'\n');
         let (lines, overflows) = run(&mut f, &burst);
         assert!(lines.is_empty(), "a truncated prefix must never be emitted");
@@ -500,7 +792,7 @@ mod tests {
     fn the_framer_recovers_after_an_overflow() {
         // An oversized line must not poison the next one.
         let mut f = LineFramer::new();
-        let mut burst = vec![b'x'; MAX_PAYLOAD + 1];
+        let mut burst = vec![b'x'; MAX_AUTH_PAYLOAD + 1];
         burst.extend_from_slice(b"\n{\"cmd\":\"capabilities\"}\n");
         let (lines, overflows) = run(&mut f, &burst);
         assert_eq!(overflows, 1);
@@ -527,14 +819,16 @@ mod tests {
 
     #[test]
     fn a_line_exactly_at_the_budget_is_kept() {
-        // Off-by-one guard: MAX_PAYLOAD bytes fit, MAX_PAYLOAD + 1 does not.
+        // Off-by-one guard: MAX_AUTH_PAYLOAD bytes fit, +1 does not — and a
+        // line at the budget encodes to a frame at exactly the radio budget.
         let mut f = LineFramer::new();
-        let mut burst = vec![b'x'; MAX_PAYLOAD];
+        let mut burst = vec![b'x'; MAX_AUTH_PAYLOAD];
         burst.push(b'\n');
         let (lines, overflows) = run(&mut f, &burst);
         assert_eq!(overflows, 0);
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].len(), MAX_PAYLOAD);
+        assert_eq!(lines[0].len(), MAX_AUTH_PAYLOAD);
+        assert_eq!(MAX_AUTH_PAYLOAD + AUTH_OVERHEAD, MAX_PAYLOAD);
     }
 
     #[test]
@@ -579,26 +873,5 @@ mod tests {
         assert!(!is_spine_payload(br#"{"node_id":"obc-esp32-s3-0"#));
         assert!(!is_spine_payload(b"{"));
         assert!(is_spine_payload(b"{}"));
-    }
-
-    #[test]
-    fn roundtrip_and_dedup() {
-        let mut buf = Vec::new();
-        SpineFrame {
-            src: 0x40,
-            seq: 7,
-            ttl: 2,
-            payload: b"{\"t\":\"hb\"}",
-        }
-        .encode(&mut buf);
-        let f = SpineFrame::decode(&buf).unwrap();
-        assert_eq!((f.src, f.seq, f.ttl), (0x40, 7, 2));
-        assert_eq!(f.payload, b"{\"t\":\"hb\"}");
-
-        let mut seen = SeenSet::new();
-        assert!(!seen.seen_or_insert(0x40, 7));
-        assert!(seen.seen_or_insert(0x40, 7)); // duplicate
-        assert!(!seen.seen_or_insert(0x40, 8));
-        assert!(!seen.seen_or_insert(0x41, 7)); // different source
     }
 }

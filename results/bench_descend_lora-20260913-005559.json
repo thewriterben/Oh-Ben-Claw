@@ -1,0 +1,334 @@
+{
+  "node": "COM6",
+  "base": "COM3",
+  "stamp": "20260913-005559",
+  "misses": [],
+  "steps": [
+    {
+      "via": "usb",
+      "step": "push-slot-rule",
+      "cmd": "set_reflex_rules",
+      "args": {
+        "rules": [
+          {
+            "id": "overheat",
+            "when": {
+              "type": "sensor_slot",
+              "entity": "sensor.temperature",
+              "op": "gt",
+              "slot": 3,
+              "min": 40.0,
+              "max": 80.0,
+              "default": 0.5
+            },
+            "then": {
+              "type": "gpio_write",
+              "node_id": "self",
+              "pin": 3,
+              "value": 0
+            },
+            "debounce_ms": 1000
+          }
+        ]
+      },
+      "expect": "loaded 1",
+      "ok": true,
+      "reply": {
+        "id": "push-slot-rule#1",
+        "ok": true,
+        "result": {
+          "builtin_safing": 6,
+          "loaded": 1,
+          "total": 7
+        }
+      }
+    },
+    {
+      "via": "usb",
+      "step": "clear-leftover-levels",
+      "cmd": "descend",
+      "args": {
+        "clear": true
+      },
+      "expect": "active []",
+      "ok": true,
+      "reply": {
+        "id": "clear-leftover-levels#2",
+        "ok": true,
+        "result": {
+          "active": [],
+          "applied": 0
+        }
+      }
+    },
+    {
+      "via": "usb",
+      "step": "baseline-65-fires",
+      "cmd": "reflex_tick",
+      "args": {
+        "snapshot": {
+          "sensor.temperature": 65.0
+        }
+      },
+      "expect": "'overheat' fires at default 60",
+      "ok": true,
+      "reply": {
+        "id": "baseline-65-fires#3",
+        "ok": true,
+        "result": {
+          "fired": [
+            {
+              "action": {
+                "reason": "over-temperature \u2014 shed load / increase cooling",
+                "type": "escalate"
+              },
+              "applied": false,
+              "error": null,
+              "rule_id": "safe-overtemp-warn"
+            },
+            {
+              "action": {
+                "node_id": "self",
+                "pin": 3,
+                "type": "gpio_write",
+                "value": 0
+              },
+              "applied": false,
+              "error": "safety: pin 3 not in allow-list",
+              "rule_id": "overheat"
+            }
+          ],
+          "node_id": "obc-esp32-s3-001"
+        }
+      }
+    },
+    {
+      "via": "lora",
+      "step": "descend-1.0-over-air",
+      "sent": "{\"id\":\"b1\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"descend\",\"args\":{\"m\":[[3,1.0]]}}",
+      "expect": "reply id b1, active [[3,1.0]]",
+      "ok": true,
+      "attempts": 1,
+      "reply": {
+        "id": "b1",
+        "node_id": "obc-esp32-s3-001",
+        "ok": true,
+        "result": {
+          "active": [
+            [
+              3,
+              1.0
+            ]
+          ],
+          "applied": 1
+        },
+        "type": "cmd_result",
+        "_rssi_dbm": -51,
+        "_attempts": 1
+      },
+      "base_lines": [
+        "[try 1]  0.12 \u001b[0;32mI (348489) heltec_lora_linktest: SPINE \u25c4 src=40 seq=238 ctr=1006 rssi=-51 dBm snr=12 dB : {\"action\":{\"reason\":\"host link lost \u2014 entering offline safing\",\"type\":\"escalate\"},\"applied\":false,\"error\":null,\"node_id\":\"obc-esp32-s3-001\",\"rule_id\":\"safe-link-of",
+        "[try 1]  0.18 \u001b[0;32mI (348659) heltec_lora_linktest: SPINE \u25ba (keepalive) seq=219\u001b[0m",
+        "[try 1]  0.24 \u001b[0;32mI (348849) heltec_lora_linktest: SPINE \u25c4 src=40 seq=240 ctr=1008 rssi=-52 dBm snr=12 dB : {\"node_id\":\"obc-esp32-s3-001\",\"silence_ms\":94,\"state\":\"online\",\"ts_ms\":957906,\"type\":\"link_state\"}\u001b[0m",
+        "[try 1]  0.74 \u001b[0;32mI (349659) heltec_lora_linktest: SPINE \u25ba (console) seq=220 (89 B) {\"id\":\"b1\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"descend\",\"args\":{\"m\":[[3,1.0]]}}\u001b[0m",
+        "[try 1]  1.73 \u001b[0;32mI (350689) heltec_lora_linktest: SPINE \u25c4 src=40 seq=241 ctr=1009 rssi=-51 dBm snr=12 dB : {\"id\":\"b1\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"{\\\"active\\\":[[3,1.0]],\\\"applied\\\":1}\",\"type\":\"cmd_result\"}\u001b[0m"
+      ],
+      "node_usb_lines": [],
+      "rssi_lines": [
+        "[try 1]  1.73 \u001b[0;32mI (350689) heltec_lora_linktest: SPINE \u25c4 src=40 seq=241 ctr=1009 rssi=-51 dBm snr=12 dB : {\"id\":\"b1\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"{\\\"active\\\":[[3,1.0]],\\\"applied\\\":1}\",\"type\":\"cmd_result\"}\u001b[0m"
+      ]
+    },
+    {
+      "via": "usb",
+      "step": "verify-65-silent",
+      "cmd": "reflex_tick",
+      "args": {
+        "snapshot": {
+          "sensor.temperature": 65.0
+        }
+      },
+      "expect": "NO 'overheat' (threshold now 80)",
+      "ok": true,
+      "reply": {
+        "id": "verify-65-silent#4",
+        "ok": true,
+        "result": {
+          "fired": [
+            {
+              "action": {
+                "reason": "over-temperature \u2014 shed load / increase cooling",
+                "type": "escalate"
+              },
+              "applied": false,
+              "error": null,
+              "rule_id": "safe-overtemp-warn"
+            }
+          ],
+          "node_id": "obc-esp32-s3-001"
+        }
+      }
+    },
+    {
+      "via": "lora",
+      "step": "descend-0.0-over-air",
+      "sent": "{\"id\":\"b2\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"descend\",\"args\":{\"m\":[[3,0.0]]}}",
+      "expect": "reply id b2, active [[3,0.0]]",
+      "ok": true,
+      "attempts": 1,
+      "reply": {
+        "id": "b2",
+        "node_id": "obc-esp32-s3-001",
+        "ok": true,
+        "result": {
+          "active": [
+            [
+              3,
+              0.0
+            ]
+          ],
+          "applied": 1
+        },
+        "type": "cmd_result",
+        "_rssi_dbm": -52,
+        "_attempts": 1
+      },
+      "base_lines": [
+        "[try 1]  0.87 \u001b[0;32mI (352739) heltec_lora_linktest: SPINE \u25ba (console) seq=221 (89 B) {\"id\":\"b2\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"descend\",\"args\":{\"m\":[[3,0.0]]}}\u001b[0m",
+        "[try 1]  1.86 \u001b[0;32mI (353769) heltec_lora_linktest: SPINE \u25c4 src=40 seq=242 ctr=1010 rssi=-52 dBm snr=12 dB : {\"id\":\"b2\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"{\\\"active\\\":[[3,0.0]],\\\"applied\\\":1}\",\"type\":\"cmd_result\"}\u001b[0m",
+        "[try 1]  9.12 \u001b[0;32mI (353919) heltec_lora_linktest: SPINE \u25c4 src=40 seq=243 ctr=1011 rssi=-51 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":243}\u001b[0m"
+      ],
+      "node_usb_lines": [],
+      "rssi_lines": [
+        "[try 1]  1.86 \u001b[0;32mI (353769) heltec_lora_linktest: SPINE \u25c4 src=40 seq=242 ctr=1010 rssi=-52 dBm snr=12 dB : {\"id\":\"b2\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"{\\\"active\\\":[[3,0.0]],\\\"applied\\\":1}\",\"type\":\"cmd_result\"}\u001b[0m"
+      ]
+    },
+    {
+      "via": "usb",
+      "step": "verify-45-fires",
+      "cmd": "reflex_tick",
+      "args": {
+        "snapshot": {
+          "sensor.temperature": 45.0
+        }
+      },
+      "expect": "'overheat' only (threshold now 40)",
+      "ok": true,
+      "reply": {
+        "id": "verify-45-fires#5",
+        "ok": true,
+        "result": {
+          "fired": [
+            {
+              "action": {
+                "node_id": "self",
+                "pin": 3,
+                "type": "gpio_write",
+                "value": 0
+              },
+              "applied": false,
+              "error": "safety: pin 3 not in allow-list",
+              "rule_id": "overheat"
+            }
+          ],
+          "node_id": "obc-esp32-s3-001"
+        }
+      }
+    },
+    {
+      "via": "lora",
+      "step": "bad-slot-refused-over-air",
+      "sent": "{\"id\":\"b3\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"descend\",\"args\":{\"m\":[[16,0.5]]}}",
+      "expect": "reply id b3, ok:false slot 16",
+      "ok": true,
+      "attempts": 1,
+      "reply": {
+        "error": "descend refused: slot 16 out of range (max 15)",
+        "id": "b3",
+        "node_id": "obc-esp32-s3-001",
+        "ok": false,
+        "result": "",
+        "type": "cmd_result",
+        "_rssi_dbm": -53,
+        "_attempts": 1
+      },
+      "base_lines": [
+        "[try 1]  0.25 \u001b[0;32mI (355339) heltec_lora_linktest: SPINE \u25ba (console) seq=222 (90 B) {\"id\":\"b3\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"descend\",\"args\":{\"m\":[[16,0.5]]}}\u001b[0m",
+        "[try 1]  1.99 \u001b[0;32mI (357029) heltec_lora_linktest: SPINE \u25c4 src=40 seq=244 ctr=1012 rssi=-53 dBm snr=12 dB : {\"error\":\"descend refused: slot 16 out of range (max 15)\",\"id\":\"b3\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":false,\"result\":\"\",\"type\":\"cmd_result\"}\u001b[0m"
+      ],
+      "node_usb_lines": [],
+      "rssi_lines": [
+        "[try 1]  1.99 \u001b[0;32mI (357029) heltec_lora_linktest: SPINE \u25c4 src=40 seq=244 ctr=1012 rssi=-53 dBm snr=12 dB : {\"error\":\"descend refused: slot 16 out of range (max 15)\",\"id\":\"b3\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":false,\"result\":\"\",\"type\":\"cmd_result\"}\u001b[0m"
+      ]
+    },
+    {
+      "via": "lora",
+      "step": "clear-over-air",
+      "sent": "{\"id\":\"b4\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"descend\",\"args\":{\"clear\":true}}",
+      "expect": "reply id b4, active []",
+      "ok": true,
+      "attempts": 1,
+      "reply": {
+        "id": "b4",
+        "node_id": "obc-esp32-s3-001",
+        "ok": true,
+        "result": {
+          "active": [],
+          "applied": 0
+        },
+        "type": "cmd_result",
+        "_rssi_dbm": -53,
+        "_attempts": 1
+      },
+      "base_lines": [
+        "[try 1]  0.37 \u001b[0;32mI (358459) heltec_lora_linktest: SPINE \u25ba (console) seq=223 (88 B) {\"id\":\"b4\",\"to\":\"obc-esp32-s3-001\",\"cmd\":\"descend\",\"args\":{\"clear\":true}}\u001b[0m",
+        "[try 1]  1.98 \u001b[0;32mI (360089) heltec_lora_linktest: SPINE \u25c4 src=40 seq=245 ctr=1013 rssi=-53 dBm snr=13 dB : {\"id\":\"b4\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"{\\\"active\\\":[],\\\"applied\\\":0}\",\"type\":\"cmd_result\"}\u001b[0m",
+        "[try 1]  9.12 \u001b[0;32mI (360239) heltec_lora_linktest: SPINE \u25c4 src=40 seq=246 ctr=1014 rssi=-53 dBm snr=12 dB : {\"node_id\":\"gw-40\",\"type\":\"gw_keepalive\",\"seq\":246}\u001b[0m"
+      ],
+      "node_usb_lines": [],
+      "rssi_lines": [
+        "[try 1]  1.98 \u001b[0;32mI (360089) heltec_lora_linktest: SPINE \u25c4 src=40 seq=245 ctr=1013 rssi=-53 dBm snr=13 dB : {\"id\":\"b4\",\"node_id\":\"obc-esp32-s3-001\",\"ok\":true,\"result\":\"{\\\"active\\\":[],\\\"applied\\\":0}\",\"type\":\"cmd_result\"}\u001b[0m"
+      ]
+    },
+    {
+      "via": "usb",
+      "step": "verify-65-fires-again",
+      "cmd": "reflex_tick",
+      "args": {
+        "snapshot": {
+          "sensor.temperature": 65.0
+        }
+      },
+      "expect": "'overheat' fires at default again",
+      "ok": true,
+      "reply": {
+        "id": "verify-65-fires-again#6",
+        "ok": true,
+        "result": {
+          "fired": [
+            {
+              "action": {
+                "reason": "over-temperature \u2014 shed load / increase cooling",
+                "type": "escalate"
+              },
+              "applied": false,
+              "error": null,
+              "rule_id": "safe-overtemp-warn"
+            },
+            {
+              "action": {
+                "node_id": "self",
+                "pin": 3,
+                "type": "gpio_write",
+                "value": 0
+              },
+              "applied": false,
+              "error": "safety: pin 3 not in allow-list",
+              "rule_id": "overheat"
+            }
+          ],
+          "node_id": "obc-esp32-s3-001"
+        }
+      }
+    }
+  ]
+}

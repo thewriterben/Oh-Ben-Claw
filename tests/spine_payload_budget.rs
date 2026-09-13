@@ -13,32 +13,32 @@
 //! someone adds a field, and a one-off measurement in a document would not
 //! notice.
 //!
-//! Budgets:
-//! - **today** — `MAX_PAYLOAD` = 240 bytes, the node's line framer discards
-//!   anything longer *whole*.
-//! - **v2** — 240 − 12 for the proposed `[ctr:u32]` + `[mac:8]`, so 228 bytes.
+//! Budget: `MAX_AUTH_PAYLOAD` = 228 bytes — the 240-byte radio frame less the
+//! 12 bytes the authenticated frame spends on `[ctr:u32]` + `[mac:8]`. The
+//! station's line framer discards anything longer *whole*.
 //!
-//! What it found, in the order it matters:
+//! What step 1 found on 2026-08-01, against the then-unauthenticated 240:
 //!
 //! 1. **The tag is affordable for the traffic that matters.** Actuation
 //!    (`gpio_write`, `sensor_read`, `capabilities`), reflex ticks, fleet
-//!    heartbeats and assignments all leave 45–169 bytes spare under v2.
-//! 2. **It is not free.** `set_limits` with one allowed pin lands on *exactly*
-//!    228 bytes — zero spare — and with two pins it goes 2 bytes over. That is a
-//!    real command the mesh carries today and would stop carrying.
-//! 3. **The saving is already in the frame.** `mesh_command` spends **36 bytes
+//!    heartbeats and assignments all leave 45–169 bytes spare under it.
+//! 2. **It is not free.** `set_limits` with one allowed pin landed on *exactly*
+//!    228 bytes — zero spare — and with two pins 2 bytes over. A real command
+//!    the mesh carried and would have stopped carrying.
+//! 3. **The saving was already in the frame.** `mesh_command` spent **36 bytes
 //!    on a UUIDv4 correlation id**, three times the entire tag, on a link where
 //!    the id only has to be unique among a handful of in-flight requests.
-//!    Shortening it pays for authentication with 20 bytes left over.
 //! 4. **One config-push command never fit at all.** `set_reflex_rules` with a
-//!    single modest rule is 344 bytes — 104 over today's frame, before any
+//!    single modest rule is 344 bytes — 104 over the frame, before any
 //!    authentication. `mesh_command` accepts any `cmd` a model names, so this is
 //!    reachable, and until 2026-08-01 it returned `sent: true` and vanished into
-//!    the node's line framer. That is now refused host-side.
+//!    the node's line framer. Refused host-side since.
 //!
-//! So step 1 does not invalidate steps 2–4, which was the thing worth knowing
-//! before building them. It does add a prerequisite the design did not have: cut
-//! the correlation id in the same change, or `set_limits` becomes collateral.
+//! **Step 4 shipped 2026-09-13** and did what step 1 required of it: the tag is
+//! on the wire, the budget is 228, and the correlation id is eight hex
+//! characters (`short_correlation_id`). Measured below with the id the host
+//! actually sends: the two-pin `set_limits` that was the casualty now fits
+//! with room, and the tightest mesh payload is no longer at the edge.
 
 #[path = "../firmware/heltec-lora-linktest/src/spine.rs"]
 mod spine;
@@ -57,13 +57,16 @@ use oh_ben_claw::spine::lora_gateway::{NodeCommand, MESH_LINE_BUDGET};
 use oh_ben_claw::spine::lora_mesh::MeshFrame;
 use serde_json::json;
 
-/// Bytes the proposed v2 frame spends on `[ctr:u32]` + `[mac:8]`.
-const V2_TAG: usize = 12;
-const V2_BUDGET: usize = MESH_LINE_BUDGET - V2_TAG;
+/// Bytes the v2 frame spends on `[ctr:u32]` + `[mac:8]`.
+const AUTH_TAG: usize = spine::AUTH_OVERHEAD;
 
 /// A node id of the length this fleet actually uses.
 const NODE: &str = "obc-esp32-s3-001";
-/// A UUIDv4, as `mesh_command` generates with `Uuid::new_v4().to_string()`.
+/// A correlation id of the shape `mesh_command` sends since step 4: eight hex
+/// characters, with a retry suffix — the longest the host generates.
+const ID: &str = "6f1a3c58r2";
+/// The UUIDv4 the host used to send, kept for the measurement that justified
+/// replacing it.
 const UUID: &str = "6f1a3c58-2b7d-4e69-9a10-c4d2e8f70b53";
 
 /// One reflex rule as the node deserializes it — a modest one: a single sensor
@@ -119,20 +122,16 @@ fn two_pin_limit() -> serde_json::Value {
 
 /// Whether a payload is something the mesh is expected to carry.
 ///
-/// Three states rather than two, because the middle one is the finding: a
-/// payload can fit the frame we have and not fit the frame the auth design
-/// proposes. Collapsing that into "too big" would have hidden the only thing
-/// step 1 was asked to discover.
+/// Until step 4 this had a third state — "fits today, breaks under the tag" —
+/// which was the finding step 1 existed to make. The tag is on the wire now,
+/// so there is one budget and two answers.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Carriage {
-    /// Fits a frame today, and with the proposed tag.
+    /// Fits an authenticated frame.
     Mesh,
-    /// Fits today; the 12-byte tag would push it over. A casualty of v2, not of
-    /// the present.
-    V2Casualty(&'static str),
-    /// Does not fit today either. Recorded rather than hidden: `mesh_command`
-    /// accepts any `cmd` the model names, so these are reachable, and until
-    /// 2026-08-01 they returned `sent: true` and vanished.
+    /// Does not fit. Recorded rather than hidden: `mesh_command` accepts any
+    /// `cmd` the model names, so these are reachable, and until 2026-08-01 they
+    /// returned `sent: true` and vanished.
     TooBig(&'static str),
 }
 
@@ -158,22 +157,22 @@ fn census() -> Vec<Row> {
     };
 
     push(
-        "capabilities (uuid id)",
-        UUID,
+        "capabilities",
+        ID,
         "capabilities",
         json!({}),
         Carriage::Mesh,
     );
     push(
-        "gpio_write (uuid id)",
-        UUID,
+        "gpio_write",
+        ID,
         "gpio_write",
         json!({"pin": 3, "value": 1}),
         Carriage::Mesh,
     );
     push(
-        "sensor_read (uuid id)",
-        UUID,
+        "sensor_read",
+        ID,
         "sensor_read",
         json!({"sensor": "temperature"}),
         Carriage::Mesh,
@@ -187,7 +186,7 @@ fn census() -> Vec<Row> {
     );
     push(
         "reflex_tick, four quantities",
-        UUID,
+        ID,
         "reflex_tick",
         json!({"snapshot": {
             "temperature": 21.5, "humidity": 48.2, "battery_soc": 91.0, "pressure": 1013.2
@@ -202,19 +201,18 @@ fn census() -> Vec<Row> {
     // The message is sparse by design, `NodeCommand::descend` refuses the
     // over-budget shape host-side, and `how_many_slots_a_descend_can_carry`
     // below measures the real ceiling instead of asserting a belief.
-    let two =
-        NodeCommand::descend(NODE, UUID, &[(3, 0.5), (7, 1.0)], false).expect("valid descend");
+    let two = NodeCommand::descend(NODE, ID, &[(3, 0.5), (7, 1.0)], false).expect("valid descend");
     push(
         "descend, two slots",
-        UUID,
+        ID,
         "descend",
         two.args,
         Carriage::Mesh,
     );
-    let all = NodeCommand::descend(NODE, UUID, &every_slot(), true).expect("valid descend");
+    let all = NodeCommand::descend(NODE, ID, &every_slot(), true).expect("valid descend");
     push(
         "descend, every slot + clear",
-        UUID,
+        ID,
         "descend",
         all.args,
         Carriage::TooBig("sparse by design; the full table is not one message"),
@@ -225,26 +223,26 @@ fn census() -> Vec<Row> {
     // `mesh_command` accepts any `cmd` string a model names, so they are
     // reachable over the mesh whether or not anyone intended them to be.
     //
-    // `set_limits` with one pin lands on exactly 228 bytes — it fits today with
-    // 12 to spare and lands on precisely zero under the proposed tag. That is
-    // not a comfortable pass; see `the_tightest_mesh_payload_is_at_the_edge`.
+    // With the UUID id, `set_limits` with one pin landed on exactly 228 bytes
+    // and two pins on 230 — the payload the tag would have broken. With the
+    // short id both fit; `the_tightest_mesh_payload_has_room` says by how much.
     push(
         "set_limits, one pin",
-        UUID,
+        ID,
         "set_limits",
         json!({ "limits": [one_limit()] }),
         Carriage::Mesh,
     );
     push(
         "set_limits, two pins",
-        UUID,
+        ID,
         "set_limits",
         json!({ "limits": [two_pin_limit()] }),
-        Carriage::V2Casualty("230 bytes: fits today, 2 over once the tag is added"),
+        Carriage::Mesh,
     );
     push(
         "set_reflex_rules, one rule",
-        UUID,
+        ID,
         "set_reflex_rules",
         json!({ "rules": [one_rule()] }),
         Carriage::TooBig("a single modest rule is already 104 bytes over"),
@@ -285,23 +283,18 @@ fn census() -> Vec<Row> {
 /// below are what run unattended.
 #[test]
 fn the_payload_census() {
-    println!(
-        "\n{:<34}{:>7}{:>12}{:>12}",
-        "payload", "bytes", "spare/240", "spare/228"
-    );
-    println!("{}", "-".repeat(65));
+    println!("\n{:<34}{:>7}{:>12}", "payload", "bytes", "spare/228");
+    println!("{}", "-".repeat(53));
     for r in census() {
         let mark = match r.carriage {
             Carriage::Mesh => "",
-            Carriage::V2Casualty(_) => " (fits today; the auth tag breaks it)",
-            Carriage::TooBig(_) => " (does not fit today either)",
+            Carriage::TooBig(_) => " (does not fit one frame)",
         };
         println!(
-            "{:<34}{:>7}{:>12}{:>12}{}",
+            "{:<34}{:>7}{:>12}{}",
             r.name,
             r.bytes,
             MESH_LINE_BUDGET as i64 - r.bytes as i64,
-            V2_BUDGET as i64 - r.bytes as i64,
             mark
         );
     }
@@ -309,32 +302,13 @@ fn the_payload_census() {
 }
 
 /// The question step 1 asked, and the answer: **yes, for everything the mesh
-/// actually carries.** Actuation, telemetry and fleet coordination leave 45–169
-/// bytes spare under the proposed tag.
-///
-/// If this fails, `SPINE-AUTH.md` §3.2 needs rethinking before anything is
-/// built, which is the entire reason step 1 comes first.
+/// actually carries.** Actuation, telemetry and fleet coordination fit the
+/// authenticated frame. This failing is a live bug: an over-budget line is
+/// discarded whole by the station's framer, so the command simply does not
+/// happen.
 #[test]
-fn every_mesh_payload_leaves_room_for_the_proposed_auth_tag() {
+fn every_mesh_payload_fits_the_authenticated_frame() {
     for r in census().iter().filter(|r| r.carriage == Carriage::Mesh) {
-        assert!(
-            r.bytes <= V2_BUDGET,
-            "{} is {} bytes; with the {V2_TAG}-byte v2 tag the budget is {V2_BUDGET}",
-            r.name,
-            r.bytes
-        );
-    }
-}
-
-/// Weaker, and separate on purpose: this failing is a live bug rather than a
-/// design question. An over-budget line is discarded whole by the node's framer,
-/// so the command simply does not happen.
-#[test]
-fn everything_that_fits_today_still_does() {
-    for r in census() {
-        if matches!(r.carriage, Carriage::TooBig(_)) {
-            continue;
-        }
         assert!(
             r.bytes <= MESH_LINE_BUDGET,
             "{} encodes to {} bytes; the mesh carries {MESH_LINE_BUDGET} and drops the rest",
@@ -350,162 +324,144 @@ fn everything_that_fits_today_still_does() {
 #[test]
 fn the_classifications_are_still_true() {
     for r in census() {
-        match r.carriage {
-            Carriage::Mesh => {}
-            Carriage::V2Casualty(why) => {
-                assert!(
-                    r.bytes <= MESH_LINE_BUDGET && r.bytes > V2_BUDGET,
-                    "{} is {} bytes, which is no longer 'fits today, breaks under the tag' \
-                     ({why:?}). Reclassify it.",
-                    r.name,
-                    r.bytes
-                );
-            }
-            Carriage::TooBig(why) => {
-                assert!(
-                    r.bytes > MESH_LINE_BUDGET,
-                    "{} is {} bytes and now fits a frame — {why:?} is no longer the case. \
-                     Reclassify it.",
-                    r.name,
-                    r.bytes
-                );
-            }
+        if let Carriage::TooBig(why) = r.carriage {
+            assert!(
+                r.bytes > MESH_LINE_BUDGET,
+                "{} is {} bytes and now fits a frame — {why:?} is no longer the case. \
+                 Reclassify it.",
+                r.name,
+                r.bytes
+            );
         }
     }
 }
 
-/// The actionable half of the census, and the reason the UUID measurement is in
-/// here rather than in a note.
-///
-/// `set_limits` with two allowed pins is the payload the auth tag would break.
-/// It is also carrying a 36-byte UUID correlation id. Shortening that id frees
-/// three times what the tag costs — so the design does not have to choose
-/// between authentication and pushing a two-pin limit over the mesh, provided it
-/// spends the saving deliberately rather than discovering it later.
+/// The payload the tag would have broken, and the reason step 4 carried the
+/// correlation-id change with it: with the UUID id, `set_limits` with two
+/// allowed pins was 230 bytes against a 228 budget. Kept as a measurement of
+/// the old shape so the argument in SPINE-AUTH.md stays checkable.
 #[test]
-fn shortening_the_correlation_id_pays_for_the_tag_and_then_some() {
-    let casualties: Vec<_> = census()
-        .into_iter()
-        .filter(|r| matches!(r.carriage, Carriage::V2Casualty(_)))
-        .collect();
+fn the_uuid_id_would_have_made_set_limits_a_casualty_and_the_short_id_does_not() {
+    let body = json!({ "limits": [two_pin_limit()] });
+    let with_uuid = NodeCommand::new(NODE, UUID, "set_limits", body.clone()).encoded_len();
+    let with_short = NodeCommand::new(NODE, ID, "set_limits", body).encoded_len();
     assert!(
-        !casualties.is_empty(),
-        "no payload is broken by the tag any more — good, but re-read this test's \
-         premise before deleting it"
+        with_uuid > MESH_LINE_BUDGET,
+        "the two-pin set_limits with a UUID id is {with_uuid} bytes and now fits — \
+         the premise of the id change no longer holds; re-read before citing it"
     );
-
-    let uuid_cost = UUID.len() - "a7".len();
-    for r in &casualties {
-        let over = r.bytes - V2_BUDGET;
-        assert!(
-            over <= uuid_cost,
-            "{} is {over} bytes over the v2 budget, which a shorter correlation id \
-             ({uuid_cost} bytes) no longer covers — v2 needs fragmentation, not \
-             just a cheaper id",
-            r.name
-        );
-    }
+    assert!(
+        with_short <= MESH_LINE_BUDGET,
+        "the two-pin set_limits with the short id is {with_short} bytes and does not fit"
+    );
 }
 
-/// The pass above is not comfortable, and saying "all clear" without this would
-/// be the kind of narrow gate this project keeps catching itself building.
-///
-/// `set_limits` with a single allowed pin lands on exactly the v2 budget — zero
-/// spare. It is the reason `SPINE-AUTH.md` §3.2's "worth measuring against real
-/// traffic before committing" is the right instinct: the tag is affordable for
-/// every frame that matters and it consumes the entire margin of one that is
-/// already at the edge.
+/// Step 1's uncomfortable pass — the tightest mesh payload sat on exactly the
+/// v2 budget — is over, and this says by how much so it cannot quietly close
+/// again. The Track 0 configuration command has to keep real headroom: it is
+/// the command the safety tag would otherwise have broken.
 #[test]
-fn the_tightest_mesh_payload_is_at_the_edge() {
+fn the_tightest_mesh_payload_has_room() {
     let tightest = census()
         .into_iter()
         .filter(|r| r.carriage == Carriage::Mesh)
         .max_by_key(|r| r.bytes)
         .expect("the census is not empty");
     assert_eq!(
-        tightest.name, "set_limits, one pin",
-        "the tightest mesh payload changed; re-read the margin before trusting the \
-         auth-tag conclusion"
+        tightest.name, "set_limits, two pins",
+        "the tightest mesh payload changed; re-read the margin before trusting it"
     );
-    assert_eq!(
-        V2_BUDGET - tightest.bytes,
-        0,
-        "the tightest mesh payload no longer sits exactly on the v2 budget \
-         ({} bytes); update the note in SPINE-AUTH.md rather than this number",
-        tightest.bytes
+    let spare = MESH_LINE_BUDGET - tightest.bytes;
+    println!(
+        "tightest mesh payload: {} at {} B, {spare} spare",
+        tightest.name, tightest.bytes
+    );
+    assert!(
+        spare >= 16,
+        "the tightest mesh payload has only {spare} bytes spare; a field added to \
+         SafetyLimit will push Track 0 configuration off the mesh"
     );
 }
 
 /// How many slots one `descend` can carry — measured, since the first draft of
 /// the census asserted "all sixteen" and was wrong by 39 bytes. The guarantee
-/// worth holding is that *half the table* fits under the auth tag, with the
-/// UUID still in the frame: a behaviour on the bench touches one to three
-/// slots, so eight is headroom, not a limit anyone will meet. If this drops
-/// below eight, the slot count or the correlation id has to give.
+/// worth holding is that *half the table* fits: a behaviour on the bench
+/// touches one to three slots, so eight is headroom, not a limit anyone will
+/// meet. If this drops below eight, the slot count or the id has to give.
 #[test]
 fn how_many_slots_a_descend_can_carry() {
     let all = every_slot();
-    let fits = |budget: usize| {
-        (0..=all.len())
-            .rev()
-            .find(|&n| {
-                NodeCommand::descend(NODE, UUID, &all[..n], true)
-                    .expect("valid descend")
-                    .encoded_len()
-                    <= budget
-            })
-            .unwrap_or(0)
-    };
-    let (today, v2) = (fits(MESH_LINE_BUDGET), fits(V2_BUDGET));
+    let fits = (0..=all.len())
+        .rev()
+        .find(|&n| {
+            NodeCommand::descend(NODE, ID, &all[..n], true)
+                .expect("valid descend")
+                .encoded_len()
+                <= MESH_LINE_BUDGET
+        })
+        .unwrap_or(0);
     println!(
-        "descend carries {today} slots in today's frame, {v2} under the auth tag (of {})",
+        "descend carries {fits} slots in one authenticated frame (of {})",
         all.len()
     );
     assert!(
-        v2 >= obc_reflex::MAX_SLOTS / 2,
-        "only {v2} slots fit under the auth tag"
+        fits >= obc_reflex::MAX_SLOTS / 2,
+        "only {fits} slots fit one frame"
     );
     assert!(
-        today < all.len(),
+        fits < all.len(),
         "the full table now fits a frame — reclassify its census row"
     );
 }
 
-/// The 240 in `lora_gateway.rs` and the 240 in the firmware are the same number
-/// living in two workspaces that cannot link to each other. Pin them.
+/// The 228 in `lora_gateway.rs` and the 228 in the firmware are the same number
+/// living in two workspaces that cannot link to each other. Pin them, and pin
+/// the arithmetic behind them.
 #[test]
 fn the_host_budget_matches_the_firmware() {
     assert_eq!(
         MESH_LINE_BUDGET,
-        spine::MAX_PAYLOAD,
-        "the host's mesh line budget has drifted from the node's MAX_PAYLOAD"
+        spine::MAX_AUTH_PAYLOAD,
+        "the host's mesh line budget has drifted from the station's MAX_AUTH_PAYLOAD"
     );
+    assert_eq!(spine::MAX_PAYLOAD - AUTH_TAG, MESH_LINE_BUDGET);
+    assert_eq!(AUTH_TAG, 4 + 8, "[ctr:u32] + [mac:8]");
 }
 
-/// What the census is for, stated as an assertion so it cannot quietly stop
-/// being true: the correlation id costs more than the authentication would.
+/// What the census was for, stated as an assertion so it cannot quietly stop
+/// being true: the UUID correlation id cost more than the authentication does.
 #[test]
-fn the_uuid_correlation_id_costs_three_times_the_proposed_tag() {
+fn the_uuid_correlation_id_cost_three_times_the_auth_tag() {
     let with_uuid =
         NodeCommand::new(NODE, UUID, "gpio_write", json!({"pin": 3, "value": 1})).encoded_len();
-    // Unique among a handful of in-flight requests is all the node needs.
     let with_short =
-        NodeCommand::new(NODE, "a7", "gpio_write", json!({"pin": 3, "value": 1})).encoded_len();
+        NodeCommand::new(NODE, ID, "gpio_write", json!({"pin": 3, "value": 1})).encoded_len();
     let saved = with_uuid - with_short;
     assert!(
-        saved > V2_TAG,
-        "a short correlation id saves {saved} bytes, which no longer pays for the \
-         {V2_TAG}-byte auth tag — recheck the argument in SPINE-AUTH.md before citing it"
+        saved >= 2 * AUTH_TAG,
+        "the short correlation id saves {saved} bytes, no longer well clear of the \
+         {AUTH_TAG}-byte auth tag — recheck the argument in SPINE-AUTH.md before citing it"
     );
 }
 
-/// The host now refuses what the mesh cannot carry. Before this, `mesh_command`
+/// The id the host actually generates has the shape the census measured with.
+#[test]
+fn the_host_sends_the_short_id_the_census_measured() {
+    use oh_ben_claw::tools::builtin::mesh::short_correlation_id;
+    let id = short_correlation_id();
+    assert_eq!(id.len(), 8, "{id:?}");
+    assert!(id.bytes().all(|b| b.is_ascii_hexdigit()), "{id:?}");
+    assert!(id.len() + "r2".len() <= ID.len());
+    assert_ne!(id, short_correlation_id());
+}
+
+/// The host refuses what the mesh cannot carry. Before this, `mesh_command`
 /// returned `sent: true` and the node's framer dropped the line.
 #[test]
 fn an_over_budget_command_is_refused_rather_than_reported_sent() {
     let big = NodeCommand::new(
         NODE,
-        UUID,
+        ID,
         "set_reflex_rules",
         json!({ "rules": vec![one_rule(); 3] }),
     );
@@ -516,6 +472,6 @@ fn an_over_budget_command_is_refused_rather_than_reported_sent() {
         big.encoded_len()
     );
 
-    let small = NodeCommand::new(NODE, UUID, "gpio_write", json!({"pin": 3, "value": 1}));
+    let small = NodeCommand::new(NODE, ID, "gpio_write", json!({"pin": 3, "value": 1}));
     assert!(small.fits_one_frame());
 }

@@ -411,6 +411,83 @@ not yet.
 > length to 500 and the run above followed. If a command over the wire ever
 > goes silent again, run the probe before suspecting the command.
 
+### A5d. Authenticated frames between the stations (SPINE-AUTH step 4)
+
+**What it proves:** every frame on the air between the Heltecs is
+`[src][seq][ttl][ctr:u32][payload ≤ 228][mac:8]` — tagged with HMAC-SHA256
+under a key derived from the deployment's root secret, counted, and judged
+by a receive window that survives a reboot. A station built with a
+different root hears nothing but rejections. Nothing unverified reaches the
+UART, the console line the host parses, or the relay.
+
+**What it does not prove:** an on-air replay. The host cannot inject raw
+radio frames, so the window's replay refusal is proven on the host
+(`tests/spine_auth_vectors.rs`, `tests/firmware_spine_framing.rs`) and its
+*persistence* is proven here by the reboot gap. It also does not prove
+anything about the host's trust in the base station: the host reads the
+base's console over USB and trusts what the base has verified. The host
+verifies no tags itself (SPINE-AUTH.md §3.4 is still open).
+
+**Preconditions.** Both Heltecs on PC USB (base COM3, bridge COM5), built with
+the same `OBC_SPINE_ROOT` — a build without one fails with the message that
+says so. Keep the secret outside the repository (`~/.obc/spine_root` on the
+bench). The boot log prints a two-byte fingerprint of the root so two boards
+can be compared at a glance.
+
+```powershell
+. $env:USERPROFILE\export-esp.ps1; $env:CARGO_TARGET_DIR='C:\e'
+$env:OBC_SPINE_ROOT = (Get-Content $env:USERPROFILE\.obc\spine_root)
+cd firmware\heltec-lora-linktest
+cargo build --release --features bench-low-power,no-relay   # base
+espflash flash --port COM3 C:\e\xtensa-esp32s3-espidf\release\heltec-lora-linktest
+cargo build --release --features bench-low-power            # bridge
+espflash flash --port COM5 C:\e\xtensa-esp32s3-espidf\release\heltec-lora-linktest
+cd ..\..
+python scripts\bench_spine_auth.py observe --seconds 60
+python scripts\bench_spine_auth.py reboot-gap
+python scripts\bench_descend_lora.py --node COM6 --base COM3   # Part B, now authenticated
+# then rebuild the bridge with a different OBC_SPINE_ROOT, flash it, and:
+python scripts\bench_spine_auth.py wrong-root --seconds 40
+# …and flash it back.
+```
+
+`observe` wants every `SPINE ◄` line to carry `ctr=`, counters strictly
+increasing per source with `seq` as the low byte, and no `REJECTED` line.
+`reboot-gap` resets the bridge through its CP2102 circuit and measures the
+bounded silence SPINE-REPLAY.md §3 promises: the receiver resumes at its
+persisted ceiling `h + M` and refuses at most `M = 8` legitimate frames while
+the sender catches up, silently (they are `Seen`, which is also what a relay
+duplicate is). It also checks the rebooted bridge's counter resumed above
+anything the base had accepted. `wrong-root` wants every frame each side
+hears from the other rejected as a bad tag and none accepted.
+
+**Run 2026-09-13** (final, jitter in; records `results/bench_spine_auth-*`
+and `bench_descend_lora-20260913-005559.json`). `observe` 60 s: base 13/13
+frames from the bridge (ctr 993–1005), bridge 10/10 from the base
+(1745–1754), 0 rejected. Part B over the authenticated link: **10/10, every
+step on its first attempt** (before the jitter: 10/10 with `b1` on its
+second), −56 dBm.
+`reboot-gap`: bridge counter resumed at 928 after the base had last accepted
+903; base accepted 929, 930, 931, 932; bridge re-accepted the base 22.5 s after
+the reset with **3 frames skipped** (bound 8); 0 loud rejections; fingerprint
+`c4cd` on both boot logs. `wrong-root`: base rejected 7/7 bridge frames and
+the bridge 5/5 base frames, all `bad tag`, 0 accepted.
+
+> **It found a link defect on the way, not an auth defect.** The first
+> `reboot-gap` run left the bridge deaf to the base for the full 120 s
+> window, and the base hearing one bridge frame in eight. Every `REJECTED`
+> counter was zero; the tag was fine. The consoles showed the cause: after
+> the reboot the bridge's keepalive landed **70 ms** after the base's, every
+> 5 s, indefinitely — two identical 5-second timers on identical firmware,
+> quantised by the same 600 ms receive poll, transmitting into each other's
+> frames with nothing to break the phase because neither heard the other.
+> Resetting the base alone (`scripts/probe_reset_station.py COM3`) restored
+> the link at once, which is the confirmation. Fix: each keepalive interval
+> now carries up to 1.5 s of jitter derived from the frame counter
+> (`keepalive_interval_ms`), so a collision cannot repeat. The run above is
+> with the jitter in. The ~1-in-5 loss measured on 2026-09-12 was very
+> likely this mechanism in a milder phase; watch the retry counts.
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**

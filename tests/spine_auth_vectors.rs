@@ -20,12 +20,18 @@
 //!    §A.1 — published constants, computed by someone else, years before this
 //!    code. If the primitive underneath were wrong these would say so.
 //!
-//! Nothing here is on a wire. `spine.rs` is untouched, no frame carries a tag,
-//! and no receiver checks one. Step 4 changes the format; this is the arithmetic
-//! landed first so that change starts from agreement rather than hoping for it.
+//! Since 2026-09-13 (step 4) the tag is on the wire: every frame between the
+//! Heltec stations is `spine::AuthFrame`, tagged with `auth::tag` and checked
+//! with `auth::verify`. The last test below is the one that joins the two
+//! modules — a frame the host would build verifies through the station's
+//! decoder, and the station's frame verifies under the host's arithmetic. The
+//! station's `spine.rs` deliberately holds no key; that test is where the
+//! seam is checked.
 
 #[path = "../firmware/heltec-lora-linktest/src/auth.rs"]
 mod node;
+#[path = "../firmware/heltec-lora-linktest/src/spine.rs"]
+mod spine;
 
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
@@ -49,7 +55,7 @@ fn cases() -> Vec<(&'static str, u8, u32, Vec<u8>)> {
                 .to_vec(),
         ),
         ("obc-esp32-s3-002", 0xff, u32::MAX, b"telemetry".to_vec()),
-        ("a", 0x00, 0x0000_0100, vec![b'z'; 240]),
+        ("a", 0x00, 0x0000_0100, vec![b'z'; spine::MAX_AUTH_PAYLOAD]),
     ]
 }
 
@@ -161,5 +167,101 @@ fn the_hkdf_primitive_matches_rfc_5869() {
 fn the_tag_is_eight_bytes_on_both_sides() {
     assert_eq!(host::TAG_LEN, 8);
     assert_eq!(node::TAG_LEN, 8);
+    assert_eq!(
+        spine::MAC_LEN,
+        node::TAG_LEN,
+        "the frame carries a different tag length than auth.rs computes"
+    );
     assert_eq!(host::KDF_SALT, node::KDF_SALT);
+}
+
+/// The seam: a frame built the way `main.rs` builds one — station key derived
+/// with the `gw-XX` id, tag over `src ‖ ctr ‖ payload`, `seq` = low byte of
+/// `ctr` — decodes on the other side and verifies under the *host's* copy of
+/// the arithmetic, and a relay's `ttl` decrement does not disturb it. Then
+/// the negatives the receiver in `main.rs` relies on: a flipped payload byte,
+/// a moved counter, a spoofed source, and a key from a different root all
+/// fail. A retired v1 frame does not decode at all.
+#[test]
+fn a_station_frame_verifies_through_the_decoder_under_the_host_arithmetic() {
+    let src = 0xd8u8;
+    let ctr = 0x0001_02f3u32;
+    let payload = br#"{"node_id":"gw-D8","type":"gw_keepalive","seq":244}"#;
+    let station_key = node::derive_node_key(ROOT, &format!("gw-{src:02X}"));
+    let host_key = host::derive_node_key(ROOT, "gw-D8");
+    assert_eq!(station_key, host_key);
+
+    let mut wire = Vec::new();
+    spine::AuthFrame {
+        src,
+        seq: ctr as u8,
+        ttl: 2,
+        ctr,
+        payload,
+        mac: node::tag(&station_key, src, ctr, payload),
+    }
+    .encode(&mut wire);
+    assert_eq!(
+        wire.len(),
+        spine::HEADER + spine::AUTH_OVERHEAD + payload.len()
+    );
+
+    let f = spine::AuthFrame::decode(&wire).expect("a v2 frame decodes");
+    assert_eq!(f.seq, f.ctr as u8);
+    assert!(host::verify(&host_key, f.src, f.ctr, f.payload, &f.mac));
+    assert!(node::verify(&station_key, f.src, f.ctr, f.payload, &f.mac));
+
+    // A relay decrements ttl and re-encodes with the same tag.
+    let mut relayed = Vec::new();
+    spine::AuthFrame {
+        ttl: f.ttl - 1,
+        ..f
+    }
+    .encode(&mut relayed);
+    let r = spine::AuthFrame::decode(&relayed).unwrap();
+    assert_eq!(r.ttl, 1);
+    assert!(host::verify(&host_key, r.src, r.ctr, r.payload, &r.mac));
+
+    // Negatives, each a single change to the bytes on the air.
+    let mut flipped = wire.clone();
+    flipped[spine::HEADER + 4] ^= 0x01; // first payload byte
+    let g = spine::AuthFrame::decode(&flipped).unwrap();
+    assert!(!node::verify(&station_key, g.src, g.ctr, g.payload, &g.mac));
+
+    let mut moved = wire.clone();
+    moved[6] ^= 0x01; // low byte of ctr…
+    moved[1] ^= 0x01; // …and seq with it, so the shape check passes
+    let g = spine::AuthFrame::decode(&moved).unwrap();
+    assert_eq!(g.seq, g.ctr as u8);
+    assert!(!node::verify(&station_key, g.src, g.ctr, g.payload, &g.mac));
+
+    let mut spoofed = wire.clone();
+    spoofed[0] = 0x40;
+    let g = spine::AuthFrame::decode(&spoofed).unwrap();
+    let key_for_claimed_src = node::derive_node_key(ROOT, "gw-40");
+    assert!(!node::verify(
+        &key_for_claimed_src,
+        g.src,
+        g.ctr,
+        g.payload,
+        &g.mac
+    ));
+
+    let other_root_key = node::derive_node_key(b"a-different-deployment", "gw-D8");
+    assert!(!node::verify(
+        &other_root_key,
+        f.src,
+        f.ctr,
+        f.payload,
+        &f.mac
+    ));
+
+    // The retired v1 layout of the same message is shorter than a v2 header
+    // plus tag only when the payload is tiny; a real one decodes as garbage
+    // and fails the tag, which is the receiver's `BadTag` path.
+    let mut v1 = vec![src, ctr as u8, 2];
+    v1.extend_from_slice(payload);
+    let g = spine::AuthFrame::decode(&v1).unwrap();
+    let key = node::derive_node_key(ROOT, &format!("gw-{:02X}", g.src));
+    assert!(!node::verify(&key, g.src, g.ctr, g.payload, &g.mac));
 }

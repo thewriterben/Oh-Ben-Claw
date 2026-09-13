@@ -1,10 +1,11 @@
-//! Spine frame authentication, node side — the primitive, ahead of the wire.
+//! Spine frame authentication, station side.
 //!
-//! Step 2 of `SPINE-AUTH.md`: the node can compute the same tag the host does.
-//! **Nothing calls this yet.** No frame carries a tag, no receiver checks one,
-//! and `spine.rs` is untouched. That is deliberate: step 4 changes the wire
-//! format, and a wire change is worth making once both ends have been proven to
-//! agree on the arithmetic rather than after.
+//! Step 2 of `SPINE-AUTH.md` landed this arithmetic on 2026-08-01, ahead of
+//! the wire; step 4 (2026-09-13) put it on the wire. `main.rs` tags every
+//! frame it originates with [`tag`] under the key [`derive_node_key`] gives
+//! this station, and verifies every frame it hears with [`verify`] under the
+//! key derived for the frame's `src`, before the counter is judged and before
+//! the payload goes anywhere. The frame layout is `spine::AuthFrame`.
 //!
 //! The host's copy is `crates/obc-safety/src/spine_tag.rs`. This file is the
 //! mirror, and `tests/spine_auth_vectors.rs` compiles both and fails if they
@@ -14,12 +15,11 @@
 //! ## Two deliberate choices
 //!
 //! **Portable SHA, not the ESP32-S3's hardware accelerator.** `SPINE-AUTH.md`
-//! notes the silicon and it is the right destination, but the design has never
-//! been run on a board and this crate cannot be compiled anywhere the author can
-//! check it. A pure-Rust `sha2` compiles for host and target alike, so this
-//! module is testable *today*, on the machine writing it. Swapping in
-//! `esp_idf_sys`'s mbedtls is an optimisation with a known answer to check
-//! against — which is a much better position than the reverse.
+//! notes the silicon and it is the right destination. A pure-Rust `sha2`
+//! compiles for host and target alike, so this module is testable on the
+//! machine writing it, and on the bench it costs nothing anyone can see at a
+//! few frames a second. Swapping in `esp_idf_sys`'s mbedtls is an
+//! optimisation with a known answer to check against.
 //!
 //! **No `no_std`.** This firmware is an ESP-IDF `std` crate; matching that
 //! keeps the module includable by the host harness with no cfg dance.

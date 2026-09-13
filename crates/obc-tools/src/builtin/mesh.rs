@@ -154,7 +154,7 @@ impl Tool for MeshCommandTool {
             ));
         }
         let cmd_args = args.get("args").cloned().unwrap_or_else(|| json!({}));
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = short_correlation_id();
 
         // `descend` is built through its own constructor so a bad slot or
         // level is refused here, with the reason, rather than on the node.
@@ -219,6 +219,19 @@ impl Tool for MeshCommandTool {
             Err(e) => Ok(ToolResult::err(format!("mesh_command send failed: {e}"))),
         }
     }
+}
+
+/// A correlation id that is unique among the handful of commands in flight on
+/// the mesh, and no longer. Eight hex characters — 32 bits of a fresh UUIDv4 —
+/// instead of the 36-byte UUID string `mesh_command` used to spend on every
+/// frame. `tests/spine_payload_budget.rs` found the UUID cost three times
+/// the authentication tag; SPINE-AUTH.md §6 step 1 made cutting it a
+/// condition of step 4, and step 4 (frame v2, budget 228) is what shipped
+/// with this. Retries suffix `r{n}`, so an id is at most 10 characters.
+pub fn short_correlation_id() -> String {
+    let u = uuid::Uuid::new_v4();
+    let b = u.as_bytes();
+    format!("{:02x}{:02x}{:02x}{:02x}", b[0], b[1], b[2], b[3])
 }
 
 impl MeshCommandTool {

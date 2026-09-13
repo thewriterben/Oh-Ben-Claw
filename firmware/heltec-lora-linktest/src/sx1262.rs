@@ -34,7 +34,11 @@ const OP_SET_TX_PARAMS: u8 = 0x8E;
 
 /// TX power in dBm: the SX1262's +22 maximum for the field, its -9 floor for a
 /// bench where the other radio is within reach (see `bench-low-power`).
-pub const TX_POWER_DBM: i8 = if cfg!(feature = "bench-low-power") { -9 } else { 22 };
+pub const TX_POWER_DBM: i8 = if cfg!(feature = "bench-low-power") {
+    -9
+} else {
+    22
+};
 const OP_SET_BUFFER_BASE: u8 = 0x8F;
 const OP_SET_MODULATION_PARAMS: u8 = 0x8B;
 const OP_SET_PACKET_PARAMS: u8 = 0x8C;
@@ -206,7 +210,12 @@ impl Sx1262 {
         let frf = ((freq_hz << 25) / 32_000_000) as u32;
         self.cmd(
             OP_SET_RF_FREQUENCY,
-            &[(frf >> 24) as u8, (frf >> 16) as u8, (frf >> 8) as u8, frf as u8],
+            &[
+                (frf >> 24) as u8,
+                (frf >> 16) as u8,
+                (frf >> 8) as u8,
+                frf as u8,
+            ],
         )?;
 
         // PA config for the SX1262 (+22 dBm capable) and TX power. The power
@@ -239,10 +248,14 @@ impl Sx1262 {
         self.cmd(
             OP_SET_DIO_IRQ_PARAMS,
             &[
-                (mask >> 8) as u8, mask as u8, // IRQ mask
-                (mask >> 8) as u8, mask as u8, // DIO1 mask
-                0x00, 0x00, // DIO2
-                0x00, 0x00, // DIO3
+                (mask >> 8) as u8,
+                mask as u8, // IRQ mask
+                (mask >> 8) as u8,
+                mask as u8, // DIO1 mask
+                0x00,
+                0x00, // DIO2
+                0x00,
+                0x00, // DIO3
             ],
         )?;
 

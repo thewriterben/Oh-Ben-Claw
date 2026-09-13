@@ -5,6 +5,79 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Every spine frame is authenticated (2026-09-13)
+
+SPINE-AUTH.md step 4. The wire between the Heltec stations is now
+`[src][seq][ttl][ctr:u32][payload ≤ 228][mac:8]`: an 8-byte HMAC-SHA256
+over `src ‖ ctr ‖ payload` under a per-station key, a 32-bit counter that
+never repeats across a reboot (the ceiling scheme from 2026-09-13 morning,
+now carrying the number it was designed for), and an RFC 4303 receive
+window per source, persisted, that accepts each counter once. Format v1 is
+retired, not kept beside it. Bench-verified (walkthrough §A5d,
+`scripts/bench_spine_auth.py`): authenticated keepalives both ways 23/23
+with counters strictly increasing; Part B `descend` over the authenticated
+link 10/10 with no retries; a bridge reset resumed its counter above anything the base had
+accepted and re-accepted the base after a 3-frame silence (bound 8); a
+bridge built with a different root was rejected 12/12 as a bad tag and
+accepted nothing.
+
+### Changed (firmware `heltec-lora-linktest`)
+
+- **`spine.rs`**: `AuthFrame` replaces `SpineFrame`; `ReplayWindow` (64-bit
+  bitmap, persisted ceiling `h + M`, `M = 8`) replaces the 32-entry `SeenSet`
+  — the window is what de-duplicates flood relays now, and it does it with
+  the counter the tag covers. `CeilingStore` is keyed (`seq_ceil`, `rx_XX`).
+  `MAX_AUTH_PAYLOAD = 228`; the line framer discards above it.
+- **`main.rs`**: signs every originated frame, verifies every received one
+  before the counter is judged and before the payload reaches the UART, the
+  console, or the relay; rejections are one `SPINE ◄ REJECTED … : <reason>`
+  line each, except `Seen`, which is normal traffic and silent. The accepted
+  line gained `ctr=` after `seq=`; the host parser reads fields by key and
+  is unaffected. NVS unusable now disables receive as well as transmit — a
+  window that cannot persist is one a reboot reopens.
+- **Keys**: the deployment root arrives at build time in `OBC_SPINE_ROOT`
+  and a build without it fails with a message that says what to set. Each
+  station's key is `derive_node_key(root, "gw-XX")`; a station derives a
+  peer's key from `src` on first hearing it. Stations hold the root — the
+  decision and its cost are in `main.rs` and in OBC-Prime's DECISIONS.md.
+  The boot log prints a two-byte fingerprint of the root.
+- **Keepalive jitter** (`keepalive_interval_ms`): up to 1.5 s, derived from
+  the frame counter. Found on the way: after a bridge reset its keepalive
+  sat 70 ms behind the base's every 5 s for as long as anyone watched, each
+  transmitting into the other's frame, neither hearing the other, and no
+  perturbation to break the phase. The jitter re-rolls it every period.
+- `auth.rs` header no longer says nothing calls it.
+
+### Changed (host)
+
+- `MESH_LINE_BUDGET` 240 → **228**; `tests/spine_payload_budget.rs` pins it
+  to the firmware's `MAX_AUTH_PAYLOAD` and re-measures the census with the
+  id the host now sends.
+- **`mesh_command` correlation id** is eight hex characters
+  (`short_correlation_id`), not a 36-byte UUID — the condition step 1 put on
+  step 4. The two-pin `set_limits` that would have been the tag's casualty
+  is 204 B with 24 spare; `descend` carries 13 slots per frame (was 12).
+  Retry ids are `{id}r{n}` as before.
+- `tests/spine_auth_vectors.rs` gained the seam test: a frame built the way
+  the station builds one verifies through the decoder under the host's
+  arithmetic, survives a relay's ttl decrement, and fails on a flipped byte,
+  a moved counter, a spoofed source, a different root, and a v1 frame.
+
+### Not claimed
+
+- An on-air replay. The host cannot inject raw frames; replay refusal is
+  proven on the host and its persistence by the reboot gap.
+- Host-side verification (SPINE-AUTH.md §3.4). The host trusts the base
+  station's console over USB; the base verifies. `NodePairingManager` still
+  has no callers.
+- Hardware SHA. Portable `sha2` at a few frames a second; nothing measured
+  suggests it matters.
+- The XIAO node's own uplink. Frames the bridge forwards from its UART are
+  signed by the *bridge*; the node ↔ bridge wire is unauthenticated serial.
+
+Both Heltecs still carry `bench-low-power` builds (base also `no-relay`);
+reflash without those features, with the field root, before field use.
+
 ## Unreleased — The spinal tier over the air, and two radio defects it found (2026-09-13)
 
 `descend` crossed the mesh and came back: base console → LoRa → gw-40 → UART
