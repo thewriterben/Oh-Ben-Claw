@@ -487,11 +487,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // `cdp_url` seeds it when the variable is unset, and `enabled = false`
     // drops the seven tools from the registry (and their schemas from every
     // prompt).
-    if let Some(url) = &config.browser.cdp_url {
-        if std::env::var_os("OBC_BROWSER_CDP_URL").is_none() {
-            std::env::set_var("OBC_BROWSER_CDP_URL", url);
-        }
-    }
+    seed_browser_cdp_url(&config);
     let mut all_tools = if conscience.enabled {
         oh_ben_claw::tools::default_tools_with_reach(
             Some(conscience.reach.clone()),
@@ -3771,6 +3767,20 @@ fn run_consent_check(
 /// set is built (the agent, `mcp-serve`, `a2a-serve`): `[browser]` on/off,
 /// `[shell]` backend, `[file]` roots. One place, so Claude Desktop driving
 /// the tools over MCP gets exactly what the agent gets (2026-09-12).
+/// Seed `OBC_BROWSER_CDP_URL` from `[browser] cdp_url` when the variable is
+/// unset. The tool set reads the CDP endpoint from the environment when it is
+/// built, so this must run *before* `default_tools()` — in every path that
+/// builds tools. Until 2026-09-12 only `start` did it: Claude Desktop's
+/// `mcp-serve` logged `cdp=http://localhost:9222` against a config that said
+/// 9333, and its browser tools fell back to plain HTTP against the wrong port.
+fn seed_browser_cdp_url(config: &Config) {
+    if let Some(url) = &config.browser.cdp_url {
+        if std::env::var_os("OBC_BROWSER_CDP_URL").is_none() {
+            std::env::set_var("OBC_BROWSER_CDP_URL", url);
+        }
+    }
+}
+
 fn apply_tool_fences(config: &Config, all_tools: &mut Vec<Box<dyn oh_ben_claw::tools::Tool>>) {
     // `[browser]`: `enabled = false` drops the seven tools (and their schemas
     // from every prompt); the CDP endpoint was seeded from `cdp_url` before
@@ -3862,6 +3872,7 @@ async fn run_mcp_serve(config: &Config, transport: &str, port: u16, mode: &str) 
     // drive the HTTP/browser tools through this server. Gate them with the
     // conscience reach allowlist when enabled. (No auditor in this standalone
     // path; the gate still refuses, it just isn't logged here.)
+    seed_browser_cdp_url(config);
     let conscience = obc_conscience::Conscience::new(&config.conscience);
     let mut tools = if conscience.enabled {
         default_tools_with_reach(Some(conscience.reach.clone()), None, None)
@@ -3932,6 +3943,7 @@ async fn run_a2a_serve(
     // Same reasoning as mcp-serve: an A2A caller is an external party driving
     // this agent's tools, so the conscience reach allowlist gates them when it
     // is enabled.
+    seed_browser_cdp_url(config);
     let conscience = obc_conscience::Conscience::new(&config.conscience);
     let mut tools = if conscience.enabled {
         default_tools_with_reach(Some(conscience.reach.clone()), None, None)

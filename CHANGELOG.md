@@ -5,6 +5,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The MCP and A2A servers drive the same browser as the agent (2026-09-12)
+
+### Fixed
+
+- **`mcp-serve` and `a2a-serve` now honour `[browser] cdp_url`.** The tool
+  set reads the CDP endpoint from `OBC_BROWSER_CDP_URL` when it is built, and
+  only the `start` path seeded that variable from the config. Claude Desktop's
+  copy of the tools therefore logged `cdp=http://localhost:9222` against a
+  config saying 9333 and fell back to plain HTTP. One helper, called before
+  the tools are built in all three paths.
+
 ## Unreleased — A transcript is words, not an envelope (2026-09-12)
 
 ### Fixed
