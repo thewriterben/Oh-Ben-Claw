@@ -50,10 +50,18 @@ Measured: the supervisor's own test walks an outage through two refused
 reopens and a third that succeeds under a paused clock, with the sink
 delivering before and after on the same `Arc`; the decision core's tests
 pin unobservable-not-escalated against the exact view that escalates when
-the spine is up, and the offline clock restarting at the reopen. Not yet
-measured: on the bench (SPINE-LOSS.md §5: pull the base's USB, wait past
-`escalate_after_ms`, replug; then a DTR reset for the auth resume) — the
-bench base is the live brain's, and the other session holds the node.
+the spine is up, and the offline clock restarting at the reopen.
+
+**Bench, same evening (walkthrough §A5n, `scripts/bench_spine_loss.py`,
+`results/bench_spine_loss-20260913-170626.json`): PASS 7/7** against the
+live brain on the rebuilt release. The pull reproduced the 18:56Z error
+byte for byte (`os error 22`); `lost` in the same second, the node
+`unobservable` 2.4 s later, reopens at 1/2/4/8/16 s then every 30 s, **no
+escalation for either node in 272 s** (the old code escalated both at
+~210 s), reopen on the first attempt after the replug (`attempts: 13`),
+node online on its next beacon, frames verified with no rejection after
+the base's own power-cycle. Not run: a separate station DTR reset across
+the reopen — the pull is a base reset, and the station property is A5d's.
 
 ### Changed (`obc-spine`)
 

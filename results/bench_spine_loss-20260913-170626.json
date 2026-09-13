@@ -1,0 +1,141 @@
+{
+  "started": "2026-09-13T17:02:19",
+  "node": "obc-esp32-s3-001",
+  "steps": [
+    {
+      "step": "baseline",
+      "pass": true,
+      "detail": "spine.gateway={'attempts': 5, 'error': 'failed to open LoRa gateway console COM3: The system cannot find the file specified.', 'next_attempt_ms': 1789340563395, 'port': 'COM3', 'since_ms': 1789340502355, 'state': 'reopening'} health={'reason': 'gateway reopening (1 failed so far): failed to open LoRa gateway console COM3: The system cannot find the file specified.', 'status': 'unobservable', 'ts_ms': 1789340504792} escalation={'status': 'cleared', 'ts_ms': 1789326642306}",
+      "at": "17:02:19"
+    },
+    {
+      "step": "pull -> lost",
+      "pass": true,
+      "detail": "spine.gateway={'attempts': 5, 'error': 'failed to open LoRa gateway console COM3: The system cannot find the file specified.', 'next_attempt_ms': 1789340563395, 'port': 'COM3', 'since_ms': 1789340502355, 'state': 'reopening'}",
+      "at": "17:02:19"
+    },
+    {
+      "step": "node unobservable",
+      "pass": true,
+      "detail": "health={'reason': 'gateway reopening (1 failed so far): failed to open LoRa gateway console COM3: The system cannot find the file specified.', 'status': 'unobservable', 'ts_ms': 1789340504792}",
+      "at": "17:02:19"
+    },
+    {
+      "step": "no escalation during the outage",
+      "pass": true,
+      "detail": "escalation facts written since pull: node=0 gw-40=0; gateway attempts so far=12",
+      "at": "17:05:44"
+    },
+    {
+      "step": "replug -> open",
+      "pass": true,
+      "detail": "spine.gateway={'attempts': 13, 'port': 'COM3', 'since_ms': 1789340774955, 'state': 'open'} after 0.1 s",
+      "at": "17:06:26"
+    },
+    {
+      "step": "node back online on its next beacon",
+      "pass": true,
+      "detail": "health={'reason': 'healthy', 'status': 'online', 'ts_ms': 1789340784791}",
+      "at": "17:06:26"
+    },
+    {
+      "step": "still no escalation",
+      "pass": true,
+      "detail": "escalation facts since pull: 0",
+      "at": "17:06:26"
+    }
+  ],
+  "gateway_history": [
+    {
+      "state": "lost",
+      "attempts": 0,
+      "error": "The device does not recognize the command. (os error 22)",
+      "at": "17:01:42"
+    },
+    {
+      "state": "reopening",
+      "attempts": 0,
+      "error": "The device does not recognize the command. (os error 22)",
+      "at": "17:01:42"
+    },
+    {
+      "state": "reopening",
+      "attempts": 1,
+      "error": "failed to open LoRa gateway console COM3: The system cannot find the file specified.",
+      "at": "17:01:43"
+    },
+    {
+      "state": "reopening",
+      "attempts": 2,
+      "error": "failed to open LoRa gateway console COM3: The system cannot find the file specified.",
+      "at": "17:01:45"
+    },
+    {
+      "state": "reopening",
+      "attempts": 3,
+      "error": "failed to open LoRa gateway console COM3: The system cannot find the file specified.",
+      "at": "17:01:49"
+    },
+    {
+      "state": "reopening",
+      "attempts": 4,
+      "error": "failed to open LoRa gateway console COM3: The system cannot find the file specified.",
+      "at": "17:01:57"
+    },
+    {
+      "state": "reopening",
+      "attempts": 5,
+      "error": "failed to open LoRa gateway console COM3: The system cannot find the file specified.",
+      "at": "17:02:13"
+    },
+    {
+      "state": "reopening",
+      "attempts": 6,
+      "error": "failed to open LoRa gateway console COM3: The system cannot find the file specified.",
+      "at": "17:02:43"
+    },
+    {
+      "state": "reopening",
+      "attempts": 7,
+      "error": "failed to open LoRa gateway console COM3: The system cannot find the file specified.",
+      "at": "17:03:13"
+    },
+    {
+      "state": "reopening",
+      "attempts": 8,
+      "error": "failed to open LoRa gateway console COM3: The system cannot find the file specified.",
+      "at": "17:03:43"
+    },
+    {
+      "state": "reopening",
+      "attempts": 9,
+      "error": "failed to open LoRa gateway console COM3: The system cannot find the file specified.",
+      "at": "17:04:13"
+    },
+    {
+      "state": "reopening",
+      "attempts": 10,
+      "error": "failed to open LoRa gateway console COM3: The system cannot find the file specified.",
+      "at": "17:04:43"
+    },
+    {
+      "state": "reopening",
+      "attempts": 11,
+      "error": "failed to open LoRa gateway console COM3: The system cannot find the file specified.",
+      "at": "17:05:13"
+    },
+    {
+      "state": "reopening",
+      "attempts": 12,
+      "error": "failed to open LoRa gateway console COM3: The system cannot find the file specified.",
+      "at": "17:05:43"
+    },
+    {
+      "state": "open",
+      "attempts": 13,
+      "error": null,
+      "at": "17:06:14"
+    }
+  ],
+  "pass": true
+}

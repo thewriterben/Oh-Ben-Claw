@@ -878,6 +878,41 @@ refusal and then nothing for 150 s. A node reset now ends with the node
 whole — rules from its own flash, limits from the host — with nobody touching
 it.
 
+### A5n. A lost spine: the brain keeps its head when the base station goes
+
+**What it proves:** SPINE-LOSS (OBC-Prime `docs/SPINE-LOSS.md`). When the
+base station's USB port goes away under the running brain, the host
+records it (`spine.gateway` = `lost` → `reopening` with the error and the
+attempt count), reads every mesh node as `unobservable` — *not* offline, so
+nothing is escalated for hardware that is beaconing normally — reopens the
+port at 1, 2, 4, …, 30 s until it comes back, and picks up where it was:
+the same authentication windows, the same command sink, the node online on
+its next beacon. Before this (2026-09-13 18:56Z) the same pull ended the RX
+loop on one `WARN`, escalated both nodes at 120 s, and stayed that way until
+someone restarted the process.
+
+**Measured with** `scripts/bench_spine_loss.py` against the live brain (it
+only reads a copy of `world.db`; the brain keeps the port). The operator
+pulls the base's cable when asked and replugs it four minutes later.
+
+```powershell
+python scripts\bench_spine_loss.py --wait 240   # > stale_ms 90 s + escalate_after_ms 120 s
+```
+
+**Run 2026-09-13 17:01: PASS 7/7** (`results/bench_spine_loss-20260913-170626.json`).
+Pull at 17:01:42 → the I/O thread reported `os error 22` (the exact error of
+the 18:56Z loss) and `spine.gateway` went `lost` in the same second; the
+node read `unobservable` 2.4 s later; reopen attempts at +1, +2, +4, +8,
++16 s then every 30 s, each recorded; **no escalation fact written for
+either node in 272 s** (the old behaviour would have escalated both at
+~210 s); replug → the next 30 s attempt opened the port (`open`,
+`attempts: 13`, `outage_ms 272600`); the node was `online` on its first
+beacon 12 s later; frames from both stations verified with no rejection —
+the base was power-cycled by the pull and its counters resumed from NVS
+into the host's unchanged windows. Not run separately: §5's DTR reset of
+a station across a reopen; the pull *is* a base reset, and the
+station-reset property itself is A5d's reboot-gap run.
+
 ### A6. Safing (self-protection)
 
 **(a) Battery safing (built-in, no rule needed):**
