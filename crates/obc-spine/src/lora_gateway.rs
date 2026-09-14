@@ -293,6 +293,38 @@ impl LoraRefused {
 /// Prefix of the per-station facts this verifier writes.
 pub const AUTH_FACT_PREFIX: &str = "spine.auth.";
 
+/// How many stations are currently alarmed — the one number the standard
+/// safing rule `safe-spine-forgery` watches, the way `mesh.escalated_count`
+/// drives `safe-mesh-node-lost`. Written on change only.
+pub const AUTH_ALARM_COUNT_FACT: &str = "spine.auth.alarm_count";
+
+/// A station's alarm clears itself this long after its last `BadTag` or
+/// `Replayed`, so a burst reads as one incident with a start and an end.
+pub const AUTH_ALARM_CLEAR_MS: u64 = 10 * 60 * 1000;
+
+impl LoraRefused {
+    /// Whether this refusal is an incident (DECISIONS.md 2026-09-14). A bad
+    /// tag that reaches the host is never corruption — the radio drops CRC
+    /// failures — so it is a wrong root or a forgery; a replayed counter is
+    /// a replay. `TooOld` is the bounded post-reset gap the design chose,
+    /// and `Unsigned` is old firmware: both stay on the auth fact and alarm
+    /// nothing.
+    pub fn is_incident(self) -> bool {
+        matches!(self, LoraRefused::BadTag | LoraRefused::Replayed)
+    }
+}
+
+/// A station's open alarm: when the burst began, how many incidents it has
+/// held, and when the last one was (the clear timer runs from there).
+#[derive(Debug, Clone)]
+struct AuthAlarm {
+    since_ms: u64,
+    last_ms: u64,
+    count: u64,
+    /// Row id of the `spine.auth.<station>.alarm` fact, the support for the count.
+    fact_id: Option<i64>,
+}
+
 /// Host-side authentication of station frames: the tag under the deployment
 /// root, and an anti-replay window per station persisted in world memory
 /// with `M = 1` (`SPINE-REPLAY.md` §3: the host has SQLite and no wear
@@ -309,6 +341,9 @@ pub struct LoraAuth {
     /// Stations whose window has been resumed from world memory.
     resumed: std::collections::HashSet<u8>,
     tally: std::collections::HashMap<u8, Tally>,
+    /// Stations with an open alarm (`BadTag`/`Replayed` within
+    /// [`AUTH_ALARM_CLEAR_MS`]).
+    alarms: std::collections::HashMap<u8, AuthAlarm>,
 }
 
 /// What the `spine.auth.<station>` fact carries besides the counter.
@@ -340,6 +375,7 @@ impl LoraAuth {
             window: obc_safety::replay::ReplayWindow::new(),
             resumed: Default::default(),
             tally: Default::default(),
+            alarms: Default::default(),
         })
     }
 
@@ -416,6 +452,29 @@ impl LoraAuth {
                     },
                 );
             }
+            // An alarm left open by the previous process is still open: its
+            // clear timer runs from when it was last written.
+            if let Ok(Some(alarm)) = world.current(&format!("{key_name}.alarm")) {
+                if alarm.value.get("status").and_then(Value::as_str) == Some("alarmed") {
+                    self.alarms.insert(
+                        frame.src,
+                        AuthAlarm {
+                            since_ms: alarm
+                                .value
+                                .get("since_ms")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(alarm.valid_from),
+                            last_ms: alarm.valid_from,
+                            count: alarm
+                                .value
+                                .get("count")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(1),
+                            fact_id: Some(alarm.id),
+                        },
+                    );
+                }
+            }
             self.resumed.insert(frame.src);
         }
 
@@ -466,8 +525,138 @@ impl LoraAuth {
             "rejected": tally.rejected,
             "last_rejected": tally.last_rejected,
         });
-        let _ = world.observe_as(&key_name, fact, now_ms, now_ms, SOURCE, Origin::Observed);
+        let auth_fact_id = world
+            .observe_as(&key_name, fact, now_ms, now_ms, SOURCE, Origin::Observed)
+            .ok()
+            .map(|f| f.id);
+
+        // An incident opens the station's alarm, or extends the one open.
+        // The fact is written once per burst — the count travels on the
+        // clear — so a flood of forged frames is one incident, not a flood
+        // of facts (DECISIONS.md 2026-09-14).
+        if let Err(why) = verdict {
+            if why.is_incident() {
+                match self.alarms.get_mut(&frame.src) {
+                    Some(a) => {
+                        a.count += 1;
+                        a.last_ms = now_ms;
+                    }
+                    None => {
+                        let fact = world
+                            .observe_derived_from(
+                                &format!("{key_name}.alarm"),
+                                json!({
+                                    "status": "alarmed",
+                                    "station": station,
+                                    "reason": why.as_str(),
+                                    "ctr": frame.ctr,
+                                    "rssi_dbm": frame.rssi_dbm,
+                                    "count": 1,
+                                    "since_ms": now_ms,
+                                }),
+                                now_ms,
+                                now_ms,
+                                SOURCE,
+                                &auth_fact_id.into_iter().collect::<Vec<_>>(),
+                            )
+                            .ok();
+                        tracing::warn!(
+                            station = %station,
+                            ctr = frame.ctr,
+                            rssi = frame.rssi_dbm,
+                            "[lora_gateway] ALARM: {} — a station is sending frames the host refuses; escalating",
+                            why.as_str()
+                        );
+                        self.alarms.insert(
+                            frame.src,
+                            AuthAlarm {
+                                since_ms: now_ms,
+                                last_ms: now_ms,
+                                count: 1,
+                                fact_id: fact.map(|f| f.id),
+                            },
+                        );
+                        self.record_alarm_count(world, now_ms);
+                    }
+                }
+            }
+        }
+        self.sweep_alarms(world, now_ms);
         verdict
+    }
+
+    /// Close every alarm whose last incident is older than
+    /// [`AUTH_ALARM_CLEAR_MS`]. Runs on every frame from any station, which
+    /// is the only clock the verifier has; a link with no traffic at all
+    /// keeps its alarms, and has nothing to judge anyway.
+    fn sweep_alarms(&mut self, world: &WorldMemory, now_ms: u64) {
+        let expired: Vec<u8> = self
+            .alarms
+            .iter()
+            .filter(|(_, a)| now_ms.saturating_sub(a.last_ms) >= AUTH_ALARM_CLEAR_MS)
+            .map(|(src, _)| *src)
+            .collect();
+        if expired.is_empty() {
+            return;
+        }
+        for src in expired {
+            let Some(a) = self.alarms.remove(&src) else {
+                continue;
+            };
+            let station = Self::station(src);
+            let _ = world.observe_derived_from(
+                &format!("{AUTH_FACT_PREFIX}{station}.alarm"),
+                json!({
+                    "status": "cleared",
+                    "station": station,
+                    "count": a.count,
+                    "since_ms": a.since_ms,
+                    "last_ms": a.last_ms,
+                    "until_ms": now_ms,
+                }),
+                now_ms,
+                now_ms,
+                SOURCE,
+                &a.fact_id.into_iter().collect::<Vec<_>>(),
+            );
+            tracing::info!(
+                station = %station,
+                incidents = a.count,
+                "[lora_gateway] alarm cleared: no refused frame for {} s",
+                AUTH_ALARM_CLEAR_MS / 1000
+            );
+        }
+        self.record_alarm_count(world, now_ms);
+    }
+
+    /// `spine.auth.alarm_count` — how many stations are alarmed — derived
+    /// from the open alarm facts. The reflex engine reads this one number.
+    fn record_alarm_count(&self, world: &WorldMemory, now_ms: u64) {
+        let support: Vec<i64> = self.alarms.values().filter_map(|a| a.fact_id).collect();
+        let _ = world.observe_derived_from(
+            AUTH_ALARM_COUNT_FACT,
+            json!(self.alarms.len() as u64),
+            now_ms,
+            now_ms,
+            SOURCE,
+            &support,
+        );
+    }
+
+    /// Stations currently alarmed, for `mesh_status` and `status`.
+    pub fn alarmed_stations(world: &WorldMemory) -> Vec<Value> {
+        let mut out = Vec::new();
+        for e in world.entities().unwrap_or_default() {
+            if !(e.starts_with(AUTH_FACT_PREFIX) && e.ends_with(".alarm")) {
+                continue;
+            }
+            if let Ok(Some(f)) = world.current(&e) {
+                if f.value.get("status").and_then(Value::as_str) == Some("alarmed") {
+                    out.push(f.value.clone());
+                }
+            }
+        }
+        out
     }
 }
 
@@ -1708,6 +1897,128 @@ mod tests {
         let fact = world.current("spine.auth.gw-40").unwrap().unwrap();
         assert_eq!(fact.value["accepted"], 1);
         assert_eq!(fact.value["rejected"], 2);
+    }
+
+    // ── A rejection is an incident (DECISIONS.md 2026-09-14) ─────────────────
+
+    fn alarm_count(world: &WorldMemory) -> Option<u64> {
+        world
+            .current(AUTH_ALARM_COUNT_FACT)
+            .unwrap()
+            .and_then(|f| f.value.as_u64())
+    }
+
+    #[test]
+    fn a_bad_tag_opens_one_alarm_per_burst_and_the_count_the_reflex_reads() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let mut auth = LoraAuth::new(ROOT).unwrap();
+        assert_eq!(
+            alarm_count(&world),
+            None,
+            "a healthy mesh has no count at all"
+        );
+        let other = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        // A wrong-root station keeps sending: three bad tags in a minute.
+        for (i, ctr) in [835u32, 836, 837].iter().enumerate() {
+            let f = parse_gateway_line(&signed_line(other, 0x40, *ctr, KEEPALIVE)).unwrap();
+            assert_eq!(
+                auth.admit(&f, &world, 1_000 + i as u64 * 20_000),
+                Err(LoraRefused::BadTag)
+            );
+        }
+        let alarms = world.history("spine.auth.gw-40.alarm").unwrap();
+        assert_eq!(alarms.len(), 1, "one fact per burst, not per frame");
+        let a = &alarms[0].value;
+        assert_eq!(a["status"], json!("alarmed"));
+        assert_eq!(a["station"], json!("gw-40"));
+        assert_eq!(a["ctr"], json!(835));
+        assert!(a["reason"].as_str().unwrap().starts_with("bad tag"));
+        assert_eq!(alarm_count(&world), Some(1));
+        assert_eq!(
+            LoraAuth::alarmed_stations(&world).len(),
+            1,
+            "mesh_status sees it"
+        );
+
+        // Quiet — genuine frames from another station keep the clock going —
+        // and ten minutes after the last bad tag it clears with the count.
+        let good = parse_gateway_line(&signed_line(ROOT, 0xD8, 1, KEEPALIVE)).unwrap();
+        assert_eq!(
+            auth.admit(&good, &world, 41_000 + AUTH_ALARM_CLEAR_MS - 1),
+            Ok(())
+        );
+        assert_eq!(alarm_count(&world), Some(1), "one ms short: still alarmed");
+        let good = parse_gateway_line(&signed_line(ROOT, 0xD8, 2, KEEPALIVE)).unwrap();
+        assert_eq!(
+            auth.admit(&good, &world, 41_000 + AUTH_ALARM_CLEAR_MS),
+            Ok(())
+        );
+        let alarms = world.history("spine.auth.gw-40.alarm").unwrap();
+        assert_eq!(alarms.len(), 2);
+        assert_eq!(alarms[1].value["status"], json!("cleared"));
+        assert_eq!(
+            alarms[1].value["count"],
+            json!(3),
+            "the burst's size travels on the clear"
+        );
+        assert_eq!(alarm_count(&world), Some(0));
+        assert!(LoraAuth::alarmed_stations(&world).is_empty());
+    }
+
+    #[test]
+    fn a_replay_alarms_but_the_post_reset_gap_and_old_firmware_do_not() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let mut auth = LoraAuth::new(ROOT).unwrap();
+        // Old firmware: refused, no alarm.
+        let f = parse_gateway_line(REFLEX_LINE).unwrap();
+        assert_eq!(auth.admit(&f, &world, 1_000), Err(LoraRefused::Unsigned));
+        assert_eq!(alarm_count(&world), None);
+        // A station reset's bounded gap: refused, no alarm.
+        let f = parse_gateway_line(&signed_line(ROOT, 0x40, 835, KEEPALIVE)).unwrap();
+        assert_eq!(auth.admit(&f, &world, 1_001), Ok(()));
+        let old = parse_gateway_line(&signed_line(ROOT, 0x40, 835 - 200, KEEPALIVE)).unwrap();
+        assert_eq!(auth.admit(&old, &world, 1_002), Err(LoraRefused::TooOld));
+        assert_eq!(alarm_count(&world), None);
+        assert!(world.current("spine.auth.gw-40.alarm").unwrap().is_none());
+        // The same counter again with a valid tag: a replay, and an incident.
+        assert_eq!(auth.admit(&f, &world, 1_003), Err(LoraRefused::Replayed));
+        assert_eq!(alarm_count(&world), Some(1));
+        assert!(world
+            .current("spine.auth.gw-40.alarm")
+            .unwrap()
+            .unwrap()
+            .value["reason"]
+            .as_str()
+            .unwrap()
+            .contains("replayed"));
+    }
+
+    #[test]
+    fn an_alarm_open_when_the_process_restarts_is_still_open() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let other = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        {
+            let mut auth = LoraAuth::new(ROOT).unwrap();
+            let f = parse_gateway_line(&signed_line(other, 0x40, 835, KEEPALIVE)).unwrap();
+            assert_eq!(auth.admit(&f, &world, 1_000), Err(LoraRefused::BadTag));
+        }
+        // New process, same store: the first frame from the station resumes
+        // the alarm, and it clears on the same timer from when it was written.
+        let mut auth = LoraAuth::new(ROOT).unwrap();
+        let good = parse_gateway_line(&signed_line(ROOT, 0x40, 900, KEEPALIVE)).unwrap();
+        assert_eq!(auth.admit(&good, &world, 5_000), Ok(()));
+        assert_eq!(alarm_count(&world), Some(1), "adopted, not forgotten");
+        let good = parse_gateway_line(&signed_line(ROOT, 0x40, 901, KEEPALIVE)).unwrap();
+        assert_eq!(
+            auth.admit(&good, &world, 1_000 + AUTH_ALARM_CLEAR_MS),
+            Ok(())
+        );
+        assert_eq!(alarm_count(&world), Some(0));
+        assert_eq!(
+            world.history("spine.auth.gw-40.alarm").unwrap().len(),
+            2,
+            "alarmed once, cleared once, across the restart"
+        );
     }
 
     /// The host persists with M = 1: after a restart a new verifier resumes

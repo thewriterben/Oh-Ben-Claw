@@ -309,6 +309,39 @@ pub fn mesh_node_lost_escalate(opts: &SafingOptions) -> ReflexRule {
     )
 }
 
+/// Triage directive when the LoRa gateway is refusing a station's frames as
+/// forged or replayed (DECISIONS.md 2026-09-14). The frames were dropped; the
+/// question for System 2 is what the station is, not whether to act on them.
+pub const SPINE_FORGERY_PLAYBOOK: &str = "The LoRa gateway is refusing frames from a mesh \
+station: a bad authentication tag (a station built with a different spine root, or a forgery) \
+or a replayed counter. The frames were dropped and nothing was ingested from them. Triage: \
+(1) call `mesh_status` and read `auth_alarms` — which station, which reason, the counter and \
+RSSI; (2) do not `mesh_command` anything on the strength of what that station says, and do \
+not seek another route to it; (3) `record_incident` with subject = the station id, \
+`status: investigating` and the `auth_alarms` entry as evidence — a wrong-root station is a \
+provisioning error for an operator to fix by reflashing, a replay is an attack for an operator \
+to look at; you cannot tell which from here and should not guess. An operator is alerted \
+automatically; you do not need to do that. Every node action stays Track-0 gated.";
+
+/// `spine.auth.alarm_count >= 1` → escalate to System 2: the LoRa gateway has
+/// refused a station's frame as forged or replayed within the last ten
+/// minutes. The count is absent or zero on a healthy mesh (4827 frames, 0
+/// rejections on the bench before this rule existed), so it is a safe default.
+pub fn spine_forgery_escalate(opts: &SafingOptions) -> ReflexRule {
+    rule(
+        "safe-spine-forgery",
+        Condition::Sensor {
+            entity: "spine.auth.alarm_count".to_string(),
+            op: Cmp::Ge,
+            value: 1.0,
+        },
+        Action::Escalate {
+            reason: SPINE_FORGERY_PLAYBOOK.to_string(),
+        },
+        debounce(opts),
+    )
+}
+
 /// The standard safing rule set for the given options. Order is stable.
 pub fn standard_safing_rules(opts: &SafingOptions) -> Vec<ReflexRule> {
     let mut rules = vec![power_critical_escalate(opts)];
@@ -321,6 +354,7 @@ pub fn standard_safing_rules(opts: &SafingOptions) -> Vec<ReflexRule> {
     rules.push(power_recovered_clear(opts));
     rules.push(net_recovered_clear(opts));
     rules.push(mesh_node_lost_escalate(opts));
+    rules.push(spine_forgery_escalate(opts));
     for stream in &opts.alarm_streams {
         rules.push(audio_alarm_escalate(stream, opts));
     }
@@ -468,9 +502,34 @@ mod tests {
     #[test]
     fn standard_set_includes_stop_only_with_actuator() {
         // base: power-critical-escalate, power-low, net-offline, net-degraded,
-        // power-recovered, net-recovered, mesh-node-lost = 7; +1 stop with an actuator = 8.
-        assert_eq!(standard_safing_rules(&SafingOptions::default()).len(), 7);
-        assert_eq!(standard_safing_rules(&opts_with_actuator()).len(), 8);
+        // power-recovered, net-recovered, mesh-node-lost, spine-forgery = 8;
+        // +1 stop with an actuator = 9.
+        assert_eq!(standard_safing_rules(&SafingOptions::default()).len(), 8);
+        assert_eq!(standard_safing_rules(&opts_with_actuator()).len(), 9);
+    }
+
+    #[test]
+    fn the_forgery_rule_watches_the_gateways_alarm_count_and_forbids_acting_on_the_station() {
+        let r = spine_forgery_escalate(&SafingOptions::default());
+        assert!(matches!(
+            &r.when,
+            Condition::Sensor { entity, op: Cmp::Ge, value } if entity == "spine.auth.alarm_count" && *value == 1.0
+        ));
+        match &r.then {
+            Action::Escalate { reason } => {
+                assert!(reason.contains("`mesh_status`"), "names the perceive tool");
+                assert!(reason.contains("auth_alarms"), "names the field to read");
+                assert!(
+                    reason.contains("do not `mesh_command`"),
+                    "forbids acting on the station"
+                );
+                assert!(
+                    reason.contains("should not guess"),
+                    "wrong root vs attack is the operator's call"
+                );
+            }
+            _ => panic!("expected an escalate action"),
+        }
     }
 
     #[test]

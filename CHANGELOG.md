@@ -5,6 +5,47 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A refused frame is an incident, and the mesh says so (SPINE-REPLAY §5.3–4) (2026-09-14)
+
+The two questions SPINE-REPLAY.md §5 left open when the anti-replay window
+shipped, decided in OBC-Prime `docs/DECISIONS.md` (2026-09-14) on the
+evidence that since host-side verification landed the brain has judged
+**4827 frames and rejected none** — every rejection ever recorded was one
+the bench made. Item 3, where the host keeps its per-source state, was
+already answered by the build (`spine.auth.<station>` in world memory,
+M = 1) and is now recorded. Item 4, what a rejection does beyond being
+dropped:
+
+- **`BadTag` and `Replayed` are incidents.** The radio drops CRC failures,
+  so a bad tag that reaches the host is a wrong root or a forgery, and a
+  replayed counter is a replay. `LoraAuth::admit` opens
+  `spine.auth.<station>.alarm` — `{status: alarmed, reason, ctr, rssi_dbm,
+  count, since_ms}`, derived from the auth fact, **one per burst** (a flood
+  of forged frames is one incident, not a flood of facts) — and keeps
+  `spine.auth.alarm_count`, the number of alarmed stations. The alarm
+  clears itself ten minutes after the station's last incident, and the
+  clear carries the burst's count. An alarm open when the process restarts
+  is adopted on the station's next frame, not forgotten.
+- **`TooOld` and `Unsigned` are not.** The first is the bounded post-reset
+  gap the design chose, in the safe direction, expected after every station
+  reboot; the second is a station on pre-step-4 firmware, a provisioning
+  error the auth fact already shows.
+- **`safe-spine-forgery`** joins the standard safing rules:
+  `spine.auth.alarm_count >= 1` escalates to System 2 with a playbook that
+  sends it to `mesh_status` (which now carries `auth_alarms`), forbids
+  commanding anything on that station's word, and has it record the
+  incident as `investigating` — wrong root or attack is the operator's call.
+- **Not `security/trust.rs`.** It scores actuating nodes by latency and
+  success; a station is not the actor, and a forger spoofs the victim's id.
+
+Measured: unit tests — three bad tags in a minute make one alarm fact and
+a count of 1; clear at exactly ten minutes with `count: 3`; a replay
+alarms while the post-reset gap and an unsigned line do not; an alarm
+survives a restart. Not yet measured on the air: a wrong-root bridge
+against the live brain (the bench is unplugged this morning) — the
+procedure is A5d's `wrong-root` run with the brain holding the base, and
+the expected result is exactly one Telegram escalation.
+
 ## Unreleased — A port that is not there at boot is an outage, not a misconfiguration (2026-09-14)
 
 Third strike. Yesterday the brain refused to start twice because a bench

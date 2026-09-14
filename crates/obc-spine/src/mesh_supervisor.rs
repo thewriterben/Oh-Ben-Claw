@@ -514,6 +514,9 @@ pub fn status_json(world: &WorldMemory) -> serde_json::Value {
             "escalated": escalated,
         },
         "spine": spine,
+        // Stations whose frames the host is refusing (bad tag or replay): the
+        // perceive step `safe-spine-forgery` sends System 2 to.
+        "auth_alarms": crate::lora_gateway::LoraAuth::alarmed_stations(world),
         "nodes": nodes,
         "escalations": recent_escalations(world, 10),
     })
