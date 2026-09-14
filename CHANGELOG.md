@@ -5,6 +5,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A port that is not there at boot is an outage, not a misconfiguration (2026-09-14)
+
+Third strike. Yesterday the brain refused to start twice because a bench
+script held COM3 when the task restarted; at 09:10 this morning it refused
+because the bench was unplugged when the machine came back — and stayed
+down until someone looked. The SPINE-LOSS reopen loop already knew what to
+do about a port that vanishes; it just was not allowed to start there.
+
+Now it is. The first open is still tried synchronously; when it fails and
+world memory is on, `supervise_gateway` starts *in* the outage:
+`spine.gateway` is `lost` with the open error from t = 0, every node reads
+`unobservable`, the command sink refuses with the same words, and the port
+is taken the moment it appears on the usual 1 → 30 s backoff
+(`GatewayHandle::lost`; `supervise_gateway` takes `Result<ConsoleLines,
+String>`). `[descending]` refuses to start only when nothing could ever
+produce a sink — no `[lora_gateway]`, no `hardware` feature, or no world
+memory, which cannot supervise a link it cannot record. Decision recorded
+in OBC-Prime `docs/DECISIONS.md` (2026-09-14), narrowing the 09-13 entry.
+
+Measured: unit test — a port absent at boot records `lost → reopening →
+reopening → open`, the sink refuses with the boot error meanwhile and
+delivers on the same `Arc` after. Live: this morning's brain, restarted
+with no COM ports present, should come up and take COM3 when the bench is
+plugged in — see the next entry's note once it has.
+
 ## Unreleased — The counter ceiling under a crash loop and a dead store (SPINE-REPLAY §6 steps 4–5) (2026-09-13)
 
 The two bench steps that were left when the ceiling scheme shipped on

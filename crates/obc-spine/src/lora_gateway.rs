@@ -919,6 +919,24 @@ impl GatewayHandle {
         }
     }
 
+    /// A handle for a port that could not be opened at startup: the link
+    /// starts `lost` with the open error, and the supervisor reopens it as it
+    /// would after a loss. A body whose base station is unplugged when it
+    /// boots is not misconfigured; it is in an outage that began at t = 0
+    /// (2026-09-14: the third time a bench that was simply unplugged left the
+    /// brain refusing to start until someone noticed).
+    pub fn lost(error: String, now_ms: u64) -> Self {
+        Self {
+            inner: std::sync::RwLock::new((
+                None,
+                GatewayLink::Lost {
+                    since_ms: now_ms,
+                    error,
+                },
+            )),
+        }
+    }
+
     /// The link as the handle last heard it.
     pub fn link(&self) -> GatewayLink {
         self.inner.read().unwrap().1.clone()
@@ -1022,18 +1040,19 @@ where
 }
 
 /// Own the base-station link for the life of the process. Runs the RX loop
-/// on `first`; when the I/O thread exits records `lost` with its error, then
-/// reopens with [`reopen_backoff`] until it succeeds — recording `reopening`
-/// before each attempt and `open` after, swapping the writer in `handle` so
-/// the sink keeps working — and runs the RX loop again with the same `auth`.
-/// Never returns.
+/// on `first` — or, when the first open failed, starts in the outage with
+/// that error — and whenever the I/O thread exits records `lost` with its
+/// error, then reopens with [`reopen_backoff`] until it succeeds: recording
+/// `reopening` before each attempt and `open` after, swapping the writer in
+/// `handle` so the sink keeps working, then running the RX loop again with
+/// the same `auth`. Never returns.
 ///
 /// `open` is whatever produces a `(lines, writer)` pair: `open_split` on
 /// hardware, a pair of channels in tests. It is awaited, so a blocking open
 /// can be moved off the runtime by the caller.
 pub async fn supervise_gateway<O, Fut, F>(
     port: String,
-    first: ConsoleLines,
+    first: Result<ConsoleLines, String>,
     mut open: O,
     mut auth: LoraAuth,
     world: Arc<WorldMemory>,
@@ -1044,62 +1063,84 @@ pub async fn supervise_gateway<O, Fut, F>(
     Fut: std::future::Future<Output = anyhow::Result<(ConsoleLines, SerialWriterHandle)>>,
     F: Fn() -> u64 + Send + Clone,
 {
-    let mut lines = first;
+    let mut lines = match first {
+        Ok(lines) => lines,
+        Err(error) => {
+            tracing::warn!(port = %port, "[lora_gateway] not open at start — reopening with backoff: {error}");
+            reopen_until_open(&port, error, &mut open, &world, &handle, &now_ms).await
+        }
+    };
     loop {
         let error = run_gateway_rx(lines, &mut auth, Arc::clone(&world), now_ms.clone()).await;
+        tracing::warn!(port = %port, "[lora_gateway] link lost — reopening with backoff: {error}");
+        lines = reopen_until_open(&port, error, &mut open, &world, &handle, &now_ms).await;
+    }
+}
 
-        // The I/O thread is gone. Say so before trying anything.
-        let lost_at = now_ms();
-        let link = GatewayLink::Lost {
+/// The outage: record `lost`, then `reopening` before each attempt, and
+/// `open` when one succeeds. Returns the new line channel.
+async fn reopen_until_open<O, Fut, F>(
+    port: &str,
+    error: String,
+    open: &mut O,
+    world: &WorldMemory,
+    handle: &GatewayHandle,
+    now_ms: &F,
+) -> ConsoleLines
+where
+    O: FnMut() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<(ConsoleLines, SerialWriterHandle)>>,
+    F: Fn() -> u64,
+{
+    let lost_at = now_ms();
+    let link = GatewayLink::Lost {
+        since_ms: lost_at,
+        error: error.clone(),
+    };
+    handle.set(None, link.clone());
+    link.record(world, port, lost_at);
+
+    let mut attempts: u32 = 0;
+    let mut last_error = error;
+    loop {
+        attempts += 1;
+        let wait = reopen_backoff(attempts);
+        let now = now_ms();
+        let link = GatewayLink::Reopening {
             since_ms: lost_at,
-            error: error.clone(),
+            error: last_error.clone(),
+            attempts: attempts - 1,
+            next_attempt_ms: now + wait.as_millis() as u64,
         };
         handle.set(None, link.clone());
-        link.record(&world, &port, lost_at);
-        tracing::warn!(port = %port, "[lora_gateway] link lost — reopening with backoff");
-
-        let mut attempts: u32 = 0;
-        let mut last_error = error;
-        lines = loop {
-            attempts += 1;
-            let wait = reopen_backoff(attempts);
-            let now = now_ms();
-            let link = GatewayLink::Reopening {
-                since_ms: lost_at,
-                error: last_error.clone(),
-                attempts: attempts - 1,
-                next_attempt_ms: now + wait.as_millis() as u64,
-            };
-            handle.set(None, link.clone());
-            link.record(&world, &port, now);
-            tokio::time::sleep(wait).await;
-            match open().await {
-                Ok((rd, wr)) => {
-                    let now = now_ms();
-                    let link = GatewayLink::Open {
-                        since_ms: now,
-                        attempts,
-                    };
-                    handle.set(Some(wr), link.clone());
-                    link.record(&world, &port, now);
-                    tracing::info!(
-                        port = %port,
-                        outage_ms = now.saturating_sub(lost_at),
-                        attempts,
-                        "[lora_gateway] link reopened"
-                    );
-                    break rd;
-                }
-                Err(e) => {
-                    last_error = format!("{e:#}");
-                    tracing::warn!(
-                        port = %port,
-                        attempt = attempts,
-                        "[lora_gateway] reopen failed: {last_error}"
-                    );
-                }
+        link.record(world, port, now);
+        tokio::time::sleep(wait).await;
+        match open().await {
+            Ok((rd, wr)) => {
+                let now = now_ms();
+                let link = GatewayLink::Open {
+                    since_ms: now,
+                    attempts,
+                };
+                handle.set(Some(wr), link.clone());
+                link.record(world, port, now);
+                tracing::info!(
+                    port = %port,
+                    outage_ms = now.saturating_sub(lost_at),
+                    attempts,
+                    "[lora_gateway] link opened"
+                );
+                return rd;
             }
-        };
+            Err(e) => {
+                last_error = format!("{e:#}");
+                tracing::warn!(
+                    port = %port,
+                    attempt = attempts,
+                    "[lora_gateway] reopen failed: {last_error}"
+                );
+            }
+        }
     }
 }
 
@@ -1881,7 +1922,7 @@ mod tests {
             };
             supervise_gateway(
                 "COM3".into(),
-                first_rx,
+                Ok(first_rx),
                 move || {
                     let r = port.open();
                     async move { r }
@@ -1976,5 +2017,77 @@ mod tests {
                 "open:3"
             ]
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_port_absent_at_boot_is_an_outage_from_t0_not_a_refusal() {
+        // 2026-09-14 09:10: the bench was unplugged when the machine came up,
+        // and the brain exited. Now the same start records `lost` with the
+        // open error, the sink refuses with it, and the port is taken the
+        // moment it appears.
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let port = FakePort {
+            opens: Default::default(),
+            cmds: Default::default(),
+            fail_first: Arc::new(std::sync::atomic::AtomicU32::new(1)),
+        };
+        let t0 = tokio::time::Instant::now();
+        let now_ms = move || 5_000_000 + t0.elapsed().as_millis() as u64;
+        let boot_error =
+            "failed to open LoRa gateway console COM3: The system cannot find the file specified.";
+        let handle = Arc::new(GatewayHandle::lost(boot_error.into(), now_ms()));
+        let sink: Arc<dyn CommandSink> = Arc::new(SerialCommandSink::new(Arc::clone(&handle)));
+        let (opens, cmds, fail_first) = (
+            Arc::clone(&port.opens),
+            Arc::clone(&port.cmds),
+            Arc::clone(&port.fail_first),
+        );
+        let (w, h) = (Arc::clone(&world), Arc::clone(&handle));
+        tokio::spawn(async move {
+            let port = FakePort {
+                opens,
+                cmds,
+                fail_first,
+            };
+            supervise_gateway(
+                "COM3".into(),
+                Err(boot_error.into()),
+                move || {
+                    let r = port.open();
+                    async move { r }
+                },
+                LoraAuth::new(ROOT).unwrap(),
+                w,
+                h,
+                now_ms,
+            )
+            .await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        let cmd = NodeCommand::new("obc-esp32-s3-001", "b1", "capabilities", json!({}));
+        let err = sink.send_command(&cmd).await.unwrap_err().to_string();
+        assert_eq!(err, format!("gateway reopening: {boot_error}"));
+        // First attempt at +1 s fails (still unplugged); second at +3 s finds it.
+        tokio::time::sleep(std::time::Duration::from_millis(3_100)).await;
+        assert!(
+            matches!(
+                GatewayLink::read(&world).unwrap(),
+                GatewayLink::Open { attempts: 2, .. }
+            ),
+            "{:?}",
+            GatewayLink::read(&world)
+        );
+        sink.send_command(&cmd).await.unwrap();
+        assert_eq!(
+            port.cmds.lock().unwrap()[0].try_recv().unwrap(),
+            cmd.encode()
+        );
+        let states: Vec<String> = world
+            .history(GATEWAY_FACT)
+            .unwrap()
+            .iter()
+            .map(|f| f.value["state"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(states, vec!["lost", "reopening", "reopening", "open"]);
     }
 }
