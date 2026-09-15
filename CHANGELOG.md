@@ -5,6 +5,42 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The descending loop is working and starved (2026-09-15)
+
+First real run of `posture_real_effect` against the live record — the
+harness written 09-13 against a store with no `descending.*` facts at all.
+It now has four.
+
+**Measured** (`world.db` + `trajectories.db`, 7.8 h of confirmed record):
+the policy has made **four posture decisions in its lifetime**, one
+cautious, held eighteen minutes total. `die-cool` — the only slot-bound
+rule, the one posture exists to modulate — fired six times under `default`
+and **zero** times under cautious. M3 has N = 1. The node-side dataset is
+33 reflex reports.
+
+The instrument is sound: `safe-link-offline`, a literal-threshold rule
+posture does not touch, ran 3.46/hour under default against 3.33/hour
+under cautious — flat, which is the control working. Had posture moved
+*that*, the wiring would have been wrong.
+
+The cause is upstream of the policy. The trajectory store holds 99
+episodes across 2.19 days but only one since 09-13, and most of what the
+body saw was the same System 2 escalation text, which it correctly scores
+at 0.001–0.03 every time. A novelty signal fed a near-constant input
+produces a near-constant output; the body is doing its job.
+
+So: the MB → DN link is built, bench-verified (novelty 0.372 → slot 0.15 →
+node `applied 1`) and **unmeasurable in service** for want of things to be
+surprised by. Nothing here supports or refutes the claim that descending
+posture helps — there is no sample. Recorded rather than quietly re-run
+later, because "we measured it and there was nothing to measure" is a
+result.
+
+`docs/NEUROMORPHIC-2026-09.md` files what follows from it: the missing
+sensory tier, where spiking hardware would earn its place and where it
+would be cargo cult, and a four-rung ladder whose first rung — a graded
+descending level instead of one bit — is planned there and not built.
+
 ## Unreleased — A refused frame is an incident, and the mesh says so (SPINE-REPLAY §5.3–4) (2026-09-14)
 
 The two questions SPINE-REPLAY.md §5 left open when the anti-replay window
