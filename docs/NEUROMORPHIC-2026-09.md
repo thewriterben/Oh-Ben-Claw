@@ -184,9 +184,24 @@ half first: replay a large episode corpus through body and policy in the
 `mushroom_real_episodes` harness and look at the level distribution — this
 needs no hardware and tells you whether the rung-1 map is sane before it
 touches the mesh. Then the live half: a perception source that produces
-episodes continuously. The ClawCam seed data and the WILD Zenodo record are
-both already on the open list as candidates; the Zenodo licence must be
-read before the first run.
+episodes continuously.
+
+**Checked 2026-09-15, and the obvious corpus is not one.** The WILD Zenodo
+record (10.5281/zenodo.18879184) is licensed **CC-BY-4.0** — attribution
+only, no non-commercial and no no-derivatives clause — so the licence gate
+this document and `WILD-2026-09.md` §7 both flagged is **clear**. The content
+gate is not. The record describes itself as "the figure data for manuscript
+[…]", its resource type is *Computational notebook*, and its fourteen files
+are `Fig2.zip`…`Fig6.zip` and
+`ExtendedDataFigure1.zip`…`ExtendedDataFigure10.zip`, 238.1 MB in total.
+That is per-panel processed arrays, not the continuous multi-stream
+recording with behavioural labels an episode stream needs. Two archives are
+large enough to hold real traces (`ExtendedDataFigure9.zip` 128.6 MB,
+`Fig3.zip` 44.7 MB) and might carry something usable, but nothing has been
+downloaded and saying more than that would be a guess. WILD's raw binaries
+are "on request" per its own §1, which is a human-latency path rather than a
+next step. **Rung 2 therefore needs a different corpus or a request to the
+authors, and the ClawCam seed data is now the nearer candidate.**
 
 **Rung 3 — event-driven sensing on a node.** Only once rung 2 has shown
 what a real event rate does to the descending signal. Needs a current
@@ -358,8 +373,11 @@ levels). Six files, so: plan first, go-ahead, then small steps.
    the cheapest (full 0.25, floor 0.05 ≈ 25 % default at 31), because M1
    needs a control group. Carry novelty and prior separately on the fact.
    Fix the stale corpus description on `LevelMap::caution` while there.
-2. Read the WILD Zenodo record's licence before any replay through the
-   body (already open on the WILD list; now blocking rung 2).
+2. ~~Read the WILD Zenodo record's licence~~ — done 2026-09-15: CC-BY-4.0,
+   gate clear. The record is **figure data, not a stream corpus** (§5 rung
+   2), so the open item is now *find rung 2 a corpus*: check whether
+   `ExtendedDataFigure9.zip` or `Fig3.zip` hold usable traces, ask the
+   authors for the raw binaries, or use the ClawCam seed data instead.
 3. The second bound slot. Slot 0 is the die-temperature LED; nothing else
    on the node is slot-bound, which is why §7 defers slot selection.
 4. A neuromorphic-silicon survey to sit beside `EDGE-LM-2026-09.md`.
