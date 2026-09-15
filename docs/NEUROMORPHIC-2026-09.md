@@ -168,6 +168,17 @@ asynchrony or analogue dynamics does not. Any node-side spiking policy has
 to be the former, and that should be decided before silicon is chosen, not
 after.
 
+**Correction, 2026-09-15.** That constraint was aimed one tier too late.
+`NEUROMORPHIC-SILICON-2026-09.md` §3 finds that determinism fails at the
+*sensor*, before any spiking processor is involved: an event pixel is an
+analogue comparator with per-part bias, per-part hot pixels and
+mismatch-driven redundant events, so the same scene on the same part twice
+does not produce the same stream. No choice of processor recovers that. What
+survives is a relocated invariant — the function from a *recorded* event
+stream to a posture level can be bit-reproducible, and the stream is an
+input carrying provenance, not a component of the system under test. That is
+the same move `TrajectoryStore` already makes for episodes.
+
 ## 5. The ladder
 
 Cheapest first, each rung measurable on its own.
@@ -243,16 +254,29 @@ cheap, it is a strict prerequisite for rung 3, and nobody had written it
 down. It is the real next rung.
 
 **Rung 3 — event-driven sensing on a node.** Only once rung 2 has shown
-what a real event rate does to the descending signal. Needs a current
-survey of neuromorphic silicon, which this repository does not have:
-`OBC-Prime/docs/EDGE-LM-2026-09.md` covers language models on nodes and
-says nothing about spiking sensors or inference parts. Families worth
-surveying — **all unverified, none costed, availability unknown**:
-Prophesee's low-power edge event sensors; SynSense Speck (sensor and
-spiking inference in one package, which is the ClawCam shape almost
-exactly); Innatera; BrainChip Akida. Intel Loihi 2 is research-access and
-almost certainly out of scope. `TODO(source)` on every one of these until
-somebody reads current datasheets.
+what a real event rate does to the descending signal. The survey this rung
+was waiting on now exists: **`NEUROMORPHIC-SILICON-2026-09.md`**
+(2026-09-15), which checked all five families named here against current
+vendor pages. What it found, in one line each:
+
+- **Prophesee GenX320** — the only part here purchasable at a published
+  retail price ($300 as an OpenMV module) *and* documented against a
+  microcontroller. Already shipping into an STM32F746 over I²C + parallel
+  DCMI at 1 MEPS and 3 mW. The 36 µW headline is a 3×3-pixel passive mode;
+  real streaming is 3–22.8 mW at the sensor.
+- **SynSense Speck** — still the ClawCam shape (DVS and SNN on one die),
+  still contact-sales, dev kit wants Ubuntu 18.04/20.04 over USB.
+- **Innatera Pulsar** — the only true neuromorphic MCU, and it gained a
+  camera parallel interface, which is the GenX320 shape. No public price,
+  store or datasheet.
+- **BrainChip Akida** — the only vendor publishing list prices ($129–$1,495)
+  and the only plainly digital-synchronous family, and its parts are host
+  cards, not node parts. That trade is the one predicted in §4.
+- **Intel Loihi 2** — research-only, and Lava was archived read-only on
+  2026-05-13. "Almost certainly out of scope" is now a fact.
+
+The survey's own finding is that determinism binds at the sensor, not the
+processor — see the correction at the end of §4.
 
 **Rung 4 — a node-side policy that is neither a rule nor a language
 model.** A few-dozen-weight sensor→slot map. The `No language model on a
@@ -424,9 +448,13 @@ levels). Six files, so: plan first, go-ahead, then small steps.
    open, now for want of a *subject* rather than a *path*.
 3. The second bound slot. Slot 0 is the die-temperature LED; nothing else
    on the node is slot-bound, which is why §7 defers slot selection.
-4. A neuromorphic-silicon survey to sit beside `EDGE-LM-2026-09.md`.
-   Datasheets, availability, price, determinism, toolchain. None of §5
-   rung 3's names should be trusted until this exists.
+4. ~~A neuromorphic-silicon survey to sit beside `EDGE-LM-2026-09.md`~~ —
+   done 2026-09-15 as `NEUROMORPHIC-SILICON-2026-09.md`; §5 rung 3 and §4
+   both revised from it. What replaces it, and it is smaller: **read the
+   ESP32-S3 technical reference manual's `LCD_CAM` chapter against the
+   GenX320 CPI timing.** The survey marks that link `TODO(source)`, and it
+   is the one question that decides whether an event sensor could ever
+   reach a node of the class OBC already fields, or needs a new board.
 5. `flyvis` as a reference implementation of the missing tier — worth
    reading before designing anything in rung 3.
 
@@ -437,9 +465,12 @@ database themselves and are as solid as anything here. Nothing was
 downloaded from Zenodo, so "two archives are large enough to hold real
 traces" is an inference from file size, not a look inside.
 
-Every hardware name in §5 rung 3 is from memory and none of it was checked
-against a current datasheet, price list or stock status; that is what item
-4 above is for. The `flyvis` citation is from the CONNECTOME source list,
+~~Every hardware name in §5 rung 3 is from memory and none of it was checked
+against a current datasheet, price list or stock status~~ — checked
+2026-09-15; §5 rung 3 now carries the findings and
+`NEUROMORPHIC-SILICON-2026-09.md` §6 carries that survey's own list of what
+it could not verify, of which the largest is that no full datasheet was read
+for any part. The `flyvis` citation is from the CONNECTOME source list,
 not re-read. The claim that event sensors suit the conscience layer better
 than frame sensors is an architectural argument, not a legal or policy
 opinion, and has not been tested against `docs/CONSCIENCE.md`'s actual

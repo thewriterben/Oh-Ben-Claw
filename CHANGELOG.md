@@ -5,6 +5,49 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Neuromorphic silicon, checked (2026-09-15)
+
+`docs/NEUROMORPHIC-SILICON-2026-09.md`. Open item 4 of
+`docs/NEUROMORPHIC-2026-09.md` said every hardware name in rung 3 was from
+memory and none had been checked against a datasheet, a price or a stock
+state. All five families are checked now, against current vendor pages, with
+a source per claim.
+
+The shopping answer is still "buy nothing", for a better reason. Exactly one
+part is purchasable at a published price *and* documented against a
+microcontroller — Prophesee's GenX320, $300 as an OpenMV module, and already
+shipping into an STM32F746 over I²C plus parallel DCMI at 1 MEPS and 3 mW.
+Neuromorphic *compute* is in a different state from neuromorphic *sensing*:
+BrainChip publishes prices ($129–$1,495) but sells host cards, Innatera's
+Pulsar has no public price, store or datasheet, SynSense Speck is
+contact-sales, and Intel's Lava went read-only on 2026-05-13 with Loihi
+still unpurchasable. The 36 µW figure that makes event sensors sound free is
+a 3×3-pixel passive mode; watching anything costs 3–22.8 mW at the sensor.
+
+The finding that changes a design is in §3, and it is not about any vendor.
+**Determinism fails at the sensor, not the processor.** §4 of the
+neuromorphic doc had said a node-side spiking policy must be fixed-point and
+fixed-timestep; that was aimed one tier too late. An event pixel is an
+analogue comparator with per-part biases, per-part hot pixels and
+mismatch-driven redundant events — OpenMV's driver ships a quieter preset
+than the datasheet's, calibrates out hot pixels per die, and the on-chip STC
+filter exists because noise fires extra events around every real transition.
+The same scene on the same part twice does not produce the same stream, and
+no processor recovers that. So the invariant moves: the function from a
+*recorded* stream to a posture level can be bit-reproducible, with the
+stream carried as an input plus provenance. That is the move
+`TrajectoryStore` already makes for episodes, which is why it is worth
+writing down now rather than retrofitting.
+
+Both revisions are folded back into `docs/NEUROMORPHIC-2026-09.md` (§4
+correction, §5 rung 3, §8 item 4, §9). What replaces open item 4 is smaller
+and sharper: read the ESP32-S3 `LCD_CAM` chapter against the GenX320 CPI
+timing. That one link decides whether an event sensor could ever reach the
+node class OBC already fields, or needs a new board — and the survey marks
+it `TODO(source)` rather than guessing.
+
+---
+
 ## Unreleased — The mushroom body gets senses (2026-09-15)
 
 Until today the body had no sensory input at all. Outside tests,
