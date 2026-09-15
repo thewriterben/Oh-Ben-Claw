@@ -5,6 +5,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased - Rung 1 step A: the graded level is cheaper than the one bit (2026-09-15)
+
+`docs/NEUROMORPHIC-2026-09.md` SS6 step A, built and run. `LevelMap` and
+`Descent` in `obc_agent::posture` are pure functions with no caller in the
+agent loop: novelty to a caution, caution to a level between the rule's own
+default and `novel_level`, quantised, with a floor below which the slots are
+cleared. `crates/obc-agent/tests/posture_level_replay.rs` (ignored; needs
+`OBC_TRAJECTORIES_DB`) replays the brain's own episodes through the body and
+asks what each candidate map would have sent.
+
+It does not live in `obc-memory`'s tests as SS6 assumed. That crate is
+deliberately near-leaf and a dev-dependency back on `obc-agent` would spend
+the property it was extracted for; the replay goes where the policy is, and
+takes `rusqlite` as a dev-dependency to read the stored embeddings.
+
+**Measured** on 99 episodes over 2.19 days, against the deployed one-bit
+policy's 35 posture changes (16.0 frames/day):
+
+| distinct descents | frames | vs one bit | knee / step / floor |
+|---|---|---|---|
+| 4 | 31 | **-4** | 0.00-0.25 / 0.10 / 0.05 |
+| 6 | 37 | +2 | 0.10-0.25 / 0.05 / 0.25 |
+| 8 | 39 | +4 | 0.05-0.25 / 0.05 / 0.05 |
+
+Two predictions failed, both recorded rather than quietly dropped.
+
+SS6 expected rung 1 to produce "four graded decisions where there were four
+binary ones" because the episode rate dominates. It does not: 53 of 79
+turns after warm-up get a different descent, and **four distinct descents
+cost four frames less than the deployed one bit**. Variance was available
+without airtime, which the rate argument had ruled out in advance.
+
+The plan for this step predicted `success_prior` would be absent on exactly
+the novel turns and so could not earn a term. It is present on 74 of 79
+turns and on 29 of the 34 novel ones. SS6 was right to want it in the map;
+step B carries novelty and prior separately on the fact.
+
+**Found by the replay, not by design.** A caution just over the floor
+produces a level that quantises back onto the rule's own default, and
+sending it spends a frame telling the node to hold the number its rule
+already holds. On these episodes that was most of the traffic the graded
+map added. `descent` now returns `Clear` for it, compared against
+`level(0.0)` so both sides come out of the same rounding.
+
+Not done: none of it is wired. No config keys, no `descending.<node>`
+fields, nothing on the air. The knee, step and floor above are what the
+corpus can speak to; the linear shape between the knees is a declared
+choice with four points anywhere near the middle of the range, and
+`LevelMap::caution` says so where someone changing it will read it.
+
 ## Unreleased — The descending loop is working and starved (2026-09-15)
 
 First real run of `posture_real_effect` against the live record — the

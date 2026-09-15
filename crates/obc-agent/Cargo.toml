@@ -81,3 +81,11 @@ uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }
 
 [dev-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# `tests/posture_level_replay.rs` reads the brain's own trajectory store to
+# choose rung 1's constants from data. It reads the stored embeddings, which
+# `TrajectoryStore` uses internally and does not expose, so it goes to SQLite
+# directly — the same thing obc-memory's own real-episode harnesses do, and
+# the same version obc-memory pins. The replay calls `obc_agent::posture`, so
+# it cannot live in obc-memory's tests: that crate is deliberately near-leaf
+# (see its Cargo.toml) and a dev-dependency back on obc-agent would spend it.
+rusqlite = { version = "0.38", features = ["bundled"] }

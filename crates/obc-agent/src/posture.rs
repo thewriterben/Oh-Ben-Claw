@@ -168,6 +168,134 @@ impl Posture {
     }
 }
 
+/// What a graded posture asks of a node's owned slots.
+///
+/// The `Clear` arm is not "level zero" — it is `descend {clear: true}`,
+/// which restores each rule's own default exactly, costs the smallest
+/// frame, and is what the node already does today for [`Posture::Default`].
+/// A map that only ever emitted levels would never return a slot to the
+/// rule's own number, only to a level that happens to equal it.
+///
+/// `PartialEq` and not `Eq` because the level is an `f64`. That is enough
+/// for the change-detection [`PosturePolicy`] does — the levels being
+/// compared are quantised by [`LevelMap::descent`], so equal caution gives
+/// bit-equal levels — but it is why the quantisation is load-bearing rather
+/// than cosmetic: without it almost every turn is a different `f64` and
+/// therefore a frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Descent {
+    /// Clear the owned slots; the rules' own defaults apply.
+    Clear,
+    /// Hold every owned slot at this quantised level.
+    Level(f64),
+}
+
+/// The graded map from the body's novelty to a slot level — rung 1 of
+/// `docs/NEUROMORPHIC-2026-09.md` §6, as a pure function.
+///
+/// **Nothing in the agent loop calls this yet.** §6 splits rung 1 into three
+/// steps and this is step A: the map exists so the replay in
+/// `tests/posture_level_replay.rs` can choose its constants from the brain's
+/// own episodes *before* any of them reach a config file or the air.
+/// [`Posture`] is still the policy; step B wires this in and moves these
+/// fields into `[descending]`. Every field is therefore a parameter with no
+/// default here on purpose — a `Default` impl would be six numbers nobody
+/// measured, which is the shape this feature exists to avoid.
+///
+/// **Only `novelty` is read.** [`Assessment`] also carries `success_prior`,
+/// and §6 wants it in the map on the argument that an objective resembling
+/// past failures deserves caution even when familiar. It is not here,
+/// because the prior is `Option<f32>` behind a coverage floor and may be
+/// `None` on exactly the objectives this map cares about. The replay prints
+/// that coverage; if it is non-trivial the prior earns a term, and if it is
+/// not, adding one now would be a weighting fitted to nothing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LevelMap {
+    /// Novelty at or below which caution is 0.
+    pub caution_knee: f32,
+    /// Novelty at or above which caution is 1.
+    pub caution_full: f32,
+    /// The level standing for "the rule's own default" — caution 0.
+    pub rule_default: f64,
+    /// The level at full caution. Lower is more cautious for a threshold
+    /// `min + level·(max − min)`, so this normally sits below `rule_default`.
+    pub novel_level: f64,
+    /// Quantisation of the emitted level. The deadband: two turns whose
+    /// caution rounds to the same step are the same `Descent` and cost no
+    /// frame.
+    pub step: f64,
+    /// Caution below this emits [`Descent::Clear`] instead of a level.
+    pub clear_below: f32,
+}
+
+impl LevelMap {
+    /// Caution in `[0, 1]`, clamped and monotone in novelty.
+    ///
+    /// The shape is linear between the knees. That is a **declared choice,
+    /// not a measured one**: the 99 episodes this was written against are
+    /// piled at novelty 0.001–0.03 with four points anywhere else, and a
+    /// curve fitted to four points would be a guess wearing evidence. The
+    /// replay's job is to size the knees, the step and the floor — which are
+    /// questions about this traffic and which this corpus can answer — and
+    /// to leave the shape falsifiable.
+    pub fn caution(&self, novelty: f32) -> f32 {
+        // A novelty that is not a number is a bug upstream of here, and the
+        // one thing it must not do is become a level on the radio. Caution 0
+        // clears the slot, which is the node's own default and the state it
+        // was in before this policy existed.
+        if novelty.is_nan() {
+            return 0.0;
+        }
+        let span = self.caution_full - self.caution_knee;
+        if span.is_nan() || span <= 0.0 {
+            // Degenerate or inverted knees: a step function at the upper
+            // knee rather than a division by zero.
+            return if novelty >= self.caution_full {
+                1.0
+            } else {
+                0.0
+            };
+        }
+        ((novelty - self.caution_knee) / span).clamp(0.0, 1.0)
+    }
+
+    /// The level for a caution, before the floor: `lerp(rule_default,
+    /// novel_level, caution)`, quantised to `step`.
+    pub fn level(&self, caution: f32) -> f64 {
+        let raw = self.rule_default + (self.novel_level - self.rule_default) * caution as f64;
+        if self.step > 0.0 {
+            (raw / self.step).round() * self.step
+        } else {
+            raw
+        }
+    }
+
+    /// What this turn's novelty asks of the owned slots.
+    ///
+    /// Two ways to arrive at [`Descent::Clear`], and the second was found by
+    /// the replay rather than designed: a caution under `clear_below`, and a
+    /// level that quantises back onto `rule_default`. The second matters
+    /// because without it the map spends a frame telling the node to hold
+    /// the number its own rule already holds — on the brain's real episodes
+    /// that was most of the traffic the graded map added. `Clear` says the
+    /// same thing in fewer bytes and restores the rule's default exactly.
+    pub fn descent(&self, novelty: f32) -> Descent {
+        let caution = self.caution(novelty);
+        if caution < self.clear_below {
+            return Descent::Clear;
+        }
+        let level = self.level(caution);
+        // Against `level(0.0)`, not against `rule_default` itself: both sides
+        // then come out of the same rounding, so this is an exact equality
+        // between two numbers produced the same way rather than a float
+        // comparison across a quantisation step.
+        if level == self.level(0.0) {
+            return Descent::Clear;
+        }
+        Descent::Level(level)
+    }
+}
+
 /// Prefix of the per-node facts this policy writes.
 pub const FACT_PREFIX: &str = "descending.";
 /// Source tag on those facts.
@@ -819,5 +947,149 @@ mod tests {
             json!({ "enabled": true, "novel_levle": 0.2 })
         )
         .is_err());
+    }
+
+    // ── Rung 1 step A: the graded map ───────────────────────────────────
+    //
+    // The numbers below are the test's own, not proposed constants. What is
+    // asserted is the map's *shape* — monotone, clamped, quantised, and
+    // clearing below the floor — because those are the properties step B
+    // will rely on. The knees, step and floor come from the replay.
+
+    fn map() -> LevelMap {
+        LevelMap {
+            caution_knee: 0.05,
+            caution_full: 0.45,
+            rule_default: 0.5,
+            novel_level: 0.15,
+            step: 0.05,
+            clear_below: 0.1,
+        }
+    }
+
+    #[test]
+    fn caution_is_clamped_monotone_and_flat_outside_the_knees() {
+        let m = map();
+        assert_eq!(m.caution(0.0), 0.0);
+        assert_eq!(m.caution(0.05), 0.0, "at the lower knee");
+        assert_eq!(m.caution(0.45), 1.0, "at the upper knee");
+        assert_eq!(m.caution(1.0), 1.0);
+        assert!((m.caution(0.25) - 0.5).abs() < 1e-6, "linear between");
+        let mut last = -1.0;
+        for i in 0..=100 {
+            let c = m.caution(i as f32 / 100.0);
+            assert!(c >= last, "not monotone at {i}");
+            assert!((0.0..=1.0).contains(&c));
+            last = c;
+        }
+    }
+
+    #[test]
+    fn degenerate_knees_are_a_step_function_not_a_nan() {
+        let m = LevelMap {
+            caution_knee: 0.4,
+            caution_full: 0.4,
+            ..map()
+        };
+        assert_eq!(m.caution(0.39), 0.0);
+        assert_eq!(m.caution(0.4), 1.0);
+        let inverted = LevelMap {
+            caution_knee: 0.6,
+            caution_full: 0.2,
+            ..map()
+        };
+        assert!(inverted.caution(0.5).is_finite());
+    }
+
+    #[test]
+    fn a_novelty_that_is_not_a_number_clears_rather_than_reaching_the_radio() {
+        let m = map();
+        assert_eq!(m.caution(f32::NAN), 0.0);
+        assert_eq!(m.descent(f32::NAN), Descent::Clear);
+        // And no path produces a level that is not a number.
+        for m in [
+            map(),
+            LevelMap {
+                caution_knee: f32::NAN,
+                ..map()
+            },
+            LevelMap {
+                caution_full: f32::NAN,
+                ..map()
+            },
+        ] {
+            for n in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, 0.0, 2.0] {
+                if let Descent::Level(l) = m.descent(n) {
+                    assert!(l.is_finite(), "level {l} from novelty {n}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_level_interpolates_between_the_endpoints_and_quantises() {
+        let m = map();
+        assert!(
+            (m.level(0.0) - 0.5).abs() < 1e-9,
+            "caution 0 = rule default"
+        );
+        assert!(
+            (m.level(1.0) - 0.15).abs() < 1e-9,
+            "caution 1 = novel level"
+        );
+        // caution 0.4 → 0.5 − 0.35·0.4 = 0.36 raw → 7.2 steps → 0.35.
+        assert!((m.level(0.4) - 0.35).abs() < 1e-9, "{}", m.level(0.4));
+        // Quantisation is what makes near-equal turns cost no frame:
+        // novelty 0.22 and 0.24 are caution 0.425 and 0.475, levels 0.351
+        // and 0.334 raw, and both round to 0.35.
+        assert_eq!(m.descent(0.22), m.descent(0.24));
+        // But the deadband only merges turns inside a bucket. 0.24 and 0.26
+        // straddle a boundary (6.675 and 6.325 steps) and so are a frame
+        // apart — which is the cost step B is choosing the step size to
+        // bound, not a property the map can promise away.
+        assert_ne!(m.descent(0.24), m.descent(0.26));
+    }
+
+    #[test]
+    fn caution_under_the_floor_clears_rather_than_sending_a_level() {
+        let m = map();
+        // Below the lower knee there is nothing to be cautious about.
+        assert_eq!(m.descent(0.01), Descent::Clear);
+        assert_eq!(m.descent(0.05), Descent::Clear);
+        // Just above the floor (caution 0.1 → novelty 0.09) a level starts.
+        assert!(matches!(m.descent(0.2), Descent::Level(_)));
+        assert!(matches!(m.descent(1.0), Descent::Level(l) if (l - 0.15).abs() < 1e-9));
+    }
+
+    #[test]
+    fn a_level_that_quantises_back_onto_the_rule_default_is_a_clear() {
+        // Found by the replay, not by design: a caution just over the floor
+        // produces a level that rounds to `rule_default`, and sending it
+        // spends a frame telling the node to hold the number its own rule
+        // already holds. On the brain's 99 episodes that was most of the
+        // traffic the graded map added.
+        let m = LevelMap {
+            caution_knee: 0.0,
+            caution_full: 0.45,
+            clear_below: 0.0,
+            ..map()
+        };
+        // novelty 0.027 → caution 0.06 → 0.479 raw → 0.50 = the rule default.
+        assert!(
+            (m.level(m.caution(0.027)) - m.rule_default).abs() < 1e-9,
+            "the arithmetic this test is about has changed"
+        );
+        assert_eq!(m.descent(0.027), Descent::Clear);
+        // One step away is a real level and does get sent.
+        assert!(matches!(m.descent(0.10), Descent::Level(_)));
+    }
+
+    #[test]
+    fn the_map_is_a_pure_function() {
+        let m = map();
+        for i in 0..=50 {
+            let n = i as f32 / 50.0;
+            assert_eq!(m.descent(n), m.descent(n));
+        }
     }
 }
