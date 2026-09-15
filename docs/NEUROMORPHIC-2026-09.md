@@ -241,11 +241,10 @@ outcome.
 
 **Steps, each verifiable.**
 
-- **A.** The map as a pure function in `obc-agent::posture`, plus a replay
-  in the `mushroom_real_episodes` harness printing the level distribution
-  over the stored 99 episodes. Choose endpoints, quantisation and floor
-  *from that distribution*. No wiring yet. This is where the evidence for
-  every constant in this feature comes from.
+- **A.** *Done 2026-09-15 as `5428a41`; read in §6.1.* The map as pure
+  functions with no caller, plus a replay over the stored 99 episodes
+  printing the airtime and the levels each candidate would have emitted.
+  This is where the evidence for every constant in this feature comes from.
 - **B.** Wire it: `PostureConfig` gains the endpoints, step and floor;
   `descending.<node>` records `level`, `novelty` and `prior` so the effect
   harness can regress against a continuous variable; validation and the
@@ -254,6 +253,69 @@ outcome.
   `{default, cautious}`; bench on the node with `bench_descend.py` to
   confirm a graded level reaches slot 0 and moves the LED threshold where
   arithmetic says it should.
+
+### 6.1 Step A result (2026-09-15)
+
+**Built by a parallel session as `5428a41`**, not by the author of this
+document, and placed better than §6 proposed: `LevelMap` and `Descent` are
+pure functions in `obc_agent::posture`, with the replay at
+`crates/obc-agent/tests/posture_level_replay.rs`. §6 assumed the harness
+would sit in `obc-memory`'s tests; that was wrong, because a dev-dependency
+from `obc-memory` back onto `obc-agent` would spend the near-leaf property
+that crate was extracted for. The replay belongs where the policy is. Its
+numbers are in the CHANGELOG; what follows is a second reading of the same
+run, and one thing its table does not price.
+
+**Independently reproduced.** A separate replay, written against the same
+store before `5428a41` was found in the tree, agreed on every corpus fact:
+99 episodes over 2.19 days, 79 after warm-up, 34 of them novel, an outcome
+prior on 74. Two implementations, one answer, which is worth more than
+either alone.
+
+**Novelty has ample range to grade — and one claim in `5428a41` needs
+correcting.** The doc comment on `LevelMap::caution` describes the corpus as
+"piled at novelty 0.001–0.03 with four points anywhere else." Measured, it is
+p25 0.011, p50 0.204, p75 0.367, p95 0.555, max 0.750. The pile is real, but
+it is the bottom quartile rather than the corpus: half of these episodes sit
+above 0.20. That description fits the *pre-fix* body (09-13, first-seen
+median 0.082), not this one, and the replay prints no distribution, so
+nothing caught it. The argument built on it — that a curve fitted to four
+points would be a guess wearing evidence, so keep the shape linear and
+falsifiable — is still right. Its premise is not.
+
+**What the frame table does not price: how much of the time the node is held
+away from its own defaults.** The cheapest corner in `5428a41` is knee 0.00 /
+full 0.25, which saturates caution at novelty 0.25 — so the median turn
+(novelty 0.204) sits at caution ≈ 0.82. Emitting `Clear` only below caution
+0.05 means clearing only below novelty ≈ 0.013, about a quarter of turns:
+**the node would be modulated roughly three turns in four.** A wider bracket
+(full ≈ 0.55) with floor 0.15 clears below novelty ≈ 0.25 and leaves the node
+at its own defaults for about 55 % of turns, at 48 frames against 31.
+
+That difference is not aesthetic, and it is not really about airtime:
+
+> `posture_real_effect`'s M1 compares a rule's firing rate **under cautious
+> against under default**. A configuration that holds the node away from its
+> defaults three turns in four leaves that comparison with almost no control
+> group — and M1 is the entire reason rung 1 exists. The cheapest corner in
+> the table would buy four frames a day and cost the measurement.
+
+So frames are a constraint, not the objective. Step B should take the widest
+bracket whose frame cost is tolerable rather than the cheapest one, and
+should report the default/cautious split beside the frame count — which
+neither replay currently prints, and which is the one number that says
+whether rung 1 achieved anything.
+
+**The prior, read from both runs, lands in the same place.** It is
+*available*: present on 74 of 79 turns and on 29 of the 34 novel ones, which
+refutes the step-A plan's prediction that it would be missing exactly where
+it mattered. It is also, on this corpus, *uninformative*: priors run min
+0.52, p50 0.98, so `1 − prior` contributes 0.02–0.05 and never lifted an
+episode into caution that novelty had not already reached. A term added now
+would be a weighting fitted to a body that has almost never failed. Both
+readings agree on the action: **step B carries novelty and prior separately
+on `descending.<node>`**, and the term waits for a corpus with real failures
+to fit against.
 
 **What would count as success — and what would not.** Not "die-cool fires
 more under cautious." The honest deliverable of rung 1 is *a dataset with
@@ -280,14 +342,22 @@ levels). Six files, so: plan first, go-ahead, then small steps.
   slot subsets, as the DN readout suggests. Only one slot is bound to a
   real quantity today. Choosing subsets among one bound slot is
   speculative abstraction; this waits for a second real slot.
+- **The outcome prior in rung 1's map** — measured in §6.1 and deferred.
+  Unsupported on a corpus that is almost all successes, and it costs a
+  noise floor. Not a permanent no; a question this data cannot answer.
 - **Feeding `security/trust.rs` from any of this.** Settled 2026-09-14 for
   the auth alarm and the reasoning carries: trust scores actuating nodes by
   their own behaviour, which is a different question.
 
 ## 8. Open items, smallest first
 
-1. Rung 1 step A — the map and its distribution. Needs nothing but the
-   existing store.
+1. ~~Rung 1 step A~~ — done 2026-09-15 as `5428a41`, read in §6.1. **Step B**
+   next, and it needs one number neither replay prints: the share of turns
+   spent at the node's own defaults. Choose the widest bracket whose frames
+   are tolerable (full ≈ 0.55, floor 0.15 ≈ 55 % default at 48 frames), not
+   the cheapest (full 0.25, floor 0.05 ≈ 25 % default at 31), because M1
+   needs a control group. Carry novelty and prior separately on the fact.
+   Fix the stale corpus description on `LevelMap::caution` while there.
 2. Read the WILD Zenodo record's licence before any replay through the
    body (already open on the WILD list; now blocking rung 2).
 3. The second bound slot. Slot 0 is the die-temperature LED; nothing else
