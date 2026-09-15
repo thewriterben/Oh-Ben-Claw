@@ -18,7 +18,12 @@ use serde_json::Value;
 use std::path::Path;
 use std::sync::Mutex;
 
-/// How an agent run ended.
+/// The `session_id` every percept carries, so a row that is not a run is
+/// identifiable as one without parsing its id.
+pub const PERCEPT_SESSION: &str = "perception";
+
+/// How an agent run ended — or, for [`Outcome::Percept`], that the row is
+/// not a run at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -28,6 +33,19 @@ pub enum Outcome {
     Failure,
     /// The run was aborted (e.g. max iterations, cancellation).
     Aborted,
+    /// Not a run: something the body *perceived* (see
+    /// [`TrajectoryStore::perceive`]). It has no steps, no session and no
+    /// result, and it exists so the mushroom body can be surprised by
+    /// something other than a prompt.
+    ///
+    /// Marking it in `outcome` is what keeps it out of the paths that mine
+    /// runs for reuse: [`TrajectoryStore::successful_since`] (which feeds
+    /// skill synthesis) and [`TrajectoryStore::similar`] (which feeds the
+    /// prompt) both select `outcome = 'success'`, so a sighting can never be
+    /// distilled into a skill or offered as a past success. The replay in
+    /// [`TrajectoryStore::attach_mushroom`] selects every row, so the body
+    /// still sees it — which is the whole point.
+    Percept,
 }
 
 impl Outcome {
@@ -36,23 +54,30 @@ impl Outcome {
             Outcome::Success => "success",
             Outcome::Failure => "failure",
             Outcome::Aborted => "aborted",
+            Outcome::Percept => "percept",
         }
     }
     fn from_str(s: &str) -> Self {
         match s {
             "success" => Outcome::Success,
             "aborted" => Outcome::Aborted,
+            // Load-bearing, not decorative: the fallback below is `Failure`,
+            // so a stored percept without this arm would read back as a
+            // failed run and teach the compartments that perceiving is
+            // punished. Every new variant must be listed here.
+            "percept" => Outcome::Percept,
             _ => Outcome::Failure,
         }
     }
     /// How the mushroom body should take this outcome. An abort (iteration
     /// cap, cancellation) says nothing about whether the plan was right, so
-    /// it reinforces nothing.
+    /// it reinforces nothing — and neither does a percept, which is an
+    /// observation and not an attempt at anything.
     fn valence(self) -> Option<Valence> {
         match self {
             Outcome::Success => Some(Valence::Rewarded),
             Outcome::Failure => Some(Valence::Punished),
-            Outcome::Aborted => None,
+            Outcome::Aborted | Outcome::Percept => None,
         }
     }
 }
@@ -306,6 +331,61 @@ impl TrajectoryStore {
             }
         }
         Ok(())
+    }
+
+    /// Record something **perceived** rather than done, so the mushroom body
+    /// can be surprised by the world instead of only by a prompt.
+    ///
+    /// Until this existed the body had no sensory input at all: `experience`
+    /// was reachable only from [`Self::record`] and the replay in
+    /// [`Self::attach_mushroom`], and both take agent turns. In the fly the
+    /// mushroom body sits downstream of the antennal lobe and is driven
+    /// continuously whether or not anything is happening; here it sat
+    /// downstream of the chat prompt (`docs/NEUROMORPHIC-2026-09.md` §5).
+    ///
+    /// `text` is a rendering of the percept in language — "red fox at
+    /// node-001, confidence 0.94" — and that is deliberate, not laziness.
+    /// It keeps percepts in the same embedding space as objectives, so one
+    /// body, one measured threshold and one posture policy serve both, with
+    /// no second novelty signal to arbitrate between. The fly's mushroom
+    /// body does not see raw photoreceptors either: something upstream
+    /// reduces a stream to channels first. A high-rate sensor must be
+    /// reduced to events before it comes here; it must not be fed a frame at
+    /// a time.
+    ///
+    /// The row is an [`Outcome::Percept`], which keeps it out of skill
+    /// synthesis and out of the prompt (see that variant), and reinforces
+    /// nothing — a sighting is not an attempt at anything.
+    ///
+    /// Returns `true` if this percept was new. The id is derived from
+    /// `subject` and `ts_ms`, so a poll that re-reads the same reading is a
+    /// no-op rather than another row: the ClawCam poll re-folded the same 25
+    /// rows every minute for six weeks and left 9,675 facts behind it, and
+    /// this is the shape of that bug closed at the door.
+    pub fn perceive(&self, subject: &str, text: &str, ts_ms: u64) -> Result<bool> {
+        let id = format!("pcpt-{subject}-{ts_ms}");
+        {
+            let conn = self.conn.lock().unwrap();
+            let seen: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM episodes WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )?;
+            if seen > 0 {
+                return Ok(false);
+            }
+        }
+        self.record(&Episode {
+            id,
+            session_id: PERCEPT_SESSION.to_string(),
+            objective: text.to_string(),
+            steps: Vec::new(),
+            outcome: Outcome::Percept,
+            ts_ms,
+            duration_ms: None,
+            tokens_est: None,
+        })?;
+        Ok(true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -736,6 +816,77 @@ mod tests {
             inputs_per_cell: 2,
             ..MushroomConfig::default()
         }
+    }
+
+    #[test]
+    fn a_percept_reaches_the_body_but_never_the_prompt_or_the_skill_forge() {
+        let mut s = TrajectoryStore::open_in_memory()
+            .unwrap()
+            .with_embedder(Box::new(MockEmbedder));
+        s.attach_mushroom(mushroom_cfg()).unwrap();
+        // Warm the body on two runs, as the config's warm-up requires.
+        s.record(&ep("d1", "unlock the entrance", Outcome::Success, 5))
+            .unwrap();
+        s.record(&ep("p1", "water the plants", Outcome::Success, 6))
+            .unwrap();
+
+        // Something seen, not done. It is new, and the body is surprised.
+        assert!(s.perceive("node-001", "fetch the forecast", 10).unwrap());
+        let seen = s.assess("fetch the forecast", 10).unwrap();
+        assert!(
+            seen.novelty < 1e-6,
+            "the body experienced the percept: {}",
+            seen.novelty
+        );
+
+        // ...but it is not a run, so nothing that mines runs may see it.
+        assert!(
+            s.successful_since(0)
+                .unwrap()
+                .iter()
+                .all(|e| e.id != "pcpt-node-001-10"),
+            "a sighting must never become training data for a skill"
+        );
+        assert!(
+            s.similar("fetch the forecast", 5).unwrap().is_empty(),
+            "a sighting must never be offered to the prompt as a past success"
+        );
+        // And it reinforced nothing: an observation is not an attempt.
+        assert_eq!(
+            s.assess("fetch the forecast", 10).unwrap().success_prior,
+            None
+        );
+    }
+
+    #[test]
+    fn perceiving_the_same_reading_twice_is_a_no_op() {
+        // The ClawCam poll re-folded the same rows every minute for six weeks.
+        let mut s = TrajectoryStore::open_in_memory()
+            .unwrap()
+            .with_embedder(Box::new(MockEmbedder));
+        s.attach_mushroom(mushroom_cfg()).unwrap();
+        assert!(s.perceive("node-001", "a red fox", 1_000).unwrap());
+        assert!(!s.perceive("node-001", "a red fox", 1_000).unwrap());
+        assert!(!s.perceive("node-001", "a red fox, re-read", 1_000).unwrap());
+        assert_eq!(s.recent(10).unwrap().len(), 1);
+        // A genuinely later reading is a new percept.
+        assert!(s.perceive("node-001", "a red fox", 1_001).unwrap());
+        assert_eq!(s.recent(10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_stored_percept_does_not_read_back_as_a_failure() {
+        // `Outcome::from_str` falls back to `Failure`. Without its own arm a
+        // percept would return from the store as a failed run and teach the
+        // compartments that perceiving is punished.
+        assert_eq!(Outcome::from_str("percept"), Outcome::Percept);
+        assert_eq!(Outcome::Percept.as_str(), "percept");
+        assert_eq!(Outcome::Percept.valence(), None);
+        let s = TrajectoryStore::open_in_memory()
+            .unwrap()
+            .with_embedder(Box::new(MockEmbedder));
+        s.perceive("node-001", "a coyote", 7).unwrap();
+        assert_eq!(s.recent(1).unwrap()[0].outcome, Outcome::Percept);
     }
 
     #[test]
