@@ -5,6 +5,54 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The mushroom body gets senses (2026-09-15)
+
+Until today the body had no sensory input at all. Outside tests,
+`experience()` was reachable only from `TrajectoryStore::record` and the
+replay in `attach_mushroom`, and both take agent turns — a mushroom body
+wired to the chat prompt instead of to an antennal lobe. Found while gating
+rung 2 of `docs/NEUROMORPHIC-2026-09.md`, after both candidate corpora were
+checked and rejected: the reason there was nothing to feed it is that
+nothing could.
+
+`TrajectoryStore::perceive(subject, text, ts_ms)` records an
+`Outcome::Percept` and feeds the body through the existing `record` path.
+The new variant is what makes it safe: `successful_since` (skill synthesis)
+and `similar` (the prompt) both select `outcome = 'success'`, and the FTS
+leg maps its ids through that same success-only candidate set — so a
+sighting can never become training data for a skill or be offered to the
+model as a past success. The replay takes every row, so the body still sees
+it. Valence is `None`; an observation is not an attempt at anything.
+
+`[[perception.polls]] perceive = true` is the first caller: a poll's
+**changes** become percepts, because a change is an event and a steady
+reading is not. Per poll and off by default — a novelty signal is worth
+having exactly as long as it stays meaningful, and the fastest way to ruin
+one is to feed it a keepalive that ticks. A poll that asks for it without a
+mushroom body says so once at startup rather than perceiving nothing
+quietly.
+
+Two traps handled rather than discovered later. `Outcome::from_str` falls
+back to `Failure`, so without its own arm every stored percept would have
+read back as a *failed run* and taught the compartments that perceiving is
+punished — there is a test for exactly that. And the percept id derives from
+`(subject, ts_ms)`, so a poll re-reading the same value is a no-op instead
+of another row: the ClawCam poll re-folded the same 25 rows every minute for
+six weeks and left 9,675 facts behind it, and that is now closed at the door
+rather than expired afterwards.
+
+Percept text is language on purpose (`printer.state is printing`, unquoted
+so the embedder sees English). It keeps percepts in the same space as
+objectives, so one body, one measured threshold and one posture policy serve
+both. The fly's mushroom body does not see raw photoreceptors either —
+something upstream reduces a stream to channels — so a high-rate sensor must
+be reduced to events before it comes here. That reduction is what rung 3
+has to build, and this is the wire it will plug into.
+
+Not measured: anything about what perception does to the novelty
+distribution. Nothing is perceiving yet — the printer poll is the obvious
+first subject and is disabled on this deployment.
+
 ## Unreleased - Rung 1 step A: the graded level is cheaper than the one bit (2026-09-15)
 
 `docs/NEUROMORPHIC-2026-09.md` SS6 step A, built and run. `LevelMap` and

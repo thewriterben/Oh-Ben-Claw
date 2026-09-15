@@ -2726,6 +2726,38 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             let world = Arc::clone(world);
             let poll_safing = Arc::clone(&safing_state);
             let interval = std::time::Duration::from_millis(poll.interval_ms.max(250));
+            // `perceive = true` sends this poll's *changes* to the mushroom
+            // body, so novelty can be about the world and not only about what
+            // was typed. Decided here rather than per tick so a poll that asks
+            // for it and cannot have it says so once, loudly, instead of
+            // quietly perceiving nothing for a fortnight.
+            let percept_traj = match (poll.perceive, &trajectory_store) {
+                (false, _) => None,
+                (true, Some(t)) if t.has_mushroom() => {
+                    info!(
+                        poll = %poll.name,
+                        "perception poll → mushroom body: its changes are percepts"
+                    );
+                    Some(Arc::clone(t))
+                }
+                (true, Some(_)) => {
+                    tracing::warn!(
+                        poll = %poll.name,
+                        "poll has perceive = true but no mushroom body is attached \
+                         ([self_improvement.mushroom] enabled, and `semantic`); \
+                         its changes reach world memory only"
+                    );
+                    None
+                }
+                (true, None) => {
+                    tracing::warn!(
+                        poll = %poll.name,
+                        "poll has perceive = true but the trajectory store did not open; \
+                         its changes reach world memory only"
+                    );
+                    None
+                }
+            };
             info!(
                 poll = %poll.name,
                 tool = %poll.tool,
@@ -2776,6 +2808,38 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                                     unchanged = outcome.unchanged,
                                     "perception poll observed changes"
                                 );
+                                // A change is an event; a steady reading is
+                                // not. Only what moved becomes a percept.
+                                if let Some(traj) = &percept_traj {
+                                    let mut fed = 0usize;
+                                    for entity in &outcome.changed {
+                                        let Ok(Some(fact)) = world.current(entity) else {
+                                            continue;
+                                        };
+                                        let text = oh_ben_claw::perception_polls::percept_text(
+                                            entity,
+                                            &fact.value,
+                                        );
+                                        match traj.perceive(entity, &text, now) {
+                                            Ok(true) => fed += 1,
+                                            // Same reading, same millisecond:
+                                            // already perceived, not an event.
+                                            Ok(false) => {}
+                                            Err(e) => tracing::warn!(
+                                                poll = %poll.name,
+                                                entity = %entity,
+                                                "percept not recorded: {e}"
+                                            ),
+                                        }
+                                    }
+                                    if fed > 0 {
+                                        tracing::debug!(
+                                            poll = %poll.name,
+                                            percepts = fed,
+                                            "perception poll → mushroom body"
+                                        );
+                                    }
+                                }
                             }
                         }
                         Err(e) => {

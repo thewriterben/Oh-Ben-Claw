@@ -264,10 +264,30 @@ max_chars = 2400
 # # args = { }                     # tool arguments, default {}
 # # source = "mcp:printer"         # default
 # # max_facts = 64                 # leaves per tick past this are dropped and counted
+# # perceive = false               # see below
 # [perception.polls.server]
 # transport = "stdio"
 # command = "python"
 # args = ["-m", "studio_mcp.server", "--base", "http://localhost:8770"]
+#
+# `perceive = true` sends this poll's *changes* to the mushroom body as
+# percepts, so novelty can be about the world and not only about what was
+# typed. Until 2026-09-15 the body had no sensory input at all: it was fed
+# only by agent turns, which is a mushroom body wired to the chat prompt
+# instead of to an antennal lobe (docs/NEUROMORPHIC-2026-09.md §5).
+#
+# Per poll and off by default, on purpose. A novelty signal is worth having
+# exactly as long as it stays meaningful, and the fastest way to ruin one is
+# to feed it a keepalive that changes every tick. Turn it on for a source
+# whose changes are worth being surprised by — a printer that starts a job, a
+# door that opens — and leave it off for anything that merely counts.
+#
+# Only changed facts are perceived (a steady reading is not an event), each
+# costs an embedding, and the percept is written as a sentence — "printer.state
+# is printing". It needs [self_improvement] semantic = true and a mushroom
+# body; without them the poll logs once at startup and behaves as before.
+# Percepts never reach skill synthesis or the prompt: they are recorded with
+# outcome `percept`, and both of those paths select successes only.
 
 # ── MCP tool import ──────────────────────────────────────────────────────────
 # The other half of `[[perception.polls]]`: a poll folds a server's answers into

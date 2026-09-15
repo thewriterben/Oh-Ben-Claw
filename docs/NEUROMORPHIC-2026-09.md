@@ -413,12 +413,15 @@ levels). Six files, so: plan first, go-ahead, then small steps.
    needs a control group. Carry novelty and prior separately on the fact.
    Fix the stale corpus description on `LevelMap::caution` while there.
 2. ~~Read the WILD Zenodo record's licence~~ / ~~use the ClawCam seed data~~
-   — both checked 2026-09-15 and both rejected (§5 rung 2). The item that
-   replaces them: **give the mushroom body an input path that is not an
-   agent turn.** `TrajectoryStore::record` is the only caller of
-   `experience`, so perception cannot reach the body at all. Until that
-   exists, no sensor in rung 3 can feed it and no corpus can be borrowed
-   into it. Smallest honest next step in the whole ladder.
+   / ~~give the body an input path that is not an agent turn~~ — the first
+   two checked and rejected 2026-09-15 (§5 rung 2); the third **built the
+   same day** (`cce0d88`, `TrajectoryStore::perceive` + `Outcome::Percept`,
+   wired to `[[perception.polls]] perceive = true`). What replaces it:
+   **point it at something.** Nothing perceives yet. The printer poll is the
+   obvious first subject — a real machine whose state genuinely changes —
+   and it is disabled on this deployment. Until one source is on, the body's
+   novelty distribution over percepts is unmeasured and rung 2 is still
+   open, now for want of a *subject* rather than a *path*.
 3. The second bound slot. Slot 0 is the die-temperature LED; nothing else
    on the node is slot-bound, which is why §7 defers slot selection.
 4. A neuromorphic-silicon survey to sit beside `EDGE-LM-2026-09.md`.

@@ -869,6 +869,20 @@ pub struct GenericPollConfig {
     /// counted, never silently. Default 64.
     #[serde(default = "default_generic_poll_max_facts")]
     pub max_facts: usize,
+    /// Let this poll's **changes** reach the mushroom body as percepts
+    /// (`TrajectoryStore::perceive`), so novelty can be about the world and
+    /// not only about what was typed. Off by default, and per poll rather
+    /// than global, on purpose: a novelty signal is worth having exactly as
+    /// long as it stays meaningful, and the cheapest way to ruin one is to
+    /// feed it a keepalive that changes every tick. Turn it on for a source
+    /// whose changes are worth being surprised by.
+    ///
+    /// Only *changed* facts are perceived — an unchanged reading is not an
+    /// event — and each one costs an embedding, so this needs
+    /// `[self_improvement] semantic = true` and a mushroom body to do
+    /// anything at all. Without them the poll behaves exactly as before.
+    #[serde(default)]
+    pub perceive: bool,
 }
 
 impl GenericPollConfig {
@@ -3207,6 +3221,15 @@ enabled = false
 [[perception.expiry]]
 prefix = "incident."
 max_age_ms = 1000
+[[perception.polls]]
+name = "printer"
+tool = "printer_status"
+interval_ms = 5000
+max_facts = 64
+perceive = true
+[perception.polls.server]
+transport = "stdio"
+command = "python"
 [lora_gateway]
 port = "COM3"
 reply_timeout_ms = 8000

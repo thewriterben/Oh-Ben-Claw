@@ -38,6 +38,22 @@ pub struct IngestOutcome {
     pub truncated: usize,
 }
 
+/// One changed fact as the sentence the mushroom body will be surprised by,
+/// for polls with `perceive = true`.
+///
+/// Language, deliberately: it keeps percepts in the same embedding space as
+/// the agent's own objectives, so one body and one measured threshold serve
+/// both (`docs/NEUROMORPHIC-2026-09.md` §5). A JSON string is unquoted so the
+/// text reads as a sentence rather than as a literal — `printer.state is
+/// printing`, not `printer.state is "printing"` — because the embedder is
+/// looking at English, and the quotes are noise that would sit in the vector.
+pub fn percept_text(entity: &str, value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => format!("{entity} is {s}"),
+        other => format!("{entity} is {other}"),
+    }
+}
+
 /// A JSON key as an entity path segment: lowercase, `[a-z0-9_-]`, anything else
 /// becomes `_`. Empty stays legible as `_` rather than producing `a..b`.
 pub fn slug(key: &str) -> String {
@@ -152,6 +168,31 @@ mod tests {
 
     fn entities(out: &[(String, Value)]) -> Vec<&str> {
         out.iter().map(|(e, _)| e.as_str()).collect()
+    }
+
+    #[test]
+    fn a_percept_reads_as_a_sentence_not_as_a_json_literal() {
+        // The embedder is looking at English; quotes and braces are noise
+        // that would sit in the vector and make two readings of the same
+        // thing look further apart than they are.
+        assert_eq!(
+            percept_text("printer.state", &json!("printing")),
+            "printer.state is printing"
+        );
+        assert_eq!(
+            percept_text("printer.bed.temperature", &json!(61.5)),
+            "printer.bed.temperature is 61.5"
+        );
+        assert_eq!(
+            percept_text("printer.door.open", &json!(true)),
+            "printer.door.open is true"
+        );
+        // A leaf that is somehow not scalar still renders, rather than
+        // panicking or being silently dropped.
+        assert_eq!(
+            percept_text("printer.lanes", &json!([1, 2])),
+            "printer.lanes is [1,2]"
+        );
     }
 
     #[test]
