@@ -5,6 +5,65 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A frame the station refuses is no longer invisible (2026-09-15)
+
+Found while preparing the bench for the auth alarm built in `27a42e7`: the
+bench could not be run as conceived, and the reason was worth more than the
+bench.
+
+A station verifies at the radio and forwards nothing it refuses — *"Nothing
+unverified reaches the UART, the log line the host parses, or the relay."* The
+refusal becomes one console line, `SPINE ◄ REJECTED … bad tag`, which carries
+no `seq=`; the host's parser requires `seq=` and dropped it. So
+`spine.auth.<station>.alarm` fires only when the host refuses a frame the
+station *accepted* — a station that disagrees with the host about the root,
+which is a replaced or mis-provisioned base. **A stranger transmitting forged
+frames at an honest station produced no fact, no escalation and a clean
+`status`.** That is the inverse of which threat is likely, and it is what the
+four `BadTag` of 09-13 had obscured: those came from a wrong-root *build* in
+front of the host, not from anyone on the air.
+
+The host now reads the line the station was already printing.
+`spine.air.<station>.refused` `{status, count, since_ms, rssi_dbm, evidence}`
+is burst-shaped like the auth alarm — one fact per burst, the count travelling
+on the clear, so fifty forged frames are one incident — and
+`spine.air.refused_count` drives a ninth standard rule, `safe-spine-on-air`.
+`AirWatch` is a separate type held beside `LoraAuth` rather than inside it,
+and `mesh_status` gains `air_refusals` as its own field next to `auth_alarms`:
+one is what the host proved, the other what a station said.
+
+**The weakness is the design, not a compromise on it.** This signal arrives
+over an unauthenticated console, so anyone with that cable can fabricate it.
+It therefore advises and never safes the mesh, it does not touch
+`spine.auth.<station>`, and it is `Warning` where `safe-spine-forgery` is
+`Critical`. That severity is derived from the reason *prose*, which produced
+the one surprise here: the playbook originally told System 2 to read
+`auth_alarms`, and the word "alarm" promoted the advisory to `Critical` — a
+message classified by what it mentions rather than by what it is about. It now
+points at the rule id instead, which is more durable anyway, and a test pins
+both the severity ordering and the absence of the keyword.
+
+Only `BadTag` counts. `Seen` is indistinguishable from a relay duplicate at
+the station and is normal traffic; `Runt`/`SeqMismatch` are RF and foreign
+protocols; `TooOld`/`Store` are the station's own bookkeeping after a reboot.
+The match on the firmware's wording is a cross-workspace string coupling that
+cannot be shared as a constant, so it is pinned by a test and it fails *safe*:
+drift silences the detector rather than inventing incidents.
+
+`parse_gateway_line` now rejects refusal lines explicitly rather than by
+accident — it carries `src=`, `ctr=` and `rssi=`, and only the missing `seq=`
+had been keeping it out of the ingest path.
+
+New firmware feature `bench-wrong-root` builds a station whose root is
+deliberately invalid, for SPINE-REPLAY §6 step 7. The `env!("OBC_SPINE_ROOT")`
+is `cfg`'d away, so such a board carries **no deployment secret at all** and
+builds without one — it cannot be mistaken for a provisioned station, and one
+left in a drawer leaks nothing. The boot log says so at error level.
+
+Not done: neither half of step 7 has been run. 7a (wrong-root board on the
+air, honest station) exercises the new advisory; 7b (both boards wrong-root)
+exercises the alarm from `27a42e7`, which has still never fired on hardware.
+
 ## Unreleased — Neuromorphic silicon, checked (2026-09-15)
 
 `docs/NEUROMORPHIC-SILICON-2026-09.md`. Open item 4 of

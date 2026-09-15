@@ -45,6 +45,15 @@ no-relay = []
 # firmware decides to fail closed; a reset clears it. Never in a field build:
 # the boot log names it.
 bench-nvs-fault = []
+# Bench only: build with a root secret that is deliberately NOT the
+# deployment's, so every frame this station sends is refused by every station
+# and host that holds the real one — the forged-station half of
+# SPINE-REPLAY.md §6 step 7, and the only way to produce a `bad tag` on the air
+# on purpose. The `env!("OBC_SPINE_ROOT")` is cfg'd away, so such a board
+# carries no deployment secret at all and cannot be confused for a provisioned
+# station; it also builds without the secret set, which is the tell. The boot
+# log says so at error level. Never in a field build.
+bench-wrong-root = []
 
 [build-dependencies]
 embuild = "0.33"

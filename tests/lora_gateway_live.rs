@@ -26,7 +26,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use oh_ben_claw::memory::world::WorldMemory;
-use oh_ben_claw::spine::lora_gateway::{open_split, run_gateway_rx, LoraAuth, AUTH_FACT_PREFIX};
+use oh_ben_claw::spine::lora_gateway::{
+    open_split, run_gateway_rx, AirWatch, LoraAuth, AUTH_FACT_PREFIX,
+};
 
 const LISTEN: Duration = Duration::from_secs(40);
 
@@ -67,7 +69,8 @@ async fn listen(root: &str) -> (Vec<serde_json::Value>, Vec<String>) {
     let w = Arc::clone(&world);
     let task = tokio::spawn(async move {
         let mut auth = auth;
-        run_gateway_rx(rx, &mut auth, w, now_ms).await
+        let mut air = AirWatch::new();
+        run_gateway_rx(rx, &mut auth, &mut air, w, now_ms).await
     });
     tokio::time::sleep(LISTEN).await;
     task.abort();

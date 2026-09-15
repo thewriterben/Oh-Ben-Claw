@@ -95,6 +95,14 @@ fn field_after<'a>(s: &'a str, key: &str) -> Option<&'a str> {
 pub fn parse_gateway_line(line: &str) -> Option<GatewayFrame> {
     let start = line.find("SPINE ◄")?;
     let rest = &line[start..];
+    // A refusal line starts with the same marker and describes a frame the
+    // station threw away. It is excluded here explicitly rather than by
+    // accident: today it lacks `seq=` and would fail below anyway, and that
+    // is exactly the kind of incidental safety that stops being true the day
+    // someone adds a field to the firmware's warning. See `parse_gateway_refusal`.
+    if rest.starts_with(REJECTED_MARKER) {
+        return None;
+    }
 
     let src = u8::from_str_radix(
         leading(field_after(rest, "src=")?, |c| c.is_ascii_hexdigit()),
@@ -660,6 +668,277 @@ impl LoraAuth {
     }
 }
 
+// ── What the station refused on the air ─────────────────────────────────────
+//
+// DECISIONS.md 2026-09-15. Everything above this line is the host's own
+// cryptographic judgement of a frame the station *accepted*, and it is only
+// reachable by a station that disagrees with the host about the root — a
+// replaced or mis-provisioned base. A stranger transmitting forged frames at
+// an honest station never reaches it: the station refuses at the radio and
+// forwards nothing (`heltec-lora-linktest/src/main.rs`: "Nothing unverified
+// reaches the UART, the log line the host parses, or the relay").
+//
+// What the station *does* do is print one console line per refusal, on the
+// same wire the host is already reading. This section reads those lines. The
+// resulting signal is deliberately weaker than the one above and is kept in
+// its own type for that reason: it is asserted by the station over an
+// unauthenticated console, so anyone who can write to that serial line can
+// fabricate it. It advises; it must never safe the mesh, and it never touches
+// `spine.auth.<station>`, whose meaning stays "the host refused a frame".
+
+/// The station's refusal line marker. The accepted-frame marker is a prefix
+/// of this one, so [`parse_gateway_line`] checks for it and bails.
+const REJECTED_MARKER: &str = "SPINE ◄ REJECTED";
+
+/// The station's wording for a tag that did not verify —
+/// `Refused::as_str` in `firmware/heltec-lora-linktest/src/main.rs`, which is
+/// a separate workspace and cannot share the constant. Matched on the prefix
+/// so the parenthetical can be reworded freely; pinned by
+/// `the_firmwares_bad_tag_wording_is_the_one_we_match`. If the firmware drops
+/// the phrase entirely this fails *safe* — no burst is opened, nothing is
+/// escalated — and the drift shows up as a debug line rather than as a false
+/// alarm, which is the right direction for a forgeable input.
+const STATION_BAD_TAG: &str = "bad tag";
+
+/// One frame the **station** refused on the air, from a `SPINE ◄ REJECTED`
+/// console line. Unauthenticated: this is the station's word, not the host's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GatewayRefusal {
+    /// Claimed originating station, from `src=` (hex). A forger picks this.
+    pub src: u8,
+    /// The counter on the refused frame, from `ctr=`.
+    pub ctr: Option<u32>,
+    /// Signal strength the station reported, from `rssi=` — the one field a
+    /// forger cannot choose, and the reason it is worth carrying.
+    pub rssi_dbm: i32,
+    /// The station's reason text, verbatim.
+    pub reason: String,
+    /// Whether the reason is a bad tag: the only kind that is evidence of a
+    /// forgery rather than of RF (`runt`, `seq`), of ordinary relay traffic
+    /// (`already accepted` — which the station prints for neither a duplicate
+    /// nor a replay, since it cannot tell them apart) or of the station's own
+    /// bookkeeping (`older than the receive window`, `NVS refused`).
+    pub bad_tag: bool,
+}
+
+/// Parse a station refusal line. Returns `None` for every other line,
+/// including accepted frames.
+pub fn parse_gateway_refusal(line: &str) -> Option<GatewayRefusal> {
+    let start = line.find(REJECTED_MARKER)?;
+    let rest = &line[start + REJECTED_MARKER.len()..];
+
+    let src = u8::from_str_radix(
+        leading(field_after(rest, "src=")?, |c| c.is_ascii_hexdigit()),
+        16,
+    )
+    .ok()?;
+    let rssi: i32 = leading(field_after(rest, "rssi=")?, |c| {
+        c == '-' || c.is_ascii_digit()
+    })
+    .parse()
+    .ok()?;
+    let ctr: Option<u32> =
+        field_after(rest, "ctr=").and_then(|s| leading(s, |c| c.is_ascii_digit()).parse().ok());
+    // The station prints `… ({} B): {reason}`; the reason runs to the ANSI
+    // colour reset, as the payload does on an accepted line.
+    let reason = field_after(rest, "): ")?
+        .split('\u{1b}')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if reason.is_empty() {
+        return None;
+    }
+    let bad_tag = reason.starts_with(STATION_BAD_TAG);
+
+    Some(GatewayRefusal {
+        src,
+        ctr,
+        rssi_dbm: rssi,
+        reason,
+        bad_tag,
+    })
+}
+
+/// Prefix of the per-station facts the air watch writes. Distinct from
+/// [`AUTH_FACT_PREFIX`] on purpose: one entity is what the host proved, the
+/// other is what the station said.
+pub const AIR_FACT_PREFIX: &str = "spine.air.";
+
+/// How many stations are currently reporting refused frames on the air — the
+/// one number the advisory rule watches, as `spine.auth.alarm_count` is for
+/// the authenticated alarm. Written on change only.
+pub const AIR_REFUSED_COUNT_FACT: &str = "spine.air.refused_count";
+
+/// A station's burst closes this long after its last refused frame, matching
+/// [`AUTH_ALARM_CLEAR_MS`] so the two signals describe an incident the same way.
+pub const AIR_REFUSED_CLEAR_MS: u64 = AUTH_ALARM_CLEAR_MS;
+
+/// An open burst of refusals at one station.
+#[derive(Debug, Clone)]
+struct AirBurst {
+    since_ms: u64,
+    last_ms: u64,
+    count: u64,
+    fact_id: Option<i64>,
+}
+
+/// Watches what the stations say they are refusing on the air. Held beside
+/// [`LoraAuth`] rather than inside it: the verifier's state is evidence, and
+/// this is hearsay, and mixing them would let the weaker one borrow the
+/// stronger one's authority.
+#[derive(Debug, Default)]
+pub struct AirWatch {
+    bursts: std::collections::HashMap<u8, AirBurst>,
+}
+
+impl AirWatch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record one refusal the station reported. Only a bad tag opens or
+    /// extends a burst; every other reason is logged and dropped. Like the
+    /// auth alarm, the fact is written once per burst and the count travels
+    /// on the clear, so a flood of forged frames is one incident.
+    pub fn observe(&mut self, r: &GatewayRefusal, world: &WorldMemory, now_ms: u64) {
+        if !r.bad_tag {
+            tracing::debug!(
+                station = %LoraAuth::station(r.src),
+                ctr = r.ctr,
+                rssi = r.rssi_dbm,
+                "[lora_gateway] station refused a frame (not a bad tag): {}",
+                r.reason
+            );
+            return;
+        }
+        let station = LoraAuth::station(r.src);
+        match self.bursts.get_mut(&r.src) {
+            Some(b) => {
+                b.count += 1;
+                b.last_ms = now_ms;
+            }
+            None => {
+                let fact = world
+                    .observe_as(
+                        &format!("{AIR_FACT_PREFIX}{station}.refused"),
+                        json!({
+                            "status": "refusing",
+                            "station": station,
+                            "reason": r.reason,
+                            "ctr": r.ctr,
+                            "rssi_dbm": r.rssi_dbm,
+                            "count": 1,
+                            "since_ms": now_ms,
+                            // Said on the record, because this fact will be
+                            // read by people and by rules: the station is the
+                            // only witness and its console is not authenticated.
+                            "evidence": "station-asserted (unauthenticated console)",
+                        }),
+                        now_ms,
+                        now_ms,
+                        SOURCE,
+                        Origin::Observed,
+                    )
+                    .ok();
+                tracing::warn!(
+                    station = %station,
+                    ctr = r.ctr,
+                    rssi = r.rssi_dbm,
+                    "[lora_gateway] ON AIR: {} is refusing frames it cannot authenticate — \
+                     someone is transmitting forgeries at it (station-asserted)",
+                    station
+                );
+                self.bursts.insert(
+                    r.src,
+                    AirBurst {
+                        since_ms: now_ms,
+                        last_ms: now_ms,
+                        count: 1,
+                        fact_id: fact.map(|f| f.id),
+                    },
+                );
+                self.record_count(world, now_ms);
+            }
+        }
+    }
+
+    /// Close every burst whose last refusal is older than
+    /// [`AIR_REFUSED_CLEAR_MS`]. Driven from the RX loop on *every* console
+    /// line, not only on refusals — otherwise a burst that stops would stay
+    /// open forever, which is the failure mode of a signal that only hears
+    /// bad news.
+    pub fn sweep(&mut self, world: &WorldMemory, now_ms: u64) {
+        let expired: Vec<u8> = self
+            .bursts
+            .iter()
+            .filter(|(_, b)| now_ms.saturating_sub(b.last_ms) >= AIR_REFUSED_CLEAR_MS)
+            .map(|(src, _)| *src)
+            .collect();
+        if expired.is_empty() {
+            return;
+        }
+        for src in expired {
+            let Some(b) = self.bursts.remove(&src) else {
+                continue;
+            };
+            let station = LoraAuth::station(src);
+            let _ = world.observe_derived_from(
+                &format!("{AIR_FACT_PREFIX}{station}.refused"),
+                json!({
+                    "status": "quiet",
+                    "station": station,
+                    "count": b.count,
+                    "since_ms": b.since_ms,
+                    "last_ms": b.last_ms,
+                    "until_ms": now_ms,
+                }),
+                now_ms,
+                now_ms,
+                SOURCE,
+                &b.fact_id.into_iter().collect::<Vec<_>>(),
+            );
+            tracing::info!(
+                station = %station,
+                refused = b.count,
+                "[lora_gateway] on-air refusals stopped at {station}: none for {} s",
+                AIR_REFUSED_CLEAR_MS / 1000
+            );
+        }
+        self.record_count(world, now_ms);
+    }
+
+    /// `spine.air.refused_count` — how many stations are reporting refusals.
+    fn record_count(&self, world: &WorldMemory, now_ms: u64) {
+        let support: Vec<i64> = self.bursts.values().filter_map(|b| b.fact_id).collect();
+        let _ = world.observe_derived_from(
+            AIR_REFUSED_COUNT_FACT,
+            json!(self.bursts.len() as u64),
+            now_ms,
+            now_ms,
+            SOURCE,
+            &support,
+        );
+    }
+
+    /// Stations currently reporting refusals, for `mesh_status` and `status`.
+    pub fn refusing_stations(world: &WorldMemory) -> Vec<Value> {
+        let mut out = Vec::new();
+        for e in world.entities().unwrap_or_default() {
+            if !(e.starts_with(AIR_FACT_PREFIX) && e.ends_with(".refused")) {
+                continue;
+            }
+            if let Ok(Some(f)) = world.current(&e) {
+                if f.value.get("status").and_then(Value::as_str) == Some("refusing") {
+                    out.push(f.value.clone());
+                }
+            }
+        }
+        out
+    }
+}
+
 /// `~/x` → `<home>/x`; anything else unchanged.
 fn expand_home(path: &str) -> String {
     match path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
@@ -1182,6 +1461,7 @@ impl CommandSink for SerialCommandSink {
 pub async fn run_gateway_rx<F>(
     mut lines: ConsoleLines,
     auth: &mut LoraAuth,
+    air: &mut AirWatch,
     world: Arc<WorldMemory>,
     now_ms: F,
 ) -> String
@@ -1201,9 +1481,20 @@ where
             line.chars().take(110).collect::<String>()
         );
         let Some(frame) = parse_gateway_line(&line) else {
+            // Not a frame. It may still be the station saying it refused one
+            // — the only way the host ever hears about a forgery on the air
+            // (DECISIONS.md 2026-09-15).
+            if let Some(refusal) = parse_gateway_refusal(&line) {
+                let now = now_ms();
+                air.observe(&refusal, &world, now);
+                air.sweep(&world, now);
+            }
             continue;
         };
         let now = now_ms();
+        // Every console line is a clock tick for the burst timer, not just the
+        // refusals: a burst that stops has to be able to close.
+        air.sweep(&world, now);
         match auth.admit(&frame, &world, now) {
             Ok(()) => {
                 if let Some(ing) = ingest_frame(&frame, &world, now) {
@@ -1239,6 +1530,10 @@ where
 /// `open` is whatever produces a `(lines, writer)` pair: `open_split` on
 /// hardware, a pair of channels in tests. It is awaited, so a blocking open
 /// can be moved off the runtime by the caller.
+///
+/// The [`AirWatch`] is owned here for the same reason `auth` is passed in:
+/// an open burst of on-air refusals must survive a reopen, or a forger could
+/// hide behind a flapping USB cable.
 pub async fn supervise_gateway<O, Fut, F>(
     port: String,
     first: Result<ConsoleLines, String>,
@@ -1259,8 +1554,10 @@ pub async fn supervise_gateway<O, Fut, F>(
             reopen_until_open(&port, error, &mut open, &world, &handle, &now_ms).await
         }
     };
+    let mut air = AirWatch::new();
     loop {
-        let error = run_gateway_rx(lines, &mut auth, Arc::clone(&world), now_ms.clone()).await;
+        let error =
+            run_gateway_rx(lines, &mut auth, &mut air, Arc::clone(&world), now_ms.clone()).await;
         tracing::warn!(port = %port, "[lora_gateway] link lost — reopening with backoff: {error}");
         lines = reopen_until_open(&port, error, &mut open, &world, &handle, &now_ms).await;
     }
@@ -2169,6 +2466,127 @@ mod tests {
             json!(4),
             "the outage is legible from the history"
         );
+    }
+
+    // ── On-air refusals (DECISIONS.md 2026-09-15) ───────────────────────────
+
+    /// Verbatim from the firmware's `warn!` format string —
+    /// `"SPINE ◄ REJECTED src={src:02X} ctr={ctr} rssi={} dBm ({} B): {}"` —
+    /// with the ANSI the serial port actually hands the host.
+    const REJECTED_LINE: &str = "\u{1b}[0;33mW (98312) heltec_lora_linktest: SPINE ◄ REJECTED \
+         src=40 ctr=1207 rssi=-51 dBm (63 B): bad tag (wrong root, forged, or corrupt)\u{1b}[0m";
+
+    #[test]
+    fn a_station_refusal_line_parses_and_is_not_a_frame() {
+        let r = parse_gateway_refusal(REJECTED_LINE).expect("a REJECTED line parses");
+        assert_eq!(r.src, 0x40);
+        assert_eq!(r.ctr, Some(1207));
+        assert_eq!(r.rssi_dbm, -51);
+        assert!(r.bad_tag, "{}", r.reason);
+        // The load-bearing half: it must never be read as a received frame.
+        // It carries `src=`, `ctr=` and `rssi=`, so only the explicit marker
+        // check stands between it and the ingest path.
+        assert!(
+            parse_gateway_line(REJECTED_LINE).is_none(),
+            "a refused frame must not ingest as a received one"
+        );
+        // And an accepted line is not a refusal.
+        assert!(parse_gateway_refusal(REFLEX_LINE).is_none());
+    }
+
+    /// Pins the firmware's wording. `Refused::as_str` lives in
+    /// `firmware/heltec-lora-linktest`, a separate workspace that cannot
+    /// share the constant, so the coupling is a string and this is the thing
+    /// that notices when it moves. If this fails, the detector has gone
+    /// silent, not wrong — check the firmware before changing the constant.
+    #[test]
+    fn the_firmwares_bad_tag_wording_is_the_one_we_match() {
+        assert!("bad tag (wrong root, forged, or corrupt)".starts_with(STATION_BAD_TAG));
+        for other in [
+            "runt (not a v2 frame)",
+            "seq is not the low byte of ctr",
+            "counter already accepted",
+            "counter older than the receive window",
+            "NVS refused the receive ceiling",
+        ] {
+            assert!(!other.starts_with(STATION_BAD_TAG), "{other}");
+        }
+    }
+
+    #[test]
+    fn only_a_bad_tag_opens_a_burst() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let mut air = AirWatch::new();
+        for reason in [
+            "runt (not a v2 frame)",
+            "counter older than the receive window",
+            "NVS refused the receive ceiling",
+        ] {
+            let line = format!("SPINE ◄ REJECTED src=40 ctr=9 rssi=-51 dBm (63 B): {reason}");
+            let r = parse_gateway_refusal(&line).unwrap();
+            assert!(!r.bad_tag, "{reason}");
+            air.observe(&r, &world, 1_000);
+        }
+        assert!(
+            world.current("spine.air.gw-40.refused").unwrap().is_none(),
+            "RF noise and the station's own bookkeeping are not forgery evidence"
+        );
+        assert_eq!(AirWatch::refusing_stations(&world).len(), 0);
+    }
+
+    #[test]
+    fn a_flood_of_forgeries_is_one_incident_with_a_count_and_an_end() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let mut air = AirWatch::new();
+        let r = parse_gateway_refusal(REJECTED_LINE).unwrap();
+
+        for i in 0..50 {
+            air.observe(&r, &world, 1_000 + i * 10);
+        }
+        // One fact for the burst, not fifty.
+        let history = world.history("spine.air.gw-40.refused").unwrap();
+        assert_eq!(history.len(), 1, "one fact per burst, the count on the clear");
+        let open = world
+            .current("spine.air.gw-40.refused")
+            .unwrap()
+            .expect("the burst is open");
+        assert_eq!(open.value["status"], json!("refusing"));
+        assert_eq!(open.value["rssi_dbm"], json!(-51));
+        assert_eq!(
+            open.value["evidence"],
+            json!("station-asserted (unauthenticated console)"),
+            "the fact says how much it is worth"
+        );
+        assert_eq!(
+            world.current(AIR_REFUSED_COUNT_FACT).unwrap().unwrap().value,
+            json!(1)
+        );
+        // The authenticated alarm is untouched: nothing here is the host's
+        // own judgement, and the two signals must not be confusable.
+        assert!(world
+            .current("spine.auth.gw-40.alarm")
+            .unwrap()
+            .is_none());
+        assert!(world
+            .current(AUTH_ALARM_COUNT_FACT)
+            .unwrap()
+            .is_none());
+
+        // Still open just before the clear window, closed on it.
+        air.sweep(&world, 1_000 + 490 + AIR_REFUSED_CLEAR_MS - 1);
+        assert_eq!(
+            world.current("spine.air.gw-40.refused").unwrap().unwrap().value["status"],
+            json!("refusing")
+        );
+        air.sweep(&world, 1_000 + 490 + AIR_REFUSED_CLEAR_MS);
+        let closed = world.current("spine.air.gw-40.refused").unwrap().unwrap();
+        assert_eq!(closed.value["status"], json!("quiet"));
+        assert_eq!(closed.value["count"], json!(50), "the count travels on the clear");
+        assert_eq!(
+            world.current(AIR_REFUSED_COUNT_FACT).unwrap().unwrap().value,
+            json!(0)
+        );
+        assert_eq!(AirWatch::refusing_stations(&world).len(), 0);
     }
 
     /// A fake port: each open hands the test the sender side, so it can feed

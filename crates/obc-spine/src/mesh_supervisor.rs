@@ -517,6 +517,12 @@ pub fn status_json(world: &WorldMemory) -> serde_json::Value {
         // Stations whose frames the host is refusing (bad tag or replay): the
         // perceive step `safe-spine-forgery` sends System 2 to.
         "auth_alarms": crate::lora_gateway::LoraAuth::alarmed_stations(world),
+        // Stations reporting that *they* are refusing frames on the air — the
+        // perceive step `safe-spine-on-air` sends System 2 to. Kept as its own
+        // field, next to but never merged with `auth_alarms`: one is what the
+        // host proved, the other what a station said over an unauthenticated
+        // console (DECISIONS.md 2026-09-15).
+        "air_refusals": crate::lora_gateway::AirWatch::refusing_stations(world),
         "nodes": nodes,
         "escalations": recent_escalations(world, 10),
     })

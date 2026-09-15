@@ -55,12 +55,24 @@ use sx1262::Sx1262;
 // without it fails here, with this message, rather than producing a station
 // that authenticates nothing. Generate one with `openssl rand -hex 32` and
 // keep it with the deployment, not the source.
+#[cfg(not(feature = "bench-wrong-root"))]
 const ROOT_SECRET: &str = env!(
     "OBC_SPINE_ROOT",
     "OBC_SPINE_ROOT is not set. Every spine frame is authenticated (SPINE-AUTH.md \
      step 4); the station needs the deployment's root secret at build time: \
      `$env:OBC_SPINE_ROOT = '<openssl rand -hex 32>'` then rebuild."
 );
+/// Bench only (`bench-wrong-root`): a root that is deliberately not the
+/// deployment's, so this board's frames fail to verify everywhere — the
+/// forged-station half of SPINE-REPLAY.md §6 step 7.
+///
+/// It is a literal rather than a second real secret, and the `env!` above is
+/// `cfg`'d away, so a wrong-root board **carries no deployment secret at
+/// all**: it cannot be mistaken for a provisioned station, and a board left
+/// in a drawer after a bench leaks nothing. It also builds without
+/// `OBC_SPINE_ROOT` set, which is the tell if one is ever flashed by accident.
+#[cfg(feature = "bench-wrong-root")]
+const ROOT_SECRET: &str = "bench-wrong-root-not-a-deployment-secret-0000000000000000";
 const _: () = assert!(
     ROOT_SECRET.len() >= 32,
     "OBC_SPINE_ROOT is shorter than 32 characters; use `openssl rand -hex 32`"
@@ -275,6 +287,17 @@ fn main() -> anyhow::Result<()> {
     );
     if cfg!(feature = "no-relay") {
         info!("flood relay DISABLED (no-relay build): this station does not re-broadcast");
+    }
+    if cfg!(feature = "bench-wrong-root") {
+        // Loudest line in the boot log, because a board that looks like a
+        // station and authenticates like a stranger is the one mistake here
+        // that is expensive: every frame it sends is refused everywhere, and
+        // a host plugged into it hears nothing at all.
+        error!(
+            "BENCH build: WRONG ROOT — this station holds a deliberately invalid root secret \
+             (SPINE-REPLAY.md section 6 step 7). Its frames verify nowhere and it verifies \
+             nothing. NEVER field this board; reflash before use."
+        );
     }
 
     // UART1 to the compute node: TX=GPIO4, RX=GPIO2.

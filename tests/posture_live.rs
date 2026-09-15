@@ -31,7 +31,7 @@ use oh_ben_claw::agent::posture::{Posture, PostureConfig, PosturePolicy, Posture
 use oh_ben_claw::memory::mushroom::Assessment;
 use oh_ben_claw::memory::world::WorldMemory;
 use oh_ben_claw::spine::lora_gateway::{
-    open_split, run_gateway_rx, CommandSink, GatewayHandle, LoraAuth, NodeCommand,
+    open_split, run_gateway_rx, AirWatch, CommandSink, GatewayHandle, LoraAuth, NodeCommand,
     SerialCommandSink,
 };
 use serde_json::Value;
@@ -125,7 +125,8 @@ async fn a_novel_objective_lights_the_led_and_a_familiar_one_clears_it() {
     let w = Arc::clone(&world);
     let _rx_task = tokio::spawn(async move {
         let mut auth = auth;
-        run_gateway_rx(rx, &mut auth, w, now_ms).await
+        let mut air = AirWatch::new();
+        run_gateway_rx(rx, &mut auth, &mut air, w, now_ms).await
     });
     let handle = Arc::new(GatewayHandle::open(wr, now_ms()));
     let sink: Arc<dyn CommandSink> = Arc::new(SerialCommandSink::new(handle));
