@@ -200,8 +200,47 @@ large enough to hold real traces (`ExtendedDataFigure9.zip` 128.6 MB,
 `Fig3.zip` 44.7 MB) and might carry something usable, but nothing has been
 downloaded and saying more than that would be a guess. WILD's raw binaries
 are "on request" per its own §1, which is a human-latency path rather than a
-next step. **Rung 2 therefore needs a different corpus or a request to the
-authors, and the ClawCam seed data is now the nearer candidate.**
+next step.
+
+**The ClawCam seed data is not a corpus either — checked the same hour, and
+this one was my own recommendation.** `clawcam_gateway.db` holds 187
+detections spanning 2026-06-23 to 07-06, which vindicates the "fourteen days
+of recorded detections" line in OBC-Prime's README on duration and nothing
+else. Every row's `source` and `model_name` is **`scenario-sim` v1.0.0**:
+they are generated, not recorded. Across all 187 there is **exactly one
+distinct bounding box** (`0.4, 0.4, 0.6, 0.6`) and **exactly one detection
+per frame**; hour-of-day is flat, where any real camera on any real animal
+would show a diel cycle. The feature space is therefore species (4 values:
+deer 93, fox 42, coyote 37, person 15) × confidence (175 distinct values
+between 0.63 and 1.00) × review state (3). Feeding that to the mushroom body
+would measure `scenario-sim`'s random number generator. It is a fixture for
+exercising the pipeline, which is what it was built for, and it was
+recommended here on the strength of a README sentence rather than a look at
+the table.
+
+**So: there is no corpus.** Two candidates, both checked against the data
+rather than the prose, both rejected for different reasons. That is worth
+stating as a finding rather than a setback, because it sharpens §3 instead of
+contradicting it — and it exposes something neither this document nor
+`CONNECTOME-2026-09.md` had noticed:
+
+> **The mushroom body has no sensory input at all.** In the fly it sits
+> downstream of the antennal lobe: roughly fifty projection neurons of
+> olfactory drive, continuously, whether or not anything is happening. In
+> OBC it sits downstream of the *chat prompt*. Outside tests, `experience`
+> has exactly two callers — `TrajectoryStore::record` and
+> `attach_mushroom`'s replay — and both take episodes, which are agent
+> turns. The body does not perceive; it tastes what the operator typed. Its
+> 45 episodes a day at the busiest, and one a day since, are not a
+> measurement problem — they are the whole of its sensory life.
+
+That reorders the ladder. Rung 2 as written ("raise the experience rate")
+assumed a corpus could be borrowed, and none can be: a body with no senses
+cannot be handed someone else's. **Before any sensor in rung 3 could feed
+the body, the body needs an input path that is not an agent turn** — a way
+for perception to produce an episode. That is a software change, it is
+cheap, it is a strict prerequisite for rung 3, and nobody had written it
+down. It is the real next rung.
 
 **Rung 3 — event-driven sensing on a node.** Only once rung 2 has shown
 what a real event rate does to the descending signal. Needs a current
@@ -373,11 +412,13 @@ levels). Six files, so: plan first, go-ahead, then small steps.
    the cheapest (full 0.25, floor 0.05 ≈ 25 % default at 31), because M1
    needs a control group. Carry novelty and prior separately on the fact.
    Fix the stale corpus description on `LevelMap::caution` while there.
-2. ~~Read the WILD Zenodo record's licence~~ — done 2026-09-15: CC-BY-4.0,
-   gate clear. The record is **figure data, not a stream corpus** (§5 rung
-   2), so the open item is now *find rung 2 a corpus*: check whether
-   `ExtendedDataFigure9.zip` or `Fig3.zip` hold usable traces, ask the
-   authors for the raw binaries, or use the ClawCam seed data instead.
+2. ~~Read the WILD Zenodo record's licence~~ / ~~use the ClawCam seed data~~
+   — both checked 2026-09-15 and both rejected (§5 rung 2). The item that
+   replaces them: **give the mushroom body an input path that is not an
+   agent turn.** `TrajectoryStore::record` is the only caller of
+   `experience`, so perception cannot reach the body at all. Until that
+   exists, no sensor in rung 3 can feed it and no corpus can be borrowed
+   into it. Smallest honest next step in the whole ladder.
 3. The second bound slot. Slot 0 is the die-temperature LED; nothing else
    on the node is slot-bound, which is why §7 defers slot selection.
 4. A neuromorphic-silicon survey to sit beside `EDGE-LM-2026-09.md`.
@@ -387,6 +428,11 @@ levels). Six files, so: plan first, go-ahead, then small steps.
    reading before designing anything in rung 3.
 
 ## 9. What I could not verify
+
+The ClawCam and Zenodo findings in §5 rung 2 are from the records and the
+database themselves and are as solid as anything here. Nothing was
+downloaded from Zenodo, so "two archives are large enough to hold real
+traces" is an inference from file size, not a look inside.
 
 Every hardware name in §5 rung 3 is from memory and none of it was checked
 against a current datasheet, price list or stock status; that is what item
