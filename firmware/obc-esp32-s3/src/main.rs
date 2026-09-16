@@ -221,6 +221,10 @@ const OUTPUT_PINS: &[i32] = BOARD.output_pins;
 /// `(-1, -1)` is unreachable — the arm that reads this is
 /// `#[cfg(not(feature = "camera"))]`, and every board declares a bus. It exists
 /// because `board::Board::i2c` is an `Option` for boards that may not.
+// Measured 2026-09-16 on the first real camera build: with `--features camera`
+// the only reader of this const is compiled out, so it is genuinely dead there.
+// Same treatment as `mod sensors` above, and for the same reason.
+#[cfg_attr(feature = "camera", allow(dead_code))]
 const I2C_PINS: (i32, i32) = match BOARD.i2c {
     Some(pins) => pins,
     None => (-1, -1),

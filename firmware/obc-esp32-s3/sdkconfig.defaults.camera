@@ -19,14 +19,15 @@
 
 # PSRAM holds the JPEG frame buffer.
 #
-# TODO(source): the XIAO ESP32S3 Sense's PSRAM interface (octal/OPI vs quad/QSPI)
-# has not been confirmed from a Seeed document or measured on the bench. OCT is
-# written below as the first thing to try, NOT as a verified fact. If
-# esp_camera_init fails on a board that otherwise boots, swap these two lines:
+# MEASURED 2026-09-16 on XIAO ESP32S3 Sense, MAC 64:E8:33:7E:7E:04, chip rev
+# v0.2, 8 MB flash (gd), ESP-IDF v5.3.2. OCT is correct -- this is no longer a
+# guess. Boot log:
 #
-#   CONFIG_SPIRAM_MODE_QUAD=y
+#   I (914) esp_psram: SPI SRAM memory test OK
+#   I (998) esp_psram: Adding pool of 8192K of PSRAM memory to heap allocator
+#   I (1309) cam_hal: Allocating 15360 Byte frame buffer in PSRAM
 #
-# and record which one worked, with the board in hand, replacing this note.
+# The former TODO(source) is closed. QUAD was never tried and does not need to be.
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y

@@ -87,7 +87,10 @@ path = "src/main.rs"
 # node. PSRAM is handled separately and does NOT need an edit here: see
 # `sdkconfig.defaults.camera` and CAMERA.md §2. ADR: OBC-Prime docs/DECISIONS.md,
 # 2026-09-16.
-# [[package.metadata.esp-idf-sys.extra_components]]
-# remote_component = { name = "espressif/esp32-camera", version = "2.0.7" }
-# bindings_header = "src/camera_bindings.h"
-# bindings_module = "camera"   # bindings land in their own esp_idf_sys::camera module
+#
+# UNCOMMENTED ON BRANCH `camera-bringup` 2026-09-16. Do not merge this state to
+# main -- see the ADR. If you are reading this on main, something went wrong.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp32-camera", version = "2.0.7" }
+bindings_header = "src/camera_bindings.h"
+bindings_module = "camera"   # bindings land in their own esp_idf_sys::camera module

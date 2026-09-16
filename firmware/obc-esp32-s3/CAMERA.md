@@ -96,9 +96,10 @@ script on its own.
 Unset the variable — or open a fresh shell — before building anything for the
 live node. Its absence is what makes a default build a default build.
 
-`TODO(source)`: the XIAO ESP32S3 Sense's PSRAM mode (OPI vs QSPI) is not yet
-confirmed from a Seeed document or measured on the bench. The overlay writes
-`MODE_OCT` as the first thing to try, not as a fact — see Troubleshooting.
+**Measured 2026-09-16, TODO(source) closed.** `MODE_OCT` is correct on the XIAO
+ESP32S3 Sense (MAC `64:E8:33:7E:7E:04`, chip rev v0.2, ESP-IDF v5.3.2): the boot
+log reports `esp_psram: SPI SRAM memory test OK` and `Adding pool of 8192K of
+PSRAM memory to heap allocator`. QUAD was never needed.
 
 ## 3. Build with the features
 

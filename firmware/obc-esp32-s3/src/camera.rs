@@ -127,6 +127,23 @@ struct CameraPins {
 ///
 /// `PWDN` and `RESET` are not broken out on this board, hence `-1`.
 ///
+/// **VERIFIED ON METAL 2026-09-16**, XIAO ESP32S3 Sense, MAC `64:E8:33:7E:7E:04`.
+/// This is the first pin map in this file that is evidence rather than a claim:
+///
+/// ```text
+/// sccb: pin_sda 40 pin_scl 39
+/// camera: Detected camera at address=0x30
+/// camera: Detected OV2640 camera
+/// camera: Camera PID=0x26 VER=0x42 MIDL=0x7f MIDH=0xa2
+/// obc_esp32_s3: OV2640 camera initialised
+/// ```
+///
+/// The sensor answering over SCCB also proves `xclk` (GPIO10) is running — an
+/// OV2640 will not respond on the control bus without its clock. So XCLK, SIOD
+/// and SIOC are confirmed by this log; the eight data lines, VSYNC and HREF are
+/// NOT, because a successful `esp_camera_init` never moves a pixel. See the
+/// capture failure recorded below.
+///
 /// Note D0..D7 map to Y2..Y9 (the sensor's low two bits are not wired), which is
 /// why the numbers below look shuffled against the table — that ordering is the
 /// convention, not a transcription error.
@@ -172,6 +189,30 @@ const PINS: CameraPins = CameraPins {
     href: 38,
     pclk: 13,
 };
+
+// ── OPEN: init succeeds, capture never does (2026-09-16) ─────────────────────
+//
+// `esp_camera_init` returns ESP_OK and the sensor is identified, but every
+// `esp_camera_fb_get` returns null, preceded by:
+//
+//     W cam_hal: Failed to get the frame on time!
+//
+// Measured 6/6 failures, at 37947, 41947, 45947, 49947, 53947, 57947 ms --
+// exactly 4000 ms apart, which is the driver's own timeout. It is deterministic,
+// not flaky, and it is not a warm-up effect. `jpeg_quality` was varied across
+// 10/12/20/30 with no change to the timing, which also suggests the command's
+// `quality` argument is not reaching the sensor.
+//
+// What that narrows it to: the control path (XCLK, SIOD, SIOC) is proven by the
+// SCCB detection above. The DATA path is not exercised by init at all, so the
+// suspects are the eight data lines, VSYNC, HREF, PCLK -- or the config below
+// rather than the pins. The most likely config suspects, untried:
+//   * `fb_count = 1` + `GRAB_WHEN_EMPTY`. With PSRAM present the common working
+//     combination is `fb_count = 2` + `CAMERA_GRAB_LATEST`.
+//   * `xclk_freq_hz = 20_000_000`; 10 MHz is the usual fallback.
+// These are hypotheses. Nobody has tested them, and this comment is not evidence
+// that they are the answer -- change ONE, measure, and rewrite this block with
+// what actually happened.
 
 /// Initialise the camera driver (global; call once at boot).
 pub fn init() -> anyhow::Result<()> {
