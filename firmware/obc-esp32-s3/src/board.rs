@@ -74,11 +74,58 @@ pub const WAVESHARE_ESP32_S3_TOUCH_LCD_21: Board = Board {
     has_mic: false,
 };
 
+/// LILYGO T-CameraPlus-S3, revision **V1.0/V1.1** (`--features board-lilygo-tcam-s3-v11`).
+///
+/// Added 2026-09-16 because the default below is the XIAO, and inheriting it here
+/// would have been actively destructive. The XIAO's `output_pins` are
+/// `[21, 3, 7, 8]`; on this board those are **SD_CS, camera RESET, camera XCLK
+/// and camera D6**. Track 0 sets every `output_pins` entry to OUTPUT at boot, so
+/// a Lilygo build on the default profile would drive its own sensor clock as an
+/// actuator line before the camera ever initialised. The pin map being right in
+/// `camera.rs` would not have saved it.
+///
+/// `output_pins` is **empty, and that is a `TODO(source)`, not a design.** Nobody
+/// has checked which GPIOs this board exposes or leaves free: the vendor's
+/// `pin_config.h` accounts for 1-17, 21 and 33-37, 45-48 across the camera, LCD,
+/// SPI/SD, touch, PMIC and the IR-cut switch, and whether anything else is
+/// broken out is a schematic question
+/// (`project/T-CameraPlus-S3_V1.0-V1.1_20241109.pdf`). An empty allow-list means
+/// Track 0 refuses every actuator write, which is the same as the boot policy
+/// and is the safe direction to be wrong in. Fill it from the schematic, with
+/// the pin numbers cited, before wiring anything to this node.
+///
+/// `i2c: None` — on V1.0/V1.1 the only exposed bus is GPIO1/2, which is the
+/// camera's SCCB (shared with the CST816S touch controller at 0x15 and the
+/// SY6970 PMIC at 0x6A). Handing that to the sensor driver would fight the
+/// camera for the bus. V1.2 splits them onto 33/37; this profile is not V1.2.
+///
+/// `has_mic: false` — the firmware's I2S mic is GPIO0/1/2, and 1/2 are that same
+/// SCCB bus. This board does have a PDM microphone, but on pins this firmware
+/// has never been told about; `TODO(source)`.
+///
+/// Facts from `Xinyuan-LilyGO/T-CameraPlus-S3` (`pin_config.h` + README),
+/// retrieved 2026-09-16. **No board of ours has been plugged in yet.**
+#[allow(dead_code)] // the board this build is not; the host harness asserts all of them
+pub const LILYGO_T_CAMERA_PLUS_S3_V11: Board = Board {
+    name: "lilygo-t-camera-plus-s3-v1.1",
+    output_pins: &[],
+    i2c: None,
+    has_mic: false,
+};
+
 /// The board this build targets. The only `#[cfg]` in this module.
-#[cfg(not(feature = "board-waveshare-21"))]
-pub const ACTIVE: Board = XIAO_ESP32_S3;
+///
+/// The XIAO remains the default because it is what the fleet's nodes are and
+/// what a plain `cargo build` should produce. Every *other* board must name
+/// itself — and a camera build must name a board at all (see `camera.rs`), so the
+/// dangerous combination, a camera board running the XIAO's pin policy, cannot
+/// be reached silently.
 #[cfg(feature = "board-waveshare-21")]
 pub const ACTIVE: Board = WAVESHARE_ESP32_S3_TOUCH_LCD_21;
+#[cfg(feature = "board-lilygo-tcam-s3-v11")]
+pub const ACTIVE: Board = LILYGO_T_CAMERA_PLUS_S3_V11;
+#[cfg(not(any(feature = "board-waveshare-21", feature = "board-lilygo-tcam-s3-v11")))]
+pub const ACTIVE: Board = XIAO_ESP32_S3;
 
 /// The `tools` array, pre-rendered.
 ///

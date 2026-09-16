@@ -47,6 +47,13 @@ camera = []
 # 2026-09-16, cited in camera.rs). This is the board the bench node already is,
 # so it is the first attributable map in the tree. Needs PSRAM enabled.
 board-xiao-sense = []
+# LILYGO T-CameraPlus-S3, revision V1.0/V1.1 ONLY. Pins from the vendor's own
+# pin_config.h and README, cited in camera.rs; retrieved 2026-09-16. V1.2 moves
+# VSYNC/PWDN/RESET and is a different board -- do not use this feature for it.
+# Needs `sdkconfig.defaults.camera-lilygo-tcam-v11` (QUAD PSRAM, not the XIAO's
+# OCT) and selects its own board profile in board.rs, because the XIAO's default
+# output pins are this board's SD_CS, camera RESET, XCLK and D6.
+board-lilygo-tcam-s3-v11 = []
 # The historical, unattributed pin map -- matches NO known board. Kept for the
 # forensic trail in camera.rs rather than deleted, quarantined behind its own
 # feature so nothing selects it by accident. Do not use it to bring up hardware.

@@ -1,0 +1,46 @@
+# Camera-build sdkconfig overlay for the LILYGO T-CameraPlus-S3 V1.0/V1.1.
+# NOT read by a default build, and NOT interchangeable with the XIAO's overlay.
+#
+# Select it per-build alongside the base file:
+#
+#   $env:ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults;sdkconfig.defaults.camera-lilygo-tcam-v11"
+#   cargo build --release --features camera,board-lilygo-tcam-s3-v11
+#
+# Name BOTH files: the variable replaces the list rather than appending to it
+# (esp-idf-sys 0.37.2, build/config.rs:139-144), so naming only this one drops
+# the 32 KB main-task stack that three crashes and a measurement bought on
+# 2026-08-22. See CAMERA.md §2 and OBC-Prime docs/DECISIONS.md, 2026-09-16.
+#
+# ── Why this file exists separately from the XIAO's ──────────────────────────
+#
+# PSRAM mode is a property of the module, not of "the camera". The XIAO Sense is
+# OCTAL (measured on metal 2026-09-16); this board is QUAD. One overlay for both
+# would be a default that is right for one board and silently wrong for the next
+# -- the failure this tree has now hit three times (the Waveshare pin map, the
+# node id, and `board::ACTIVE`'s output pins).
+#
+# Wrong mode does not fail cleanly: the board boots and `esp_camera_init` fails,
+# or PSRAM allocation quietly misbehaves.
+
+# PSRAM: QUAD (QSPI) on this board. Sources, all in Xinyuan-LilyGO/T-CameraPlus-S3
+# (branch arduino-esp32-libs_V2.0.14), retrieved 2026-09-16:
+#
+#   platformio.ini:
+#     ; board_build.arduino.memory_type = qio_opi ;Enable internal PSRAM
+#     board_build.arduino.memory_type = qio_qspi ;Enable external PSRAM
+#   boards/lilygo_t_cameraplus_esp32s3.json:  "memory_type": "qio_qspi"
+#   sdkconfig.defaults:                       CONFIG_SPIRAM_MODE_QUAD=y
+#   README (Arduino IDE settings table):      PSRAM | QSPI PSRAM
+#
+# NOT measured by us -- no board of ours has been plugged in yet. Four vendor
+# sources agreeing is good evidence and still not a measurement; confirm from the
+# boot log (`esp_psram: SPI SRAM memory test OK` and the pool size) and replace
+# this paragraph with what the board said.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# 16 MB flash on this board (README §1: FLASH 16M; platformio.ini
+# board_upload.flash_size = 16MB). The XIAO is 8 MB. This does not need a
+# sdkconfig line for the app to boot, but it is why the vendor uses a 16 MB
+# partition table -- revisit if the app outgrows the default layout.

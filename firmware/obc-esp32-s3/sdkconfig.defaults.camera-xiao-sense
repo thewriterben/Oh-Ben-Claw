@@ -1,8 +1,14 @@
-# Camera-build sdkconfig overlay. NOT read by a default build.
+# Camera-build sdkconfig overlay for the Seeed XIAO ESP32S3 Sense.
+# NOT read by a default build, and NOT interchangeable with another board's.
+#
+# Renamed from `sdkconfig.defaults.camera` on 2026-09-16, when the LILYGO
+# T-CameraPlus-S3 turned out to need QUAD PSRAM where this board needs OCTAL. The
+# generic name was about to become the next default that is right for one board
+# and silently wrong for the next.
 #
 # This file is selected only when ESP_IDF_SDKCONFIG_DEFAULTS names it:
 #
-#   $env:ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults;sdkconfig.defaults.camera"
+#   $env:ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults;sdkconfig.defaults.camera-xiao-sense"
 #
 # esp-idf-sys 0.37.2 reads that variable as a `;`-separated list
 # (build/config.rs:25-27, parse::list at config.rs:187-202) and later files win.
@@ -19,14 +25,14 @@
 
 # PSRAM holds the JPEG frame buffer.
 #
-# TODO(source): the XIAO ESP32S3 Sense's PSRAM interface (octal/OPI vs quad/QSPI)
-# has not been confirmed from a Seeed document or measured on the bench. OCT is
-# written below as the first thing to try, NOT as a verified fact. If
-# esp_camera_init fails on a board that otherwise boots, swap these two lines:
+# MEASURED 2026-09-16 on XIAO ESP32S3 Sense, MAC 64:E8:33:7E:7E:04, chip rev
+# v0.2, 8 MB flash (gd), ESP-IDF v5.3.2. OCT is correct -- no longer a guess:
 #
-#   CONFIG_SPIRAM_MODE_QUAD=y
+#   I (914) esp_psram: SPI SRAM memory test OK
+#   I (998) esp_psram: Adding pool of 8192K of PSRAM memory to heap allocator
 #
-# and record which one worked, with the board in hand, replacing this note.
+# The former TODO(source) is closed. QUAD was never tried and is not needed HERE;
+# the LILYGO T-CameraPlus-S3 is quad, which is why these overlays are per-board.
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
