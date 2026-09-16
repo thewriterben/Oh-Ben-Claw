@@ -34,6 +34,7 @@ measurement wins.
 | bridge (field) | **gw-D8** | **COM5** (USB on the bench; wall/bank in the field) | wall or power bank | **the node jumper pair belongs here** |
 | relay (Stage 3b) | **gw-90** | — | USB power only | none — radio only |
 | node | `obc-esp32-s3-001` | **COM6** | USB or bank | jumpers to the **bridge** = `gw-D8` |
+| camera node | `obc-esp32-s3-002` | **COM8** | USB | **no radio yet** — spine UART unwired |
 
 How each row was established, so the next person can redo it in two minutes rather
 than infer it from traffic (which is what Card 0 exists to stop):
@@ -50,6 +51,33 @@ than infer it from traffic (which is what Card 0 exists to stop):
   `gw-40` originated them. That is the wrong board: see the jumper rule below.
 
 All three radios self-test clean (`status=0xA2`, syncword readback `0x1424`).
+
+### ⚠ Before you flash any ESP32-S3, run the gate
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\which_esp32.ps1
+```
+
+It names every attached S3 by its factory MAC and tells you which port is safe.
+Then pass that port explicitly — `espflash --port COM8` — and never let espflash
+autodetect while the live node is plugged in.
+
+**This is not paranoia, it is the 2026-09-16 near-miss.** Both XIAOs are the same
+board, from the same batch, and their MACs differ only in the last three bytes
+(`…7E:BB:98` vs `…7E:7E:04`). The plan that day said "flash the spare XIAO"; the
+only S3 attached at the time was the live mesh node. Nothing on the desk, in the
+port list, or in the firmware distinguished them.
+
+Then it got worse before it got better: the second board, once flashed, booted
+announcing `Node ID: obc-esp32-s3-001` — the live node's identity — and began
+emitting `link_state` JSON under it. The node id was a compile-time constant.
+Nothing reached the air only because that board's spine UART was not yet wired to
+a radio, and wiring it to one was the next step in the plan.
+
+Identity now comes from the chip (`firmware/obc-esp32-s3/src/identity_map.rs`),
+the boot log prints the MAC beside the name, and
+`tests/firmware_identity_roster.rs` fails if this card, the firmware roster, the
+host registry and the gate script ever drift apart.
 
 **Keep the relay unpowered outside Stage 3b.** On 2026-07-19 a frame carrying a
 host-originated command was observed with `src=90` — the relay — which means all three

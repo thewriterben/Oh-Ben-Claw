@@ -1,0 +1,65 @@
+//! MAC → node id. Pure arithmetic over strings, no ESP dependencies.
+//!
+//! Split from `identity.rs` for the same reason `sensor_math` is split from
+//! `sensors`: the hardware read needs a bench, but the *mapping* is
+//! deterministic and needs only a test. Behind an `esp_idf_svc` import it could
+//! never be executed on the host, and a rule about fleet identity that nothing
+//! can run is a rule on trust. `tests/firmware_identity_roster.rs` includes this
+//! file by `#[path]` and exercises it for real.
+//!
+//! See `identity.rs` for why identity is derived from the chip at all.
+
+/// Known boards, by factory MAC.
+///
+/// **Keep in step with the host's `crates/obc-planner/src/peripherals/registry.rs`
+/// and with `scripts/which_esp32.ps1`.** Three copies of one roster is a smell,
+/// and this codebase has been bitten by exactly that — a file contradicting its
+/// own manifest two directories away, unnoticed because nothing compared them.
+/// `tests/firmware_identity_roster.rs` compares all three and fails on drift.
+pub const ROSTER: &[(&str, &str)] = &[
+    // Verified 2026-09-13 (walkthrough run, 18/18) and again by espflash 2026-09-16.
+    ("64:E8:33:7E:BB:98", "obc-esp32-s3-001"),
+    // Camera node. MAC read by espflash while flashing it, 2026-09-16:
+    //   MAC address: 64:e8:33:7e:7e:04
+    ("64:E8:33:7E:7E:04", "obc-esp32-s3-002"),
+];
+
+/// What a board calls itself when its MAC cannot be read at all.
+///
+/// Not a fleet name, and deliberately not parseable as one: a node that does not
+/// know what it is should be obviously broken, not quietly someone else.
+pub const UNIDENTIFIED: &str = "obc-esp32-s3-unidentified";
+
+/// The all-zero MAC, used as the sentinel for "efuse read failed".
+pub const NO_MAC: &str = "00:00:00:00:00:00";
+
+/// Format six raw bytes as `AA:BB:CC:DD:EE:FF`.
+pub fn format_mac(mac: &[u8; 6]) -> String {
+    mac.iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// Resolve a formatted MAC to a node id: roster first, then the derived tail.
+///
+/// The fallback is the last **three** bytes, because the bench's own two boards
+/// differ only in those — `64:E8:33:7E:BB:98` and `64:E8:33:7E:7E:04` share the
+/// first three. A shorter tail would have reproduced the collision this whole
+/// module exists to end.
+pub fn id_for(mac_str: &str) -> String {
+    if mac_str == NO_MAC {
+        return UNIDENTIFIED.to_string();
+    }
+    for (mac, id) in ROSTER {
+        if mac.eq_ignore_ascii_case(mac_str) {
+            return (*id).to_string();
+        }
+    }
+    let tail: String = mac_str
+        .split(':')
+        .skip(3)
+        .map(|b| b.to_ascii_lowercase())
+        .collect();
+    format!("obc-esp32-s3-{tail}")
+}
