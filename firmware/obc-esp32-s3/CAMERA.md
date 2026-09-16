@@ -12,13 +12,27 @@ you uncomment it.
 > nothing used to force anyone to say which one they meant. That is how the map
 > below was wrong twice. The choices:
 >
-> | feature | board | pin map source |
-> |---|---|---|
-> | `board-xiao-sense` | Seeed XIAO ESP32S3 **Sense** | Seeed wiki camera-slot table, retrieved 2026-09-16, cited in `camera.rs` |
-> | `board-unverified-map` | **none known** | the historical unattributed set — quarantined, do not bring up hardware with it |
+> | feature | board | sdkconfig overlay | pin map source |
+> |---|---|---|---|
+> | `board-xiao-sense` | Seeed XIAO ESP32S3 **Sense** | `sdkconfig.defaults.camera-xiao-sense` (PSRAM **OCT**, measured) | Seeed wiki camera-slot table, 2026-09-16, cited in `camera.rs` |
+> | `board-lilygo-tcam-s3-v11` | LILYGO T-CameraPlus-S3 **V1.0/V1.1 only** | `sdkconfig.defaults.camera-lilygo-tcam-v11` (PSRAM **QUAD**, vendor-cited) | vendor `pin_config.h` + README, 2026-09-16, cited in `camera.rs` |
+> | `board-unverified-map` | **none known** | — | the historical unattributed set — quarantined, do not bring up hardware with it |
 >
-> Omitting both, or naming both, is a `compile_error!` that names the choice.
+> Omitting a board, or naming two, is a `compile_error!` that names the choice.
 > `board-waveshare-21` + `camera` remains a `compile_error!` (no camera connector).
+>
+> **The overlay is not interchangeable.** PSRAM mode is a property of the module:
+> the XIAO is octal, the Lilygo is quad. Pairing a board with the wrong overlay
+> does not fail cleanly — the board boots and `esp_camera_init` fails, or PSRAM
+> misbehaves quietly. Nothing enforces the pairing at compile time, because
+> sdkconfig is invisible to `cfg`; the table above is the enforcement, which is to
+> say it is you.
+>
+> **V1.2 is a different board.** Only three camera pins differ (VSYNC, PWDN,
+> RESET — GPIO3 and GPIO4 swap roles), which is exactly what makes it dangerous,
+> and the vendor ships `pin_config.h` with V1.2 selected. There is no
+> `board-lilygo-tcam-s3-v12` feature; if you have that revision, add one with its
+> own citation rather than reusing V1.1's.
 
 > **Board caveat, corrected twice on 2026-08-21 — the second time by looking
 > at the board.** This document and `camera.rs` both described the pin map
@@ -78,11 +92,11 @@ downloads the component, compiles it into the ESP-IDF, and generates the
 tree, so forcing PSRAM on there changes the binary a default build produces —
 including one flashed to the live mesh node, whose PSRAM mode is unverified and
 whose boot that can break. The overlay already exists as
-`sdkconfig.defaults.camera`; you select it per-build with an environment
+`sdkconfig.defaults.camera-<board>`; you select it per-build with an environment
 variable:
 
 ```powershell
-$env:ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults;sdkconfig.defaults.camera"
+$env:ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults;sdkconfig.defaults.camera-xiao-sense"
 ```
 
 Semicolon-separated, later files win, and the variable **replaces** the default
@@ -96,17 +110,19 @@ script on its own.
 Unset the variable — or open a fresh shell — before building anything for the
 live node. Its absence is what makes a default build a default build.
 
-**Measured 2026-09-16, TODO(source) closed.** `MODE_OCT` is correct on the XIAO
-ESP32S3 Sense (MAC `64:E8:33:7E:7E:04`, chip rev v0.2, ESP-IDF v5.3.2): the boot
-log reports `esp_psram: SPI SRAM memory test OK` and `Adding pool of 8192K of
-PSRAM memory to heap allocator`. QUAD was never needed.
+**Measured 2026-09-16 on the XIAO, `TODO(source)` closed.** `MODE_OCT` is correct
+on the XIAO ESP32S3 Sense (MAC `64:E8:33:7E:7E:04`, chip rev v0.2, ESP-IDF
+v5.3.2): boot log reports `esp_psram: SPI SRAM memory test OK` and `Adding pool of
+8192K of PSRAM memory to heap allocator`. QUAD was never needed **on that board**
+— the Lilygo is the opposite and that is the whole reason these overlays are
+per-board.
 
 ## 3. Build with the features
 
 ```powershell
 git switch -c camera-bringup                  # §1: the tree is dirty, make it visible
 $env:CARGO_TARGET_DIR = "C:\e"                # Windows path-length workaround
-$env:ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults;sdkconfig.defaults.camera"
+$env:ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults;sdkconfig.defaults.camera-xiao-sense"
 cargo build --release --features camera,board-xiao-sense
 cargo espflash flash --release --features camera,board-xiao-sense --monitor
 ```
@@ -127,8 +143,7 @@ A healthy board returns `ok:true` with a long base64 JPEG string (no longer the
 ## Troubleshooting / caveats
 
 - **`esp_camera_init failed`** — almost always PSRAM mode (step 2). Swap
-  `CONFIG_SPIRAM_MODE_OCT` for `CONFIG_SPIRAM_MODE_QUAD` in
-  `sdkconfig.defaults.camera`, and record which one worked — that `TODO(source)`
+  the PSRAM mode in your board's overlay, and record which one worked — that `TODO(source)`
   closes the moment a board proves it.
 - **Do not use the boot log's `app_init: Compile time:` to tell whether your
   change is on the board.** It is the ESP-IDF app descriptor's timestamp and does

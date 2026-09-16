@@ -70,17 +70,41 @@ compile_error!(
 // A camera build must name its board. No default: see the 2026-09-16 note above.
 #[cfg(all(
     feature = "camera",
-    not(any(feature = "board-xiao-sense", feature = "board-unverified-map"))
+    not(any(
+        feature = "board-xiao-sense",
+        feature = "board-lilygo-tcam-s3-v11",
+        feature = "board-unverified-map"
+    ))
 ))]
 compile_error!(
     "`camera` needs a board feature so the pin map is attributable. Add \
-     `board-xiao-sense` (Seeed XIAO ESP32S3 Sense, pins from the vendor wiki) or, \
-     only if you know what it is for, `board-unverified-map` (the historical \
-     unattributed set — matches no known board). See camera.rs."
+     `board-xiao-sense` (Seeed XIAO ESP32S3 Sense, pins from the vendor wiki), \
+     `board-lilygo-tcam-s3-v11` (LILYGO T-CameraPlus-S3 **V1.0/V1.1 only** -- V1.2 \
+     moves VSYNC/PWDN/RESET and is a different board), or, only if you know what it \
+     is for, `board-unverified-map` (the historical unattributed set — matches no \
+     known board). See camera.rs."
 );
 
+// Pairwise, because each pin map is a different board and picking two means the
+// compiler silently takes whichever `cfg` it sees first.
 #[cfg(all(feature = "board-xiao-sense", feature = "board-unverified-map"))]
-compile_error!("pick one camera board feature, not both");
+compile_error!("pick one camera board feature, not both (xiao-sense + unverified-map)");
+#[cfg(all(feature = "board-xiao-sense", feature = "board-lilygo-tcam-s3-v11"))]
+compile_error!("pick one camera board feature, not both (xiao-sense + lilygo-tcam-s3-v11)");
+#[cfg(all(feature = "board-lilygo-tcam-s3-v11", feature = "board-unverified-map"))]
+compile_error!("pick one camera board feature, not both (lilygo-tcam-s3-v11 + unverified-map)");
+
+// The camera board and the board *profile* (`board.rs`) must agree, or Track 0
+// opens the wrong pins at boot. On the Lilygo V1.1 the XIAO's default output
+// allow-list `[21, 3, 7, 8]` is SD_CS, camera RESET, camera XCLK and camera D6 --
+// the node would drive its own sensor clock as an actuator. `board.rs` selects the
+// Lilygo profile from the same feature, and this refuses the combination that
+// cannot be made consistent.
+#[cfg(all(feature = "board-lilygo-tcam-s3-v11", feature = "board-waveshare-21"))]
+compile_error!(
+    "`board-lilygo-tcam-s3-v11` and `board-waveshare-21` are different boards; \
+     pick one."
+);
 
 use anyhow::Context;
 // esp32-camera bindings live in their own module (see Cargo.toml `bindings_module`).
@@ -165,6 +189,65 @@ const PINS: CameraPins = CameraPins {
     vsync: 38,
     href: 47,
     pclk: 13,
+};
+
+/// LILYGO T-CameraPlus-S3, hardware revision **V1.0/V1.1 only**.
+///
+/// Sources, both retrieved 2026-09-16, and they agree exactly:
+///
+/// * `libraries/private_library/pin_config.h` in `Xinyuan-LilyGO/T-CameraPlus-S3`
+///   (branch `arduino-esp32-libs_V2.0.14`, the repo's only branch — there is no
+///   `master`), block `#ifdef T_CameraPlus_S3_V1_0_V1_1` plus the shared block
+///   below it.
+/// * That repo's README, table *"T-CameraPlus-S3_V1.0-V1.1 版本 → camera module
+///   ov2640 pins"*.
+///
+/// ```text
+/// XCLK 7   PCLK 10   VSYNC 4   HREF 5   SIOD(SDA) 1   SIOC(SCL) 2
+/// RESET 3   PWDN -1 (not wired on this revision)
+/// Y2 12  Y3 14  Y4 15  Y5 13  Y6 11  Y7 9  Y8 8  Y9 6
+/// ```
+///
+/// **Do not use this map on a V1.2 board.** Only three camera pins differ, which
+/// is exactly why it is dangerous: V1.2 has VSYNC on 3, PWDN on 4 and RESET on
+/// -1 — GPIO3 and GPIO4 swap roles. Loading this map on a V1.2 board drives
+/// GPIO4 as an input while the board expects it as PWDN. The vendor ships
+/// `pin_config.h` with **V1.2 selected**, so the upstream default is the other
+/// revision from ours.
+///
+/// Two board-level facts that do not live in this struct but govern any build
+/// using it:
+///
+/// * **PSRAM is QUAD (QSPI), not octal.** The vendor's `platformio.ini` has
+///   `qio_opi` commented out and `qio_qspi` active, their `sdkconfig.defaults`
+///   says `CONFIG_SPIRAM_MODE_QUAD=y`, and the README's Arduino table says
+///   "QSPI PSRAM". Use `sdkconfig.defaults.camera-lilygo-tcam-v11`, not the
+///   XIAO's overlay, which is `MODE_OCT` and measured correct for that board
+///   only.
+/// * **SCCB is shared.** On V1.0/V1.1 GPIO1/2 also carry the CST816S touch
+///   controller (0x15) and the SY6970 PMIC (0x6A). The camera driver takes the
+///   bus as its SCCB master. This is why `board.rs` gives this board no sensor
+///   I2C bus and no microphone — the firmware's I2S mic is GPIO0/1/2 and would
+///   fight the sensor. (V1.2 splits them onto 33/37; another reason not to mix
+///   the revisions.)
+#[cfg(feature = "board-lilygo-tcam-s3-v11")]
+const PINS: CameraPins = CameraPins {
+    pwdn: -1,
+    reset: 3,
+    xclk: 7,
+    sccb_sda: 1,
+    sccb_scl: 2,
+    d0: 12, // Y2
+    d1: 14, // Y3
+    d2: 15, // Y4
+    d3: 13, // Y5
+    d4: 11, // Y6
+    d5: 9,  // Y7
+    d6: 8,  // Y8
+    d7: 6,  // Y9
+    vsync: 4,
+    href: 5,
+    pclk: 10,
 };
 
 /// The historical map. **Matches no known board** — see the module header for how

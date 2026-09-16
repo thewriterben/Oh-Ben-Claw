@@ -31,7 +31,16 @@
 #[path = "../firmware/obc-esp32-s3/src/board.rs"]
 mod board;
 
-use board::{Board, WAVESHARE_ESP32_S3_TOUCH_LCD_21 as WAVESHARE, XIAO_ESP32_S3 as XIAO};
+use board::{
+    Board, LILYGO_T_CAMERA_PLUS_S3_V11 as LILYGO, WAVESHARE_ESP32_S3_TOUCH_LCD_21 as WAVESHARE,
+    XIAO_ESP32_S3 as XIAO,
+};
+
+/// Every declared board profile. Enumerations below iterate THIS, not a literal
+/// pair -- on 2026-09-16 a third profile (the Lilygo) was added and every loop
+/// here still said `[&XIAO, &WAVESHARE]`, so the new board was covered by
+/// nothing while the suite stayed green.
+const ALL_BOARDS: &[&Board] = &[&XIAO, &WAVESHARE, &LILYGO];
 
 fn describe(b: &Board, camera: bool) -> serde_json::Value {
     board::describe(b, camera, "obc-esp32-s3-001", "0.4.2", 0xC0FFEE)
@@ -52,7 +61,8 @@ fn describe(b: &Board, camera: bool) -> serde_json::Value {
 /// fails rather than a host quietly learning something untrue.
 #[test]
 fn the_wire_format_and_the_definition_are_the_same_document() {
-    for (name, board) in [("xiao", &XIAO), ("waveshare", &WAVESHARE)] {
+    for board in ALL_BOARDS {
+        let name = board.name;
         for camera in [false, true] {
             let wire = board::describe_json(board, camera, "obc-esp32-s3-001", "0.4.2", 0xC0FFEE);
             let parsed: serde_json::Value = serde_json::from_str(&wire).unwrap_or_else(|e| {
@@ -96,7 +106,7 @@ fn a_waveshare_node_does_not_announce_itself_as_a_xiao() {
 /// own gate, and the two pins it *would* accept are invisible.
 #[test]
 fn the_announced_gpio_list_is_the_list_the_gate_is_seeded_with() {
-    for b in [&XIAO, &WAVESHARE] {
+    for b in ALL_BOARDS {
         for camera in [false, true] {
             let caps = describe(b, camera);
             let announced: Vec<i64> = caps["gpio"]
@@ -158,11 +168,99 @@ fn the_xiao_bus_is_the_labelled_one_and_no_output_pin_sits_on_it() {
         Some((5, 6)),
         "SDA=GPIO5 (silk D4), SCL=GPIO6 (silk D5)"
     );
-    for b in [&XIAO, &WAVESHARE] {
-        let (sda, scl) = b.i2c.expect("both boards declare a bus");
+    for b in ALL_BOARDS {
+        // Not every board has a free sensor bus. The Lilygo T-CameraPlus-S3
+        // V1.0/V1.1 declares `None` because its only exposed bus, GPIO1/2, IS the
+        // camera's SCCB (shared with the CST816S touch controller and the SY6970
+        // PMIC). This used to `expect()` a bus on every board, which was true of
+        // exactly the two boards that existed when it was written.
+        let Some((sda, scl)) = b.i2c else { continue };
         for &pin in b.output_pins {
             assert_ne!(pin, sda, "{}: output pin {pin} is the bus SDA", b.name);
             assert_ne!(pin, scl, "{}: output pin {pin} is the bus SCL", b.name);
+        }
+    }
+}
+
+/// A board that declares no sensor bus must not then announce one.
+///
+/// The counterpart to the check above: `i2c: None` is a real answer, and the
+/// wire format has to carry it as `null` rather than as an invented pair. A host
+/// told a bus exists will wire a sensor to it.
+#[test]
+fn a_board_with_no_bus_announces_null_rather_than_inventing_one() {
+    for b in ALL_BOARDS {
+        if b.i2c.is_some() {
+            continue;
+        }
+        for camera in [false, true] {
+            assert_eq!(
+                describe(b, camera)["i2c_bus"],
+                serde_json::Value::Null,
+                "{} declares no bus but announced one (camera={camera})",
+                b.name
+            );
+        }
+    }
+}
+
+/// No board may put a Track 0 actuator pin on its own camera's wiring.
+///
+/// This is the invariant that nearly shipped broken on 2026-09-16. `board::ACTIVE`
+/// defaulted to the XIAO for any build that was not the Waveshare, so the first
+/// Lilygo build would have inherited `output_pins: [21, 3, 7, 8]` — on that board
+/// SD_CS, camera RESET, camera **XCLK** and camera D6. Track 0 sets every entry to
+/// OUTPUT at boot, so the node would have driven its own sensor clock as an
+/// actuator line before the camera initialised, and a correct pin map in
+/// `camera.rs` would not have saved it.
+///
+/// It was caught by reading a vendor pin table, which is not a mechanism. This is.
+///
+/// **Partial by construction, and that is the point to fix next.** The camera pin
+/// maps live in `camera.rs` behind `#[cfg(feature = ...)]`, so a host test cannot
+/// see them; the numbers below are transcribed. Transcription is exactly what
+/// this repo keeps getting wrong. The real fix is to move the pin maps into a
+/// pure `camera_map.rs` the way `identity_map.rs` and `sensor_math.rs` are split,
+/// so this test reads the shipped table instead of a copy of it.
+#[test]
+fn no_board_drives_its_own_camera_pins_as_actuators() {
+    // Transcribed from camera.rs 2026-09-16. See the caveat above.
+    let camera_pins: &[(&str, &[i32])] = &[
+        // LILYGO T-CameraPlus-S3 V1.0/V1.1: xclk 7, pclk 10, vsync 4, href 5,
+        // sccb 1/2, reset 3, data 12/14/15/13/11/9/8/6.
+        (
+            "lilygo-t-camera-plus-s3-v1.1",
+            &[7, 10, 4, 5, 1, 2, 3, 12, 14, 15, 13, 11, 9, 8, 6],
+        ),
+        // Seeed XIAO ESP32S3 Sense: xclk 10, pclk 13, vsync 38, href 47,
+        // sccb 40/39, data 15/17/18/16/14/12/11/48.
+        (
+            "seeed-xiao-esp32-s3",
+            &[10, 13, 38, 47, 40, 39, 15, 17, 18, 16, 14, 12, 11, 48],
+        ),
+    ];
+
+    for (name, cam) in camera_pins {
+        let board = ALL_BOARDS
+            .iter()
+            .find(|b| b.name == *name)
+            .unwrap_or_else(|| panic!("no board profile named {name}"));
+        for &pin in board.output_pins {
+            assert!(
+                !cam.contains(&pin),
+                "{name}: Track 0 output pin {pin} is one of this board's camera \
+                 pins. Track 0 configures it as an output at boot, before the \
+                 camera initialises."
+            );
+        }
+        if let Some((sda, scl)) = board.i2c {
+            for p in [sda, scl] {
+                assert!(
+                    !cam.contains(&p),
+                    "{name}: sensor bus pin {p} is a camera pin; the two drivers \
+                     would fight for it."
+                );
+            }
         }
     }
 }
@@ -171,5 +269,9 @@ fn the_xiao_bus_is_the_labelled_one_and_no_output_pin_sits_on_it() {
 /// boards declared here rather than a third thing assembled by `#[cfg]`.
 #[test]
 fn the_active_board_is_one_of_the_declared_ones() {
-    assert!(board::ACTIVE == XIAO || board::ACTIVE == WAVESHARE);
+    assert!(
+        ALL_BOARDS.iter().any(|b| **b == board::ACTIVE),
+        "ACTIVE is a board this harness does not know about: {}",
+        board::ACTIVE.name
+    );
 }
