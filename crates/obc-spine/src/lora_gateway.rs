@@ -702,9 +702,18 @@ const STATION_BAD_TAG: &str = "bad tag";
 
 /// One frame the **station** refused on the air, from a `SPINE ◄ REJECTED`
 /// console line. Unauthenticated: this is the station's word, not the host's.
+///
+/// Note what this line does *not* say: which station refused it. The console
+/// belongs to one station and the host knows the port, not the id, so the
+/// refuser is identified only as "the station on this console". With two
+/// stations that is unambiguous; with three it would not be, and the fix is a
+/// station id on the firmware's warning line. `TODO(source)` — see
+/// SPINE-REPLAY.md §6 step 7.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GatewayRefusal {
-    /// Claimed originating station, from `src=` (hex). A forger picks this.
+    /// The refused frame's **claimed** origin, from `src=` (hex). A forger
+    /// picks this freely, so it names who is being impersonated, never who is
+    /// transmitting — and it must never be read as the station that refused.
     pub src: u8,
     /// The counter on the refused frame, from `ctr=`.
     pub ctr: Option<u32>,
@@ -771,9 +780,20 @@ pub const AIR_FACT_PREFIX: &str = "spine.air.";
 /// the authenticated alarm. Written on change only.
 pub const AIR_REFUSED_COUNT_FACT: &str = "spine.air.refused_count";
 
-/// A station's burst closes this long after its last refused frame, matching
+/// A burst closes this long after its last refused frame, matching
 /// [`AUTH_ALARM_CLEAR_MS`] so the two signals describe an incident the same way.
 pub const AIR_REFUSED_CLEAR_MS: u64 = AUTH_ALARM_CLEAR_MS;
+
+/// Most claimed sources that may hold an open burst at once.
+///
+/// The key of a burst fact is the *claimed* source, which a forger chooses,
+/// so without a cap one transmitter cycling `src` could mint 256 entities in
+/// world memory through an input that is unauthenticated by construction.
+/// Past the cap the refusals are counted on [`AIR_REFUSED_COUNT_FACT`]'s
+/// overflow rather than given entities of their own — the operator still
+/// learns that something is spraying, which is the more useful finding
+/// anyway, and the store is not the thing that pays for it.
+pub const AIR_MAX_TRACKED_SOURCES: usize = 8;
 
 /// An open burst of refusals at one station.
 #[derive(Debug, Clone)]
@@ -791,11 +811,68 @@ struct AirBurst {
 #[derive(Debug, Default)]
 pub struct AirWatch {
     bursts: std::collections::HashMap<u8, AirBurst>,
+    /// Refusals dropped because [`AIR_MAX_TRACKED_SOURCES`] bursts were
+    /// already open. Counted, never given an entity.
+    overflow: u64,
 }
 
 impl AirWatch {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Adopt the bursts a previous process left open, so they can be closed.
+    ///
+    /// Without this a restart during a burst orphans the fact: the new watch
+    /// knows nothing, `sweep` returns early when it has nothing to expire, and
+    /// `spine.air.refused_count` stays at its old value **forever** — a rule
+    /// firing on a condition that ended, which is the failure this repository
+    /// keeps calling silent degradation. The clear timer resumes from when the
+    /// fact was last written, exactly as [`LoraAuth`] resumes an open alarm.
+    ///
+    /// The resumed `count` is what the open fact carried, which is what it had
+    /// at the moment the burst opened — a restart mid-burst therefore
+    /// undercounts. Recorded rather than hidden: the count is for an
+    /// operator's sense of scale, and the alternative is a write per frame.
+    pub fn resume(&mut self, world: &WorldMemory) {
+        for entity in world.entities().unwrap_or_default() {
+            if !(entity.starts_with(AIR_FACT_PREFIX) && entity.ends_with(".refused")) {
+                continue;
+            }
+            let Ok(Some(fact)) = world.current(&entity) else {
+                continue;
+            };
+            if fact.value.get("status").and_then(Value::as_str) != Some("refusing") {
+                continue;
+            }
+            let Some(src) = fact
+                .value
+                .get("claimed_src")
+                .and_then(Value::as_str)
+                .and_then(|s| s.strip_prefix("gw-"))
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+            else {
+                continue;
+            };
+            self.bursts.insert(
+                src,
+                AirBurst {
+                    since_ms: fact
+                        .value
+                        .get("since_ms")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(fact.valid_from),
+                    last_ms: fact.valid_from,
+                    count: fact.value.get("count").and_then(Value::as_u64).unwrap_or(1),
+                    fact_id: Some(fact.id),
+                },
+            );
+            let claimed = LoraAuth::station(src);
+            tracing::info!(
+                claimed_src = %claimed,
+                "[lora_gateway] resumed an open on-air refusal burst left by the previous process"
+            );
+        }
     }
 
     /// Record one refusal the station reported. Only a bad tag opens or
@@ -813,21 +890,47 @@ impl AirWatch {
             );
             return;
         }
-        let station = LoraAuth::station(r.src);
+        let claimed = LoraAuth::station(r.src);
+        // Read the cap before taking the mutable borrow below.
+        let at_cap = self.bursts.len() >= AIR_MAX_TRACKED_SOURCES;
+        let known = self.bursts.contains_key(&r.src);
         match self.bursts.get_mut(&r.src) {
             Some(b) => {
                 b.count += 1;
                 b.last_ms = now_ms;
             }
+            None if at_cap && !known => {
+                // Someone is cycling `src`. Do not mint an entity per id.
+                self.overflow += 1;
+                if self.overflow == 1 || self.overflow.is_multiple_of(100) {
+                    tracing::warn!(
+                        claimed_src = %claimed,
+                        overflow = self.overflow,
+                        "[lora_gateway] ON AIR: refusals now name more than {} distinct sources \
+                         — a transmitter is cycling the claimed id; counting without tracking",
+                        AIR_MAX_TRACKED_SOURCES
+                    );
+                }
+                self.record_count(world, now_ms);
+            }
             None => {
                 let fact = world
                     .observe_as(
-                        &format!("{AIR_FACT_PREFIX}{station}.refused"),
+                        &format!("{AIR_FACT_PREFIX}{claimed}.refused"),
                         json!({
                             "status": "refusing",
-                            "station": station,
+                            // The frame's *claimed* origin — who is being
+                            // impersonated. Named `claimed_src`, never
+                            // `station`, because the obvious misreading ("this
+                            // station is refusing") sends an operator to the
+                            // wrong board: the refuser is the station on this
+                            // host's console, which the console line does not
+                            // identify.
+                            "claimed_src": claimed,
+                            "refused_by": "the station on this host's console",
                             "reason": r.reason,
                             "ctr": r.ctr,
+                            // The one field a forger does not choose.
                             "rssi_dbm": r.rssi_dbm,
                             "count": 1,
                             "since_ms": now_ms,
@@ -843,12 +946,12 @@ impl AirWatch {
                     )
                     .ok();
                 tracing::warn!(
-                    station = %station,
+                    claimed_src = %claimed,
                     ctr = r.ctr,
                     rssi = r.rssi_dbm,
-                    "[lora_gateway] ON AIR: {} is refusing frames it cannot authenticate — \
-                     someone is transmitting forgeries at it (station-asserted)",
-                    station
+                    "[lora_gateway] ON AIR: the station on this console is refusing frames that \
+                     claim to come from {} — it cannot authenticate them (station-asserted)",
+                    claimed
                 );
                 self.bursts.insert(
                     r.src,
@@ -883,12 +986,12 @@ impl AirWatch {
             let Some(b) = self.bursts.remove(&src) else {
                 continue;
             };
-            let station = LoraAuth::station(src);
+            let claimed = LoraAuth::station(src);
             let _ = world.observe_derived_from(
-                &format!("{AIR_FACT_PREFIX}{station}.refused"),
+                &format!("{AIR_FACT_PREFIX}{claimed}.refused"),
                 json!({
                     "status": "quiet",
-                    "station": station,
+                    "claimed_src": claimed,
                     "count": b.count,
                     "since_ms": b.since_ms,
                     "last_ms": b.last_ms,
@@ -900,16 +1003,19 @@ impl AirWatch {
                 &b.fact_id.into_iter().collect::<Vec<_>>(),
             );
             tracing::info!(
-                station = %station,
+                claimed_src = %claimed,
                 refused = b.count,
-                "[lora_gateway] on-air refusals stopped at {station}: none for {} s",
+                "[lora_gateway] on-air refusals naming {claimed} have stopped: none for {} s",
                 AIR_REFUSED_CLEAR_MS / 1000
             );
         }
         self.record_count(world, now_ms);
     }
 
-    /// `spine.air.refused_count` — how many stations are reporting refusals.
+    /// `spine.air.refused_count` — how many distinct claimed sources are
+    /// currently being refused on the air. The rule reads this one number;
+    /// it stays a plain count so the condition is a comparison, and the
+    /// overflow is not folded in (it would make the number mean two things).
     fn record_count(&self, world: &WorldMemory, now_ms: u64) {
         let support: Vec<i64> = self.bursts.values().filter_map(|b| b.fact_id).collect();
         let _ = world.observe_derived_from(
@@ -922,7 +1028,8 @@ impl AirWatch {
         );
     }
 
-    /// Stations currently reporting refusals, for `mesh_status` and `status`.
+    /// Claimed sources whose frames are currently being refused on the air,
+    /// for `mesh_status` and `status`.
     pub fn refusing_stations(world: &WorldMemory) -> Vec<Value> {
         let mut out = Vec::new();
         for e in world.entities().unwrap_or_default() {
@@ -1555,6 +1662,7 @@ pub async fn supervise_gateway<O, Fut, F>(
         }
     };
     let mut air = AirWatch::new();
+    air.resume(&world);
     loop {
         let error =
             run_gateway_rx(lines, &mut auth, &mut air, Arc::clone(&world), now_ms.clone()).await;
@@ -2557,6 +2665,22 @@ mod tests {
             json!("station-asserted (unauthenticated console)"),
             "the fact says how much it is worth"
         );
+        // Caught on the bench, 2026-09-15: `src` is the refused frame's
+        // *claimed* origin, not the refuser. The first cut called it
+        // `station`, and the log line said "gw-D8 is refusing frames" when
+        // gw-D8 was the board being impersonated — an operator following that
+        // goes to the wrong radio.
+        assert_eq!(open.value["claimed_src"], json!("gw-40"));
+        assert!(
+            open.value.get("station").is_none(),
+            "no field whose obvious reading is the refusing station"
+        );
+        assert_eq!(
+            open.value["refused_by"],
+            json!("the station on this host's console"),
+            "the console line does not name the refuser, and the fact says so \
+             rather than implying one"
+        );
         assert_eq!(
             world.current(AIR_REFUSED_COUNT_FACT).unwrap().unwrap().value,
             json!(1)
@@ -2587,6 +2711,74 @@ mod tests {
             json!(0)
         );
         assert_eq!(AirWatch::refusing_stations(&world).len(), 0);
+    }
+
+    /// A restart mid-burst must not orphan the fact. `sweep` returns early
+    /// when it has nothing to expire, so a watch that came up empty would
+    /// never rewrite `spine.air.refused_count` and the rule would fire on a
+    /// condition that had ended — for as long as the process lived.
+    #[test]
+    fn a_restart_adopts_an_open_burst_instead_of_orphaning_it() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let r = parse_gateway_refusal(REJECTED_LINE).unwrap();
+        {
+            let mut air = AirWatch::new();
+            air.observe(&r, &world, 1_000);
+            air.observe(&r, &world, 2_000);
+        } // the process dies here, mid-burst
+
+        let mut reborn = AirWatch::new();
+        reborn.resume(&world);
+        assert_eq!(
+            world.current(AIR_REFUSED_COUNT_FACT).unwrap().unwrap().value,
+            json!(1),
+            "still open, and still counted, immediately after the restart"
+        );
+        // The clear timer runs from the fact, not from the restart.
+        reborn.sweep(&world, 2_000 + AIR_REFUSED_CLEAR_MS);
+        let closed = world.current("spine.air.gw-40.refused").unwrap().unwrap();
+        assert_eq!(closed.value["status"], json!("quiet"));
+        assert_eq!(
+            world.current(AIR_REFUSED_COUNT_FACT).unwrap().unwrap().value,
+            json!(0),
+            "the count the rule reads returns to zero"
+        );
+    }
+
+    /// A forger who cycles the claimed `src` must not be able to mint an
+    /// entity per id in world memory. The key is a value the attacker picks,
+    /// through an input that is unauthenticated by construction, so the cap is
+    /// the only thing between them and the store.
+    #[test]
+    fn cycling_the_claimed_source_cannot_flood_world_memory() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        let mut air = AirWatch::new();
+        for src in 0u8..=255 {
+            let line = format!(
+                "SPINE ◄ REJECTED src={src:02X} ctr=7 rssi=-40 dBm (63 B): \
+                 bad tag (wrong root, forged, or corrupt)"
+            );
+            let r = parse_gateway_refusal(&line).unwrap();
+            air.observe(&r, &world, 1_000 + u64::from(src));
+        }
+        let minted = world
+            .entities()
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.starts_with(AIR_FACT_PREFIX) && e.ends_with(".refused"))
+            .count();
+        assert_eq!(
+            minted, AIR_MAX_TRACKED_SOURCES,
+            "256 claimed sources must not become 256 entities"
+        );
+        assert_eq!(
+            world.current(AIR_REFUSED_COUNT_FACT).unwrap().unwrap().value,
+            json!(AIR_MAX_TRACKED_SOURCES as u64),
+            "the count the rule reads stays a plain count, not count + overflow"
+        );
+        // The rule still fires: the operator learns something is spraying,
+        // which is the more useful finding than any single id.
+        assert!(AirWatch::refusing_stations(&world).len() == AIR_MAX_TRACKED_SOURCES);
     }
 
     /// A fake port: each open hands the test the sender side, so it can feed

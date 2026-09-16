@@ -353,14 +353,17 @@ it cannot authenticate: something nearby is transmitting on our frequency with a
 not verify. Nothing was ingested — the station drops these at the radio, and they never reach \
 the brain. Weigh the evidence accordingly: this is the station's own report over a serial \
 console that is not authenticated, so it is a lead, not proof, and anyone with access to that \
-cable could have written it. Triage: (1) call `mesh_status` and read `air_refusals` — which \
-station, how many, and the RSSI, which is the one field a forger does not choose and tells you \
-roughly how close they are; (2) check whether `safe-spine-forgery` has also fired — that rule \
+cable could have written it. Triage: (1) call `mesh_status` and read `air_refusals` — note that \
+`claimed_src` is the identity the refused frames claimed, which a forger chooses freely, so it \
+says who is being impersonated and never who is transmitting; the RSSI is the one field they \
+do not choose and tells you roughly how close they are; (2) check whether `safe-spine-forgery` \
+has also fired — that rule \
 means the host refused a frame on its own evidence, and that finding outranks this one; \
 (3) do not `mesh_command` anything in response and do not change the deployment root on the \
 strength of this alone; (4) `record_incident` with subject = the station id and \
 `status: investigating`, noting the three readings that fit: a neighbouring deployment on the \
-same band, one of our own boards flashed with the wrong root, or someone probing the mesh. \
+same band, one of our own boards flashed with the wrong root, or someone probing the mesh. If \
+`air_refusals` names many different sources at once, prefer the third reading and say so. \
 An operator is alerted automatically; you do not need to do that. Every node action stays \
 Track-0 gated.";
 
@@ -588,6 +591,10 @@ mod tests {
         assert!(air_reason.contains("a lead, not proof"));
         assert!(air_reason.contains("`mesh_status`"), "names the perceive tool");
         assert!(air_reason.contains("air_refusals"), "names the field to read");
+        assert!(
+            air_reason.contains("who is being impersonated and never who is transmitting"),
+            "the bench-caught misreading: claimed_src is not the refusing station"
+        );
         assert!(air_reason.contains("do not `mesh_command`"));
         assert!(
             air_reason.contains("`safe-spine-forgery`") && air_reason.contains("outranks this one"),
