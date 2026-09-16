@@ -118,6 +118,15 @@ use esp_idf_svc::sys::ESP_OK;
 /// named, cited and diffed — the previous shape made it impossible to tell, at a
 /// glance, whether you were looking at one board's map or a merge of two.
 struct CameraPins {
+    /// IR-cut filter switch, `-1` when the board has none (or does not break it
+    /// out). The Lilygo T-CameraPlus-S3 has an AP1511B on GPIO16; the XIAO Sense
+    /// has no such part. Left undriven, an OV5640 sees infrared across the whole
+    /// frame and every picture comes back washed magenta — which is exactly what
+    /// the first images off this node looked like.
+    ir_cut: i32,
+    /// Level that ENGAGES the IR-cut filter (blocks infrared). Determined on the
+    /// bench by trying both and looking at the picture; see the board consts.
+    ir_cut_engaged_level: u32,
     pwdn: i32,
     reset: i32,
     xclk: i32,
@@ -173,6 +182,9 @@ struct CameraPins {
 /// convention, not a transcription error.
 #[cfg(feature = "board-xiao-sense")]
 const PINS: CameraPins = CameraPins {
+    // No IR-cut filter on the Sense expansion board.
+    ir_cut: -1,
+    ir_cut_engaged_level: 0,
     pwdn: -1,
     reset: -1,
     xclk: 10,
@@ -232,6 +244,22 @@ const PINS: CameraPins = CameraPins {
 ///   the revisions.)
 #[cfg(feature = "board-lilygo-tcam-s3-v11")]
 const PINS: CameraPins = CameraPins {
+    // AP1511B IR-cut switch. `#define AP1511B_FBC 16` in the vendor
+    // pin_config.h (both revisions). The vendor never states which level
+    // engages the filter, so it was MEASURED 2026-09-16 by flashing both and
+    // looking at the picture, same scene minutes apart:
+    //
+    //   level 1 -- scene readable, contrast present, warm cast
+    //   level 0 -- markedly worse: flat pink/white wash, contrast gone
+    //
+    // So 1 engages. Two samples, not a datasheet fact; if a schematic says
+    // otherwise, believe the schematic and re-shoot.
+    //
+    // A warm cast REMAINS at level 1 and this does not explain it. Auto white
+    // balance is left at the driver's default and has not been looked at. The
+    // cast is not solved, only reduced.
+    ir_cut: 16,
+    ir_cut_engaged_level: 1,
     pwdn: -1,
     reset: 3,
     xclk: 7,
@@ -255,6 +283,9 @@ const PINS: CameraPins = CameraPins {
 /// nothing selects it by accident.
 #[cfg(feature = "board-unverified-map")]
 const PINS: CameraPins = CameraPins {
+    // Unknown board; claiming an IR-cut pin would be one more invented fact.
+    ir_cut: -1,
+    ir_cut_engaged_level: 0,
     pwdn: -1,
     reset: -1,
     xclk: 15,
@@ -373,6 +404,30 @@ const PINS: CameraPins = CameraPins {
 // `esp_camera_fb_get` returns null there, with `cam_hal: Failed to get the
 // frame on time!`, so there is no frame to drop. Two boards, two unrelated
 // bugs, and the second one masked the first one's diagnosis.
+//
+// ── 2026-09-16: FIRST IMAGE OFF A NODE ───────────────────────────────────────
+//
+// With `send_line` chunking its writes, the Lilygo returned a complete JPEG:
+// 4905 bytes, 320x240, `FF D8` … `FF D9`, decoded and viewed. The camera path
+// on this board is end-to-end working.
+//
+// The image has a heavy magenta cast. **Likely cause, not yet tested:** the
+// vendor's `pin_config.h` defines `AP1511B_FBC 16` — the IR-cut filter switch —
+// and this firmware never drives that pin. An OV5640 with the IR-cut filter
+// disengaged sees infrared across the whole frame, which washes exactly this
+// purple. The fix would be to assert GPIO16 at init on this board.
+//
+// Two reasons that is not done here. It is one more board-specific pin, so it
+// belongs in `CameraPins` (or a board-level init hook) rather than hard-coded;
+// and nobody has confirmed the polarity — whether high or low engages the
+// filter is not stated in the sources read on 2026-09-16, and guessing it is
+// how this file got its reputation. Confirm from the schematic
+// (`project/T-CameraPlus-S3_V1.0-V1.1_20241109.pdf`) or by trying both and
+// looking at the picture, then record which way round it was.
+//
+// The vendor's OV5640 examples also call `set_vflip(1)` / `set_hmirror(0)` for
+// this sensor and load an autofocus blob (`ESP32_OV5640_AF`); we do neither, so
+// orientation and focus are whatever the sensor powers up with.
 
 /// Initialise the camera driver (global; call once at boot).
 pub fn init() -> anyhow::Result<()> {
@@ -426,6 +481,63 @@ pub fn init() -> anyhow::Result<()> {
     if err != ESP_OK {
         anyhow::bail!("esp_camera_init failed (error {err})");
     }
+
+    // ── IR-cut filter ────────────────────────────────────────────────────────
+    //
+    // Boards that have one (the Lilygo's AP1511B on GPIO16) leave it undriven
+    // after `esp_camera_init`, so the sensor sees infrared. `ir_cut_engaged_level`
+    // is a bench-determined fact, not a datasheet one — see the board const.
+    if PINS.ir_cut >= 0 {
+        unsafe {
+            use esp_idf_svc::sys::*;
+            let mask = 1u64 << PINS.ir_cut;
+            let io = gpio_config_t {
+                pin_bit_mask: mask,
+                mode: gpio_mode_t_GPIO_MODE_OUTPUT,
+                pull_up_en: gpio_pullup_t_GPIO_PULLUP_DISABLE,
+                pull_down_en: gpio_pulldown_t_GPIO_PULLDOWN_DISABLE,
+                intr_type: gpio_int_type_t_GPIO_INTR_DISABLE,
+                ..core::mem::zeroed()
+            };
+            if gpio_config(&io) == ESP_OK
+                && gpio_set_level(PINS.ir_cut, PINS.ir_cut_engaged_level) == ESP_OK
+            {
+                log::info!(
+                    "camera: IR-cut filter engaged (GPIO{} = {})",
+                    PINS.ir_cut,
+                    PINS.ir_cut_engaged_level
+                );
+            } else {
+                log::warn!("camera: IR-cut filter setup failed on GPIO{}", PINS.ir_cut);
+            }
+        }
+    }
+
+    // ── Orientation: deliberately NOT set. ───────────────────────────────────
+    //
+    // The first real picture off this node (2026-09-16) came back upside down,
+    // and the vendor's own OV5640 example does exactly what you would reach for:
+    //
+    //     if (s->id.PID == OV5640_PID) { s->set_vflip(s, 1); s->set_hmirror(s, 0); }
+    //
+    // That call was written here and then removed, because the board was
+    // **physically mounted upside down on the bench for testing** — USB at the
+    // bottom. A software flip would have compensated for a temporary arrangement
+    // and then silently inverted every correctly-mounted board afterwards. The
+    // vendor's flip says their sensor is inverted relative to *their* reference
+    // mounting; it says nothing about ours.
+    //
+    // One photograph taken with the board deliberately inverted cannot separate
+    // "the sensor is mounted upside down on the PCB" from "the PCB is upside
+    // down on the desk". The measurement that settles it is one frame with the
+    // board in its intended orientation. Until someone takes it, the sensor is
+    // left at its power-on default and the picture means what the lens saw.
+    //
+    // When it is settled: the flip belongs keyed on the sensor PID the driver
+    // reports (`esp_camera_sensor_get()`, `id.PID`, 0x5640 for the OV5640),
+    // not on the board feature, so a board fitted with a different sensor gets
+    // the right answer without anyone editing a pin map.
+
     Ok(())
 }
 

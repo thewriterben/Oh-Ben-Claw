@@ -720,7 +720,7 @@ fn main() -> anyhow::Result<()> {
             restored.source(),
             restored.count()
         );
-        send_line(&mut usb, &announcement);
+        send_line(&mut usb, &announcement, LineKind::Report);
         mirror_spine(&mut spine_uart, &announcement);
     }
     // Real I2C sensor bus. Default (XIAO): SDA=GPIO5, SCL=GPIO6 — the pads the
@@ -905,6 +905,7 @@ fn main() -> anyhow::Result<()> {
                                     "error": format!("command line longer than {MAX_LINE_LEN} bytes — discarded whole"),
                                 })
                                 .to_string(),
+                                LineKind::Reply,
                             );
                         } else if !line.is_empty() {
                             // A line that cannot be handled is answered too: a
@@ -925,7 +926,7 @@ fn main() -> anyhow::Result<()> {
                                 })
                                 .to_string(),
                             };
-                            send_line(&mut usb, &answer);
+                            send_line(&mut usb, &answer, LineKind::Reply);
                             line.clear();
                         }
                     } else if usb_line_overflowed {
@@ -1050,7 +1051,7 @@ fn main() -> anyhow::Result<()> {
                     "ts_ms": now,
                 });
                 let spine_msg = link_report.to_string();
-                send_line(&mut usb, &spine_msg);
+                send_line(&mut usb, &spine_msg, LineKind::Report);
                 mirror_spine(&mut spine_uart, &spine_msg);
             }
             // Self-report the derived power mode when a battery reading is present —
@@ -1072,7 +1073,7 @@ fn main() -> anyhow::Result<()> {
                         "ts_ms": now,
                     });
                     let spine_msg = report.to_string();
-                    send_line(&mut usb, &spine_msg);
+                    send_line(&mut usb, &spine_msg, LineKind::Report);
                     mirror_spine(&mut spine_uart, &spine_msg);
                 }
             }
@@ -1113,7 +1114,7 @@ fn main() -> anyhow::Result<()> {
                     report["bl"] = serde_json::json!(fired.bl);
                 }
                 let spine_msg = report.to_string();
-                send_line(&mut usb, &spine_msg);
+                send_line(&mut usb, &spine_msg, LineKind::Report);
                 mirror_spine(&mut spine_uart, &spine_msg);
             }
         }
@@ -1143,7 +1144,7 @@ fn main() -> anyhow::Result<()> {
                 beacon["policy"] = serde_json::json!("deny-all");
             }
             let spine_msg = beacon.to_string();
-            send_line(&mut usb, &spine_msg);
+            send_line(&mut usb, &spine_msg, LineKind::Report);
             mirror_spine(&mut spine_uart, &spine_msg);
         }
     }
@@ -1714,37 +1715,123 @@ fn mirror_spine(uart: &mut Option<UartDriver<'static>>, line: &str) {
     }
 }
 
-fn send_line(usb: &mut UsbSerialDriver, line: &str) {
-    let payload = format!("{line}\n");
-    let bytes = payload.as_bytes();
+/// Why a line is being written, which decides how long the node is willing to
+/// wait for the USB TX ring to drain.
+///
+/// The distinction is the whole fix. Both kinds used one budget until
+/// 2026-09-16, and that budget was tuned for the kind that must never block.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LineKind {
+    /// An answer to a command the host just sent. A reader is present *by
+    /// construction* — it wrote to us a moment ago and is now waiting.
+    Reply,
+    /// Something the node said on its own: a beacon, a reflex report, safing.
+    /// Nobody may be listening, so this must be dropped rather than waited on.
+    Report,
+}
+
+/// Stall budget in 10 ms rounds. A "stall" is one `write` returning `Ok(0)`.
+///
+/// `REPORT` stays at the value measured into place on 2026-09-13: ~50 ms. It
+/// used to be ~2 s and that made the node DEAF TO THE MESH whenever its USB
+/// cable was plugged in with nothing reading it — every report parked the main
+/// loop, the UART intake between them starved, and mesh commands the bridge had
+/// delivered were never answered. A mesh node must never wait on its USB.
+const STALL_BUDGET_REPORT: u32 = 4;
+/// ~500 ms. Ten times `REPORT`, still a quarter of the value that caused the
+/// deafness, and only reachable when a host has just spoken to us.
+const STALL_BUDGET_REPLY: u32 = 50;
+
+const _: () = assert!(
+    STALL_BUDGET_REPLY > STALL_BUDGET_REPORT,
+    "a command reply has a host waiting for it; it must be more patient than an \
+     autonomous report, not less"
+);
+
+/// Largest slice handed to `UsbSerialDriver::write` in one call.
+///
+/// Measured 2026-09-16: passing the whole 6766-byte reply at once wrote **zero**
+/// bytes and returned immediately — not a stall, a refusal. The TX ring is 4096,
+/// and a single write larger than it does not partially fill; it fails. The
+/// silent-drop fix made this visible within minutes of shipping, which is the
+/// argument for that fix in one line.
+///
+/// A quarter of the ring, so a chunk always fits with the ring part-drained.
+const USB_WRITE_CHUNK: usize = 1024;
+
+/// Write as much of `bytes` as the ring will take within `max_stalls`.
+/// Returns how many bytes actually went out, and whether the driver errored.
+fn write_budgeted(usb: &mut UsbSerialDriver, bytes: &[u8], max_stalls: u32) -> (usize, bool) {
     let mut off = 0;
     let mut stalls = 0u32;
+    let mut errored = false;
     while off < bytes.len() {
-        match usb.write(&bytes[off..], 10) {
+        // Never hand the driver more than the ring can hold in one go.
+        let end = (off + USB_WRITE_CHUNK).min(bytes.len());
+        match usb.write(&bytes[off..end], 10) {
             Ok(0) => {
-                // No progress this round: the 4 KiB TX ring is full because no
-                // host is reading. A connected host drains it at USB speed, so
-                // a few tens of milliseconds is all a genuine reader ever
-                // needs; give up well inside that and drop the line.
-                //
-                // This used to wait ~2 s (20 × 100 ms), and that made the
-                // node DEAF TO THE MESH whenever its USB cable was plugged in
-                // with nothing reading it (bench, 2026-09-13): every report
-                // — a holding reflex every 10 s, the beacon, safing — parked
-                // the main loop for 2 s, the UART intake between them starved,
-                // and mesh commands the bridge had delivered to UART1 were
-                // never answered. A mesh node must never wait on its USB.
                 stalls += 1;
-                if stalls > 4 {
-                    return;
+                if stalls > max_stalls {
+                    break;
                 }
             }
             Ok(n) => {
                 off += n;
                 stalls = 0;
             }
-            Err(_) => return,
+            Err(_) => {
+                errored = true;
+                break;
+            }
         }
+    }
+    (off, errored)
+}
+
+/// Write one newline-terminated line, and **say so if it does not all fit**.
+///
+/// The silence was the bug. On 2026-09-16 a working camera produced a 6697-byte
+/// reply, this function abandoned it after ~50 ms, and the host saw nothing at
+/// all — which read as "no frame" and cost three sessions of hunting pin maps,
+/// PSRAM modes and ribbon seating on hardware that was fine. A node that cannot
+/// send its answer must be able to say that, or the absence of an answer gets
+/// attributed to whatever the answer was about.
+fn send_line(usb: &mut UsbSerialDriver, line: &str, kind: LineKind) {
+    let payload = format!("{line}\n");
+    let bytes = payload.as_bytes();
+    let budget = match kind {
+        LineKind::Reply => STALL_BUDGET_REPLY,
+        LineKind::Report => STALL_BUDGET_REPORT,
+    };
+    let (sent, errored) = write_budgeted(usb, bytes, budget);
+    if sent == bytes.len() {
+        return;
+    }
+
+    // Dropped. A partial line is already on the wire and the host cannot parse
+    // it, so terminate it and follow with a whole, parseable line saying what
+    // happened. Best-effort on the report budget: if the ring is so wedged that
+    // even this will not go, nothing else would have either.
+    let why = if errored {
+        "driver error"
+    } else {
+        "ring stayed full"
+    };
+    log::warn!(
+        "send_line: dropped after {sent}/{} B ({}); {why}",
+        bytes.len(),
+        match kind {
+            LineKind::Reply => "reply",
+            LineKind::Report => "report",
+        }
+    );
+    if kind == LineKind::Reply {
+        let notice = format!(
+            "\n{{\"type\":\"reply_dropped\",\"sent\":{sent},\"total\":{},\
+             \"reason\":\"{why} - the answer exists but did not fit\"}}\n",
+            bytes.len()
+        );
+        let _ = write_budgeted(usb, notice.as_bytes(), STALL_BUDGET_REPORT);
     }
 }
 // ── MEASURED 2026-09-16: this function silently eats `camera_capture` ─────────
