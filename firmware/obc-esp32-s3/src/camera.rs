@@ -252,12 +252,23 @@ const PINS: CameraPins = CameraPins {
     //   level 1 -- scene readable, contrast present, warm cast
     //   level 0 -- markedly worse: flat pink/white wash, contrast gone
     //
-    // So 1 engages. Two samples, not a datasheet fact; if a schematic says
-    // otherwise, believe the schematic and re-shoot.
+    // That pointed to 1, and level 1 is what ships. But treat it as WEAK: the
+    // two frames were minutes apart, so exposure and auto-gain moved between
+    // them, and the difference could have been that rather than the filter.
     //
-    // A warm cast REMAINS at level 1 and this does not explain it. Auto white
-    // balance is left at the driver's default and has not been looked at. The
-    // cast is not solved, only reduced.
+    // It got weaker the same evening. The warm cast is UNCHANGED across a
+    // bright daylight-window scene and a lamp-lit one -- a large lighting
+    // change that altered exposure visibly and the colour not at all. A cast
+    // that ignores the light is systematic: sensor auto-white-balance (left at
+    // the driver's default, never looked at), or this pin not switching
+    // anything at all. Ambient colour temperature it is not.
+    //
+    // So: the pin is real and cited, the LEVEL is a guess supported by one
+    // uncontrolled comparison, and the cast is NOT explained. The clean test
+    // is to toggle this pin between two frames of one unchanged scene without
+    // reflashing -- which needs a command to drive it, and Track 0 denies GPIO
+    // writes on this board because `output_pins` is empty. Do that before
+    // believing the value above.
     ir_cut: 16,
     ir_cut_engaged_level: 1,
     pwdn: -1,
