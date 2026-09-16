@@ -23,14 +23,31 @@ and two docs pointed at a COM port belonging to the XIAO.
 Node ids are MAC-derived, so they are permanent per board. Roles are tape. **When the two
 disagree, believe the node id.**
 
-Confirmed by boot banner and physically labelled, 2026-07-19:
+⚠ **Re-measured 2026-09-15: base and bridge are the other way round.** The July table
+below had `gw-D8` as the base on COM3 and `gw-40` as the field bridge. Both are wrong
+now — whether the boards were swapped since or the table was always wrong, the
+measurement wins.
 
 | Role | Node id | Port | Power | Wiring |
 |---|---|---|---|---|
-| base (host link) | **gw-D8** | **COM3** | PC USB — *must* stay on the host | none |
-| bridge (field) | **gw-40** | — | wall or power bank | the XIAO jumper pair |
+| base (host link) | **gw-40** | **COM3** | PC USB — *must* stay on the host | none — see below |
+| bridge (field) | **gw-D8** | **COM5** (USB on the bench; wall/bank in the field) | wall or power bank | **the node jumper pair belongs here** |
 | relay (Stage 3b) | **gw-90** | — | USB power only | none — radio only |
-| node | `obc-esp32-s3-001` | **COM6** | USB or bank | jumpers to **gw-40** |
+| node | `obc-esp32-s3-001` | **COM6** | USB or bank | jumpers to the **bridge** = `gw-D8` |
+
+How each row was established, so the next person can redo it in two minutes rather
+than infer it from traffic (which is what Card 0 exists to stop):
+
+- **`gw-D8` is on COM5** — `espflash flash --port COM5` printed
+  `MAC address: 3c:0f:02:ee:82:d8`. The MAC is the id (`node = mac[5]`), so this is
+  the hardware speaking, not a role or a label.
+- **COM3 is therefore `gw-40`** — the brain, plugged into COM3, ingests
+  `node=gw-D8 msg=gw_keepalive`. A station never logs a `SPINE ◄` for its own
+  frames, so the station hearing `gw-D8` cannot be `gw-D8`. With `gw-90` unpowered,
+  COM3 is `gw-40`.
+- **The node is currently jumpered to `gw-40`** — frames carrying the node's beacon
+  arrive at `gw-D8` as `src=40`, and a relay preserves the original `src`, so
+  `gw-40` originated them. That is the wrong board: see the jumper rule below.
 
 All three radios self-test clean (`status=0xA2`, syncword readback `0x1424`).
 
@@ -56,6 +73,12 @@ ESP32-S3 with 8 MB of flash, so the flash log looked exactly right. **It is not 
 base station until it is reflashed with the gateway build.** Anything in Stage 3 that
 assumes a live base is currently untrue.
 
+*Resolved 2026-09-15.* `gw-D8` was flashed twice that evening with the gateway build
+(`bench-low-power,bench-wrong-root` for SPINE-REPLAY §6 step 7a, then `bench-low-power`
+with the real root to restore it) and is a working station again — on **COM5**, as the
+corrected table above says, not COM3. Its frame counter continued across both reflashes
+(15401 → 15431), so the NVS ceiling survives a firmware change and not merely a reboot.
+
 The cheap check that would have caught it, and that `bench_run.py` now enforces: the node
 is native USB-Serial-JTAG, Espressif VID `0x303a`. The Heltecs are CP210x bridges, VID
 `0x10c4`. Roles are tape and ports re-enumerate, but the USB descriptor is a property of
@@ -72,10 +95,16 @@ separate the radios, move the *bridge* (and the XIAO with it — they are jumper
 directions at once, which looks exactly like a dead node:
 
 ```
-XIAO D6 (GPIO43, TX)  ──►  gw-40 GPIO2 (RX)     node → mesh
-gw-40 GPIO4 (TX)      ──►  XIAO D7 (GPIO44, RX) mesh → node
-XIAO GND              ◄─►  gw-40 GND            common reference
+node D6 (GPIO43, TX)  ──►  bridge GPIO2 (RX)     node → mesh
+bridge GPIO4 (TX)     ──►  node D7 (GPIO44, RX)  mesh → node
+node GND              ◄─►  bridge GND            common reference
 ```
+
+**"bridge" is a role, and the board holding it changes.** As of 2026-09-15 that is
+**`gw-D8`, on COM5** — *not* the board on COM3, which is the base and must stay bare.
+This block used to name `gw-40` outright; the boards then swapped roles and the
+instruction silently became the failure mode two paragraphs down. Wire by role, confirm
+the id from the boot banner or the flash MAC, and only then pick up a jumper.
 
 **Two RF facts that keep resurfacing:**
 
@@ -87,6 +116,26 @@ XIAO GND              ◄─►  gw-40 GND            common reference
 - A Heltec **wired directly to the node** transmits that frame and then de-dups its own
   echo, so it never logs a `SPINE ◄` line for it. The host sees silence from a perfectly
   healthy node. Only the bridge should carry the jumpers.
+
+  **Cost an evening again on 2026-09-15**, so here is the exact mechanism rather than
+  the symptom. A UART-origin frame is logged by `main.rs` as
+  `SPINE ► (uart) seq=… ({n} B) {payload}` — a **TX** line. The host's
+  `parse_gateway_line` anchors on `SPINE ◄` and documents that it returns `None` for
+  "TX lines (►), relay lines (⇒), malformed-frame notices, and boot logs". So the
+  brain discards its own node's uplink by category, before the echo de-dup above even
+  comes into it. The node looked dead for a whole session: beaconing every 30.78 s,
+  stable `boot_id`, pinned in `deny-all` because its boot announcement never reached
+  the supervisor that would push its limits back, and every `descend` unanswered
+  after three attempts because the reply came home the same discarded way.
+
+  **This is an authentication boundary, not a parser oversight — do not "fix" it in
+  the host.** The `► (uart)` line carries no `ctr=` and no `mac=`, so even if the
+  parser accepted it, `LoraAuth` would have nothing to verify and the host would be
+  trusting a console. That is precisely the trust boundary SPINE-AUTH closed
+  (`lora_gateway.rs`: "the host trusts the station's radio, not its console").
+  **A node's uplink has to arrive over the air to be authenticated at all**, which is
+  what makes "only the bridge carries the jumpers" a design rule rather than bench
+  tidiness.
 
 ---
 
@@ -107,12 +156,19 @@ keep in walkthrough **Stage 3b** (true 3-hop test).
 | MISO | 11 | | TCXO | via **DIO3** (1.8 V) |
 | | | | RF switch | via **DIO2** |
 
-**Phase-B UART bridge to the XIAO node** (`heltec-gw` **only**) — `[fw]` `docs/PHASE-B-LORA-MESH.md`
+**Phase-B UART bridge to the XIAO node** (`heltec-gw` **only** — currently `gw-D8`/COM5;
+never the base) — `[fw]` `src/main.rs`, `docs/PHASE-B-LORA-MESH.md`
 | Signal | Heltec GPIO | Direction |
 |---|---|---|
 | RX (from XIAO TX) | **GPIO2** | XIAO GPIO43 → here |
 | TX (to XIAO RX) | **GPIO4** | here → XIAO GPIO44 |
 | GND | GND | common ground (verify with meter) |
+
+The banner prints this pair on every boot, so it is checkable without a meter:
+`Gateway XX — UART1(TX=4,RX=2) ⇄ LoRa. Wire compute TX→GPIO2, GND↔GND.`
+⚠ **UART0/GPIO43-44 on the Heltec is its own CP2102 USB console** — a different pair from
+the XIAO's D6/D7, which are *that* board's GPIO43/44. Two boards, same GPIO numbers,
+opposite roles; read the column headers before cutting a jumper.
 
 **Board reference** — `[board]`
 | Function | GPIO |
