@@ -1747,6 +1747,36 @@ fn send_line(usb: &mut UsbSerialDriver, line: &str) {
         }
     }
 }
+// ── MEASURED 2026-09-16: this function silently eats `camera_capture` ─────────
+//
+// On the Lilygo T-CameraPlus-S3 the camera works. It produced a real 5020-byte
+// QVGA JPEG (`capture: frame len=5020 B, 320x240, format=4`), base64-encoded to
+// 6696 B, and then the host received NOTHING -- no reply, no error, no log --
+// while `gpio_read` answered normally on either side of it. Three sessions were
+// spent suspecting pin maps, PSRAM, buffer counts, ribbon seating and the sensor
+// itself. The camera was never the problem for that board.
+//
+// The payload is 6697 bytes and the TX ring is 4096. When the ring fills,
+// `write` returns `Ok(0)`; after five of those (about 50 ms of patience) the
+// loop above `return`s and **abandons the rest of the line without telling
+// anyone**. The caller cannot tell a sent reply from a dropped one, and neither
+// can the host: it just waits.
+//
+// The small stall budget is deliberate and the comment above explains why -- a
+// ~2 s wait once made the node deaf to the mesh, which is a worse failure. So
+// this is a real tension, not an oversight: autonomous reports SHOULD be dropped
+// rather than block System 1. But a command reply is different in kind. A host
+// is synchronously waiting for it, and dropping it silently converts "your
+// camera works" into "your camera is broken" -- which is exactly what happened.
+//
+// NOT FIXED HERE. The fix is a protocol decision and deserves an ADR:
+//   * report the drop instead of returning silently (right regardless, small);
+//   * give command replies a longer patience budget than autonomous reports,
+//     since a reader is known to be present for them;
+//   * chunk large replies across lines -- the only thing that actually makes
+//     images work, and it changes the wire format, so the host changes too.
+// Until then, `camera_capture` cannot return an image over USB on any board,
+// and that is a property of this function rather than of any camera.
 
 /// Monotonic milliseconds since boot (ESP timer), for reflex valid-time + debounce.
 fn now_ms() -> u64 {

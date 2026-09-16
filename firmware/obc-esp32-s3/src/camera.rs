@@ -349,19 +349,30 @@ const PINS: CameraPins = CameraPins {
 // The command is received and the main loop survives; only the response never
 // appears.
 //
-// HYPOTHESIS, explicitly untested: on the Lilygo the capture SUCCEEDS and the
-// reply is lost because it is too large to write. A QVGA JPEG from an OV5640 is
-// tens of kilobytes, base64 is 4/3 of that, and this file's own history is
-// littered with line-length truncation (`MAX_LINE_LEN`, and the `capabilities`
-// reply that "truncated at ~1088 bytes"). A small error reply gets through; a
-// 30 KB success reply may not. That would mean the XIAO and the Lilygo have two
-// unrelated faults and the Lilygo's camera works.
+// ── CONFIRMED 2026-09-16: the Lilygo's camera works; the REPLY PATH drops it ──
 //
-// Do not act on that paragraph as though it were a finding. The measurement
-// that settles it is cheap and nobody has run it: have `camera_capture` log the
-// frame length from `(*fb).len` BEFORE encoding, so the node says how big a
-// frame it got even when it cannot send it. If that prints a plausible JPEG
-// size, the camera is fine and the bug is in the reply path.
+// The hypothesis above was that the capture succeeds and the reply is lost for
+// size. The measurement -- logging `(*fb).len` before encoding, which is what
+// `capture_base64` now does -- settled it in one run:
+//
+//     capture: frame len=5020 B, 320x240, format=4, base64 will be ~6696 B
+//     capture: encoded 6696 B, handing it to the reply path
+//
+// A real QVGA JPEG (`format=4` is `PIXFORMAT_JPEG`). Then the host received
+// nothing. `send_line` in `main.rs` writes into a 4096-byte TX ring and
+// abandons the rest of the line after five `Ok(0)` stalls -- about 50 ms --
+// silently. 6697 bytes does not fit that budget. See the note under `send_line`.
+//
+// **So the Lilygo has no camera bug at all**, and three sessions of suspecting
+// pin maps, PSRAM, fb_count, ribbon seating and the sensor were spent on a
+// board whose camera was working the whole time. What made it look like a
+// camera fault was a silent drop: the node could not say "I have your image and
+// cannot send it", so the absence of a reply read as the absence of a frame.
+//
+// The XIAO is a SEPARATE fault and is still open. It never reaches this path:
+// `esp_camera_fb_get` returns null there, with `cam_hal: Failed to get the
+// frame on time!`, so there is no frame to drop. Two boards, two unrelated
+// bugs, and the second one masked the first one's diagnosis.
 
 /// Initialise the camera driver (global; call once at boot).
 pub fn init() -> anyhow::Result<()> {
@@ -419,20 +430,47 @@ pub fn init() -> anyhow::Result<()> {
 }
 
 /// Capture one JPEG frame and return it base64-encoded.
+///
+/// Logs the frame's size and shape BEFORE encoding, on purpose. On 2026-09-16 the
+/// Lilygo returned nothing at all to `camera_capture` — no reply, no error, no
+/// log — while answering `gpio_read` normally on either side of it, and there was
+/// no way to tell "the sensor produced no frame" from "the sensor produced a
+/// frame we failed to send". Those have opposite fixes. The log line below is the
+/// difference, and it goes out on the console whether or not the reply ever does.
 pub fn capture_base64() -> anyhow::Result<String> {
     let fb = unsafe { sys::esp_camera_fb_get() };
     if fb.is_null() {
+        log::warn!("capture: esp_camera_fb_get returned null -- the sensor gave no frame");
         anyhow::bail!("esp_camera_fb_get returned null (no frame)");
     }
     // Copy the frame out, then always return the buffer to the driver.
     let result = (|| {
         let len = unsafe { (*fb).len } as usize;
         let buf = unsafe { (*fb).buf };
+        let width = unsafe { (*fb).width };
+        let height = unsafe { (*fb).height };
+        let format = unsafe { (*fb).format };
+        // The measurement. A plausible JPEG size here means the camera works and
+        // anything still broken is downstream of this line.
+        log::info!(
+            "capture: frame len={len} B, {width}x{height}, format={format}, \
+             base64 will be ~{} B",
+            len.div_ceil(3) * 4
+        );
         if buf.is_null() || len == 0 {
+            log::warn!(
+                "capture: frame buffer empty (buf_null={}, len={len})",
+                buf.is_null()
+            );
             anyhow::bail!("empty frame buffer");
         }
         let data = unsafe { core::slice::from_raw_parts(buf, len) };
-        Ok(base64_encode(data))
+        let encoded = base64_encode(data);
+        log::info!(
+            "capture: encoded {} B, handing it to the reply path",
+            encoded.len()
+        );
+        Ok(encoded)
     })();
     unsafe { sys::esp_camera_fb_return(fb) };
     result.context("camera capture")
