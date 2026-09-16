@@ -5,6 +5,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The board the brain is plugged into is not a node (2026-09-16)
+
+Third variant of one root cause in a single evening. The host's picture of the
+mesh is built from `SPINE ◄` lines on one station's console — everything it knows
+arrives as a *received* frame. But the station at the end of that cable never
+receives its own frames; it transmits them. **The board the brain is wired to is
+the one thing on the mesh it is structurally unable to hear.** That produced
+three failures tonight, each of which looked like something else: refused frames
+invisible (`SPINE ◄ REJECTED`, dropped for want of a `seq=`), the node's uplink
+invisible (`SPINE ► (uart)`, dropped by category), and now the station's own
+liveness — never heard at all, so the supervisor presumed it lost.
+
+`gw-40` sat "offline for 43.5 hours — presumed lost" with `escalated_count` pinned
+at 1 and `safe-mesh-node-lost` firing at Critical every tick, until the System 2
+wake budget swallowed it: the log shows `System 2: suppressed (wake budget)` on
+repeat. A real node loss at that moment would have been indistinguishable from the
+standing noise. That is alarm fatigue compiled into the product.
+
+The existing phantom guard did not catch it, and was right not to. `snapshot`
+refuses to invent nodes from entity names — a node exists only if its rollup
+carries `Origin::Observed`, which closed the 2026-07-17 loop. `mesh.gw-40` passes
+that honestly: it *was* heard on the air, for weeks, while it was the field
+bridge. Then the console cable moved to it. The guard asks "was this ever real?";
+the question that needed asking is "can this still be heard?".
+
+So discovery is authoritative *and* liveness must be. `[lora_gateway] station`
+declares which board the console belongs to, recorded as the fact `spine.station`;
+`snapshot` excludes it, and `tick` **withdraws** the conclusions it was given while
+it was being judged as a node — `escalated_count` recomputes from the views either
+way, but an "escalated" fact nobody will ever revisit is worse than the count it
+stopped feeding. Its liveness already had a correct signal of its own:
+`spine.gateway`, the console link.
+
+**The claim is checked, not trusted.** The host cannot discover its own station —
+it never sees a boot banner, because the gateway deliberately holds DTR/RTS low so
+opening the port does not reset the board. So it is stamped `source: "config"` to
+say what it is. But it is falsifiable: a received frame whose `src` is our own
+station is impossible, so one arriving means the setting names the wrong board, or
+that board is being impersonated — and the gateway says so at error level, naming
+the consequence. Unset, behaviour is exactly as before and startup warns.
+
+Verified live at 02:42: the declaration and the retirement both logged, the
+falsification check silent, and **zero** escalations in the 69 log lines since,
+against 207 in the window before.
+
+Also corrected: `BENCH-PINOUT-CARDS.md` Card 0 had base and bridge swapped since
+July, and its jumper block named a board outright — so when the boards swapped
+roles, following the documented instruction produced the documented failure mode.
+It now names the role and says to confirm the id from the boot banner first.
+
 ## Unreleased — A frame the station refuses is no longer invisible (2026-09-15)
 
 Found while preparing the bench for the auth alarm built in `27a42e7`: the
