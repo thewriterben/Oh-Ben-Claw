@@ -204,15 +204,39 @@ const PINS: CameraPins = CameraPins {
 // `quality` argument is not reaching the sensor.
 //
 // What that narrows it to: the control path (XCLK, SIOD, SIOC) is proven by the
-// SCCB detection above. The DATA path is not exercised by init at all, so the
-// suspects are the eight data lines, VSYNC, HREF, PCLK -- or the config below
-// rather than the pins. The most likely config suspects, untried:
-//   * `fb_count = 1` + `GRAB_WHEN_EMPTY`. With PSRAM present the common working
-//     combination is `fb_count = 2` + `CAMERA_GRAB_LATEST`.
-//   * `xclk_freq_hz = 20_000_000`; 10 MHz is the usual fallback.
-// These are hypotheses. Nobody has tested them, and this comment is not evidence
-// that they are the answer -- change ONE, measure, and rewrite this block with
-// what actually happened.
+// SCCB detection above. The DATA path is not exercised by `esp_camera_init` at
+// all -- it never moves a pixel -- so the suspects are the eight data lines,
+// VSYNC, HREF and PCLK, or the config below.
+//
+// ELIMINATED so far, each by measurement rather than by reasoning:
+//
+//   * **Buffer count / grab mode.** `fb_count = 2` + `CAMERA_GRAB_LATEST`, the
+//     configuration usually prescribed with PSRAM, was flashed and confirmed
+//     active (two frame-buffer allocations in the boot log). Capture failed 6/6
+//     with the identical 4000 ms timeout. See the note at `fb_count` below.
+//   * **An LEDC conflict inside this firmware.** XCLK is driven by
+//     `LEDC_TIMER_0` / `LEDC_CHANNEL_0`; a grep of `src/` finds no other LEDC
+//     user, so nothing here is stealing the timer and detuning XCLK.
+//   * **A GPIO conflict inside this firmware.** Nothing else in `src/` claims
+//     any of the fourteen camera pins. The boot log's configured outputs are
+//     GPIO 21/3/7/8 and the I2S mic is 0/1/2; none overlap.
+//
+// STILL OPEN, in the order worth trying:
+//
+//   1. **The physical connection.** SCCB is two lines out of fourteen through
+//      the same path; a partially seated camera FPC or expansion-board
+//      connector reproduces this signature exactly -- control answers, data
+//      never arrives. This is the cheapest thing left and needs hands, not a
+//      build.
+//   2. **`xclk_freq_hz = 20_000_000`.** SCCB answering proves XCLK exists, not
+//      that it is the right frequency; the OV2640's control logic tolerates a
+//      wide range while PCLK timing does not. 10 MHz is the usual fallback.
+//   3. **The sensor module itself**, swapped for the second XIAO Sense's.
+//
+// Two changes have now failed on this, so per the project's two-strikes rule
+// the next person should gather evidence rather than try a third variation
+// blind. A scope or logic analyser on PCLK and VSYNC while a capture is
+// attempted answers 1 and 2 at once, and is the honest next step.
 
 /// Initialise the camera driver (global; call once at boot).
 pub fn init() -> anyhow::Result<()> {
@@ -247,6 +271,17 @@ pub fn init() -> anyhow::Result<()> {
     cfg.pixel_format = sys::pixformat_t_PIXFORMAT_JPEG;
     cfg.frame_size = sys::framesize_t_FRAMESIZE_QVGA; // 320×240 — fits one PSRAM fb
     cfg.jpeg_quality = 12; // 0..63, lower = higher quality
+
+    // `fb_count = 2` + `CAMERA_GRAB_LATEST` was tried on 2026-09-16 and REFUTED.
+    // It is the configuration usually prescribed when PSRAM is present, and the
+    // reasoning was sound: with one buffer the DVP capture must start on demand
+    // and finish inside the driver's timeout, while two let it keep a capture in
+    // flight. The board took the change -- the boot log showed two `Allocating
+    // 15360 Byte frame buffer in PSRAM` lines instead of one -- and capture still
+    // failed 6/6 with the identical 4000 ms timeout.
+    //
+    // So the buffer count is not the cause, and these stay at their original
+    // values rather than carrying a change no evidence supports.
     cfg.fb_count = 1;
     cfg.fb_location = sys::camera_fb_location_t_CAMERA_FB_IN_PSRAM;
     cfg.grab_mode = sys::camera_grab_mode_t_CAMERA_GRAB_WHEN_EMPTY;
