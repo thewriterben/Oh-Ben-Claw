@@ -569,8 +569,9 @@ mod tests {
         let Action::Escalate { reason: air_reason } = &air.then else {
             panic!("expected an escalate action");
         };
-        let Action::Escalate { reason: host_reason } =
-            &spine_forgery_escalate(&SafingOptions::default()).then
+        let Action::Escalate {
+            reason: host_reason,
+        } = &spine_forgery_escalate(&SafingOptions::default()).then
         else {
             panic!("expected an escalate action");
         };
@@ -587,10 +588,19 @@ mod tests {
 
         // The playbook has to say why it is weaker, name the tool and the
         // field, and forbid acting on it alone.
-        assert!(air_reason.contains("not authenticated"), "names the weakness");
+        assert!(
+            air_reason.contains("not authenticated"),
+            "names the weakness"
+        );
         assert!(air_reason.contains("a lead, not proof"));
-        assert!(air_reason.contains("`mesh_status`"), "names the perceive tool");
-        assert!(air_reason.contains("air_refusals"), "names the field to read");
+        assert!(
+            air_reason.contains("`mesh_status`"),
+            "names the perceive tool"
+        );
+        assert!(
+            air_reason.contains("air_refusals"),
+            "names the field to read"
+        );
         assert!(
             air_reason.contains("who is being impersonated and never who is transmitting"),
             "the bench-caught misreading: claimed_src is not the refusing station"

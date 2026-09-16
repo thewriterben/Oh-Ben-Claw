@@ -1664,8 +1664,14 @@ pub async fn supervise_gateway<O, Fut, F>(
     let mut air = AirWatch::new();
     air.resume(&world);
     loop {
-        let error =
-            run_gateway_rx(lines, &mut auth, &mut air, Arc::clone(&world), now_ms.clone()).await;
+        let error = run_gateway_rx(
+            lines,
+            &mut auth,
+            &mut air,
+            Arc::clone(&world),
+            now_ms.clone(),
+        )
+        .await;
         tracing::warn!(port = %port, "[lora_gateway] link lost — reopening with backoff: {error}");
         lines = reopen_until_open(&port, error, &mut open, &world, &handle, &now_ms).await;
     }
@@ -2653,7 +2659,11 @@ mod tests {
         }
         // One fact for the burst, not fifty.
         let history = world.history("spine.air.gw-40.refused").unwrap();
-        assert_eq!(history.len(), 1, "one fact per burst, the count on the clear");
+        assert_eq!(
+            history.len(),
+            1,
+            "one fact per burst, the count on the clear"
+        );
         let open = world
             .current("spine.air.gw-40.refused")
             .unwrap()
@@ -2682,32 +2692,42 @@ mod tests {
              rather than implying one"
         );
         assert_eq!(
-            world.current(AIR_REFUSED_COUNT_FACT).unwrap().unwrap().value,
+            world
+                .current(AIR_REFUSED_COUNT_FACT)
+                .unwrap()
+                .unwrap()
+                .value,
             json!(1)
         );
         // The authenticated alarm is untouched: nothing here is the host's
         // own judgement, and the two signals must not be confusable.
-        assert!(world
-            .current("spine.auth.gw-40.alarm")
-            .unwrap()
-            .is_none());
-        assert!(world
-            .current(AUTH_ALARM_COUNT_FACT)
-            .unwrap()
-            .is_none());
+        assert!(world.current("spine.auth.gw-40.alarm").unwrap().is_none());
+        assert!(world.current(AUTH_ALARM_COUNT_FACT).unwrap().is_none());
 
         // Still open just before the clear window, closed on it.
         air.sweep(&world, 1_000 + 490 + AIR_REFUSED_CLEAR_MS - 1);
         assert_eq!(
-            world.current("spine.air.gw-40.refused").unwrap().unwrap().value["status"],
+            world
+                .current("spine.air.gw-40.refused")
+                .unwrap()
+                .unwrap()
+                .value["status"],
             json!("refusing")
         );
         air.sweep(&world, 1_000 + 490 + AIR_REFUSED_CLEAR_MS);
         let closed = world.current("spine.air.gw-40.refused").unwrap().unwrap();
         assert_eq!(closed.value["status"], json!("quiet"));
-        assert_eq!(closed.value["count"], json!(50), "the count travels on the clear");
         assert_eq!(
-            world.current(AIR_REFUSED_COUNT_FACT).unwrap().unwrap().value,
+            closed.value["count"],
+            json!(50),
+            "the count travels on the clear"
+        );
+        assert_eq!(
+            world
+                .current(AIR_REFUSED_COUNT_FACT)
+                .unwrap()
+                .unwrap()
+                .value,
             json!(0)
         );
         assert_eq!(AirWatch::refusing_stations(&world).len(), 0);
@@ -2730,7 +2750,11 @@ mod tests {
         let mut reborn = AirWatch::new();
         reborn.resume(&world);
         assert_eq!(
-            world.current(AIR_REFUSED_COUNT_FACT).unwrap().unwrap().value,
+            world
+                .current(AIR_REFUSED_COUNT_FACT)
+                .unwrap()
+                .unwrap()
+                .value,
             json!(1),
             "still open, and still counted, immediately after the restart"
         );
@@ -2739,7 +2763,11 @@ mod tests {
         let closed = world.current("spine.air.gw-40.refused").unwrap().unwrap();
         assert_eq!(closed.value["status"], json!("quiet"));
         assert_eq!(
-            world.current(AIR_REFUSED_COUNT_FACT).unwrap().unwrap().value,
+            world
+                .current(AIR_REFUSED_COUNT_FACT)
+                .unwrap()
+                .unwrap()
+                .value,
             json!(0),
             "the count the rule reads returns to zero"
         );
@@ -2772,7 +2800,11 @@ mod tests {
             "256 claimed sources must not become 256 entities"
         );
         assert_eq!(
-            world.current(AIR_REFUSED_COUNT_FACT).unwrap().unwrap().value,
+            world
+                .current(AIR_REFUSED_COUNT_FACT)
+                .unwrap()
+                .unwrap()
+                .value,
             json!(AIR_MAX_TRACKED_SOURCES as u64),
             "the count the rule reads stays a plain count, not count + overflow"
         );
