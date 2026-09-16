@@ -60,9 +60,47 @@ is `cfg`'d away, so such a board carries **no deployment secret at all** and
 builds without one — it cannot be mistaken for a provisioned station, and one
 left in a drawer leaks nothing. The boot log says so at error level.
 
-Not done: neither half of step 7 has been run. 7a (wrong-root board on the
-air, honest station) exercises the new advisory; 7b (both boards wrong-root)
-exercises the alarm from `27a42e7`, which has still never fired on hardware.
+**Benched the same evening — SPINE-REPLAY §6 step 7a, and it found two bugs
+in the above before it passed.** gw-D8 flashed `bench-wrong-root`, gw-40 left
+honest with the brain on it.
+
+*What the bench broke.* First, `src` on a refusal line is the refused frame's
+**claimed** origin — who is being impersonated — not the station doing the
+refusing. The fact said `"station": "gw-D8"` and the log said *"gw-D8 is
+refusing frames"* when gw-D8 was the board being impersonated: an operator
+following that goes to the wrong radio. Now `claimed_src` plus an explicit
+`refused_by`, because the console line does not identify the refuser at all —
+unambiguous with two stations, not with three, and the fix is a station id on
+the firmware's warning (`TODO(source)`). Second, since `src` is attacker-chosen
+and the input is unauthenticated by construction, one transmitter cycling it
+could have minted an entity per id in world memory; tracked sources are now
+capped at eight and the rest counted as overflow. Third, found while reasoning
+about the restart rather than on the bench: `AirWatch` kept its bursts only in
+memory, and `sweep` returns early with nothing to expire — so a restart
+mid-burst would have left `spine.air.refused_count` stuck at its old value for
+the life of the process, a rule firing on a condition that had ended. It now
+resumes open bursts from world memory the way the auth alarm does.
+
+*What passed.* Ten forged frames over 105 s produced **one** open fact and
+**one** close fact, never ten: opened `refusing`, closed `quiet` with
+`count: 10` on the clear, `spine.air.refused_count` 1 → 0, `safe-spine-on-air`
+waking System 2 at `Warning`. `spine.auth.gw-D8` stayed at `rejected: 0`
+throughout — the authenticated alarm never fired, which is the separation the
+whole design rests on. Clear ran 602.8 s against a 600 s window, the 2.8 s
+being the sweep waiting for the next console line to tick the clock.
+
+*Two claims in the procedure were wrong and are corrected in the doc.*
+"Genuine traffic keeps flowing" cannot be asserted on two boards — the forger
+*was* the only other transmitter, so verified ingests stop at the flash and
+resume at the reflash; showing that needs a third radio, as §6 step 6 does.
+And `safe-mesh-node-lost` fires as collateral at `Critical`, correctly: the
+station that went wrong-root genuinely did stop being reachable.
+
+Incidental: the frame counter continued across the reflash (15401 forged →
+15431 honest), so §6 step 1 holds through a firmware change, not just a reboot.
+
+Not done: **7b** — both boards wrong-root, which is the only path that reaches
+the alarm built in `27a42e7`. That alarm has still never fired on hardware.
 
 ## Unreleased — Neuromorphic silicon, checked (2026-09-15)
 
