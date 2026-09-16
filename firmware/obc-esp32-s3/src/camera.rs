@@ -320,6 +320,48 @@ const PINS: CameraPins = CameraPins {
 // the next person should gather evidence rather than try a third variation
 // blind. A scope or logic analyser on PCLK and VSYNC while a capture is
 // attempted answers 1 and 2 at once, and is the honest next step.
+//
+// ── 2026-09-16, later: a SECOND board, and it moves the suspicion ────────────
+//
+// The LILYGO T-CameraPlus-S3 V1.0/V1.1 was brought up specifically as the
+// discriminating experiment: same driver, same `capture_base64`, different
+// board, different sensor (OV5640), different pin map, different PSRAM mode.
+// If it captured, the XIAO's camera hardware was at fault. It did not.
+//
+// What that board proved, all from its own boot log:
+//
+//     esp_psram: SPI SRAM memory test OK          (QUAD, as the vendor says)
+//     sccb: pin_sda 1 pin_scl 2                   (the cited map)
+//     camera: Detected camera at address=0x3c
+//     camera: Detected OV5640 camera
+//     camera: Camera PID=0x5640
+//     ov5640: Calculated XVCLK: 20000000 Hz ... PCLK: 11250000 Hz
+//
+// So on BOTH boards the sensor is found and configured, and on NEITHER does a
+// frame come back. Two pin maps, two sensors, two PSRAM modes, two SCCB buses.
+// That is most of the board-level hypothesis space, and it is gone.
+//
+// **They fail differently, and the difference is the lead.** The XIAO answers
+// `{"ok":false,"error":"esp_camera_fb_get returned null (no frame)"}` in ~4 s,
+// preceded by `cam_hal: Failed to get the frame on time!`. The Lilygo answers
+// NOTHING -- no reply, no error, no log -- for 45 s, while `gpio_read` answers
+// normally immediately before and immediately after, and beacons keep flowing.
+// The command is received and the main loop survives; only the response never
+// appears.
+//
+// HYPOTHESIS, explicitly untested: on the Lilygo the capture SUCCEEDS and the
+// reply is lost because it is too large to write. A QVGA JPEG from an OV5640 is
+// tens of kilobytes, base64 is 4/3 of that, and this file's own history is
+// littered with line-length truncation (`MAX_LINE_LEN`, and the `capabilities`
+// reply that "truncated at ~1088 bytes"). A small error reply gets through; a
+// 30 KB success reply may not. That would mean the XIAO and the Lilygo have two
+// unrelated faults and the Lilygo's camera works.
+//
+// Do not act on that paragraph as though it were a finding. The measurement
+// that settles it is cheap and nobody has run it: have `camera_capture` log the
+// frame length from `(*fb).len` BEFORE encoding, so the node says how big a
+// frame it got even when it cannot send it. If that prints a plausible JPEG
+// size, the camera is fine and the bug is in the reply path.
 
 /// Initialise the camera driver (global; call once at boot).
 pub fn init() -> anyhow::Result<()> {

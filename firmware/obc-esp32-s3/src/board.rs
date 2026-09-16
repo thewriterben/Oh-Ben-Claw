@@ -136,7 +136,10 @@ pub const ACTIVE: Board = XIAO_ESP32_S3;
 const TOOLS_JSON: &str = concat!(
     r#"[{"name":"gpio_read","description":"Read a GPIO pin value (0 or 1)."},"#,
     r#"{"name":"gpio_write","description":"Set a GPIO pin high (1) or low (0)."},"#,
-    r#"{"name":"camera_capture","description":"Capture a JPEG image from the OV2640 camera."},"#,
+    // Sensor-neutral since 2026-09-16: this string is shared by every board, and
+    // the Lilygo T-CameraPlus-S3 has an OV5640 (`Camera PID=0x5640`, measured).
+    // A node announcing "OV2640" to a host on that board is simply wrong.
+    r#"{"name":"camera_capture","description":"Capture a JPEG image from the camera."},"#,
     r#"{"name":"audio_sample","description":"Sample audio from the I2S microphone."},"#,
     r#"{"name":"sensor_read","description":"Read a value from an I2C/SPI sensor."},"#,
     r#"{"name":"set_reflex_rules","description":"Push the on-MCU reflex (System 1) rule set."},"#,
@@ -239,7 +242,7 @@ pub fn describe(
         "tools": [
             {"name": "gpio_read", "description": "Read a GPIO pin value (0 or 1)."},
             {"name": "gpio_write", "description": "Set a GPIO pin high (1) or low (0)."},
-            {"name": "camera_capture", "description": "Capture a JPEG image from the OV2640 camera."},
+            {"name": "camera_capture", "description": "Capture a JPEG image from the camera."},
             {"name": "audio_sample", "description": "Sample audio from the I2S microphone."},
             {"name": "sensor_read", "description": "Read a value from an I2C/SPI sensor."},
             {"name": "set_reflex_rules", "description": "Push the on-MCU reflex (System 1) rule set."},

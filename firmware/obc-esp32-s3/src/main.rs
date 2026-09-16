@@ -154,8 +154,12 @@ mod sensors;
 
 /// I2S microphone driver (loudness/RMS).
 // On the Waveshare 2.1 build the I2S init is compiled out (GPIO0 = DHT22,
-// GPIO1/2 = LCD), so the constructor path is intentionally unused there.
-#[cfg_attr(feature = "board-waveshare-21", allow(dead_code))]
+// GPIO1/2 = LCD), so the constructor path is intentionally unused there. Same on
+// the Lilygo T-CameraPlus-S3 V1.0/V1.1, where GPIO1/2 are the camera's SCCB.
+#[cfg_attr(
+    any(feature = "board-waveshare-21", feature = "board-lilygo-tcam-s3-v11"),
+    allow(dead_code)
+)]
 mod audio;
 
 /// DHT22/AM2302 single-wire temperature + humidity driver.
@@ -184,6 +188,30 @@ const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 // node. Identity now comes from the chip's factory MAC -- see `identity.rs`.
 // `identity::node_id()` replaces the const; it panics unless `identity::init()`
 // has run, which it does at the top of `app_main`.
+
+// ── The `#[cfg]`s and the board data must say the same thing ─────────────────
+//
+// `board.rs` exists so a host can be told what this node is; the `#[cfg]`s around
+// the driver init decide what it actually does. Nothing connected them until
+// 2026-09-16, when the Lilygo board was added: `BOARD.has_mic` was false while
+// the I2S init was gated only on "not the Waveshare", so the build would have
+// announced no microphone and then initialised one — on the camera's SCCB pins.
+//
+// These are const assertions, so a mismatch is a build failure rather than a
+// bench session. If you add a board, you will land here, and the fix is to make
+// the two agree rather than to widen the assertion.
+const _: () = assert!(
+    BOARD.has_mic
+        == cfg!(not(any(
+            feature = "board-waveshare-21",
+            feature = "board-lilygo-tcam-s3-v11"
+        ))),
+    "board.rs says has_mic but the I2S init cfg disagrees (or vice versa)"
+);
+const _: () = assert!(
+    BOARD.i2c.is_some() == cfg!(not(feature = "board-lilygo-tcam-s3-v11")),
+    "board.rs declares an I2C bus that the init cfg skips (or vice versa)"
+);
 
 /// JPEG quality range.
 const CAMERA_QUALITY_MIN: u64 = 1;
@@ -715,7 +743,14 @@ fn main() -> anyhow::Result<()> {
     // has a camera — `camera.rs` describes an FPC connector on the Waveshare
     // while the old comment here said that board has none. That wants a bench
     // and a datasheet, not a guess.
-    #[cfg(not(feature = "camera"))]
+    // Also skipped on any board that declares no sensor bus. The Lilygo
+    // T-CameraPlus-S3 V1.0/V1.1's only exposed I2C is GPIO1/2 -- the camera's
+    // SCCB, shared with the CST816S touch controller and the SY6970 PMIC -- so
+    // `BOARD.i2c` is `None` there. Without this arm the non-camera build would
+    // have opened a bus on GPIO5/6, which on that board are HREF and camera D7,
+    // while `capabilities` announced `(-1, -1)`. The const assertion below keeps
+    // this cfg and `BOARD.i2c` from drifting apart.
+    #[cfg(all(not(feature = "camera"), not(feature = "board-lilygo-tcam-s3-v11")))]
     {
         use esp_idf_svc::hal::i2c::config::Config as I2cConfig;
         use esp_idf_svc::hal::i2c::I2cDriver;
@@ -741,10 +776,16 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
-    // OV2640 camera (opt-in). Owns the SCCB on GPIO4/5 and the parallel data bus.
+    // Camera (opt-in). Owns the SCCB and the parallel data bus; the pins are the
+    // board's, see camera.rs. The sensor part is whatever is fitted -- the XIAO
+    // Sense has an OV2640, the Lilygo T-CameraPlus-S3 an OV5640 (both measured
+    // 2026-09-16). This comment used to say "OV2640" and "GPIO4/5", which were
+    // the unverified map's numbers and were never this board's.
     #[cfg(feature = "camera")]
     match camera::init() {
-        Ok(()) => info!("OV2640 camera initialised"),
+        // Not "OV2640 camera initialised": that line printed on a board with an
+        // OV5640 in it, two lines after the driver logged `Camera PID=0x5640`.
+        Ok(()) => info!("camera initialised"),
         Err(e) => log::warn!("camera init failed ({e}); camera_capture falls back to stub"),
     }
     // I2S microphone (SCK=GPIO0, WS=GPIO1, SD=GPIO2). Falls back to the stub RMS if
@@ -752,7 +793,13 @@ fn main() -> anyhow::Result<()> {
     //
     // Disabled on the Waveshare 2.1 build: GPIO0 is the DHT22 there and GPIO1/2
     // are LCD lines — no mic is wirable; `audio_sample` serves the stub RMS.
-    #[cfg(not(feature = "board-waveshare-21"))]
+    // Not on the Lilygo T-CameraPlus-S3 V1.0/V1.1: this init takes GPIO0/1/2, and
+    // on that board GPIO1/2 are the camera's SCCB. It runs *after* `camera::init`,
+    // so it would have reassigned the sensor's control bus out from under a
+    // camera that had just reported success -- a failure that would have looked
+    // like anything but an I2S driver. `BOARD.has_mic` is false there and the
+    // const assertion below makes the two agree.
+    #[cfg(not(any(feature = "board-waveshare-21", feature = "board-lilygo-tcam-s3-v11")))]
     {
         use esp_idf_svc::hal::i2s::{config, I2sDriver};
         let i2s_cfg =
