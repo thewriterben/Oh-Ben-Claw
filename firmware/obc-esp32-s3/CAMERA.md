@@ -2,7 +2,21 @@
 
 The camera is **opt-in**. The default firmware build needs no PSRAM and no camera
 component — `camera_capture` returns a stub. This guide turns on a real OV2640
-capture via the `espressif/esp32-camera` IDF component. Three files + a feature flag.
+capture via the `espressif/esp32-camera` IDF component. Three files + **two**
+feature flags: `camera` plus a board.
+
+> **2026-09-16: `--features camera` alone no longer compiles.** A camera build
+> must also name its board, because the pin map is a property of the board and
+> nothing used to force anyone to say which one they meant. That is how the map
+> below was wrong twice. The choices:
+>
+> | feature | board | pin map source |
+> |---|---|---|
+> | `board-xiao-sense` | Seeed XIAO ESP32S3 **Sense** | Seeed wiki camera-slot table, retrieved 2026-09-16, cited in `camera.rs` |
+> | `board-unverified-map` | **none known** | the historical unattributed set — quarantined, do not bring up hardware with it |
+>
+> Omitting both, or naming both, is a `compile_error!` that names the choice.
+> `board-waveshare-21` + `camera` remains a `compile_error!` (no camera connector).
 
 > **Board caveat, corrected twice on 2026-08-21 — the second time by looking
 > at the board.** This document and `camera.rs` both described the pin map
@@ -11,9 +25,10 @@ capture via the `espressif/esp32-camera` IDF component. Three files + a feature 
 > is the screen's. `Cargo.toml` and `BENCH-PINOUT-CARDS.md` Card 3 had said so
 > since July; the firmware said otherwise and nothing compared them.
 >
-> Which board the map is for is now an open question — see `camera.rs`. Building
-> it against `board-waveshare-21` is a compile error, because those pins are
-> that board's LCD lines.
+> Which board that map is for is still unknown — see `camera.rs`. It now lives
+> behind `board-unverified-map` and is not what a camera build gets by default,
+> because there is no default. Building it against `board-waveshare-21` is a
+> compile error, because those pins are that board's LCD lines.
 >
 > The earlier correction the same day: the sensor-bus overlap ("the same pins as
 > the I2C sensor bus") was the stated reason for disabling that bus in camera
@@ -57,13 +72,20 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 ```
 
+`TODO(source)`: the XIAO ESP32S3 Sense's PSRAM mode (OPI vs QSPI) is not yet
+confirmed from a Seeed document or measured on the bench. Treat `MODE_OCT` above
+as the first thing to flip if `esp_camera_init` fails — see Troubleshooting.
+
 ## 3. Build with the feature
 
 ```powershell
 $env:CARGO_TARGET_DIR = "C:\e"    # Windows path-length workaround
-cargo build --release --features camera
-cargo espflash flash --release --features camera --monitor
+cargo build --release --features camera,board-xiao-sense
+cargo espflash flash --release --features camera,board-xiao-sense --monitor
 ```
+
+Substitute the board feature for your board. `--features camera` on its own stops
+at a `compile_error!` that lists the options — that is the point of it.
 
 On boot you should see `OV2640 camera initialised` (or a warning if init failed).
 

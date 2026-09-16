@@ -37,7 +37,20 @@ log = "0.4"
 # here on faith and confirmed by eye on 2026-08-21: that board's only FPC
 # connector is the screen's. The combination is now a compile_error in
 # camera.rs, because this map's pins are that board's LCD lines.
+#
+# A camera build must ALSO name its board (below). There is deliberately no
+# default pin map: a default is exactly what let "the Waveshare's pins" sit in
+# camera.rs for weeks on a board with no camera connector. `--features camera`
+# alone is now a compile_error naming the choice.
 camera = []
+# Seeed XIAO ESP32S3 Sense camera pin map, from Seeed's own wiki table (retrieved
+# 2026-09-16, cited in camera.rs). This is the board the bench node already is,
+# so it is the first attributable map in the tree. Needs PSRAM enabled.
+board-xiao-sense = []
+# The historical, unattributed pin map -- matches NO known board. Kept for the
+# forensic trail in camera.rs rather than deleted, quarantined behind its own
+# feature so nothing selects it by accident. Do not use it to bring up hardware.
+board-unverified-map = []
 # Pin map for the Waveshare ESP32-S3-Touch-LCD-2.1 (round 480x480 RGB LCD).
 # That board exposes ONLY GPIO 0/19/20/43/44 (12-pin header) + a hardwired I2C
 # connector on SDA=15/SCL=7; the RGB LCD consumes most other GPIOs, so the

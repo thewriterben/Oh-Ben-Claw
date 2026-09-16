@@ -431,8 +431,14 @@ pins are the Waveshare's LCD lines.
 
 It opened a new question rather than closing one cleanly. If the map is not the
 Waveshare's, whose is it? XCLK=15, SCCB=4/5 and PCLK=13 match the ESP32-S3-EYE
-v2.2, but the data bus does not. Until someone checks it against a datasheet for
-a board they are holding, every pin in `camera.rs` is unattributed.
+v2.2, but the data bus does not.
+
+**Still open, and now quarantined (2026-09-16).** Nobody has attributed that map,
+so rather than leave it as the thing a camera build silently gets, the pin map
+became a per-board choice with *no default*: `--features camera` alone is a
+`compile_error!`. `board-xiao-sense` carries a map cited to Seeed's wiki;
+`board-unverified-map` holds the orphan set for the forensic trail. The question
+below is unchanged — it is just no longer load-bearing.
 
 **Three claims remain**, and all three need a powered board.
 
@@ -446,7 +452,7 @@ Fill this in as you go, not afterwards.
 date:              ____________________
 firmware commit:   ____________________
 board:             ____________________  (XIAO / FireBeetle / Waveshare / other)
-build:             default | --features board-waveshare-21 | --features camera
+build:             default | --features board-waveshare-21 | --features camera,board-xiao-sense
 
 1. refusal stops the wire
    node reported (capabilities):____________________

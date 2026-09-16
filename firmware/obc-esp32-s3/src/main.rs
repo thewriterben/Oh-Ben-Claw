@@ -135,8 +135,11 @@ mod safety;
 mod sensor_math;
 
 /// Real I2C sensor drivers (MAX17048 fuel gauge, MPU6050 IMU).
-// Under `--features camera` the I2C bus is disabled (shared SCCB pins), so the
-// sensor constructor/probe paths are intentionally unused in that build.
+// Under `--features camera` the I2C bus is disabled, so the sensor
+// constructor/probe paths are intentionally unused in that build. NOT because of
+// shared SCCB pins — that reason died on 2026-08-21 when the default bus moved to
+// GPIO5/6, and was never true of the XIAO Sense (SCCB 40/39). The gate is a
+// conservative default; see camera.rs.
 #[cfg_attr(feature = "camera", allow(dead_code))]
 mod sensors;
 

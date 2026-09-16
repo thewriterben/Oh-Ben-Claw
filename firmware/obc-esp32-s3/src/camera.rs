@@ -43,6 +43,19 @@
 //! The struct field names (`pin_sccb_sda`/`pin_sccb_scl` in esp32-camera ≥2.0; the
 //! older component spelled them `pin_sscb_*`) and the bindgen enum names are the
 //! parts most likely to need a version tweak — verify against the compiler.
+//!
+//! ---
+//!
+//! **2026-09-16: the pin map is now a per-board choice, and there is no default.**
+//!
+//! The map above was wrong twice because it was a single hard-coded set with no
+//! board attached to it, and nothing forced anyone to say which board they meant.
+//! A default is what let "the Waveshare's pins" survive for weeks on a board with
+//! no camera connector. So `--features camera` alone no longer compiles: it needs
+//! a board feature too, and the unattributed set is quarantined behind
+//! `board-unverified-map` rather than deleted — the history above is worth more
+//! than the twelve numbers, and deleting it would invite someone to re-derive the
+//! same guess.
 
 // Confirmed by looking at the board on 2026-08-21: the Waveshare
 // ESP32-S3-Touch-LCD-2.1 has one FPC connector and it is the screen's. This
@@ -54,37 +67,137 @@ compile_error!(
      camera connector, and this module's pins are its LCD lines. See camera.rs."
 );
 
+// A camera build must name its board. No default: see the 2026-09-16 note above.
+#[cfg(all(
+    feature = "camera",
+    not(any(feature = "board-xiao-sense", feature = "board-unverified-map"))
+))]
+compile_error!(
+    "`camera` needs a board feature so the pin map is attributable. Add \
+     `board-xiao-sense` (Seeed XIAO ESP32S3 Sense, pins from the vendor wiki) or, \
+     only if you know what it is for, `board-unverified-map` (the historical \
+     unattributed set — matches no known board). See camera.rs."
+);
+
+#[cfg(all(feature = "board-xiao-sense", feature = "board-unverified-map"))]
+compile_error!("pick one camera board feature, not both");
+
 use anyhow::Context;
 // esp32-camera bindings live in their own module (see Cargo.toml `bindings_module`).
 use esp_idf_svc::sys::camera as sys;
 // ESP_OK / error type come from the base bindings, not the camera module.
 use esp_idf_svc::sys::ESP_OK;
 
+/// One board's DVP wiring. `-1` means "not connected on this board".
+///
+/// A struct rather than loose constants so a board is a single value that can be
+/// named, cited and diffed — the previous shape made it impossible to tell, at a
+/// glance, whether you were looking at one board's map or a merge of two.
+struct CameraPins {
+    pwdn: i32,
+    reset: i32,
+    xclk: i32,
+    sccb_sda: i32,
+    sccb_scl: i32,
+    d0: i32,
+    d1: i32,
+    d2: i32,
+    d3: i32,
+    d4: i32,
+    d5: i32,
+    d6: i32,
+    d7: i32,
+    vsync: i32,
+    href: i32,
+    pclk: i32,
+}
+
+/// Seeed XIAO ESP32S3 Sense — the OV2640/OV5640 on the Sense expansion board.
+///
+/// Source: Seeed's own wiki, "Camera Usage in Seeed Studio XIAO ESP32S3 Sense",
+/// section *Camera slot circuit design for expansion boards*, which publishes the
+/// table of the 14 GPIOs the card slot occupies. Retrieved 2026-09-16 and
+/// cross-checked against the `CAMERA_MODEL_XIAO_ESP32S3` entry of the Arduino
+/// `camera_pins.h` the same page uses:
+///
+/// ```text
+/// XCLK 10   PCLK 13   VSYNC 38   HREF 47   SIOD(SDA) 40   SIOC(SCL) 39
+/// Y2 15  Y3 17  Y4 18  Y5 16  Y6 14  Y7 12  Y8 11  Y9 48
+/// ```
+///
+/// `PWDN` and `RESET` are not broken out on this board, hence `-1`.
+///
+/// Note D0..D7 map to Y2..Y9 (the sensor's low two bits are not wired), which is
+/// why the numbers below look shuffled against the table — that ordering is the
+/// convention, not a transcription error.
+#[cfg(feature = "board-xiao-sense")]
+const PINS: CameraPins = CameraPins {
+    pwdn: -1,
+    reset: -1,
+    xclk: 10,
+    sccb_sda: 40,
+    sccb_scl: 39,
+    d0: 15, // Y2
+    d1: 17, // Y3
+    d2: 18, // Y4
+    d3: 16, // Y5
+    d4: 14, // Y6
+    d5: 12, // Y7
+    d6: 11, // Y8
+    d7: 48, // Y9
+    vsync: 38,
+    href: 47,
+    pclk: 13,
+};
+
+/// The historical map. **Matches no known board** — see the module header for how
+/// it came to be here and why it is kept. Quarantined behind its own feature so
+/// nothing selects it by accident.
+#[cfg(feature = "board-unverified-map")]
+const PINS: CameraPins = CameraPins {
+    pwdn: -1,
+    reset: -1,
+    xclk: 15,
+    sccb_sda: 4,
+    sccb_scl: 5,
+    d0: 39,
+    d1: 40,
+    d2: 41,
+    d3: 42,
+    d4: 16,
+    d5: 17,
+    d6: 18,
+    d7: 19,
+    vsync: 21,
+    href: 38,
+    pclk: 13,
+};
+
 /// Initialise the camera driver (global; call once at boot).
 pub fn init() -> anyhow::Result<()> {
     // Zero-initialise the C config, then fill the fields this board needs.
     let mut cfg: sys::camera_config_t = unsafe { core::mem::zeroed() };
 
-    cfg.pin_pwdn = -1;
-    cfg.pin_reset = -1;
-    cfg.pin_xclk = 15;
+    cfg.pin_pwdn = PINS.pwdn;
+    cfg.pin_reset = PINS.reset;
+    cfg.pin_xclk = PINS.xclk;
     // SCCB (camera-control I2C) pins live in anonymous unions in the binding — the
     // component keeps both the new `pin_sccb_*` and legacy `pin_sscb_*` spellings.
     // Writing a union field is safe in Rust.
-    cfg.__bindgen_anon_1.pin_sccb_sda = 4;
-    cfg.__bindgen_anon_2.pin_sccb_scl = 5;
+    cfg.__bindgen_anon_1.pin_sccb_sda = PINS.sccb_sda;
+    cfg.__bindgen_anon_2.pin_sccb_scl = PINS.sccb_scl;
     // 8-bit parallel data bus D0..D7.
-    cfg.pin_d0 = 39;
-    cfg.pin_d1 = 40;
-    cfg.pin_d2 = 41;
-    cfg.pin_d3 = 42;
-    cfg.pin_d4 = 16;
-    cfg.pin_d5 = 17;
-    cfg.pin_d6 = 18;
-    cfg.pin_d7 = 19;
-    cfg.pin_vsync = 21;
-    cfg.pin_href = 38;
-    cfg.pin_pclk = 13;
+    cfg.pin_d0 = PINS.d0;
+    cfg.pin_d1 = PINS.d1;
+    cfg.pin_d2 = PINS.d2;
+    cfg.pin_d3 = PINS.d3;
+    cfg.pin_d4 = PINS.d4;
+    cfg.pin_d5 = PINS.d5;
+    cfg.pin_d6 = PINS.d6;
+    cfg.pin_d7 = PINS.d7;
+    cfg.pin_vsync = PINS.vsync;
+    cfg.pin_href = PINS.href;
+    cfg.pin_pclk = PINS.pclk;
 
     cfg.xclk_freq_hz = 20_000_000;
     cfg.ledc_timer = sys::ledc_timer_t_LEDC_TIMER_0;

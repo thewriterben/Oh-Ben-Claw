@@ -995,12 +995,14 @@ Speak/clap near the mic and repeat — the value rises toward 1.0.
 
 **PASS A9:** quiet ≈ near-zero; sound raises the RMS.
 
-### A10. OV2640 camera (opt-in; needs PSRAM + camera + the `camera` feature)
+### A10. OV2640 camera (opt-in; needs PSRAM + camera + the `camera` feature **and a board feature**)
 
 Follow `firmware/obc-esp32-s3/CAMERA.md` (the `idf_component.yml`/`extra_components`
-and PSRAM sdkconfig are already in place from setup). Build + flash with the feature:
+and PSRAM sdkconfig are already in place from setup). Build + flash with the features
+— since 2026-09-16 a camera build must also name the board its pin map belongs to,
+so `--features camera` alone stops at a `compile_error!`:
 ```powershell
-cargo run --release --features camera
+cargo run --release --features camera,board-xiao-sense
 ```
 Boot log should show `OV2640 camera initialised`. Then:
 ```json
@@ -1010,8 +1012,11 @@ Boot log should show `OV2640 camera initialised`. Then:
 Decode the base64 to a `.jpg` and open it.
 
 **PASS A10:** a real base64 JPEG returns and decodes to a viewable image.
-> Note: the camera feature disables the I2C sensor bus (shared SCCB pins 4/5), so
-> A7/A8 and battery safing use stubs in a camera build — that's expected.
+> Note: the camera feature disables the I2C sensor bus, so A7/A8 and battery safing
+> use stubs in a camera build — that's expected. The stated reason used to be
+> "shared SCCB pins 4/5"; that stopped being true on 2026-08-21 when the default
+> bus moved to GPIO5/6, and it was never true of the XIAO Sense (SCCB 40/39). The
+> gate is now a conservative default, not a necessity — see `camera.rs`.
 
 **✅ Phase A complete** when A2–A9 pass (A10 if you have the camera). The entire
 embodied control path is validated on real silicon.
