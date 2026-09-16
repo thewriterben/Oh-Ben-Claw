@@ -325,8 +325,27 @@ fn is_policy_refusal(value: &serde_json::Value) -> bool {
 /// agent manufactures its own emergency and reports it in a loop. Sourcing discovery
 /// at the radio closes that loop at the root, rather than blacklisting names one at a
 /// time as they appear.
+///
+/// **One phantom survives that rule, and it is the host's own station**
+/// (DECISIONS.md 2026-09-16). `Origin::Observed` asks whether the entity was ever
+/// heard on the air, and the station the brain is plugged into may well have been —
+/// while it held a different role. Move the console cable to it and it becomes
+/// permanently unhearable, because a station transmits its own frames rather than
+/// receiving them, but the rollup from its former life stays `Observed` and keeps
+/// qualifying. On the bench 2026-09-16 that was `gw-40`: heard as the field bridge,
+/// promoted to base, then "offline for 43.5 hours — presumed lost" with
+/// `escalated_count` pinned at 1 and `safe-mesh-node-lost` firing at Critical every
+/// tick until the System 2 wake budget absorbed it. Exactly the loop the paragraph
+/// above closes, re-entered through the one door it left open.
+///
+/// So discovery is authoritative *and* liveness must be. A board that cannot be
+/// heard is not a node whose silence means anything, and its liveness already has a
+/// correct signal of its own — `spine.gateway`, the console link. The id comes from
+/// [`lora_gateway::OWN_STATION_FACT`], which the operator declares and the gateway
+/// checks against the air.
 pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
     let entities = world.entities().unwrap_or_default();
+    let own = crate::lora_gateway::own_station(world);
     let mut views = Vec::new();
     for e in entities {
         let parts: Vec<&str> = e.split('.').collect();
@@ -334,6 +353,11 @@ pub fn snapshot(world: &WorldMemory) -> Vec<MeshNodeView> {
             continue;
         }
         let node = parts[1].to_string();
+        // The console's own board. Not a node: unhearable by construction, so its
+        // silence carries no information and must not be read as loss.
+        if own.as_deref() == Some(node.as_str()) {
+            continue;
+        }
         // Heard over the air, or it is not a node.
         let (last_seen_ms, rollup_id) = match world.current(&e).ok().flatten() {
             Some(f) if f.origin == Origin::Observed => (f.valid_from, f.id),
@@ -538,6 +562,42 @@ pub async fn tick(
     now_ms: u64,
 ) -> usize {
     let views = snapshot(world);
+
+    // Retire conclusions drawn about the console's own station while it was still
+    // being mistaken for a node. `snapshot` now skips it, so nothing would ever
+    // revisit those facts: `escalated_count` recomputes from the views and drops,
+    // but `mesh.<own>.escalation` would sit at "escalated" forever, and a standing
+    // conclusion nobody will ever withdraw is worse than the count it no longer
+    // feeds. Idempotent — after the first tick there is nothing left to clear.
+    if let Some(own) = crate::lora_gateway::own_station(world) {
+        let key = format!("mesh.{own}.escalation");
+        let standing = world
+            .current(&key)
+            .ok()
+            .flatten()
+            .filter(|f| f.value.get("status").and_then(|s| s.as_str()) == Some("escalated"));
+        if let Some(prev) = standing {
+            tracing::info!(
+                station = %own,
+                "mesh supervisor: {own} is this console's own station, not a node — \
+                 retiring the escalation it was given while it was being judged as one"
+            );
+            let _ = world.observe_derived_from(
+                &key,
+                json!({
+                    "status": "cleared",
+                    "reason": "not a mesh node: this is the host's own station, which \
+                               cannot be heard on the air",
+                    "ts_ms": now_ms,
+                }),
+                now_ms,
+                now_ms,
+                SUPERVISOR_SOURCE,
+                &[prev.id],
+            );
+        }
+    }
+
     let spine = SpineView::from_world(world);
     let decisions = decide(&views, now_ms, cfg, &spine);
     let mut applied = 0;
@@ -1602,6 +1662,86 @@ mod tests {
                 .value
                 .as_u64(),
             Some(1)
+        );
+    }
+
+    /// The bench case of 2026-09-16. `gw-40` was heard on the air as the field
+    /// bridge, so its rollup is legitimately `Origin::Observed` and passes the
+    /// phantom guard above. Then the console cable moved to it and it became
+    /// unhearable — a station transmits its own frames rather than receiving
+    /// them — so it "went offline", got escalated, and pinned `escalated_count`
+    /// at 1 with `safe-mesh-node-lost` firing at Critical every tick.
+    #[test]
+    fn the_consoles_own_station_is_not_a_node_even_though_it_was_heard_once() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        for station in ["gw-40", "gw-D8"] {
+            world
+                .observe_as(
+                    &format!("mesh.{station}"),
+                    json!({ "last_type": "gw_keepalive", "rssi_dbm": -58, "src": station }),
+                    1_000,
+                    1_000,
+                    "lora-gateway",
+                    Origin::Observed,
+                )
+                .unwrap();
+        }
+        // Without the declaration both qualify — which is the bug, not the fix.
+        assert_eq!(snapshot(&world).len(), 2);
+
+        crate::lora_gateway::record_own_station(&world, "gw-40", "COM3", 2_000);
+        let views = snapshot(&world);
+        assert_eq!(views.len(), 1, "the console's own board is not a node");
+        assert_eq!(views[0].node, "gw-D8", "the other station still is one");
+    }
+
+    /// Retiring the conclusion, not merely dropping it from the count. A standing
+    /// "escalated" that nothing will ever revisit is worse than the count it no
+    /// longer feeds: the next person reads world memory, not the views.
+    #[tokio::test]
+    async fn an_escalation_left_on_the_own_station_is_withdrawn_not_abandoned() {
+        let world = WorldMemory::open_in_memory().unwrap();
+        world
+            .observe_as(
+                "mesh.gw-40",
+                json!({ "last_type": "gw_keepalive", "rssi_dbm": -58, "src": "40" }),
+                1_000,
+                1_000,
+                "lora-gateway",
+                Origin::Observed,
+            )
+            .unwrap();
+        world
+            .observe_as(
+                "mesh.gw-40.escalation",
+                json!({ "status": "escalated", "reason": "offline for 120005 ms", "ts_ms": 1_000 }),
+                1_000,
+                1_000,
+                SUPERVISOR_SOURCE,
+                Origin::Derived,
+            )
+            .unwrap();
+        crate::lora_gateway::record_own_station(&world, "gw-40", "COM3", 2_000);
+
+        let cfg = MeshSupervisorConfig::default();
+        tick(&world, None, &cfg, 3_000).await;
+
+        let esc = world.current("mesh.gw-40.escalation").unwrap().unwrap();
+        assert_eq!(esc.value["status"], json!("cleared"));
+        assert!(
+            esc.value["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("host's own station"),
+            "the withdrawal says why, so it does not read as the node coming back"
+        );
+        // Idempotent: a second tick has nothing left to clear.
+        let before = world.history("mesh.gw-40.escalation").unwrap().len();
+        tick(&world, None, &cfg, 4_000).await;
+        assert_eq!(
+            world.history("mesh.gw-40.escalation").unwrap().len(),
+            before,
+            "clearing runs once, not every tick"
         );
     }
 

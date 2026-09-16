@@ -1326,6 +1326,54 @@ pub enum ConsoleEvent {
 /// Inbound console events from the single serial I/O thread.
 pub type ConsoleLines = tokio::sync::mpsc::Receiver<ConsoleEvent>;
 
+/// Which station the host's console is plugged into, when the operator has said
+/// (`[lora_gateway] station`). Written once at startup; read by the mesh
+/// supervisor, which must not judge that board as a node.
+///
+/// A fact rather than a config field threaded through three call sites: the
+/// supervisor already reads the world to decide, and this is one more thing the
+/// world knows. It carries `source: "config"` because that is exactly what it
+/// is — an operator's claim, not an observation — and the gateway checks it
+/// against the air (see [`LoraAuth::admit`]).
+pub const OWN_STATION_FACT: &str = "spine.station";
+
+/// Record the station this console belongs to. Call once, at gateway start.
+pub fn record_own_station(world: &WorldMemory, station: &str, port: &str, now_ms: u64) {
+    let _ = world.observe_as(
+        OWN_STATION_FACT,
+        json!({
+            "station": station,
+            "port": port,
+            // Said plainly so nobody reads this as something the host measured.
+            "source": "config",
+            "note": "the host cannot hear this station; it is the console's own board",
+        }),
+        now_ms,
+        now_ms,
+        SOURCE,
+        Origin::Observed,
+    );
+    tracing::info!(
+        station = %station,
+        port = %port,
+        "[lora_gateway] this console belongs to {station}; it will not be judged as a mesh node"
+    );
+}
+
+/// The station this console belongs to, if the operator declared one.
+pub fn own_station(world: &WorldMemory) -> Option<String> {
+    world
+        .current(OWN_STATION_FACT)
+        .ok()
+        .flatten()
+        .and_then(|f| {
+            f.value
+                .get("station")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+}
+
 /// The one entity that says whether the brain can hear the mesh right now.
 /// One fact, not one per station: it describes the host's serial link; the
 /// stations' own liveness stays in `mesh.gw-XX` and `spine.auth.gw-XX`.
@@ -1602,6 +1650,26 @@ where
         // Every console line is a clock tick for the burst timer, not just the
         // refusals: a burst that stops has to be able to close.
         air.sweep(&world, now);
+        // The operator's `station` claim, falsified. A station never receives its
+        // own frames — it transmits them — so a `SPINE ◄` line carrying this
+        // station's `src` means either the config names the wrong board, or
+        // something on the air is claiming to be the board the brain is wired to.
+        // Both are worth shouting about, and neither is silently survivable: the
+        // supervisor is excluding this id from mesh liveness on the strength of it.
+        if let Some(own) = own_station(&world) {
+            if LoraAuth::station(frame.src) == own {
+                tracing::error!(
+                    station = %own,
+                    ctr = frame.ctr,
+                    rssi = frame.rssi_dbm,
+                    "[lora_gateway] received a frame from {own}, which is configured as THIS \
+                     console's own station — a station cannot hear itself, so \
+                     `[lora_gateway] station` names the wrong board, or {own} is being \
+                     impersonated. The supervisor is skipping {own}'s liveness because of \
+                     that setting; fix it before trusting the mesh view."
+                );
+            }
+        }
         match auth.admit(&frame, &world, now) {
             Ok(()) => {
                 if let Some(ing) = ingest_frame(&frame, &world, now) {

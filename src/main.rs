@@ -951,6 +951,29 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0)
             };
+            // Which board this console belongs to, if the operator said. Recorded
+            // before the first frame so the supervisor's very first tick already
+            // knows not to judge it as a node (DECISIONS.md 2026-09-16).
+            match (&gw.station, &world_mem) {
+                (Some(station), Some(world)) => {
+                    oh_ben_claw::spine::lora_gateway::record_own_station(
+                        world,
+                        station,
+                        &gw.port,
+                        now_ms(),
+                    );
+                }
+                (Some(_), None) => tracing::warn!(
+                    "[lora_gateway] station is set but [perception].world_memory is off — \
+                     nothing reads it, and the supervisor is not running either"
+                ),
+                (None, _) => tracing::warn!(
+                    "[lora_gateway] no `station` set: the board this console is plugged into \
+                     will be judged as a mesh node, go offline (a station cannot hear \
+                     itself) and pin safe-mesh-node-lost. Set it to the id in that board's \
+                     boot banner, e.g. station = \"gw-40\"."
+                ),
+            }
             let started = match oh_ben_claw::spine::lora_gateway::open_split(&gw.port, gw.baud) {
                 Ok((rd, wr)) => Some((
                     Arc::new(oh_ben_claw::spine::lora_gateway::GatewayHandle::open(

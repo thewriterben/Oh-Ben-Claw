@@ -1690,6 +1690,28 @@ pub struct LoraGatewayConfig {
     /// The spine root secret inline. See `spine_root_file`.
     #[serde(default)]
     pub spine_root: Option<String>,
+    /// Which station this console belongs to, e.g. `"gw-40"` — the board at the
+    /// far end of `port`.
+    ///
+    /// The host cannot work this out for itself. It never sees the station's boot
+    /// banner, because the gateway deliberately holds DTR/RTS low so that opening
+    /// the port does not reset the board, and a station never reports its own
+    /// frames: it *transmits* them, and a transmitted frame is a `SPINE ►` line,
+    /// not a `SPINE ◄` one. The board the brain is plugged into is therefore the
+    /// one thing on the mesh it is structurally unable to hear.
+    ///
+    /// Left unset, nothing changes and the supervisor behaves as it did. Set, it
+    /// stops the host's own station from being judged as a mesh node that has gone
+    /// silent — which it always is, permanently, by construction
+    /// (DECISIONS.md 2026-09-16).
+    ///
+    /// This is a claim the operator makes, so it is checked rather than trusted:
+    /// the host can never legitimately *receive* a frame whose `src` is this
+    /// station, so if one arrives the value is wrong (or something is
+    /// impersonating the station the brain is wired to) and the gateway says so
+    /// loudly. See `lora_gateway::OWN_STATION_FACT`.
+    #[serde(default)]
+    pub station: Option<String>,
 }
 
 fn default_mesh_reply_timeout_ms() -> u64 {
@@ -3232,6 +3254,7 @@ transport = "stdio"
 command = "python"
 [lora_gateway]
 port = "COM3"
+station = "gw-40"
 reply_timeout_ms = 8000
 reply_retries = 2
 spine_root_file = "~/.obc/spine_root"
