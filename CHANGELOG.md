@@ -5,6 +5,51 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The second board answered to the first board's name (2026-09-16)
+
+### Fixed
+
+- **Node identity now derives from the chip's factory MAC**, not from
+  `const NODE_ID: &str = "obc-esp32-s3-001"`. A second XIAO, flashed for camera
+  bring-up, booted announcing the live mesh node's identity and began emitting
+  `link_state` JSON under it. The supervisor keys everything on node id; nothing
+  reached the air only because that board's spine UART was not yet wired to a
+  radio, which was the next step in the plan. Known MACs get readable names from
+  a roster (`obc-esp32-s3-001` keeps its name, so the host's world memory and
+  pushed limits are untouched); an unrostered board self-names
+  `obc-esp32-s3-<last three MAC bytes>` — deliberately ugly, and deliberately not
+  a fixed string, because a fixed fallback is what caused this.
+- **The boot log prints the MAC beside the node id.** A name on its own is an
+  assertion; the collision was invisible because both boards asserted it with
+  equal confidence.
+
+### Added
+
+- `scripts/which_esp32.ps1` — names every attached ESP32-S3 by factory MAC and
+  refuses to nominate a live node as flashable. Written after the near-miss where
+  "flash the spare XIAO" met a bench on which the only attached S3 was the live
+  one. It lives in the repo rather than on one machine, because a control that
+  exists on one bench is not a control.
+- `tests/firmware_identity_roster.rs` — 11 tests over the real mapping code, plus
+  drift checks across the three places the roster now lives (firmware, host
+  peripheral registry, gate script). `camera.rs` contradicted its own
+  `Cargo.toml` two directories away for weeks because nothing compared them.
+- The MAC→name mapping is an ESP-free module (`identity_map.rs`) so those tests
+  execute the shipped code on the host — same split as `sensor_math` / `sensors`.
+
+### Camera bring-up (branch `camera-bringup`, not merged)
+
+- XIAO ESP32S3 Sense OV2640 pin map **verified on metal**: sensor detected at
+  `0x30`, `PID=0x26 VER=0x42`. First attributable pin map in `camera.rs`.
+- PSRAM `TODO(source)` **closed by measurement** — `MODE_OCT` is correct
+  (`esp_psram: SPI SRAM memory test OK`, 8192K pool).
+- **Still broken:** `esp_camera_fb_get` returns null 6/6, exactly 4000 ms apart
+  (the driver's own timeout), across four `jpeg_quality` values. Deterministic,
+  not a warm-up effect. Init proves the control path only; the data path is
+  untested by it. Hypotheses recorded in `camera.rs` and labelled as untested.
+
+---
+
 ## Unreleased — The board the brain is plugged into is not a node (2026-09-16)
 
 Third variant of one root cause in a single evening. The host's picture of the

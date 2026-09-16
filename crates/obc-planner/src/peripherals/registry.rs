@@ -869,6 +869,24 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         ecosystem: "XIAO",
         connectors: &[Connector::Bare],
     },
+    // The fleet's *second* XIAO, and the reason node identity stopped being a
+    // compile-time constant.
+    //
+    // Measured 2026-09-16 by espflash while flashing the first camera build:
+    // node `obc-esp32-s3-002`, MAC 64:E8:33:7E:7E:04, chip rev v0.2, 8 MB flash
+    // (gd), 8192K PSRAM. It is a XIAO ESP32S3 **Sense** — the same module as the
+    // row above plus the Sense expansion board's OV2640 and PDM mic — so it
+    // enumerates identically at 0x303a:0x1001 and needs no row of its own here.
+    //
+    // It is recorded because the two boards' MACs differ only in their last
+    // three bytes, and on 2026-09-16 this one booted announcing
+    // `obc-esp32-s3-001`: the live node's identity, already being emitted as
+    // `link_state` on its spine UART. Nothing reached the air only because that
+    // UART was not yet wired to a radio. Firmware identity now derives from the
+    // factory MAC (`firmware/obc-esp32-s3/src/identity_map.rs`), and
+    // `tests/firmware_identity_roster.rs` fails if this comment and that roster
+    // ever disagree.
+    //
     // ── Sipeed 6+1 Mic Array ──────────────────────────────────────────────────
     // Circular microphone array with 6 peripheral mics and 1 center mic,
     // powered by an STM32F103 MCU.  Appears as a USB audio device and

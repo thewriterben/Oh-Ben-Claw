@@ -129,6 +129,15 @@ use board::ACTIVE as BOARD;
 /// On-MCU Track 0 safety gate — deterministic, host-pushable actuator limits.
 mod safety;
 
+/// Who this board is, derived from the chip's factory MAC rather than a
+/// constant. Read its header before changing anything about node identity.
+mod identity;
+
+/// The MAC → node id mapping, with no ESP dependencies, so
+/// `tests/firmware_identity_roster.rs` runs it on the host. Same split as
+/// `sensor_math` / `sensors`, for the same reason.
+mod identity_map;
+
 /// Pure decode and compensation arithmetic for the I2C sensors. No ESP
 /// dependencies, so `tests/firmware_sensor_math.rs` executes it on the host
 /// against the BME280 datasheet's own double-precision algorithm.
@@ -169,9 +178,12 @@ const MAX_LINE_LEN: usize = 2048;
 /// Firmware version — must match the host-side `CARGO_PKG_VERSION`.
 const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Node ID — set this to a unique identifier for each board in your fleet.
-/// In production, this should be read from NVS (non-volatile storage).
-const NODE_ID: &str = "obc-esp32-s3-001";
+// The node id used to be `const NODE_ID: &str = "obc-esp32-s3-001"` here, with a
+// comment saying it should come from NVS "in production". On 2026-09-16 a second
+// board was flashed and booted announcing the same identity as the live mesh
+// node. Identity now comes from the chip's factory MAC -- see `identity.rs`.
+// `identity::node_id()` replaces the const; it panics unless `identity::init()`
+// has run, which it does at the top of `app_main`.
 
 /// JPEG quality range.
 const CAMERA_QUALITY_MIN: u64 = 1;
@@ -481,6 +493,12 @@ fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
+    // Before anything else that could name this board. `identity::node_id()`
+    // panics until this has run, so an ordering mistake here is a loud crash at
+    // boot rather than a node quietly answering to the wrong name.
+    let (node_id, mac) = identity::init();
+    log::debug!("identity resolved: {node_id} from MAC {mac}");
+
     let peripherals = Peripherals::take()?;
     let pins = peripherals.pins;
 
@@ -577,7 +595,15 @@ fn main() -> anyhow::Result<()> {
     }
 
     info!("Oh-Ben-Claw ESP32-S3 firmware v{} ready", FIRMWARE_VERSION);
-    info!("Node ID: {}", NODE_ID);
+    // Both values, always: a node id with no MAC beside it is an assertion, and
+    // the whole reason this module exists is that an unbacked assertion about
+    // identity went unnoticed. Printing the MAC makes a collision visible in the
+    // boot log of either board rather than only in a fleet-wide comparison.
+    info!(
+        "Node ID: {}  (MAC {})",
+        identity::node_id(),
+        identity::mac()
+    );
     log::warn!(
         "Track 0 gate: DENY-ALL until a host pushes limits. No pin can be \
          driven -- including by the built-in safing rules -- until set_limits \
@@ -661,7 +687,7 @@ fn main() -> anyhow::Result<()> {
                 r#""rules":{{"source":"{}","loaded":{}}},"#,
                 r#""detail":"no pin can be driven until set_limits arrives"}}"#
             ),
-            NODE_ID,
+            identity::node_id(),
             boot_id(),
             restored.source(),
             restored.count()
@@ -914,7 +940,7 @@ fn main() -> anyhow::Result<()> {
                                                 );
                                                 m.insert(
                                                     "node_id".into(),
-                                                    serde_json::json!(NODE_ID),
+                                                    serde_json::json!(identity::node_id()),
                                                 );
                                             }
                                             let out = v.to_string();
@@ -971,7 +997,7 @@ fn main() -> anyhow::Result<()> {
                 last_link_offline = Some(link_offline);
                 let link_report = serde_json::json!({
                     "type": "link_state",
-                    "node_id": NODE_ID,
+                    "node_id": identity::node_id(),
                     "state": if link_offline { "offline" } else { "online" },
                     "silence_ms": silence_ms,
                     "ts_ms": now,
@@ -993,7 +1019,7 @@ fn main() -> anyhow::Result<()> {
                     last_power_mode = Some(mode);
                     let report = serde_json::json!({
                         "type": "power_mode",
-                        "node_id": NODE_ID,
+                        "node_id": identity::node_id(),
                         "mode": mode.as_str(),
                         "soc_pct": soc,
                         "ts_ms": now,
@@ -1023,7 +1049,7 @@ fn main() -> anyhow::Result<()> {
                 // shapes).
                 let mut report = serde_json::json!({
                     "type": "reflex",
-                    "node_id": NODE_ID,
+                    "node_id": identity::node_id(),
                     "rule_id": fired.rule_id,
                     "action": serde_json::to_value(&fired.action).unwrap_or(serde_json::Value::Null),
                     "applied": applied,
@@ -1062,7 +1088,7 @@ fn main() -> anyhow::Result<()> {
             // ~40 bytes on a ~60-byte frame and stops the moment limits land.
             let mut beacon = serde_json::json!({
                 "type": "beacon",
-                "node_id": NODE_ID,
+                "node_id": identity::node_id(),
                 "ts_ms": now,
                 "boot_id": boot_id(),
             });
@@ -1144,7 +1170,7 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                 let body = board::describe_json(
                     &BOARD,
                     cfg!(feature = "camera"),
-                    NODE_ID,
+                    identity::node_id(),
                     FIRMWARE_VERSION,
                     boot_id(),
                 );
@@ -1194,7 +1220,7 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                     Some(v) => serde_json::from_value(v.take())?,
                     None => Vec::new(),
                 };
-                let applied = state.safety.apply_pushed(limits, NODE_ID);
+                let applied = state.safety.apply_pushed(limits, identity::node_id());
                 if applied {
                     // A new policy is a new world for the rules: a standing
                     // condition whose write the old gate refused gets to fire
@@ -1347,7 +1373,10 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                     }
                     reports.push(report);
                 }
-                Ok(serde_json::json!({ "node_id": NODE_ID, "fired": reports }).to_string())
+                Ok(
+                    serde_json::json!({ "node_id": identity::node_id(), "fired": reports })
+                        .to_string(),
+                )
             }
 
             "camera_capture" => {
@@ -1428,7 +1457,7 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                     None => Vec::new(),
                 };
                 Ok(serde_json::json!({
-                    "node_id": NODE_ID,
+                    "node_id": identity::node_id(),
                     "count": addrs.len(),
                     "addresses": addrs,
                 })
@@ -1622,7 +1651,7 @@ fn sensor_read_stub(sensor: &str, field: &str) -> anyhow::Result<f64> {
 fn command_targets_us(line: &str) -> bool {
     match serde_json::from_str::<serde_json::Value>(line.trim()) {
         Ok(v) => match v.get("to").and_then(|t| t.as_str()) {
-            Some(to) => to == NODE_ID,
+            Some(to) => to == identity::node_id(),
             None => true,
         },
         Err(_) => false,
