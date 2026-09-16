@@ -113,6 +113,25 @@ the id from the boot banner or the flash MAC, and only then pick up a jumper.
   commands silently disappear. Cost an evening on 2026-07-17 and recurred 2026-07-19.
   `snr=` in the `SPINE ◄` line separates the two cases — weak-and-clean is range,
   strong-and-dirty is saturation.
+
+  **The band has two edges, and the weak one was measured on 2026-09-16.** The bench
+  sat at a *stable* −80 (5 dB spread over 200 frames) and was tuned back to a settled
+  **−51/−53**. Three things came out of it worth keeping:
+
+  - **Distance was the smaller half of the fix.** The boards went from ~5 ft to
+    under 2 ft, which at 915 MHz is only about **8 dB**; the measured gain was
+    **36 dB**. The other ~28 dB came from what was corrected on the way —
+    connector seating and antenna polarisation. Two λ/4 whips at right angles lose
+    10–20 dB on their own. Reach for seating and orientation *before* reaching for
+    distance, because distance is the part you cannot buy back in the field.
+  - **Erratic and weak are different faults.** An intermittent connection reads as a
+    wide swing (−69 to −101 within four minutes, boards stationary); a fixed
+    attenuation reads as a *tight* spread at the wrong level. The first is a
+    connector or a ground, the second is seating or geometry. Diagnose from the
+    spread, not the average.
+  - **RSSI is measured on beacons, which are short.** Good RSSI is necessary and not
+    sufficient: both edges of the band eat long frames first. See the cold-start
+    check below for the test that actually settles it.
 - A Heltec **wired directly to the node** transmits that frame and then de-dups its own
   echo, so it never logs a `SPINE ◄` line for it. The host sees silence from a perfectly
   healthy node. Only the bridge should carry the jumpers.
@@ -136,6 +155,33 @@ the id from the boot banner or the flash MAC, and only then pick up a jumper.
   **A node's uplink has to arrive over the air to be authenticated at all**, which is
   what makes "only the bridge carries the jumpers" a design rule rather than bench
   tidiness.
+
+**The cold start is a free long-frame test — use it.** (2026-09-16.)
+
+This bench is powered off overnight, so every morning the node boots fresh, and the
+boot sequence exercises the one path RSSI cannot vouch for:
+
+1. node boots with `policy: "deny-all"` and beacons it
+2. the supervisor sees a boot it holds limits for and **pushes limits** — a long
+   outbound frame
+3. the node applies them and replies `cmd_result` `{"applied":true,…}` — a long
+   inbound frame
+
+**The attempt count on that push is a direct link-quality measurement**, and it is
+free, daily, and needs nobody at the bench. At ~−70 dBm on 2026-09-16 it needed
+**three** attempts (`…r1`, `…r2`); at −53 it should take **one**. A push that still
+needs three on a good link means the link was never what was breaking commands.
+
+That matters because short frames survive links that eat long ones, in *both*
+directions of the band. Between cold starts the node's non-beacon frames
+(`link_state`, `reflex`, `cmd_result`) are event-driven and historically arrive about
+**once per 53 minutes** — so waiting for one to prove the link is not a plan, and a
+quiet hour is not evidence of a fault.
+
+Bench tools live in `C:\Users\Benji\obc-bench\` (outside any repo, so they survive):
+`rssi_live.py` prints per-frame RSSI with both edges flagged, `boot_id_check.py`
+shows the boot id and the limits-push attempt count, `morning_bench_report.py` is what
+the 10:00 scheduled check runs.
 
 ---
 
