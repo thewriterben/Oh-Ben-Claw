@@ -73,8 +73,20 @@ path = "src/main.rs"
 # (not gated by the cargo feature): it pulls the component into every build. Comment
 # this block out — and the PSRAM lines in `sdkconfig.defaults` — for lean non-camera
 # builds. After changing this block, run `cargo clean` so esp-idf-sys regenerates.
-# DISABLED for lean/default builds. Uncomment ALL FOUR lines (and the PSRAM lines in
-# sdkconfig.defaults) only when building the camera with `--features camera`.
+#
+# It CANNOT be gated on a cargo feature, and that was checked in esp-idf-sys
+# 0.37.2's source rather than assumed: `extra_components` is an exclude in
+# `try_from_env()` (cargo_driver/config.rs:72-74), the `cargo metadata` call that
+# reads it passes no feature flags (config.rs:107-113), and `CARGO_FEATURE_*` is
+# read nowhere in that crate's build/. A camera-feature-OFF build with these
+# lines uncommented still downloads and compiles the component.
+#
+# DISABLED for lean/default builds. Uncomment ALL FOUR lines only on a
+# `camera-bringup` branch -- never commit them to main, because a default build
+# from such a tree produces a different binary from the one on the live mesh
+# node. PSRAM is handled separately and does NOT need an edit here: see
+# `sdkconfig.defaults.camera` and CAMERA.md §2. ADR: OBC-Prime docs/DECISIONS.md,
+# 2026-09-16.
 # [[package.metadata.esp-idf-sys.extra_components]]
 # remote_component = { name = "espressif/esp32-camera", version = "2.0.7" }
 # bindings_header = "src/camera_bindings.h"

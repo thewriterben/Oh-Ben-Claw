@@ -1,0 +1,32 @@
+# Camera-build sdkconfig overlay. NOT read by a default build.
+#
+# This file is selected only when ESP_IDF_SDKCONFIG_DEFAULTS names it:
+#
+#   $env:ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults;sdkconfig.defaults.camera"
+#
+# esp-idf-sys 0.37.2 reads that variable as a `;`-separated list
+# (build/config.rs:25-27, parse::list at config.rs:187-202) and later files win.
+# The variable REPLACES the default list rather than appending to it
+# (set_when_none, config.rs:139-144), which is why `sdkconfig.defaults` is named
+# explicitly above -- omit it and you lose the 32 KB main-task stack that was
+# measured into existence on 2026-08-22.
+#
+# The point of the separate file: `sdkconfig.defaults` is global to every build
+# from this tree, and forcing PSRAM on there would change the binary a default
+# build produces -- including one flashed to the live mesh node. The env var is
+# absent in a default build, so that isolation is mechanical, not a promise.
+# See docs/DECISIONS.md (OBC-Prime), 2026-09-16.
+
+# PSRAM holds the JPEG frame buffer.
+#
+# TODO(source): the XIAO ESP32S3 Sense's PSRAM interface (octal/OPI vs quad/QSPI)
+# has not been confirmed from a Seeed document or measured on the bench. OCT is
+# written below as the first thing to try, NOT as a verified fact. If
+# esp_camera_init fails on a board that otherwise boots, swap these two lines:
+#
+#   CONFIG_SPIRAM_MODE_QUAD=y
+#
+# and record which one worked, with the board in hand, replacing this note.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y

@@ -1,11 +1,19 @@
 # ESP-IDF default config.
 #
-# PSRAM is DISABLED by default — it's only needed for the camera, and forcing it
-# on can crash early boot if the mode (octal/quad) doesn't match your module.
-# Re-enable ONLY for the camera build (`--features camera`), matching your module:
-# CONFIG_SPIRAM=y
-# CONFIG_SPIRAM_MODE_OCT=y      # or CONFIG_SPIRAM_MODE_QUAD=y for a quad-SPI module
-# CONFIG_SPIRAM_SPEED_80M=y
+# PSRAM is DISABLED here, and deliberately not merely commented out — it's only
+# needed for the camera, and forcing it on can crash early boot if the mode
+# (octal/quad) doesn't match your module.
+#
+# Do NOT add the CONFIG_SPIRAM lines to this file. Every build from this tree
+# reads it, including one flashed to the live mesh node. They live in
+# `sdkconfig.defaults.camera`, which a camera build selects per-build with:
+#
+#   $env:ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults;sdkconfig.defaults.camera"
+#
+# Name BOTH files: that variable replaces the list rather than appending to it
+# (esp-idf-sys 0.37.2, build/config.rs:139-144), so naming only the overlay drops
+# the stack size measured below and boot-loops for a reason that looks nothing
+# like its cause. See CAMERA.md §2 and OBC-Prime docs/DECISIONS.md, 2026-09-16.
 
 # Main-task stack.
 #
