@@ -642,6 +642,27 @@ mod tests {
                     reason.contains("should not guess"),
                     "wrong root vs attack is the operator's call"
                 );
+                // The severity this rule ships at is produced by a WORD in the
+                // prose above, not by anything structural: `Severity::classify`
+                // raises to Critical on six keywords and "auth_alarms" contains
+                // one of them. The advisory test above pins the same mechanism
+                // from the other side — that `safe-spine-on-air` must NOT contain
+                // "alarm", or it stops being advisory.
+                //
+                // So the coupling is load-bearing in both directions and, until
+                // 2026-09-17, was guarded in only one. Reword this playbook to
+                // say "authentication failures" and the forgery alarm silently
+                // drops to Warning with every test still green.
+                //
+                // Observed live on the bench that day: SPINE-REPLAY A6 step 7b,
+                // both stations wrong-root, `spine.auth.alarm_count` = 1, this
+                // rule raised with this text.
+                assert_eq!(
+                    crate::Severity::classify(reason),
+                    crate::Severity::Critical,
+                    "the forgery alarm must outrank the on-air advisory; it does so \
+                     only because its prose contains a CRIT keyword"
+                );
             }
             _ => panic!("expected an escalate action"),
         }
