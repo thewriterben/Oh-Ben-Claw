@@ -41,6 +41,27 @@ fn read(rel: &str) -> String {
 fn rostered_boards_get_their_names() {
     assert_eq!(id_for("64:E8:33:7E:BB:98"), "obc-esp32-s3-001");
     assert_eq!(id_for("64:E8:33:7E:7E:04"), "obc-esp32-s3-002");
+    // Not a XIAO, and a different OUI (48:CA:43). Rostered 2026-09-17 after a
+    // day of running unrostered as `obc-esp32-s3-4b95f8`.
+    assert_eq!(id_for("48:CA:43:4B:95:F8"), "obc-esp32-s3-003");
+}
+
+/// The fallback is what protected this board before anyone wrote it down.
+///
+/// `obc-esp32-s3-003` sat on a bench beside the live node for a day with no
+/// roster entry, self-naming from its own MAC. Rostering it must not be mistaken
+/// for the thing that made it safe — the derived name already was.
+#[test]
+fn an_unrostered_board_is_safe_before_anyone_writes_it_down() {
+    let derived: String = "48:CA:43:4B:95:F8"
+        .split(':')
+        .skip(3)
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    assert_eq!(format!("obc-esp32-s3-{derived}"), "obc-esp32-s3-4b95f8");
+    for (_, name) in ROSTER {
+        assert_ne!(&format!("obc-esp32-s3-{derived}"), name);
+    }
 }
 
 #[test]

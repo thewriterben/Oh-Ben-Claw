@@ -26,6 +26,11 @@ $Known = @{
     Status = 'BENCH'
     Note   = 'camera node (XIAO Sense). Bring-up board -- safe to reflash.'
   }
+  '48:CA:43:4B:95:F8' = @{
+    Id     = 'obc-esp32-s3-003'
+    Status = 'BENCH'
+    Note   = 'LILYGO T-CameraPlus-S3 V1.1 (OV5640). Camera works; safe to reflash.'
+  }
 }
 
 Write-Output "=== ESP32-S3 boards on native USB (VID_303A) ==="

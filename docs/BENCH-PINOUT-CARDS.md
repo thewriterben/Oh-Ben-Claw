@@ -35,6 +35,7 @@ measurement wins.
 | relay (Stage 3b) | **gw-90** | — | USB power only | none — radio only |
 | node | `obc-esp32-s3-001` | **COM6** | USB or bank | jumpers to the **bridge** = `gw-D8` |
 | camera node | `obc-esp32-s3-002` | **COM8** | USB | **no radio yet** — spine UART unwired |
+| camera node (Lilygo) | `obc-esp32-s3-003` | COM10 when plugged | USB | **no radio yet** - LILYGO T-CameraPlus-S3 V1.1, OV5640 |
 
 How each row was established, so the next person can redo it in two minutes rather
 than infer it from traffic (which is what Card 0 exists to stop):

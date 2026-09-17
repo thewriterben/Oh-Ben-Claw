@@ -887,6 +887,20 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
     // `tests/firmware_identity_roster.rs` fails if this comment and that roster
     // ever disagree.
     //
+    // The fleet's first non-XIAO node, and its camera works.
+    //
+    // Measured 2026-09-16 on the board above (`lilygo-t-camera-plus-s3`, the row
+    // that said "no board of ours has been plugged in yet" — one now has):
+    // node `obc-esp32-s3-003`, MAC 48:CA:43:4B:95:F8, 16 MB flash, 8192K PSRAM
+    // in QUAD mode, OV5640 detected at SCCB address 0x3c with PID 0x5640. The
+    // vendor repo never states that sensor's address; this is where it is
+    // written down.
+    //
+    // Note the OUI: 48:CA:43, where both XIAOs are 64:E8:33. Firmware identity is
+    // MAC-derived (`firmware/obc-esp32-s3/src/identity_map.rs`), and this board
+    // ran unrostered for a day, self-naming `obc-esp32-s3-4b95f8` — the fallback
+    // doing its job on a bench that also held the live node.
+    //
     // ── Sipeed 6+1 Mic Array ──────────────────────────────────────────────────
     // Circular microphone array with 6 peripheral mics and 1 center mic,
     // powered by an STM32F103 MCU.  Appears as a USB audio device and

@@ -22,6 +22,18 @@ pub const ROSTER: &[(&str, &str)] = &[
     // Camera node. MAC read by espflash while flashing it, 2026-09-16:
     //   MAC address: 64:e8:33:7e:7e:04
     ("64:E8:33:7E:7E:04", "obc-esp32-s3-002"),
+    // LILYGO T-CameraPlus-S3 V1.1 (OV5640). MAC read by espflash 2026-09-16:
+    //   MAC address: 48:ca:43:4b:95:f8
+    //
+    // A different OUI from the two XIAOs (48:CA:43 rather than 64:E8:33), and a
+    // different board entirely — the first fleet member that is not a XIAO.
+    //
+    // Until now it was unrostered and self-named `obc-esp32-s3-4b95f8` from its
+    // own MAC, which is the fallback working exactly as designed: it booted on a
+    // bench next to the live node and could not have taken its name. That is
+    // what the fallback is for, and it is also why rostering is not urgent —
+    // only tidy. The derived name is correct, just unreadable.
+    ("48:CA:43:4B:95:F8", "obc-esp32-s3-003"),
 ];
 
 /// What a board calls itself when its MAC cannot be read at all.
