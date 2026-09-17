@@ -1,0 +1,32 @@
+{
+  "label": "empty-bench-2026-09-17",
+  "frames": 200,
+  "scored": 199,
+  "judged": 198,
+  "errors": 0,
+  "interval_s": 1.0,
+  "frac": {
+    "mean": 0.0072,
+    "p95": 0.0087,
+    "max": 0.0095,
+    "host_baseline_max": 0.083
+  },
+  "edge": {
+    "mean": 1.178,
+    "p95": 1.26,
+    "max": 1.28,
+    "host_baseline_max": 3.4
+  },
+  "brightness": {
+    "min": 91.5,
+    "max": 94.68,
+    "spread": 3.18
+  },
+  "host_thresholds": {
+    "frac_hi": 0.35,
+    "edge_light": 4.2,
+    "edge_nudge": 9.0,
+    "frames_the_rule_would_call_motion_or_nudge": 0,
+    "of_scored": 199
+  }
+}

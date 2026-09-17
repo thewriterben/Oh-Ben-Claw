@@ -223,3 +223,61 @@ far had a person in the frame.
 - `camera_capture` returns a real greyscale JPEG again (`FF D8` … `FF D9`),
   encoded on the node by `jpge` from the Y8 frame. Quality is honoured: 1, 5 and
   10 gave 2,894 / 5,982 / 22,540 bytes from the same 76,800-byte frame.
+
+## The floor, measured on an empty bench — and it is the opposite of the prediction
+
+`tests/fixtures/vision-floor-2026-09-17/` — 200 frames at 1 s from
+`obc-esp32-s3-003`, with `first.jpg` and `last.jpg` in the same directory
+showing an empty workshop corner at both ends of the run. Captured by
+`scripts/vision/bench_floor.py`.
+
+```
+                    on-node Y8        host fixture (JPEG round trip)
+frac   mean            0.0072                              0.041
+       p95             0.0087                              0.068
+       max             0.0095                              0.083
+edge   mean             1.178                               2.49
+       p95              1.26                                3.08
+       max              1.28                                3.40
+brightness        91.5 – 94.7 (3.2)                 108.7 – 111.0 (2.3)
+judged            198 / 200
+```
+
+**The on-node floor is roughly nine times lower on `frac` and nearly three times
+lower on `edge`.** The ADR predicted the opposite, in as many words: raw Y8
+carries sensor noise that JPEG quantisation smooths away, so more pixels should
+cross a 12-grey-level threshold and the floor should *rise*. It falls.
+
+The likely mechanism, stated as a hypothesis because this run cannot prove it:
+**the JPEG round trip was adding difference, not removing it.** Each frame is
+quantised independently, so two nearly-identical sensor frames decode to two
+visibly different images — block boundaries and DCT coefficients land
+differently. The host fixture was not measuring the room's noise floor so much
+as the encoder's. Differencing raw Y8 skips that entirely.
+
+**What this run does not control for.** It is a different scene, a different
+day, different light and a 1.0 s interval against the fixture's 0.75 s. Scene
+and pipeline are confounded, and the honest claim is "the floor on this bench
+with this pipeline is 0.0095 `frac` / 1.28 `edge`", not "JPEG was responsible
+for the difference". The clean experiment is both pipelines on one scene, and it
+is not expensive: capture JPEG and greyscale runs of the same still room.
+
+### Consequence for the thresholds: safe, and far too loose
+
+Zero of 199 scored frames would be called `motion` or `nudge` by the host
+thresholds. They are not dangerous here. They are **enormously** slack —
+`FRAC_HI` is 0.35 against a measured maximum of 0.0095, a factor of 37.
+
+That is not licence to lower them. A floor sets a lower bound on where a
+threshold may go; it says nothing about where the *events* sit, and a threshold
+tuned to one class is how a detector acquires false positives on the other
+three. `person`, `light_change` and `camera_nudge` have to be measured on-node
+too, and until they are `thresholds_provisional` stays true on every reply.
+
+### The warm-up gate holds up
+
+198 of 200 frames judged, brightness holding 91.5–94.7 across three and a half
+minutes. `SETTLE_DELTA = 3.0` was taken from the host fixture and is comfortable
+here. Frame 0 is `no_reference`, frame 1 is `warming_up`, and from frame 2 the
+node is judging — which is the designed behaviour and the first time it has been
+seen on a scene quiet enough to show it.
