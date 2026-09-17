@@ -30,8 +30,8 @@ measurement wins.
 
 | Role | Node id | Port | Power | Wiring |
 |---|---|---|---|---|
-| base (host link) | **gw-40** | **COM3** | PC USB — *must* stay on the host | none — see below |
-| bridge (field) | **gw-D8** | **COM5** (USB on the bench; wall/bank in the field) | wall or power bank | **the node jumper pair belongs here** |
+| base (host link) | **gw-40** | **COM4** | PC USB — *must* stay on the host | none — see below |
+| bridge (field) | **gw-D8** | **COM3** (USB on the bench; wall/bank in the field) | wall or power bank | **the node jumper pair belongs here** |
 | relay (Stage 3b) | **gw-90** | — | USB power only | none — radio only |
 | node | `obc-esp32-s3-001` | **COM6** | USB or bank | jumpers to the **bridge** = `gw-D8` |
 | camera node | `obc-esp32-s3-002` | **COM8** | USB | **no radio yet** — spine UART unwired |
@@ -51,6 +51,56 @@ than infer it from traffic (which is what Card 0 exists to stop):
   `gw-40` originated them. That is the wrong board: see the jumper rule below.
 
 All three radios self-test clean (`status=0xA2`, syncword readback `0x1424`).
+
+⚠ **Ports re-measured 2026-09-17, and they had moved again.** The table above said
+`gw-40` on COM3 and `gw-D8` on COM5; both boot banners were read directly that day and
+say otherwise — COM3 prints `Gateway D8`, COM4 prints `Gateway 40`, and COM5 is not
+present at all. The live config agrees (`station = `gw-40`, `port = `COM4`). This is the
+second correction to this table; read the banner, never the table, before flashing.
+
+### `no-relay` on gw-40, measured 2026-09-17 — the flag works, the benefit does not reproduce
+
+Each station's build is now recorded here, because the 7b restore showed that
+guessing them is a way to silently strip a feature:
+
+| board | port | features |
+|---|---|---|
+| `gw-D8` | COM3 | `bench-low-power` |
+| `gw-40` | COM4 | `bench-low-power`, `bench-nvs-fault`, **`no-relay`** (2026-09-17) |
+
+`no-relay` was enabled on the base station because it is the sink and the
+firmware comment says a station with a host plugged in should not play relay.
+The comment also carries a number, measured 2026-09-12: flood-relaying "cost it
+about half of everything gw-40 sent — the frame after any received frame,
+reliably."
+
+**That number did not reproduce, and the experiment that went looking for it was
+broken by construction.** Three minutes of gw-40's console either side of the
+flash, counting gaps in gw-D8's `seq`:
+
+```
+BEFORE  seq 80..114   span 35   received 31   missed 4   delivery 88.6%   relays 31
+AFTER   seq 145..173  span 29   received 23   missed 6   delivery 79.3%   relays  0
+```
+
+The flag does exactly what it says: **31 relays → 0**. Delivery did not improve;
+it read worse, and on 4-versus-6 misses over ~30 frames that difference is not
+distinguishable from noise either way.
+
+**The tautology worth recording.** The BEFORE run also reported "4 of 4 missing
+seq directly follow a relayed frame (100%)", and that looked like the mechanism
+caught red-handed. It is not evidence of anything. gw-40 relayed **every frame it
+received** — 31 relays against 31 receptions — so *any* miss necessarily followed
+a relay. The statistic could not have come out otherwise, whatever the cause of
+the loss. A correlation with a saturated control variable measures the control,
+not the effect.
+
+So the honest position: relaying is gone, which is architecturally right and free;
+the delivery claim from 2026-09-12 is neither confirmed nor refuted here; and
+there is a baseline loss source of roughly 10-20% that relaying does not explain,
+because removing relaying did not remove it. That is the thing worth chasing, and
+it wants a longer run with the counting done on gap *rate* over many minutes
+rather than two three-minute samples.
 
 ### ⚠ Before you flash any ESP32-S3, run the gate
 
