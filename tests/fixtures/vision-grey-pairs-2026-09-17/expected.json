@@ -1,0 +1,49 @@
+{
+  "note": "160x120 centre crops of tests/fixtures/vision-bench-2026-09-16. Scores are the reference implementation's (scripts/vision/classify.py) on these exact buffers -- NOT the full-frame numbers in docs/VISION-DETECTOR-2026-09.md. Regenerate with scripts/vision/make_grey_pairs.py.",
+  "pairs": [
+    {
+      "label": "baseline_still",
+      "source": "baseline_still/010.jpg -> baseline_still/011.jpg",
+      "width": 160,
+      "height": 120,
+      "pixel_eps": 12.0,
+      "frac": 0.12442708333333333,
+      "edge": 5.046874046325684,
+      "mean": 102.234375,
+      "class": "quiet"
+    },
+    {
+      "label": "light_change",
+      "source": "light_change/018.jpg -> light_change/019.jpg",
+      "width": 160,
+      "height": 120,
+      "pixel_eps": 12.0,
+      "frac": 0.04895833333333333,
+      "edge": 3.066547393798828,
+      "mean": 109.1371841430664,
+      "class": "quiet"
+    },
+    {
+      "label": "person",
+      "source": "person/020.jpg -> person/021.jpg",
+      "width": 160,
+      "height": 120,
+      "pixel_eps": 12.0,
+      "frac": 0.8946354166666667,
+      "edge": 7.4875993728637695,
+      "mean": 114.23181915283203,
+      "class": "motion"
+    },
+    {
+      "label": "camera_nudge",
+      "source": "camera_nudge/003.jpg -> camera_nudge/004.jpg",
+      "width": 160,
+      "height": 120,
+      "pixel_eps": 12.0,
+      "frac": 0.5116666666666667,
+      "edge": 9.142187118530273,
+      "mean": 109.03375244140625,
+      "class": "nudge"
+    }
+  ]
+}
