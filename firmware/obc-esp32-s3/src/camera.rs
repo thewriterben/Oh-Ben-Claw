@@ -440,6 +440,15 @@ const PINS: CameraPins = CameraPins {
 // this sensor and load an autofocus blob (`ESP32_OV5640_AF`); we do neither, so
 // orientation and focus are whatever the sensor powers up with.
 
+/// The `pixformat_t` value this node captures, re-exported so callers do not
+/// have to reach into the generated bindings to name it.
+///
+/// Measured on `obc-esp32-s3-003` 2026-09-17: the driver reports `format=3` for
+/// `PIXFORMAT_GRAYSCALE` in this component build. The constant is used rather
+/// than the 3, because the number is an enum discriminant that belongs to
+/// esp32-camera and not to us.
+pub const FORMAT_GRAYSCALE: u32 = sys::pixformat_t_PIXFORMAT_GRAYSCALE;
+
 /// Initialise the camera driver (global; call once at boot).
 pub fn init() -> anyhow::Result<()> {
     // Zero-initialise the C config, then fill the fields this board needs.
@@ -489,7 +498,8 @@ pub fn init() -> anyhow::Result<()> {
     // Price: pictures off this node are monochrome until the software encoder
     // lands.
     cfg.pixel_format = sys::pixformat_t_PIXFORMAT_GRAYSCALE;
-    cfg.frame_size = sys::framesize_t_FRAMESIZE_QVGA; // 320×240 = 76,800 B of Y8
+    // 320x240 = 76,800 B of Y8.
+    cfg.frame_size = sys::framesize_t_FRAMESIZE_QVGA;
     // Ignored while the format is not JPEG — `esp_camera_init` only calls
     // `set_quality` under `pix_format == PIXFORMAT_JPEG`. Kept so the value is
     // not re-invented when the encoder arrives.
@@ -581,13 +591,40 @@ pub fn init() -> anyhow::Result<()> {
 /// no way to tell "the sensor produced no frame" from "the sensor produced a
 /// frame we failed to send". Those have opposite fixes. The log line below is the
 /// difference, and it goes out on the console whether or not the reply ever does.
-pub fn capture_base64() -> anyhow::Result<String> {
+pub fn capture_base64(quality: u8) -> anyhow::Result<String> {
+    with_frame(|data, width, height, format| {
+        if format == sys::pixformat_t_PIXFORMAT_JPEG {
+            // The sensor encoded it. Nothing to do but hand it over.
+            return Ok(base64_encode(data));
+        }
+        let jpeg = encode_jpeg(data, width, height, format, quality)?;
+        log::info!(
+            "capture: encoded {} B of {format} into {} B of JPEG at quality {quality} \
+             ({}:1)",
+            data.len(),
+            jpeg.len(),
+            data.len() / jpeg.len().max(1)
+        );
+        Ok(base64_encode(&jpeg))
+    })
+}
+
+/// Borrow one frame's pixels, then always give the buffer back to the driver.
+///
+/// The driver owns a fixed number of frame buffers and stops producing frames
+/// when they are all out on loan, so the return is unconditional — on the error
+/// path too. That is the only reason this is a closure rather than a function
+/// that hands out a `&[u8]`.
+///
+/// The callback gets `(pixels, width, height, format)`.
+pub fn with_frame<R>(
+    f: impl FnOnce(&[u8], usize, usize, u32) -> anyhow::Result<R>,
+) -> anyhow::Result<R> {
     let fb = unsafe { sys::esp_camera_fb_get() };
     if fb.is_null() {
         log::warn!("capture: esp_camera_fb_get returned null -- the sensor gave no frame");
         anyhow::bail!("esp_camera_fb_get returned null (no frame)");
     }
-    // Copy the frame out, then always return the buffer to the driver.
     let result = (|| {
         let len = unsafe { (*fb).len } as usize;
         let buf = unsafe { (*fb).buf };
@@ -608,31 +645,116 @@ pub fn capture_base64() -> anyhow::Result<String> {
             );
             anyhow::bail!("empty frame buffer");
         }
-        // The driver now hands back raw Y8, not a JPEG, and base64 of 76,800
-        // bytes is neither an image nor something a caller can use. Refusing is
-        // the honest answer until `fmt2jpg_cb` is wired: a reply that looked like
-        // a picture and was not is exactly the confusion that cost three sessions
-        // on this peripheral.
-        //
-        // The measurement above still goes to the console either way, which is
-        // the whole point of it being a separate line.
-        if format != sys::pixformat_t_PIXFORMAT_JPEG {
-            anyhow::bail!(
-                "frame is format {format} ({len} B, {width}x{height}), not JPEG -- this \
-                 node captures greyscale for the detector and cannot encode a picture \
-                 yet. See camera.rs and the 2026-09-17 ADR."
-            );
-        }
         let data = unsafe { core::slice::from_raw_parts(buf, len) };
-        let encoded = base64_encode(data);
-        log::info!(
-            "capture: encoded {} B, handing it to the reply path",
-            encoded.len()
-        );
-        Ok(encoded)
+        f(data, width as usize, height as usize, format)
     })();
     unsafe { sys::esp_camera_fb_return(fb) };
     result.context("camera capture")
+}
+
+/// Encode raw pixels to JPEG with the component's software encoder.
+///
+/// This node captures greyscale, so the sensor never makes a JPEG and something
+/// has to. `jpge` compresses a one-channel frame as `Y_ONLY` — the picture is
+/// monochrome, which is the price the 2026-09-17 ADR states.
+///
+/// `fmt2jpg_cb` rather than `fmt2jpg`: the latter allocates a hardcoded 128 KiB
+/// and its output stream truncates on overflow **silently** (the warning is
+/// commented out in `to_jpg.cpp`). Owning the buffer here means an encode that
+/// does not fit is an error rather than a shorter picture.
+fn encode_jpeg(
+    src: &[u8],
+    width: usize,
+    height: usize,
+    format: u32,
+    quality: u8,
+) -> anyhow::Result<Vec<u8>> {
+    let jpge_quality = command_quality_to_jpge(quality);
+
+    let mut out: Vec<u8> = Vec::with_capacity(src.len() / 8);
+    let ok = unsafe {
+        sys::fmt2jpg_cb(
+            src.as_ptr() as *mut u8,
+            src.len(),
+            width as u16,
+            height as u16,
+            format,
+            jpge_quality,
+            Some(jpeg_sink),
+            &mut out as *mut Vec<u8> as *mut core::ffi::c_void,
+        )
+    };
+    if !ok {
+        anyhow::bail!(
+            "fmt2jpg_cb refused a {width}x{height} frame of format {format} \
+             ({} B at jpge quality {jpge_quality})",
+            src.len()
+        );
+    }
+    if out.is_empty() {
+        anyhow::bail!("fmt2jpg_cb reported success and produced no bytes");
+    }
+    // A JPEG that does not end in EOI was truncated. The encoder cannot tell us
+    // that, so the bytes have to.
+    if out.len() < 4 || out[..2] != [0xFF, 0xD8] || out[out.len() - 2..] != [0xFF, 0xD9] {
+        anyhow::bail!(
+            "software encoder produced {} B that is not a complete JPEG \
+             (starts {:02X?}, ends {:02X?})",
+            out.len(),
+            &out[..out.len().min(2)],
+            &out[out.len().saturating_sub(2)..]
+        );
+    }
+    Ok(out)
+}
+
+/// Map the `camera_capture` command's `quality` onto `jpge`'s.
+///
+/// **The command's range is 1..=10, not the sensor's 0..63.** `main.rs` clamps
+/// to `CAMERA_QUALITY_MIN..CAMERA_QUALITY_MAX` = 1..10 with a default of 5, and
+/// that is the number arriving here.
+///
+/// Getting this wrong is not theoretical: the first version of this function
+/// assumed the sensor's scale, so every request in the command's actual range
+/// landed in the top sixth of `jpge`'s and `quality: 10` and `quality: 40`
+/// produced 11,020 and 11,005 bytes — a 15-byte difference across what should
+/// have been opposite ends of the dial. Two nearly-identical files is what
+/// exposed it; a single capture would have looked perfect.
+///
+/// **Higher is better here**, which is a decision rather than a discovery. The
+/// argument was accepted and then thrown away (`let _ = quality`) from the day
+/// it was added until 2026-09-17, so no caller can have depended on the other
+/// reading, and 1..10 with a midpoint default is a scale people read as
+/// higher-is-better. The sensor's own `jpeg_quality` runs the other way; that
+/// one is set at init and is not this number.
+fn command_quality_to_jpge(q: u8) -> u8 {
+    let q = q.clamp(1, 10) as u32;
+    // 1 -> 15, 10 -> 96. Linear across a useful span: jpge below ~10 is
+    // unreadable and above ~96 is mostly bytes, so neither end is offered.
+    (15 + (q - 1) * 9) as u8
+}
+
+/// Where `fmt2jpg_cb` puts its output.
+///
+/// The vendor's own `callback_stream::put_buf` forwards whatever `jpge` hands
+/// it, including the end-of-image `NULL` that `memory_stream` checks for and
+/// this path does not — so the null check below is load-bearing, not defensive
+/// habit.
+///
+/// Returns the number of bytes accepted; the caller accumulates it as the
+/// stream index.
+unsafe extern "C" fn jpeg_sink(
+    arg: *mut core::ffi::c_void,
+    _index: usize,
+    data: *const core::ffi::c_void,
+    len: usize,
+) -> usize {
+    if arg.is_null() || data.is_null() || len == 0 {
+        return 0;
+    }
+    let out = &mut *(arg as *mut Vec<u8>);
+    out.extend_from_slice(core::slice::from_raw_parts(data as *const u8, len));
+    len
 }
 
 /// Minimal standard base64 encoder (no external crate in the firmware deps).

@@ -169,6 +169,13 @@ mod dht;
 #[cfg(feature = "camera")]
 mod camera;
 
+/// The frame-difference detector's arithmetic. No ESP dependencies, so
+/// `tests/firmware_detector_math.rs` executes it on the host against frames
+/// `scripts/vision/classify.py` has already scored — the same split, and for the
+/// same reason, as `sensor_math` and `identity_map`.
+#[cfg(feature = "camera")]
+mod detector_math;
+
 /// Maximum line length for incoming serial commands (bytes).
 ///
 /// 2048, up from 512 on 2026-09-13: a `set_reflex_rules` with the two
@@ -641,8 +648,8 @@ fn main() -> anyhow::Result<()> {
     );
     info!("Serial: native USB-Serial-JTAG (send newline-delimited JSON commands)");
     info!(
-        "Commands: gpio_read, gpio_write, camera_capture, audio_sample, sensor_read, \
-         capabilities, announce, agent_chat, agent_config, agent_clear"
+        "Commands: gpio_read, gpio_write, camera_capture, camera_detect, audio_sample, \
+         sensor_read, capabilities, announce, agent_chat, agent_config, agent_clear"
     );
 
     info!("Stack headroom after init: {} bytes", stack_headroom());
@@ -1443,6 +1450,8 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                 camera_capture(quality, &format)
             }
 
+            "camera_detect" => camera_detect(),
+
             "audio_sample" => {
                 let duration_ms = req
                     .args
@@ -1612,10 +1621,16 @@ fn gpio_write(
 fn camera_capture(quality: u8, format: &str) -> anyhow::Result<String> {
     #[cfg(feature = "camera")]
     {
-        // Format/quality are baked into the driver config at init; capture returns
-        // a base64 JPEG frame from the OV2640.
-        let _ = (quality, format);
-        camera::capture_base64()
+        // `format` is still baked into the driver at init and cannot be changed
+        // at runtime — see the 2026-09-17 ADR for why that is a property of the
+        // driver and not an omission here.
+        //
+        // `quality` stopped being ignored on 2026-09-17. The node captures
+        // greyscale, so the picture is produced by the software encoder, and
+        // that encoder takes a quality. It is the one argument of the two that
+        // now does something.
+        let _ = format;
+        camera::capture_base64(quality)
     }
     #[cfg(not(feature = "camera"))]
     {
@@ -1629,6 +1644,152 @@ fn camera_capture(quality: u8, format: &str) -> anyhow::Result<String> {
             "STUB:camera_capture:quality={quality}:format={format}:base64_jpeg_data_here"
         ))
     }
+}
+
+// ── Detector ──────────────────────────────────────────────────────────────────
+//
+// The node decides for itself whether something happened, because the whole
+// point of G2 is a summary on the air and 228 bytes of payload will not carry a
+// picture. See `docs/VISION-DETECTOR-2026-09.md` for what was measured and
+// `detector_math.rs` for the rule.
+
+/// What the detector has to remember between frames: one reference frame and
+/// how settled the exposure is.
+///
+/// The reference costs `width * height` bytes of heap (76,800 at QVGA), which
+/// PSRAM has in abundance. The alternative — keeping the previous *gradient* —
+/// would cost four times that to save recomputing it, and the node is not short
+/// of cycles at one frame a second.
+#[cfg(feature = "camera")]
+struct DetectorState {
+    prev: Option<Vec<u8>>,
+    warm: detector_math::WarmUp,
+}
+
+#[cfg(feature = "camera")]
+impl DetectorState {
+    const fn new() -> Self {
+        Self {
+            prev: None,
+            warm: detector_math::WarmUp::new(),
+        }
+    }
+}
+
+#[cfg(feature = "camera")]
+static DETECTOR: std::sync::Mutex<DetectorState> = std::sync::Mutex::new(DetectorState::new());
+
+/// Score one frame against the last one and say what it looks like.
+///
+/// Every field of the reply is measured except the verdict, which depends on
+/// three thresholds taken from a host fixture of JPEG-decoded frames. This node
+/// differences the sensor's raw Y8, which is not the same pixels — so the reply
+/// carries `thresholds_provisional: true` until someone re-measures them here.
+/// A verdict that quietly implied it had been validated on this hardware would
+/// be the kind of claim this project keeps having to retract.
+fn camera_detect() -> anyhow::Result<String> {
+    #[cfg(feature = "camera")]
+    {
+        use detector_math::{Readiness, HOST_FIXTURE_2026_09_16 as T};
+
+        let mut st = DETECTOR
+            .lock()
+            .map_err(|_| anyhow::anyhow!("detector state is poisoned"))?;
+
+        let (scored, mean, w, h) = camera::with_frame(|data, w, h, fmt| {
+            if fmt != camera::FORMAT_GRAYSCALE {
+                anyhow::bail!(
+                    "detector needs greyscale pixels and the driver produced format \
+                     {fmt}. It is fixed at init and cannot be switched at runtime -- \
+                     see the 2026-09-17 ADR."
+                );
+            }
+            let mean = detector_math::mean(data)
+                .ok_or_else(|| anyhow::anyhow!("empty frame has no brightness"))?;
+            let scored = match st.prev.as_deref() {
+                Some(prev) => detector_math::score(prev, data, w, h, T.pixel_eps),
+                None => None,
+            };
+            // Whatever we decided, this frame becomes the reference. Doing it
+            // inside the borrow means a capture that fails downstream cannot
+            // leave a stale reference behind.
+            match st.prev.as_mut() {
+                Some(buf) if buf.len() == data.len() => buf.copy_from_slice(data),
+                _ => st.prev = Some(data.to_vec()),
+            }
+            Ok((scored, mean, w, h))
+        })?;
+
+        let readiness = st.warm.observe(mean);
+        let class = match (readiness, scored) {
+            (Readiness::Ready, Some(s)) => Some(classify_and_settle(&mut st, &s)),
+            _ => None,
+        };
+
+        let mut out = serde_json::json!({
+            "node_id": identity::node_id(),
+            "state": readiness.as_str(),
+            "mean": round2(mean),
+            "width": w,
+            "height": h,
+            "thresholds_provisional": true,
+        });
+        if let Some(s) = scored {
+            out["frac"] = serde_json::json!(round4(s.frac));
+            out["edge"] = serde_json::json!(round2(s.edge));
+        }
+        match class {
+            Some(c) => {
+                out["class"] = serde_json::json!(c.as_str());
+                // `detection` is deliberately narrower than `class`: a lamp and
+                // a bumped tripod are states, not events. `det=1` for a light
+                // switch is a lie, and this is where that is enforced.
+                out["detection"] = serde_json::json!(c.is_detection());
+            }
+            None => {
+                // No class, and no `detection: false` either -- "I cannot tell"
+                // must not be readable as "nothing happened".
+                out["why_no_class"] = serde_json::json!(match readiness {
+                    Readiness::NoReference => "no previous frame to compare against",
+                    Readiness::WarmingUp =>
+                        "brightness is still moving; auto-exposure has not settled",
+                    Readiness::Ready => "scored nothing (geometry changed between frames)",
+                });
+            }
+        }
+        Ok(out.to_string())
+    }
+    #[cfg(not(feature = "camera"))]
+    {
+        anyhow::bail!(
+            "camera_detect needs --features camera; this build has no camera (see CAMERA.md)"
+        )
+    }
+}
+
+/// Classify, and drop the reference when the camera has moved.
+///
+/// After a nudge, "compare to before" has stopped meaning anything: the previous
+/// frame is a picture of somewhere else and the exposure is about to re-converge
+/// on a new scene. Reporting `warming_up` for a frame or two afterwards is the
+/// honest form of "I cannot compare to before".
+#[cfg(feature = "camera")]
+fn classify_and_settle(st: &mut DetectorState, s: &detector_math::Scores) -> detector_math::Class {
+    let c = detector_math::classify(s, &detector_math::HOST_FIXTURE_2026_09_16);
+    if c == detector_math::Class::Nudge {
+        st.warm.reset();
+    }
+    c
+}
+
+#[cfg(feature = "camera")]
+fn round2(v: f32) -> f32 {
+    (v * 100.0).round() / 100.0
+}
+
+#[cfg(feature = "camera")]
+fn round4(v: f32) -> f32 {
+    (v * 10_000.0).round() / 10_000.0
 }
 
 // ── Audio ─────────────────────────────────────────────────────────────────────
@@ -2016,6 +2177,7 @@ fn execute_local_tool(
                 .unwrap_or("jpeg");
             camera_capture(quality, fmt)
         }
+        "camera_detect" => camera_detect(),
         "audio_sample" => {
             let dur = args
                 .get("duration_ms")
