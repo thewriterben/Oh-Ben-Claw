@@ -94,7 +94,18 @@ path = "src/main.rs"
 # node. PSRAM is handled separately and does NOT need an edit here: see
 # `sdkconfig.defaults.camera` and CAMERA.md §2. ADR: OBC-Prime docs/DECISIONS.md,
 # 2026-09-16.
-# [[package.metadata.esp-idf-sys.extra_components]]
-# remote_component = { name = "espressif/esp32-camera", version = "2.0.7" }
-# bindings_header = "src/camera_bindings.h"
-# bindings_module = "camera"   # bindings land in their own esp_idf_sys::camera module
+# ENABLED HERE. This is the `camera-bringup` branch and these four lines are the
+# only reason it exists.
+#
+# 2026-09-17: they were lost once, in the least interesting way available.
+# `git merge main` on this branch **fast-forwarded** -- the branch had no commits
+# of its own, so merging moved it to main, where these lines are commented out.
+# The next build produced a camera-less firmware from camera source and failed
+# with `no camera in sys`, which reads like a toolchain problem and is not one.
+# A full `cargo clean` and IDF rebuild were spent on it.
+#
+# If that error appears again: check these four lines before anything else.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp32-camera", version = "2.0.7" }
+bindings_header = "src/camera_bindings.h"
+bindings_module = "camera"   # bindings land in their own esp_idf_sys::camera module

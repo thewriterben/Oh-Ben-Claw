@@ -470,8 +470,29 @@ pub fn init() -> anyhow::Result<()> {
     cfg.ledc_timer = sys::ledc_timer_t_LEDC_TIMER_0;
     cfg.ledc_channel = sys::ledc_channel_t_LEDC_CHANNEL_0;
 
-    cfg.pixel_format = sys::pixformat_t_PIXFORMAT_JPEG;
-    cfg.frame_size = sys::framesize_t_FRAMESIZE_QVGA; // 320×240 — fits one PSRAM fb
+    // ── Greyscale, and only greyscale. ───────────────────────────────────────
+    //
+    // ADR: OBC-Prime `docs/DECISIONS.md`, 2026-09-17. The short version: this
+    // field is not a setting the driver watches, it is an input consumed once.
+    // `cam_config()` derives `jpeg_mode`, `fb_size`, `in/fb_bytes_per_pixel` and
+    // the DMA descriptors from it, and is called from exactly one place —
+    // `esp_camera_init`. `s->set_pixformat()` afterwards moves sensor registers
+    // and nothing else, so a "runtime format switch" desynchronises the driver
+    // from the sensor and presents as an intermittent camera fault.
+    //
+    // The detector needs pixels (see `docs/VISION-DETECTOR-2026-09.md`). Two
+    // modes would mean a deinit/init per switch, and the fixture measured what a
+    // sensor reset costs: the frame after one scores 17× the quiet floor with
+    // nothing happening, auto-exposure converging. That is a detector that goes
+    // blind every time someone asks for a picture.
+    //
+    // Price: pictures off this node are monochrome until the software encoder
+    // lands.
+    cfg.pixel_format = sys::pixformat_t_PIXFORMAT_GRAYSCALE;
+    cfg.frame_size = sys::framesize_t_FRAMESIZE_QVGA; // 320×240 = 76,800 B of Y8
+    // Ignored while the format is not JPEG — `esp_camera_init` only calls
+    // `set_quality` under `pix_format == PIXFORMAT_JPEG`. Kept so the value is
+    // not re-invented when the encoder arrives.
     cfg.jpeg_quality = 12; // 0..63, lower = higher quality
 
     // `fb_count = 2` + `CAMERA_GRAB_LATEST` was tried on 2026-09-16 and REFUTED.
@@ -586,6 +607,21 @@ pub fn capture_base64() -> anyhow::Result<String> {
                 buf.is_null()
             );
             anyhow::bail!("empty frame buffer");
+        }
+        // The driver now hands back raw Y8, not a JPEG, and base64 of 76,800
+        // bytes is neither an image nor something a caller can use. Refusing is
+        // the honest answer until `fmt2jpg_cb` is wired: a reply that looked like
+        // a picture and was not is exactly the confusion that cost three sessions
+        // on this peripheral.
+        //
+        // The measurement above still goes to the console either way, which is
+        // the whole point of it being a separate line.
+        if format != sys::pixformat_t_PIXFORMAT_JPEG {
+            anyhow::bail!(
+                "frame is format {format} ({len} B, {width}x{height}), not JPEG -- this \
+                 node captures greyscale for the detector and cannot encode a picture \
+                 yet. See camera.rs and the 2026-09-17 ADR."
+            );
         }
         let data = unsafe { core::slice::from_raw_parts(buf, len) };
         let encoded = base64_encode(data);
