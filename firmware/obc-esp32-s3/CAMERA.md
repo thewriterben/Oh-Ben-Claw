@@ -145,6 +145,15 @@ A healthy board returns `ok:true` with a long base64 JPEG string (no longer the
 - **`esp_camera_init failed`** — almost always PSRAM mode (step 2). Swap
   the PSRAM mode in your board's overlay, and record which one worked — that `TODO(source)`
   closes the moment a board proves it.
+- **Do not use the boot log's `app_init: Compile time:` to tell whether your
+  change is on the board.** It is the ESP-IDF app descriptor's timestamp and does
+  not move when only Rust changes — observed 2026-09-16, where two different
+  binaries minutes apart both reported `Sep 16 2026 12:05:12`. Verify with
+  something your change actually alters: the `fb_count` work was confirmed by
+  counting `cam_hal: Allocating ... frame buffer in PSRAM` lines (one per
+  buffer). Checking the wrong signal here costs you a measurement on a board you
+  only think you flashed — which happened once this session already, when a
+  timed-out command left the old binary running and the "result" was noise.
 - **No PSRAM at all in the build** — check `$env:ESP_IDF_SDKCONFIG_DEFAULTS` is
   set in *this* shell. It is per-shell by design; a fresh terminal is a default
   build.

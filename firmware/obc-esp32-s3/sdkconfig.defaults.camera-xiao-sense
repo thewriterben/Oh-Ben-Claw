@@ -30,6 +30,7 @@
 #
 #   I (914) esp_psram: SPI SRAM memory test OK
 #   I (998) esp_psram: Adding pool of 8192K of PSRAM memory to heap allocator
+#   I (1309) cam_hal: Allocating 15360 Byte frame buffer in PSRAM
 #
 # The former TODO(source) is closed. QUAD was never tried and is not needed HERE;
 # the LILYGO T-CameraPlus-S3 is quad, which is why these overlays are per-board.

@@ -154,8 +154,12 @@ mod sensors;
 
 /// I2S microphone driver (loudness/RMS).
 // On the Waveshare 2.1 build the I2S init is compiled out (GPIO0 = DHT22,
-// GPIO1/2 = LCD), so the constructor path is intentionally unused there.
-#[cfg_attr(feature = "board-waveshare-21", allow(dead_code))]
+// GPIO1/2 = LCD), so the constructor path is intentionally unused there. Same on
+// the Lilygo T-CameraPlus-S3 V1.0/V1.1, where GPIO1/2 are the camera's SCCB.
+#[cfg_attr(
+    any(feature = "board-waveshare-21", feature = "board-lilygo-tcam-s3-v11"),
+    allow(dead_code)
+)]
 mod audio;
 
 /// DHT22/AM2302 single-wire temperature + humidity driver.
@@ -184,6 +188,30 @@ const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 // node. Identity now comes from the chip's factory MAC -- see `identity.rs`.
 // `identity::node_id()` replaces the const; it panics unless `identity::init()`
 // has run, which it does at the top of `app_main`.
+
+// ── The `#[cfg]`s and the board data must say the same thing ─────────────────
+//
+// `board.rs` exists so a host can be told what this node is; the `#[cfg]`s around
+// the driver init decide what it actually does. Nothing connected them until
+// 2026-09-16, when the Lilygo board was added: `BOARD.has_mic` was false while
+// the I2S init was gated only on "not the Waveshare", so the build would have
+// announced no microphone and then initialised one — on the camera's SCCB pins.
+//
+// These are const assertions, so a mismatch is a build failure rather than a
+// bench session. If you add a board, you will land here, and the fix is to make
+// the two agree rather than to widen the assertion.
+const _: () = assert!(
+    BOARD.has_mic
+        == cfg!(not(any(
+            feature = "board-waveshare-21",
+            feature = "board-lilygo-tcam-s3-v11"
+        ))),
+    "board.rs says has_mic but the I2S init cfg disagrees (or vice versa)"
+);
+const _: () = assert!(
+    BOARD.i2c.is_some() == cfg!(not(feature = "board-lilygo-tcam-s3-v11")),
+    "board.rs declares an I2C bus that the init cfg skips (or vice versa)"
+);
 
 /// JPEG quality range.
 const CAMERA_QUALITY_MIN: u64 = 1;
@@ -233,6 +261,10 @@ const OUTPUT_PINS: &[i32] = BOARD.output_pins;
 /// `(-1, -1)` is unreachable — the arm that reads this is
 /// `#[cfg(not(feature = "camera"))]`, and every board declares a bus. It exists
 /// because `board::Board::i2c` is an `Option` for boards that may not.
+// Measured 2026-09-16 on the first real camera build: with `--features camera`
+// the only reader of this const is compiled out, so it is genuinely dead there.
+// Same treatment as `mod sensors` above, and for the same reason.
+#[cfg_attr(feature = "camera", allow(dead_code))]
 const I2C_PINS: (i32, i32) = match BOARD.i2c {
     Some(pins) => pins,
     None => (-1, -1),
@@ -688,7 +720,7 @@ fn main() -> anyhow::Result<()> {
             restored.source(),
             restored.count()
         );
-        send_line(&mut usb, &announcement);
+        send_line(&mut usb, &announcement, LineKind::Report);
         mirror_spine(&mut spine_uart, &announcement);
     }
     // Real I2C sensor bus. Default (XIAO): SDA=GPIO5, SCL=GPIO6 — the pads the
@@ -711,7 +743,14 @@ fn main() -> anyhow::Result<()> {
     // has a camera — `camera.rs` describes an FPC connector on the Waveshare
     // while the old comment here said that board has none. That wants a bench
     // and a datasheet, not a guess.
-    #[cfg(not(feature = "camera"))]
+    // Also skipped on any board that declares no sensor bus. The Lilygo
+    // T-CameraPlus-S3 V1.0/V1.1's only exposed I2C is GPIO1/2 -- the camera's
+    // SCCB, shared with the CST816S touch controller and the SY6970 PMIC -- so
+    // `BOARD.i2c` is `None` there. Without this arm the non-camera build would
+    // have opened a bus on GPIO5/6, which on that board are HREF and camera D7,
+    // while `capabilities` announced `(-1, -1)`. The const assertion below keeps
+    // this cfg and `BOARD.i2c` from drifting apart.
+    #[cfg(all(not(feature = "camera"), not(feature = "board-lilygo-tcam-s3-v11")))]
     {
         use esp_idf_svc::hal::i2c::config::Config as I2cConfig;
         use esp_idf_svc::hal::i2c::I2cDriver;
@@ -737,10 +776,16 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
-    // OV2640 camera (opt-in). Owns the SCCB on GPIO4/5 and the parallel data bus.
+    // Camera (opt-in). Owns the SCCB and the parallel data bus; the pins are the
+    // board's, see camera.rs. The sensor part is whatever is fitted -- the XIAO
+    // Sense has an OV2640, the Lilygo T-CameraPlus-S3 an OV5640 (both measured
+    // 2026-09-16). This comment used to say "OV2640" and "GPIO4/5", which were
+    // the unverified map's numbers and were never this board's.
     #[cfg(feature = "camera")]
     match camera::init() {
-        Ok(()) => info!("OV2640 camera initialised"),
+        // Not "OV2640 camera initialised": that line printed on a board with an
+        // OV5640 in it, two lines after the driver logged `Camera PID=0x5640`.
+        Ok(()) => info!("camera initialised"),
         Err(e) => log::warn!("camera init failed ({e}); camera_capture falls back to stub"),
     }
     // I2S microphone (SCK=GPIO0, WS=GPIO1, SD=GPIO2). Falls back to the stub RMS if
@@ -748,7 +793,13 @@ fn main() -> anyhow::Result<()> {
     //
     // Disabled on the Waveshare 2.1 build: GPIO0 is the DHT22 there and GPIO1/2
     // are LCD lines — no mic is wirable; `audio_sample` serves the stub RMS.
-    #[cfg(not(feature = "board-waveshare-21"))]
+    // Not on the Lilygo T-CameraPlus-S3 V1.0/V1.1: this init takes GPIO0/1/2, and
+    // on that board GPIO1/2 are the camera's SCCB. It runs *after* `camera::init`,
+    // so it would have reassigned the sensor's control bus out from under a
+    // camera that had just reported success -- a failure that would have looked
+    // like anything but an I2S driver. `BOARD.has_mic` is false there and the
+    // const assertion below makes the two agree.
+    #[cfg(not(any(feature = "board-waveshare-21", feature = "board-lilygo-tcam-s3-v11")))]
     {
         use esp_idf_svc::hal::i2s::{config, I2sDriver};
         let i2s_cfg =
@@ -854,6 +905,7 @@ fn main() -> anyhow::Result<()> {
                                     "error": format!("command line longer than {MAX_LINE_LEN} bytes — discarded whole"),
                                 })
                                 .to_string(),
+                                LineKind::Reply,
                             );
                         } else if !line.is_empty() {
                             // A line that cannot be handled is answered too: a
@@ -874,7 +926,7 @@ fn main() -> anyhow::Result<()> {
                                 })
                                 .to_string(),
                             };
-                            send_line(&mut usb, &answer);
+                            send_line(&mut usb, &answer, LineKind::Reply);
                             line.clear();
                         }
                     } else if usb_line_overflowed {
@@ -999,7 +1051,7 @@ fn main() -> anyhow::Result<()> {
                     "ts_ms": now,
                 });
                 let spine_msg = link_report.to_string();
-                send_line(&mut usb, &spine_msg);
+                send_line(&mut usb, &spine_msg, LineKind::Report);
                 mirror_spine(&mut spine_uart, &spine_msg);
             }
             // Self-report the derived power mode when a battery reading is present —
@@ -1021,7 +1073,7 @@ fn main() -> anyhow::Result<()> {
                         "ts_ms": now,
                     });
                     let spine_msg = report.to_string();
-                    send_line(&mut usb, &spine_msg);
+                    send_line(&mut usb, &spine_msg, LineKind::Report);
                     mirror_spine(&mut spine_uart, &spine_msg);
                 }
             }
@@ -1062,7 +1114,7 @@ fn main() -> anyhow::Result<()> {
                     report["bl"] = serde_json::json!(fired.bl);
                 }
                 let spine_msg = report.to_string();
-                send_line(&mut usb, &spine_msg);
+                send_line(&mut usb, &spine_msg, LineKind::Report);
                 mirror_spine(&mut spine_uart, &spine_msg);
             }
         }
@@ -1092,7 +1144,7 @@ fn main() -> anyhow::Result<()> {
                 beacon["policy"] = serde_json::json!("deny-all");
             }
             let spine_msg = beacon.to_string();
-            send_line(&mut usb, &spine_msg);
+            send_line(&mut usb, &spine_msg, LineKind::Report);
             mirror_spine(&mut spine_uart, &spine_msg);
         }
     }
@@ -1663,39 +1715,155 @@ fn mirror_spine(uart: &mut Option<UartDriver<'static>>, line: &str) {
     }
 }
 
-fn send_line(usb: &mut UsbSerialDriver, line: &str) {
-    let payload = format!("{line}\n");
-    let bytes = payload.as_bytes();
+/// Why a line is being written, which decides how long the node is willing to
+/// wait for the USB TX ring to drain.
+///
+/// The distinction is the whole fix. Both kinds used one budget until
+/// 2026-09-16, and that budget was tuned for the kind that must never block.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LineKind {
+    /// An answer to a command the host just sent. A reader is present *by
+    /// construction* — it wrote to us a moment ago and is now waiting.
+    Reply,
+    /// Something the node said on its own: a beacon, a reflex report, safing.
+    /// Nobody may be listening, so this must be dropped rather than waited on.
+    Report,
+}
+
+/// Stall budget in 10 ms rounds. A "stall" is one `write` returning `Ok(0)`.
+///
+/// `REPORT` stays at the value measured into place on 2026-09-13: ~50 ms. It
+/// used to be ~2 s and that made the node DEAF TO THE MESH whenever its USB
+/// cable was plugged in with nothing reading it — every report parked the main
+/// loop, the UART intake between them starved, and mesh commands the bridge had
+/// delivered were never answered. A mesh node must never wait on its USB.
+const STALL_BUDGET_REPORT: u32 = 4;
+/// ~500 ms. Ten times `REPORT`, still a quarter of the value that caused the
+/// deafness, and only reachable when a host has just spoken to us.
+const STALL_BUDGET_REPLY: u32 = 50;
+
+const _: () = assert!(
+    STALL_BUDGET_REPLY > STALL_BUDGET_REPORT,
+    "a command reply has a host waiting for it; it must be more patient than an \
+     autonomous report, not less"
+);
+
+/// Largest slice handed to `UsbSerialDriver::write` in one call.
+///
+/// Measured 2026-09-16: passing the whole 6766-byte reply at once wrote **zero**
+/// bytes and returned immediately — not a stall, a refusal. The TX ring is 4096,
+/// and a single write larger than it does not partially fill; it fails. The
+/// silent-drop fix made this visible within minutes of shipping, which is the
+/// argument for that fix in one line.
+///
+/// A quarter of the ring, so a chunk always fits with the ring part-drained.
+const USB_WRITE_CHUNK: usize = 1024;
+
+/// Write as much of `bytes` as the ring will take within `max_stalls`.
+/// Returns how many bytes actually went out, and whether the driver errored.
+fn write_budgeted(usb: &mut UsbSerialDriver, bytes: &[u8], max_stalls: u32) -> (usize, bool) {
     let mut off = 0;
     let mut stalls = 0u32;
+    let mut errored = false;
     while off < bytes.len() {
-        match usb.write(&bytes[off..], 10) {
+        // Never hand the driver more than the ring can hold in one go.
+        let end = (off + USB_WRITE_CHUNK).min(bytes.len());
+        match usb.write(&bytes[off..end], 10) {
             Ok(0) => {
-                // No progress this round: the 4 KiB TX ring is full because no
-                // host is reading. A connected host drains it at USB speed, so
-                // a few tens of milliseconds is all a genuine reader ever
-                // needs; give up well inside that and drop the line.
-                //
-                // This used to wait ~2 s (20 × 100 ms), and that made the
-                // node DEAF TO THE MESH whenever its USB cable was plugged in
-                // with nothing reading it (bench, 2026-09-13): every report
-                // — a holding reflex every 10 s, the beacon, safing — parked
-                // the main loop for 2 s, the UART intake between them starved,
-                // and mesh commands the bridge had delivered to UART1 were
-                // never answered. A mesh node must never wait on its USB.
                 stalls += 1;
-                if stalls > 4 {
-                    return;
+                if stalls > max_stalls {
+                    break;
                 }
             }
             Ok(n) => {
                 off += n;
                 stalls = 0;
             }
-            Err(_) => return,
+            Err(_) => {
+                errored = true;
+                break;
+            }
         }
     }
+    (off, errored)
 }
+
+/// Write one newline-terminated line, and **say so if it does not all fit**.
+///
+/// The silence was the bug. On 2026-09-16 a working camera produced a 6697-byte
+/// reply, this function abandoned it after ~50 ms, and the host saw nothing at
+/// all — which read as "no frame" and cost three sessions of hunting pin maps,
+/// PSRAM modes and ribbon seating on hardware that was fine. A node that cannot
+/// send its answer must be able to say that, or the absence of an answer gets
+/// attributed to whatever the answer was about.
+fn send_line(usb: &mut UsbSerialDriver, line: &str, kind: LineKind) {
+    let payload = format!("{line}\n");
+    let bytes = payload.as_bytes();
+    let budget = match kind {
+        LineKind::Reply => STALL_BUDGET_REPLY,
+        LineKind::Report => STALL_BUDGET_REPORT,
+    };
+    let (sent, errored) = write_budgeted(usb, bytes, budget);
+    if sent == bytes.len() {
+        return;
+    }
+
+    // Dropped. A partial line is already on the wire and the host cannot parse
+    // it, so terminate it and follow with a whole, parseable line saying what
+    // happened. Best-effort on the report budget: if the ring is so wedged that
+    // even this will not go, nothing else would have either.
+    let why = if errored {
+        "driver error"
+    } else {
+        "ring stayed full"
+    };
+    log::warn!(
+        "send_line: dropped after {sent}/{} B ({}); {why}",
+        bytes.len(),
+        match kind {
+            LineKind::Reply => "reply",
+            LineKind::Report => "report",
+        }
+    );
+    if kind == LineKind::Reply {
+        let notice = format!(
+            "\n{{\"type\":\"reply_dropped\",\"sent\":{sent},\"total\":{},\
+             \"reason\":\"{why} - the answer exists but did not fit\"}}\n",
+            bytes.len()
+        );
+        let _ = write_budgeted(usb, notice.as_bytes(), STALL_BUDGET_REPORT);
+    }
+}
+// ── MEASURED 2026-09-16: this function silently eats `camera_capture` ─────────
+//
+// On the Lilygo T-CameraPlus-S3 the camera works. It produced a real 5020-byte
+// QVGA JPEG (`capture: frame len=5020 B, 320x240, format=4`), base64-encoded to
+// 6696 B, and then the host received NOTHING -- no reply, no error, no log --
+// while `gpio_read` answered normally on either side of it. Three sessions were
+// spent suspecting pin maps, PSRAM, buffer counts, ribbon seating and the sensor
+// itself. The camera was never the problem for that board.
+//
+// The payload is 6697 bytes and the TX ring is 4096. When the ring fills,
+// `write` returns `Ok(0)`; after five of those (about 50 ms of patience) the
+// loop above `return`s and **abandons the rest of the line without telling
+// anyone**. The caller cannot tell a sent reply from a dropped one, and neither
+// can the host: it just waits.
+//
+// The small stall budget is deliberate and the comment above explains why -- a
+// ~2 s wait once made the node deaf to the mesh, which is a worse failure. So
+// this is a real tension, not an oversight: autonomous reports SHOULD be dropped
+// rather than block System 1. But a command reply is different in kind. A host
+// is synchronously waiting for it, and dropping it silently converts "your
+// camera works" into "your camera is broken" -- which is exactly what happened.
+//
+// NOT FIXED HERE. The fix is a protocol decision and deserves an ADR:
+//   * report the drop instead of returning silently (right regardless, small);
+//   * give command replies a longer patience budget than autonomous reports,
+//     since a reader is known to be present for them;
+//   * chunk large replies across lines -- the only thing that actually makes
+//     images work, and it changes the wire format, so the host changes too.
+// Until then, `camera_capture` cannot return an image over USB on any board,
+// and that is a property of this function rather than of any camera.
 
 /// Monotonic milliseconds since boot (ESP timer), for reflex valid-time + debounce.
 fn now_ms() -> u64 {

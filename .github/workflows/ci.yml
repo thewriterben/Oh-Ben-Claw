@@ -462,6 +462,29 @@ jobs:
         run: python3 scripts/check_bench_constants.py --selftest
       - name: bench documents match the firmware they describe
         run: python3 scripts/check_bench_constants.py
+
+      # The esp32-camera component block cannot be gated on a cargo feature —
+      # checked in esp-idf-sys 0.37.2's source, not assumed — so uncommenting it
+      # changes what a DEFAULT build produces, including one flashed to the live
+      # mesh node. The containment was "keep it commented on main, uncomment it
+      # only on a bring-up branch, a branch name you can see in your prompt".
+      #
+      # That failed twice on the day it was written: an hour of work happened on
+      # main believing it was the branch, and a shared CARGO_TARGET_DIR meant
+      # building on main silently destroyed the branch's camera bindings. A
+      # prompt protects a human at a terminal and protects nothing else.
+      #
+      # Enforced only on main: the bring-up branch is supposed to have it
+      # uncommented, and a check that is permanently red on a working branch
+      # teaches people to ignore red.
+      - name: main does not carry the camera component block
+        run: |
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            python3 scripts/check_camera_component_gate.py --enforce
+          else
+            python3 scripts/check_camera_component_gate.py
+          fi
+
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run security audit
