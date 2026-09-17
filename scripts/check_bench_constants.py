@@ -108,16 +108,42 @@ def firmware_facts() -> dict[str, object]:
             sys.exit(f"could not find `i2c` on `{name}`")
         return [int(x) for x in re.findall(r"\d+", m.group(1))]
 
-    node = re.search(r'const NODE_ID: &str = "([^"]+)"', main)
-    if not node:
-        sys.exit("could not find NODE_ID in main.rs")
+    # Node ids come from the ROSTER in identity_map.rs, not from a constant.
+    #
+    # This used to read `const NODE_ID: &str = "..."` out of main.rs. That
+    # constant was removed on 2026-09-16, when a second board booted announcing
+    # the live node's identity and identity moved to the chip's factory MAC. The
+    # regex did NOT start failing: main.rs keeps a comment explaining the
+    # removal, the words `const NODE_ID: &str = "obc-esp32-s3-001"` appear inside
+    # it, and this script matched the prose. It went on "working" by reading a
+    # fact out of a sentence about a fact that no longer existed -- which is
+    # exactly the class of drift this file is here to catch, aimed at itself.
+    #
+    # Guard against that specifically: refuse a match that is inside a comment.
+    stale = re.search(r"^\s*(?://|///)?.*const NODE_ID: &str", main, re.M)
+    if stale and stale.group(0).lstrip().startswith("//"):
+        pass  # a historical mention in a comment is fine; we no longer read it
+    elif re.search(r"^\s*const NODE_ID: &str", main, re.M):
+        sys.exit(
+            "main.rs has a live `const NODE_ID` again. Identity comes from the "
+            "chip -- see firmware/obc-esp32-s3/src/identity.rs."
+        )
+
+    identity = (FW / "identity_map.rs").read_text(encoding="utf-8")
+    roster_block = re.search(r"pub const ROSTER: &\[\(&str, &str\)\] = &\[(.*?)\n\];",
+                             identity, re.S)
+    if not roster_block:
+        sys.exit("could not find ROSTER in identity_map.rs")
+    node_ids = re.findall(r'"([0-9A-Fa-f:]{17})",\s*"([^"]+)"', roster_block.group(1))
+    if not node_ids:
+        sys.exit("ROSTER in identity_map.rs parsed to zero boards")
 
     return {
         "xiao_outputs": output_pins("XIAO_ESP32_S3"),
         "xiao_i2c": i2c("XIAO_ESP32_S3"),
         "wave_outputs": output_pins("WAVESHARE_ESP32_S3_TOUCH_LCD_21"),
         "wave_i2c": i2c("WAVESHARE_ESP32_S3_TOUCH_LCD_21"),
-        "node_id": node.group(1),
+        "node_ids": [name for _mac, name in node_ids],
     }
 
 
@@ -169,9 +195,12 @@ def check_line(line: str, f: dict) -> list[str]:
 
     # A node id in backticks.
     for m in re.finditer(r"`(obc-esp32-s3-[\w-]+|bench-\d+)`", line):
-        if m.group(1) != f["node_id"] and m.group(1).startswith("obc-esp32-s3"):
+        if m.group(1).startswith("obc-esp32-s3") and m.group(1) not in f["node_ids"]:
+            roster = ", ".join(f"`{n}`" for n in f["node_ids"])
             problems.append(
-                f"names node `{m.group(1)}`; NODE_ID is `{f['node_id']}`"
+                f"names node `{m.group(1)}`, which is not on the roster ({roster}). "
+                f"Add it to ROSTER in identity_map.rs with the MAC you measured, "
+                f"or fix the name."
             )
     return problems
 
@@ -244,7 +273,8 @@ def main(argv: list[str]) -> int:
     print(
         f"checked {scanned} bench document(s) against the firmware: "
         f"outputs {f['xiao_outputs']}/{f['wave_outputs']}, "
-        f"i2c {f['xiao_i2c']}/{f['wave_i2c']}, node `{f['node_id']}`"
+        f"i2c {f['xiao_i2c']}/{f['wave_i2c']}, "
+        f"roster {', '.join('`' + n + '`' for n in f['node_ids'])}"
     )
     if problems:
         print("\nbench prose the firmware contradicts:")
