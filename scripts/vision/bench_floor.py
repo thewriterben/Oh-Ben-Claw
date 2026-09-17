@@ -1,6 +1,6 @@
 """Measure the on-node detector's quiet floor, with evidence that it was quiet.
 
-    python scripts/vision/bench_floor.py <label> [count] [interval_s] [port]
+    python scripts/vision/bench_floor.py <label> [count] [interval_s] [port] [lead_s]
 
 Writes `obc-bench/floor/<label>/`:
     first.jpg, last.jpg   -- the scene at both ends of the run
@@ -41,6 +41,10 @@ LABEL = sys.argv[1] if len(sys.argv) > 1 else "floor"
 COUNT = int(sys.argv[2]) if len(sys.argv) > 2 else 200
 INTERVAL = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
 PORT = sys.argv[4] if len(sys.argv) > 4 else "COM10"
+# Seconds between the port opening and the first photograph, so whoever started
+# the run can get out of shot. The first version had none, and the opening frame
+# of the first attempt was a picture of the operator still walking away.
+LEAD_S = float(sys.argv[5]) if len(sys.argv) > 5 else 15.0
 
 OUT = os.path.join(r"C:\Users\Benji\obc-bench\floor", LABEL)
 
@@ -96,6 +100,10 @@ rows = []
 with serial.Serial(PORT, 115200, timeout=0.3) as ser:
     time.sleep(3.5)  # the port open resets the board
     ser.reset_input_buffer()
+
+    if LEAD_S > 0:
+        print(f"  clear the frame -- first photograph in {LEAD_S:.0f} s", flush=True)
+        time.sleep(LEAD_S)
 
     snap(ser, "snap0", os.path.join(OUT, "first.jpg"))
 
