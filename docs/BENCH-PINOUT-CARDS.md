@@ -37,6 +37,7 @@ measurement wins.
 | camera node | `obc-esp32-s3-002` | **COM8** | USB | **no radio yet** — spine UART unwired |
 | camera node (Lilygo) | `obc-esp32-s3-003` | COM10 when plugged | USB | **no radio yet** - LILYGO T-CameraPlus-S3 V1.1, OV5640 |
 | spare | `obc-esp32-s3-004` | not measured - read the banner | USB | none - spare XIAO ESP32S3, MAC 64:E8:33:7F:84:CC |
+| camera node (Sense #2) | `obc-esp32-s3-005` | COM11 when plugged | USB | **no radio yet** - XIAO ESP32S3 Sense, OV3660, MAC AC:27:6E:A8:4D:E4 |
 
 How each row was established, so the next person can redo it in two minutes rather
 than infer it from traffic (which is what Card 0 exists to stop):

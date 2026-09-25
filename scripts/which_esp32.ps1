@@ -36,6 +36,11 @@ $Known = @{
     Status = 'BENCH'
     Note   = 'spare XIAO ESP32S3. Nothing depends on it -- safe to reflash.'
   }
+  'AC:27:6E:A8:4D:E4' = @{
+    Id     = 'obc-esp32-s3-005'
+    Status = 'BENCH'
+    Note   = 'second camera node (XIAO Sense, OV3660). Captures; safe to reflash.'
+  }
 }
 
 Write-Output "=== ESP32-S3 boards on native USB (VID_303A) ==="

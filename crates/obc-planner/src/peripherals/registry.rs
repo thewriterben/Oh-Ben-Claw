@@ -962,6 +962,13 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
     // measured the Sense's id above. It is the plain XIAO's 0x303a:0x1001 row
     // and needs none of its own. Flash and PSRAM have not been measured.
     //
+    // The fleet's second Sense: node `obc-esp32-s3-005`, MAC AC:27:6E:A8:4D:E4,
+    // an OV3660 where 002 has an OV2640. It is listed by `which_esp32.ps1` under
+    // VID_303A, so it presents the same 0x303a:0x1001 as the Sense row above: a
+    // second board behind that measurement, not a new id. espflash read 8 MB
+    // flash; the boot log shows 8 MB octal PSRAM (AP, 3 V). With the
+    // mic-before-camera fix it captured 10/10 greyscale QVGA frames, 2026-09-25.
+    //
     // ── Sipeed 6+1 Mic Array ──────────────────────────────────────────────────
     // Circular microphone array with 6 peripheral mics and 1 center mic,
     // powered by an STM32F103 MCU.  Appears as a USB audio device and
