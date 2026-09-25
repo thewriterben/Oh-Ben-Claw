@@ -315,7 +315,12 @@ const PINS: CameraPins = CameraPins {
     pclk: 13,
 };
 
-// ── OPEN: init succeeds, capture never does (2026-09-16) ─────────────────────
+// ── RESOLVED 2026-09-25: init succeeds, capture never does ───────────────────
+//
+// Kept as found, because the wrong turns are the useful part. The cause was
+// none of the suspects below: the I2S mic's first GDMA allocation reset the
+// camera's DMA channel. See the note above `camera::init` in main.rs, and the
+// resolution at the end of this block.
 //
 // `esp_camera_init` returns ESP_OK and the sensor is identified, but every
 // `esp_camera_fb_get` returns null, preceded by:
@@ -411,10 +416,40 @@ const PINS: CameraPins = CameraPins {
 // camera fault was a silent drop: the node could not say "I have your image and
 // cannot send it", so the absence of a reply read as the absence of a frame.
 //
-// The XIAO is a SEPARATE fault and is still open. It never reaches this path:
+// The XIAO is a SEPARATE fault. It never reaches this path:
 // `esp_camera_fb_get` returns null there, with `cam_hal: Failed to get the
 // frame on time!`, so there is no frame to drop. Two boards, two unrelated
 // bugs, and the second one masked the first one's diagnosis.
+//
+// ── RESOLVED 2026-09-25: the XIAO's fault was the I2S mic, not the XIAO ──────
+//
+// One binary on two Senses with two sensors (002/OV2640, a84de4/OV3660) gave
+// the same `cam_hal: FB-SIZE: 0 != 76800` on every frame. VSYNC arrived, but no
+// pixel data followed. Ribbon, XCLK and sensor were all ruled out at once:
+// esp32-camera 2.0.7 claims its GDMA channel by direct register writes, and
+// ESP-IDF resets the whole GDMA block on the first driver allocation, which was
+// the I2S mic's, made immediately after `camera::init`. The Lilygo never saw
+// it because its build has no mic. JPEG mode drops an empty frame silently,
+// which is why only a timeout ever showed.
+//
+// With the mic initialised first, 002 (MAC 64:E8:33:7E:7E:04) returned
+// `capture: frame len=76800 B, 320x240, format=3` on 3 of 4 tries
+// (`scripts/probe_sense_capture.py`, ELF 48baf785c). Those are the first frames
+// from a XIAO Sense in this project. The pin map above was right all along.
+//
+// The second Sense, same binary: a84de4 (MAC AC:27:6E:A8:4D:E4, OV3660) booted
+// clean for two minutes, then returned 10/10 `frame len=76800 B, 320x240,
+// format=3`. Both Senses and both sensors now capture.
+//
+// STILL OPEN, and different: 002's fourth try returned null. The console shows
+// `cam_hal: EV-VSYNC-OVF`, meaning the driver's one-slot event queue was still
+// full when the frame ended, so that frame was aborted. The driver task is
+// not keeping up with 24-line DMA chunks at the OV2640's 25 fps. The OV3660
+// supports that reading without proving it: it runs at ~11 fps with 48-line
+// chunks (under a quarter of the event rate), and it never logged the overflow
+// and never missed a frame. Candidates, untested: XCLK 20 -> 10 MHz (halves
+// the OV2640's event rate), CPU 160 -> 240 MHz, and the byte-by-byte
+// YUV-to-grey copy.
 //
 // ── 2026-09-16: FIRST IMAGE OFF A NODE ───────────────────────────────────────
 //
