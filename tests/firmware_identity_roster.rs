@@ -47,6 +47,9 @@ fn rostered_boards_get_their_names() {
     // Spare XIAO, rostered 2026-09-25 after running unrostered as
     // `obc-esp32-s3-7f84cc`.
     assert_eq!(id_for("64:E8:33:7F:84:CC"), "obc-esp32-s3-004");
+    // Second Sense, a third OUI (AC:27:6E). Rostered 2026-09-25 after running
+    // unrostered as `obc-esp32-s3-a84de4`.
+    assert_eq!(id_for("AC:27:6E:A8:4D:E4"), "obc-esp32-s3-005");
 }
 
 /// The fallback is what protected this board before anyone wrote it down.
