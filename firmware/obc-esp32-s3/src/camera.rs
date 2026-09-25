@@ -437,12 +437,19 @@ const PINS: CameraPins = CameraPins {
 // (`scripts/probe_sense_capture.py`, ELF 48baf785c). Those are the first frames
 // from a XIAO Sense in this project. The pin map above was right all along.
 //
-// STILL OPEN, and different: the fourth try returned null. The console shows
+// The second Sense, same binary: a84de4 (MAC AC:27:6E:A8:4D:E4, OV3660) booted
+// clean for two minutes, then returned 10/10 `frame len=76800 B, 320x240,
+// format=3`. Both Senses and both sensors now capture.
+//
+// STILL OPEN, and different: 002's fourth try returned null. The console shows
 // `cam_hal: EV-VSYNC-OVF`, meaning the driver's one-slot event queue was still
 // full when the frame ended, so that frame was aborted. The driver task is
-// not keeping up with 24-line DMA chunks at the OV2640's 25 fps. Candidates,
-// untested: XCLK 20 -> 10 MHz (halves the event rate), CPU 160 -> 240 MHz, and
-// the byte-by-byte YUV-to-grey copy.
+// not keeping up with 24-line DMA chunks at the OV2640's 25 fps. The OV3660
+// supports that reading without proving it: it runs at ~11 fps with 48-line
+// chunks (under a quarter of the event rate), and it never logged the overflow
+// and never missed a frame. Candidates, untested: XCLK 20 -> 10 MHz (halves
+// the OV2640's event rate), CPU 160 -> 240 MHz, and the byte-by-byte
+// YUV-to-grey copy.
 //
 // ── 2026-09-16: FIRST IMAGE OFF A NODE ───────────────────────────────────────
 //
