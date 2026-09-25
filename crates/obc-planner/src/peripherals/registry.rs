@@ -21,7 +21,7 @@
 //!
 //! Three consequences worth stating out loud, because each looks like a bug:
 //!
-//! - **[`lookup_board`] returns the first VID/PID match**, and eighteen boards
+//! - **[`lookup_board`] returns the first VID/PID match**, and twenty rows
 //!   share `0x303a:0x1001`. That is a choice, not an oversight: no function of
 //!   the USB id can do better, because the information is not in the id.
 //!   Deployment config selects by `name`.
@@ -29,10 +29,13 @@
 //!   expect a set; OpenPartsCore's ingest merges same-name rows into one model
 //!   with a `usb_ids` list, and its `candidates_for_usb` returns an iterator
 //!   rather than an `Option` for exactly this reason (its ADR-0004).
-//! - **An id with no firmware named beside it is not evidence.** `0x2886:0x0058`
-//!   sits on `xiao-esp32s3-sense` from a comment with no source, and the two
-//!   primary sources that exist (arduino-esp32, CircuitPython) give `0x0056` and
-//!   `0x8056`. Unresolved on purpose; see #150.
+//! - **An id with no firmware named beside it is not evidence.**
+//!   `xiao-esp32s3-sense` carried `0x2886:0x0058` for six months on the strength
+//!   of a comment. It was generated with the entry (9646ba8, 2026-03-22) and
+//!   nothing ever backed it; the only other `0x0058` here is the Arduino Nano
+//!   Every's, under a different vendor. Removed in #150 for the Sense's two
+//!   sourced ids: CircuitPython's `0x8056` and the `0x303a:0x1001` our own Sense
+//!   was measured presenting.
 //!
 //! # Capability Tokens
 //! | Token | Description |
@@ -761,12 +764,29 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
     // ── Seeed XIAO ESP32S3-Sense ──────────────────────────────────────────────
     // Compact ESP32-S3 module with OV2640 camera, PDM microphone, and
     // expandable microSD.  Used as the primary vision node.
-    // USB VID=0x2886 (Seeed Studio), PID=0x0058 (XIAO ESP32-S3 Sense).
     // The bare module uses castellated pads; the XIAO Expansion Board adds
     // Grove and Qwiic ports (see scout proposals for those as separate entries).
+    //
+    // USB VID=0x2886 (Seeed Studio), PID=0x8056, **under CircuitPython**: its
+    // board definition `ports/espressif/boards/seeed_xiao_esp32_s3_sense/
+    // mpconfigboard.mk` sets USB_VID/USB_PID and USB_PRODUCT "Seeed Xiao
+    // ESP32-S3 Sense". arduino-esp32 uses the same number for the plain board's
+    // UF2 bootloader, which is why that board's row does not list it: two
+    // firmwares, one number, two meanings.
+    //
+    // Under arduino-esp32 the Sense presents 0x2886:0x0056 — Seeed's wiki says to
+    // select `XIAO_ESP32S3` for either variant — but that id is deliberately left
+    // to the plain XIAO's row below: this row comes first, so claiming it here
+    // would make `lookup_board(0x2886, 0x0056)` return the Sense and hand a
+    // camera to a board that may not have one. Its id under our own firmware,
+    // measured, is the second Sense row further down.
+    //
+    // This row said PID=0x0058 until #150. Nothing sourced it: it arrived with the
+    // entry in 9646ba8 (2026-03-22) as a comment and a pinned test, and 0x0058 is
+    // otherwise the Arduino Nano Every's PID under Arduino's VID.
     BoardInfo {
         vid: 0x2886,
-        pid: 0x0058,
+        pid: 0x8056,
         name: "xiao-esp32s3-sense",
         architecture: Some(
             "ESP32-S3 Xtensa LX7 dual-core @ 240 MHz, OV2640 camera, PDM microphone",
@@ -796,11 +816,13 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
     // definition: `XIAO_ESP32S3.vid.0`/`pid.0` in boards.txt and USB_VID/USB_PID
     // in variants/XIAO_ESP32S3/pins_arduino.h (espressif/arduino-esp32 #7971).
     // The definition's second pair, 0x8056, is this board in UF2 bootloader mode
-    // rather than a second board, so it is not listed.
+    // rather than a second board, so it is not listed here. It sits on the Sense
+    // row above instead, where CircuitPython uses it as a running id.
     //
     // That same single Arduino definition also serves the Sense — Seeed's wiki
-    // tells you to select `XIAO_ESP32S3` for either — while the Sense entry above
-    // claims 0x0058 from a comment with nothing behind it (#150).
+    // tells you to select `XIAO_ESP32S3` for either — so a Sense on Arduino
+    // firmware resolves to this row and loses its camera. No function of the id
+    // can tell the two apart: the difference is a B2B board, not a descriptor.
     //
     // The id below is what this board presents **under the Arduino board
     // definition**, which builds with TinyUSB (`usb_mode=0`) and applies
@@ -842,7 +864,7 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
     // not the board** — which is why this board needs two rows and why neither
     // alone would have found our own node.
     //
-    // `lookup_board` returns the first VID/PID match, and eighteen boards now sit
+    // `lookup_board` returns the first VID/PID match, and twenty rows now sit
     // at 0x303a:0x1001, so this row does not win that lookup and is not meant to:
     // it exists so `candidates_for_usb` downstream (OpenPartsCore ADR-0004, an
     // iterator precisely because this mapping is many-to-many) can offer the XIAO
@@ -875,8 +897,19 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
     // Measured 2026-09-16 by espflash while flashing the first camera build:
     // node `obc-esp32-s3-002`, MAC 64:E8:33:7E:7E:04, chip rev v0.2, 8 MB flash
     // (gd), 8192K PSRAM. It is a XIAO ESP32S3 **Sense** — the same module as the
-    // row above plus the Sense expansion board's OV2640 and PDM mic — so it
-    // enumerates identically at 0x303a:0x1001 and needs no row of its own here.
+    // row above plus the Sense expansion board's OV2640 and PDM mic.
+    //
+    // Its USB id, measured 2026-09-25 (#150) while it ran Oh-Ben-Claw's own
+    // ESP-IDF firmware: Windows PnP lists it as
+    // `USB\VID_303A&PID_1001\64:E8:33:7E:7E:04`. The instance id carries the
+    // factory MAC as the descriptor serial, so this reading belongs to this board
+    // and no other on the bench. As the module above predicted, it presents the
+    // chip's USB-Serial-JTAG id, not a Seeed one.
+    //
+    // It gets its own row below rather than sharing the plain XIAO's. That row
+    // claims none of the expansion board's hardware, so without this one
+    // `candidates_for_usb` could only offer our vision node as a board without a
+    // camera.
     //
     // It is recorded because the two boards' MACs differ only in their last
     // three bytes, and on 2026-09-16 this one booted announcing
@@ -886,7 +919,29 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
     // factory MAC (`firmware/obc-esp32-s3/src/identity_map.rs`), and
     // `tests/firmware_identity_roster.rs` fails if this comment and that roster
     // ever disagree.
-    //
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "xiao-esp32s3-sense",
+        architecture: Some(
+            "ESP32-S3 Xtensa LX7 dual-core @ 240 MHz, OV2640 camera, PDM microphone (native USB-Serial-JTAG; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio",
+            "analog_read",
+            "i2c",
+            "spi",
+            "wifi",
+            "ble",
+            "camera_capture",
+            "audio_sample",
+            "sensor_read",
+        ],
+        vendor: "Seeed Studio",
+        ecosystem: "XIAO",
+        connectors: &[Connector::Bare],
+    },
     // The fleet's first non-XIAO node, and its camera works.
     //
     // Measured 2026-09-16 on the board above (`lilygo-t-camera-plus-s3`, the row
@@ -2321,7 +2376,7 @@ mod tests {
 
     #[test]
     fn lookup_xiao_esp32s3_sense() {
-        let b = lookup_board(0x2886, 0x0058).unwrap();
+        let b = lookup_board(0x2886, 0x8056).unwrap();
         assert_eq!(b.name, "xiao-esp32s3-sense");
         assert!(b.architecture.unwrap().contains("OV2640"));
         assert!(b.capabilities.contains(&"camera_capture"));
@@ -2360,13 +2415,14 @@ mod tests {
 
     #[test]
     fn the_shared_esp32s3_id_does_not_resolve_to_the_xiao() {
-        // Documenting the consequence rather than pretending it away: eighteen
-        // boards share 0x303a:0x1001 and `lookup_board` returns the first match.
-        // The XIAO row at that id exists for `candidates_for_usb` downstream, not
-        // to win this lookup. If this ever starts returning the XIAO, the lookup
-        // contract changed and the comment above that row is stale.
+        // Documenting the consequence rather than pretending it away: twenty
+        // rows share 0x303a:0x1001 and `lookup_board` returns the first match.
+        // The XIAO rows at that id exist for `candidates_for_usb` downstream, not
+        // to win this lookup. If this ever starts returning either XIAO, the
+        // lookup contract changed and the comments above those rows are stale.
         let b = lookup_board(0x303a, 0x1001).unwrap();
         assert_ne!(b.name, "xiao-esp32s3");
+        assert_ne!(b.name, "xiao-esp32s3-sense");
         let sharing = known_boards()
             .iter()
             .filter(|b| (b.vid, b.pid) == (0x303a, 0x1001))
@@ -2386,8 +2442,45 @@ mod tests {
                 "xiao-esp32s3 claims {cap}, which lives on the Sense expansion board"
             );
         }
-        let sense = lookup_board(0x2886, 0x0058).unwrap();
+        let sense = lookup_board(0x2886, 0x8056).unwrap();
         assert!(sense.capabilities.contains(&"camera_capture"));
+    }
+
+    #[test]
+    fn the_sense_carries_both_of_its_sourced_usb_identities() {
+        // 0x2886:0x8056 from CircuitPython's board definition, and 0x303a:0x1001
+        // measured on obc-esp32-s3-002 (MAC 64:E8:33:7E:7E:04) running our own
+        // firmware, 2026-09-25. Without the second, our own vision node could
+        // only be offered as the plain XIAO, which has no camera.
+        let rows: Vec<&BoardInfo> = known_boards()
+            .iter()
+            .filter(|b| b.name == "xiao-esp32s3-sense")
+            .collect();
+        let ids: Vec<(u16, u16)> = rows.iter().map(|b| (b.vid, b.pid)).collect();
+        assert!(
+            ids.contains(&(0x2886, 0x8056)) && ids.contains(&(0x303a, 0x1001)),
+            "xiao-esp32s3-sense must keep both identities, got {ids:?}"
+        );
+        for b in rows {
+            assert!(
+                b.capabilities.contains(&"camera_capture"),
+                "a Sense row at {:04x}:{:04x} lost its camera",
+                b.vid,
+                b.pid
+            );
+        }
+    }
+
+    #[test]
+    fn no_row_claims_the_senses_unsourced_pid() {
+        // #150: 0x2886:0x0058 sat on the Sense from 2026-03-22 to 2026-09-25 with
+        // no source behind it. arduino-esp32 gives 0x0056, CircuitPython 0x8056,
+        // and our own firmware 0x303a:0x1001. If it comes back, it needs a source
+        // and the firmware that presents it, in the comment above its row.
+        assert!(
+            lookup_board(0x2886, 0x0058).is_none(),
+            "0x2886:0x0058 is back; cite the firmware that presents it (#150)"
+        );
     }
 
     #[test]
@@ -2496,7 +2589,7 @@ mod tests {
 
     #[test]
     fn bare_accessory_attaches_to_any_board() {
-        let board = lookup_board(0x2886, 0x0058).unwrap(); // xiao
+        let board = lookup_board(0x2886, 0x8056).unwrap(); // xiao sense
         let bme = lookup_accessory("bme280").unwrap();
         assert_eq!(bme.connector, Connector::Bare);
         assert!(board_accepts_accessory(board, bme));

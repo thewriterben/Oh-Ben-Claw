@@ -630,7 +630,7 @@
     },
     {
       "vid": 10374,
-      "pid": 88,
+      "pid": 32854,
       "name": "xiao-esp32s3-sense",
       "architecture": "ESP32-S3 Xtensa LX7 dual-core @ 240 MHz, OV2640 camera, PDM microphone",
       "transport": "serial",
@@ -685,6 +685,29 @@
         "spi",
         "wifi",
         "ble",
+        "sensor_read"
+      ],
+      "vendor": "Seeed Studio",
+      "ecosystem": "XIAO",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "xiao-esp32s3-sense",
+      "architecture": "ESP32-S3 Xtensa LX7 dual-core @ 240 MHz, OV2640 camera, PDM microphone (native USB-Serial-JTAG; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "analog_read",
+        "i2c",
+        "spi",
+        "wifi",
+        "ble",
+        "camera_capture",
+        "audio_sample",
         "sensor_read"
       ],
       "vendor": "Seeed Studio",

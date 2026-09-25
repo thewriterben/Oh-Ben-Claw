@@ -5,6 +5,52 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The Sense's USB id had no source, and now it has two (2026-09-25)
+
+### Fixed
+
+- **`xiao-esp32s3-sense` no longer claims `0x2886:0x0058`** (#150). The number
+  arrived with the entry in `9646ba8` (2026-03-22) as a comment and a pinned
+  test, and nothing ever backed it. No source anywhere links `0x0058` to a XIAO.
+  The only other `0x0058` in the registry is the Arduino Nano Every's, under
+  Arduino's VID. The row now carries CircuitPython's `0x2886:0x8056`, from
+  `seeed_xiao_esp32_s3_sense/mpconfigboard.mk`, with the firmware named beside it.
+
+### Added
+
+- **A second Sense row at `0x303a:0x1001`, measured.** `obc-esp32-s3-002`,
+  running our own ESP-IDF firmware, enumerates as
+  `USB\VID_303A&PID_1001\64:E8:33:7E:7E:04`. The MAC in the instance id ties
+  that reading to this board and no other on the bench. This is the id our own
+  vision node actually presents. Before this row, `candidates_for_usb` could
+  only offer the node as the plain XIAO, which has no camera. The registry
+  comment that said the Sense "needs no row of its own here" was asserting the
+  opposite.
+- Two tests. `the_sense_carries_both_of_its_sourced_usb_identities` also
+  requires every Sense row to keep `camera_capture`.
+  `no_row_claims_the_senses_unsourced_pid` fails if `0x2886:0x0058` returns
+  without a citation. Both were mutation-checked: putting `0x0058` back fails
+  six tests, and removing the camera from the new row fails the identity test
+  by name.
+- `registry/registry.json` and `firmware-templates/templates.json` regenerated.
+  The Sense starter sketch's header now reads `2886:8056`.
+
+### Not done, on purpose
+
+- **The Sense does not take `0x2886:0x0056`**, although that is what it presents
+  under arduino-esp32. Its row comes before the plain XIAO's, so `lookup_board`
+  would start returning the Sense for a board that may have no camera. A Sense
+  on Arduino firmware therefore resolves as the plain XIAO. That is the safe
+  direction to be wrong in, and it has to be wrong one way or the other: the
+  difference between the two boards is a B2B board, not a USB descriptor.
+
+### Corrected
+
+- The registry said eighteen boards shared `0x303a:0x1001`. It was nineteen
+  before this change and is twenty after it.
+
+---
+
 ## Unreleased — The second board answered to the first board's name (2026-09-16)
 
 ### Fixed
