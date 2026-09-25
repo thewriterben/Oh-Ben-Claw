@@ -104,6 +104,46 @@ because removing relaying did not remove it. That is the thing worth chasing, an
 it wants a longer run with the counting done on gap *rate* over many minutes
 rather than two three-minute samples.
 
+### The baseline-loss run (set up 2026-09-25, not yet run)
+
+Two samples of about 30 frames cannot support "10-20%". The 95% intervals are
+4.5-26% for 4/35 and 9.8-38% for 6/29. `relay_loss.py` also watched only the
+receiver, and it counted the one-byte `seq`, which wraps after 255 frames. So
+the run was redone as `scripts/mesh_loss.py`. It watches **both** consoles and
+gives every frame gw-D8 logs as sent exactly one fate: `received`, `rejected`,
+`crc`, `header`, `deaf` (gw-40 was transmitting) or `silent`.
+
+**Why gw-40 is reflashed partway through.** Until 2026-09-25 the SX1262's
+IRQ mask left out CrcErr and HeaderErr. A masked IRQ never latches, so the
+"CRC error" warning could not fire, and none has ever been logged.
+- A CRC-failed frame was read out as good and died as `REJECTED … bad tag`.
+- A frame with a corrupt header vanished without a line.
+
+Run once on each firmware. The difference between the two runs is how much
+of the old "silent" loss was really frames that arrived broken.
+
+```powershell
+# stop the brain first: it holds COM4. Read both banners before trusting the ports.
+python scripts\mesh_loss.py --selftest
+python scripts\mesh_loss.py --tx COM3 --rx COM4 --minutes 45 --label "gw-40 old IRQ mask"
+
+. $env:USERPROFILE\export-esp.ps1; $env:CARGO_TARGET_DIR='C:\e'
+$env:OBC_SPINE_ROOT = (Get-Content $env:USERPROFILE\.obc\spine_root)
+cd firmware\heltec-lora-linktest
+cargo build --release --features bench-low-power,bench-nvs-fault,no-relay   # gw-40's full feature set, per the table above
+espflash flash --port COM4 C:\e\xtensa-esp32s3-espidf\release\heltec-lora-linktest
+cd ..\..
+python scripts\mesh_loss.py --tx COM3 --rx COM4 --minutes 45 --label "gw-40 CRC+header IRQs unmasked"
+```
+
+Each run writes `results/mesh_loss-<stamp>.log` (the raw capture from both
+consoles) and a `.json` next to it. `--replay <log>` re-analyses a capture
+without the hardware. Keep node `obc-esp32-s3-001` jumpered and reporting as
+usual, so node reports (about 220 B, 348 ms on air) and keepalives (about
+66 B, 123 ms) are both in the sample. Loss is broken down by frame size
+because long frames have failed alone before. Note whether gw-90 is powered:
+its relayed copies of gw-D8's frames count as delivered.
+
 ### ⚠ Before you flash any ESP32-S3, run the gate
 
 ```powershell
