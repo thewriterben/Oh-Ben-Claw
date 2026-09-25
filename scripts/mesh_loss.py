@@ -125,6 +125,10 @@ RX_REJECTED = re.compile(
 RX_CRC = re.compile(r"SX1262 RX: CRC error(?:.*rssi=(-?\d+) dBm)?")
 RX_HEADER = re.compile(r"SX1262 RX: header error")
 RX_ERR = re.compile(r"SPINE RX error: (.*)")
+# Listen-before-talk (heltec main.rs, 2026-09-25): a deferred keepalive, and one
+# sent anyway after the deferral cap.
+LBT_DEFER = re.compile(r"keepalive deferred: channel busy")
+LBT_FORCED = re.compile(r"keepalive sent on a busy channel")
 
 
 @dataclass
@@ -151,6 +155,8 @@ class Station:
     crc: list[dict] = field(default_factory=list)
     header: list[float] = field(default_factory=list)
     rx_errors: list[tuple[float, str]] = field(default_factory=list)
+    lbt_deferrals: int = 0
+    lbt_forced: int = 0
 
 
 def parse(lines: list[tuple[float, str]], name: str) -> Station:
@@ -189,6 +195,10 @@ def parse(lines: list[tuple[float, str]], name: str) -> Station:
             st.header.append(t)
         elif m := RX_ERR.search(line):
             st.rx_errors.append((t, m.group(1)))
+        elif LBT_DEFER.search(line):
+            st.lbt_deferrals += 1
+        elif LBT_FORCED.search(line):
+            st.lbt_forced += 1
     unwrap(st.tx)
     return st
 
@@ -310,8 +320,10 @@ def analyse(tx: Station, rx: Station) -> dict:
         "by_kind": {k: tally(v) for k, v in sorted(by_kind.items())},
         "by_size": {k: tally(v) for k, v in sorted(by_size.items())},
         "timeline_5min": timeline,
-        "sender_side": {"tx_errors": len(tx.tx_errors), "seq_gaps_never_sent": never_sent},
+        "sender_side": {"tx_errors": len(tx.tx_errors), "seq_gaps_never_sent": never_sent,
+                        "lbt_deferrals": tx.lbt_deferrals, "lbt_forced": tx.lbt_forced},
         "receiver_side": {"rx_errors": len(rx.rx_errors),
+                          "lbt_deferrals": rx.lbt_deferrals, "lbt_forced": rx.lbt_forced,
                           "rejected_reasons": dict(Counter(e["why"] for e in rx.rejected)),
                           "unattributed": unattributed},
         "link_when_received": link,
@@ -335,7 +347,9 @@ def report(a: dict) -> str:
                        f"CI {v['loss_ci95_pct'][0]}-{v['loss_ci95_pct'][1]}%  "
                        + " ".join(f"{f}={n}" for f, n in v["fates"].items() if n and f != "received"))
     s, r = a["sender_side"], a["receiver_side"]
-    out.append(f"  sender: {s['tx_errors']} TX errors, {s['seq_gaps_never_sent']} seq never logged as sent")
+    out.append(f"  sender: {s['tx_errors']} TX errors, {s['seq_gaps_never_sent']} seq never logged as sent, "
+               f"LBT deferred {s['lbt_deferrals']} / forced {s['lbt_forced']}")
+    out.append(f"  receiver: LBT deferred {r['lbt_deferrals']} / forced {r['lbt_forced']}")
     out.append(f"  receiver: {r['rx_errors']} RX errors; rejected reasons {r['rejected_reasons'] or '{}'}; "
                f"unattributed {r['unattributed']}")
     if a["link_when_received"]:
@@ -467,7 +481,12 @@ def selftest() -> int:
     check("fates", a["overall"]["fates"],
           {"received": 4, "rejected": 1, "crc": 1, "header": 1, "deaf": 1, "silent": 1})
     check("sent", a["overall"]["sent"], 9)
-    check("never sent", a["sender_side"], {"tx_errors": 1, "seq_gaps_never_sent": 1})
+    check("never sent", {k: a["sender_side"][k] for k in ("tx_errors", "seq_gaps_never_sent")},
+          {"tx_errors": 1, "seq_gaps_never_sent": 1})
+    lbt = parse([(1.0, "I (1) heltec: keepalive deferred: channel busy (listen-before-talk 1/5), retry in 412 ms"),
+                 (2.0, "I (2) heltec: keepalive deferred: channel busy (listen-before-talk 2/5), retry in 333 ms"),
+                 (3.0, "I (3) heltec: keepalive sent on a busy channel after 5 deferrals")], "40")
+    check("lbt counts", (lbt.lbt_deferrals, lbt.lbt_forced), (2, 1))
     check("unattributed crc", a["receiver_side"]["unattributed"], {"rejected": 0, "crc": 1, "header": 0})
     check("uart by size", a["by_size"][">160 B"]["fates"]["rejected"], 1)
     check("silent one is 255", [f["seq"] for f in a["lost_frames"] if f["fate"] == "silent"], [255])
@@ -494,7 +513,7 @@ def selftest() -> int:
             print("  " + f)
         return 1
     print("selftest ok: airtime, Wilson interval, seq unwrap, all six fates, "
-          "sender-side gaps, unattributed errors, replay round-trip")
+          "sender-side gaps, unattributed errors, LBT counts, replay round-trip")
     return 0
 
 

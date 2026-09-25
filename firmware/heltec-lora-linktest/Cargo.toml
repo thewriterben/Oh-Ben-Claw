@@ -37,6 +37,11 @@ bench-low-power = []
 # takes, and on 2026-09-12 that cost it about half of everything gw-40 sent —
 # the frame after any received frame, reliably. A relay is a role
 # (heltec-relay); a station with a host plugged in should not play it.
+#
+# The same role also slows this station's keepalive from 5 s to 30 s
+# (KEEPALIVE_MS in main.rs). Measured 2026-09-25: every frame the base lost
+# from gw-D8 over 45 minutes was on the air while the base was transmitting
+# its own keepalive, and nothing waits on the base's keepalive.
 no-relay = []
 # Bench only: the console line `{"bench":"nvs_fault"}` poisons the counter
 # store so every NVS read and write fails from then on — SPINE-REPLAY.md §6

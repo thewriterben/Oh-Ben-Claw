@@ -233,7 +233,34 @@ const FREQ_HZ: u64 = 915_000_000;
 const PIN_RST: i32 = 12;
 const PIN_BUSY: i32 = 13;
 const PIN_DIO1: i32 = 14;
-const KEEPALIVE_MS: u64 = 5_000;
+/// Keepalive period. 5 s for a station in the field; 30 s for the base.
+///
+/// The base (`no-relay`, the station with a host plugged in) is the sink, and
+/// every keepalive it sends blinds it for ~125 ms. Measured 2026-09-25 with
+/// `scripts/mesh_loss.py` (545 frames, 45 min): all 50 of the frames gw-40
+/// lost from gw-D8 were on the air while gw-40 was transmitting, none for
+/// any other reason. Nothing waits on the base's keepalive: the node excludes
+/// keepalives from host-link liveness (obc-esp32-s3 main.rs), and the host
+/// cannot hear the station it is plugged into. So the base keepalive is
+/// slowed, and the field stations keep theirs, which is what makes them
+/// visible.
+///
+/// Keyed on `no-relay` because that feature already means exactly this role
+/// ("a station with a host plugged in should not play relay", Cargo.toml).
+const KEEPALIVE_MS: u64 = if cfg!(feature = "no-relay") {
+    30_000
+} else {
+    5_000
+};
+/// Listen-before-talk for the keepalive: when `channel_busy` says another
+/// radio is on the air, wait this long plus up to `LBT_BACKOFF_SPREAD_MS` and
+/// ask again, rather than talk over its frame. The longest frame on this mesh
+/// is ~350 ms of airtime (SF7, ~220 B).
+const LBT_BACKOFF_MIN_MS: u64 = 300;
+const LBT_BACKOFF_SPREAD_MS: u32 = 400;
+/// After this many deferrals in a row the keepalive goes anyway: a jammed or
+/// noisy channel must not silence a station for good.
+const LBT_MAX_DEFERRALS: u32 = 5;
 /// Up to this much is added to each keepalive interval, derived from the
 /// frame counter so it differs per station and per frame. Without it two
 /// stations lock step: measured 2026-09-13 after a bridge reset landed its
@@ -415,6 +442,8 @@ fn main() -> anyhow::Result<()> {
 
     let mut buf: Vec<u8> = Vec::new();
     let mut last_keepalive = now_ms();
+    // Consecutive listen-before-talk deferrals of the pending keepalive.
+    let mut lbt_deferrals: u32 = 0;
     let uart_read_timeout = TickType::new_millis(20).ticks();
     // Same framer as the console origin: complete lines only, oversized ones
     // discarded whole rather than transmitted as a prefix.
@@ -577,7 +606,12 @@ fn main() -> anyhow::Result<()> {
             // the frame it is waiting for. Measured 2026-09-12: with
             // continuous RX in place, the remaining reply losses each lined
             // up with a base keepalive 1.1–1.9 s after the command.
-            last_keepalive = now_ms().saturating_sub(KEEPALIVE_MS) + KEEPALIVE_HOLDOFF_AFTER_CMD_MS;
+            //
+            // `max`, not assignment: with the base's 30 s period, a plain
+            // assignment would pull the next keepalive FORWARD to 3 s after
+            // every command. The hold-off may only ever delay one.
+            last_keepalive = last_keepalive
+                .max(now_ms().saturating_sub(KEEPALIVE_MS) + KEEPALIVE_HOLDOFF_AFTER_CMD_MS);
         }
 
         // ── 2. Keepalive so the link is visible without a compute node wired. ──
@@ -587,14 +621,37 @@ fn main() -> anyhow::Result<()> {
         // fired a keepalive 120 ms after the command (bench, 2026-09-13).
         let due = keepalive_interval_ms(counter.as_ref().map(|c| c.count()).unwrap_or(0));
         if now_ms().saturating_sub(last_keepalive) >= due {
-            last_keepalive = now_ms();
-            let hb = format!(
-                "{{\"node_id\":\"gw-{node:02X}\",\"type\":\"gw_keepalive\",\"seq\":{}}}",
-                seq.wrapping_add(1)
-            );
-            match send_spine!(radio, seq, buf, hb.as_bytes()) {
-                Ok(()) => info!("SPINE ► (keepalive) seq={seq}"),
-                Err(e) => info!("SPINE TX error: {e:#}"),
+            // Listen before talking. A busy channel defers the keepalive by a
+            // randomised backoff instead of transmitting into someone's frame;
+            // the loop goes back to `receive` meanwhile, so the frame that made
+            // the channel busy is heard rather than destroyed. A radio error
+            // here is treated as "clear": LBT must never stop a keepalive.
+            let busy = radio.channel_busy().unwrap_or(false);
+            if busy && lbt_deferrals < LBT_MAX_DEFERRALS {
+                lbt_deferrals += 1;
+                // SAFETY: esp_random has no preconditions.
+                let backoff = LBT_BACKOFF_MIN_MS
+                    + u64::from(unsafe { esp_idf_svc::sys::esp_random() } % LBT_BACKOFF_SPREAD_MS);
+                // Due again `backoff` ms from now: the interval for this frame
+                // (`due`) is unchanged, because no frame was sent.
+                last_keepalive = now_ms().saturating_sub(due).saturating_add(backoff);
+                info!(
+                    "keepalive deferred: channel busy (listen-before-talk {lbt_deferrals}/{LBT_MAX_DEFERRALS}), retry in {backoff} ms"
+                );
+            } else {
+                if busy {
+                    info!("keepalive sent on a busy channel after {LBT_MAX_DEFERRALS} deferrals");
+                }
+                lbt_deferrals = 0;
+                last_keepalive = now_ms();
+                let hb = format!(
+                    "{{\"node_id\":\"gw-{node:02X}\",\"type\":\"gw_keepalive\",\"seq\":{}}}",
+                    seq.wrapping_add(1)
+                );
+                match send_spine!(radio, seq, buf, hb.as_bytes()) {
+                    Ok(()) => info!("SPINE ► (keepalive) seq={seq}"),
+                    Err(e) => info!("SPINE TX error: {e:#}"),
+                }
             }
         }
 
