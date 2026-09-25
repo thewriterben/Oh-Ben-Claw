@@ -55,6 +55,7 @@ PSRAM_OK = re.compile(r"esp_psram: SPI SRAM memory test OK")
 PSRAM_POOL = re.compile(r"Adding pool of (\d+)K of PSRAM")
 CAM_INIT_FAIL = re.compile(r"camera init failed \((.*)\)")
 FRAME = re.compile(r"capture: frame len=(\d+) B, (\d+)x(\d+), format=(\d+)")
+NODE_IN_REPLY = re.compile(r"obc-esp32-s3-[0-9a-z]{3,6}")
 NULL = re.compile(r"esp_camera_fb_get returned null|Failed to get the frame on time")
 
 
@@ -124,32 +125,52 @@ def reply_for(lines: list[str], req_id: str) -> dict | None:
     return None
 
 
+def node_from_reply(reply: dict | None) -> str | None:
+    """The node id inside a `capabilities` reply, whatever shape its result takes."""
+    m = NODE_IN_REPLY.search(json.dumps(reply)) if reply else None
+    return m.group(0) if m else None
+
+
 def run(port: str, count: int, boot_s: float, try_s: float) -> dict:
     con = Console(port)
     boot = con.lines(boot_s)
     facts = banner_facts(boot)
-    if facts.get("node_id") == LIVE_NODE:
-        sys.exit(f"{port} is {LIVE_NODE}, the live mesh node. Nothing sent. "
-                 "Run scripts/which_esp32.ps1 and pass the camera board's port.")
     if "node_id" not in facts:
-        print("  ! no `Node ID:` banner seen -- the board may not have reset on open, "
-              "or this is not an obc-esp32-s3 build. Continuing, but identity is unrecorded.")
+        # On 2026-09-25 a port opened without resetting the board, so no banner
+        # came. `capabilities` is read-only and names the node, which is enough
+        # to refuse the live one before any camera command is sent.
+        con.send({"id": "who", "cmd": "capabilities"})
+        who = node_from_reply(reply_for(con.lines(3.0), "who"))
+        if who:
+            facts["node_id"] = who
+            facts["identity_from"] = "capabilities"
+        else:
+            print("  ! no `Node ID:` banner and no `capabilities` reply -- "
+                  "continuing, but identity is unrecorded.")
+    if facts.get("node_id") == LIVE_NODE:
+        sys.exit(f"{port} is {LIVE_NODE}, the live mesh node. No camera command sent. "
+                 "Run scripts/which_esp32.ps1 and pass the camera board's port.")
     tries = []
-    for i in range(count):
-        req_id = f"cap{i}"
-        t0 = time.time()
-        con.send({"id": req_id, "cmd": "camera_capture", "args": {"quality": 12}})
-        seen = con.lines(try_s)
-        reply = reply_for(seen, req_id)
-        row = classify(seen, reply)
-        row["seconds"] = round(time.time() - t0, 2)
-        row["reply_ok"] = reply.get("ok") if reply else None
-        tries.append(row)
-        print(f"  try {i + 1}/{count}: {row['outcome']}"
-              + (f" {row['bytes']} B {row['size']} format={row['format']}" if row["outcome"] == "frame" else ""),
-              flush=True)
+    try:
+        for i in range(count):
+            req_id = f"cap{i}"
+            t0 = time.time()
+            con.send({"id": req_id, "cmd": "camera_capture", "args": {"quality": 12}})
+            seen = con.lines(try_s)
+            reply = reply_for(seen, req_id)
+            row = classify(seen, reply)
+            row["seconds"] = round(time.time() - t0, 2)
+            row["reply_ok"] = reply.get("ok") if reply else None
+            tries.append(row)
+            print(f"  try {i + 1}/{count}: {row['outcome']}"
+                  + (f" {row['bytes']} B {row['size']} format={row['format']}" if row["outcome"] == "frame" else ""),
+                  flush=True)
+    except KeyboardInterrupt:
+        # A run stopped by hand still measured something; keep it.
+        print(f"  interrupted after {len(tries)} of {count} tries -- keeping what was measured")
     return {"port": port, "boot": facts, "tries": tries,
-            "frames": sum(1 for t in tries if t["outcome"] == "frame"), "count": count}
+            "frames": sum(1 for t in tries if t["outcome"] == "frame"),
+            "count": len(tries), "requested": count}
 
 
 def selftest() -> int:
@@ -183,11 +204,16 @@ def selftest() -> int:
     check("silent", classify(["I (1) something else"], None), {"outcome": "silent"})
     check("reply id match", reply_for(['noise', '{"id":"cap1","ok":true}', '{"id":"cap2","ok":false}'], "cap2"),
           {"id": "cap2", "ok": False})
+    check("node from capabilities reply",
+          node_from_reply({"id": "who", "ok": True, "result": '{"node_id":"obc-esp32-s3-002","board":"xiao"}'}),
+          "obc-esp32-s3-002")
+    check("no node in reply", node_from_reply({"id": "who", "ok": False, "error": "x"}), None)
     check("live node named", banner_facts(["Node ID: obc-esp32-s3-001  (MAC 64:E8:33:7E:BB:98)"])["node_id"], LIVE_NODE)
     if fails:
         print("SELFTEST FAILED\n  " + "\n  ".join(fails))
         return 1
-    print("selftest ok: banner facts, frame/null/stub/silent outcomes, reply matching, live-node name")
+    print("selftest ok: banner facts, frame/null/stub/silent outcomes, reply matching, "
+          "identity from capabilities, live-node name")
     return 0
 
 
