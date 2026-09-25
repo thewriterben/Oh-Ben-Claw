@@ -61,6 +61,7 @@ const REG_LORA_SYNCWORD_MSB: u16 = 0x0740;
 // IRQ bits.
 const IRQ_TX_DONE: u16 = 0x0001;
 const IRQ_RX_DONE: u16 = 0x0002;
+const IRQ_HEADER_ERR: u16 = 0x0020;
 const IRQ_CRC_ERR: u16 = 0x0040;
 const IRQ_TIMEOUT: u16 = 0x0200;
 
@@ -243,8 +244,21 @@ impl Sx1262 {
         // Private-network sync word 0x1424 (both nodes must match).
         self.write_register(REG_LORA_SYNCWORD_MSB, &[0x14, 0x24])?;
 
-        // Route TxDone | RxDone | Timeout to the IRQ register (and DIO1).
-        let mask = IRQ_TX_DONE | IRQ_RX_DONE | IRQ_TIMEOUT;
+        // Route TxDone | RxDone | HeaderErr | CrcErr | Timeout to the IRQ
+        // register (and DIO1).
+        //
+        // The IrqMask decides which bits the chip ever sets in the status
+        // register, not just which ones reach DIO1: a masked IRQ is never raised
+        // (SX1261/2 datasheet, SetDioIrqParams). Until 2026-09-25 the mask was
+        // TxDone | RxDone | Timeout only. `receive` tested IRQ_CRC_ERR anyway, so
+        // its "CRC error" warning could not fire, and no bench log has ever shown
+        // one. A frame that failed its CRC still raised RxDone, was read out as if
+        // it were good, and died later as `REJECTED … bad tag` or `runt` (which
+        // nothing counted). A frame whose *header* failed raises HeaderErr and never
+        // RxDone, so it vanished with no line at all. Both are now visible, which is
+        // what the baseline-loss hunt (scripts/mesh_loss.py) needs in order to tell
+        // "arrived broken" from "never arrived".
+        let mask = IRQ_TX_DONE | IRQ_RX_DONE | IRQ_HEADER_ERR | IRQ_CRC_ERR | IRQ_TIMEOUT;
         self.cmd(
             OP_SET_DIO_IRQ_PARAMS,
             &[
@@ -332,6 +346,12 @@ impl Sx1262 {
             let irq = self.irq_status()?;
             if irq & IRQ_RX_DONE != 0 {
                 self.clear_irq()?;
+                if irq & IRQ_HEADER_ERR != 0 {
+                    // A header error latched earlier in this poll and a frame has
+                    // since arrived. RxDone is handled first so that frame is not
+                    // lost; the clear above erases the header error, so count it here.
+                    warn!("SX1262 RX: header error — frame arrived with a corrupt header and was dropped");
+                }
                 if irq & IRQ_CRC_ERR != 0 {
                     // A frame arrived and was corrupt. Dropping it silently is what made
                     // the 2026-07-17 saturation hunt cost an evening: 205-byte report
@@ -364,6 +384,18 @@ impl Sx1262 {
                     rssi_dbm: -(ps[1] as i16) / 2,
                     snr_db: (ps[2] as i8) / 4,
                 }));
+            }
+            if irq & IRQ_HEADER_ERR != 0 {
+                // A LoRa header failed its checksum: a frame started and was
+                // unreadable from its first bytes. RxDone never follows, and in
+                // continuous RX the chip stays listening. The packet-status RSSI
+                // is not defined for a packet that was never received, so none is
+                // printed; the line's presence is the measurement.
+                self.clear_irq()?;
+                warn!(
+                    "SX1262 RX: header error — frame arrived with a corrupt header and was dropped"
+                );
+                return Ok(None);
             }
             if irq & IRQ_TIMEOUT != 0 {
                 // Continuous RX never times out on its own; if the chip says it

@@ -5,6 +5,51 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The receiver could not see a broken frame (2026-09-25)
+
+### Fixed
+
+- **The SX1262 now raises CRC and header errors.** Its IRQ mask was
+  TxDone | RxDone | Timeout. A masked IRQ never latches, so `receive`'s
+  "CRC error" warning could not fire. No bench log has ever shown one, and
+  the "zero CRC errors" noted on 2026-09-12 is what that would look like.
+  - A frame that failed its CRC was read out as good and died later as
+    `REJECTED … bad tag`.
+  - A frame with a corrupt header raised nothing at all, and now logs
+    `SX1262 RX: header error`.
+
+  Not compiled in this change (no Xtensa toolchain where it was written).
+  It is proven on the bench by the run below, not by CI, which does not
+  build the Heltec firmware.
+
+### Added
+
+- **`scripts/mesh_loss.py`: where each of gw-D8's frames goes.** It reads
+  both consoles at once, stamps every line with host time, and gives each
+  frame the sender logged one fate: `received`, `rejected`, `crc`, `header`,
+  `deaf` (the receiver was transmitting) or `silent`.
+  - On-air intervals come from the SX126x airtime formula at the firmware's
+    settings.
+  - It counts an unwrapped `seq`, not the one byte that wraps at 255.
+  - Frames the sender never sent are kept separate from loss on the air.
+  - Loss is reported with 95% Wilson intervals, by kind, by frame size and
+    in 5-minute bins.
+  - It writes the raw capture so `--replay` can re-analyse it.
+  - `--selftest` covers airtime (41.2 ms for 10 B, Semtech's figure), the
+    interval, the unwrap and all six fates. It was mutation-checked by
+    breaking the unwrap and the deaf rule, and each break fails the test.
+- Card 0 has the two-run procedure: old firmware, reflash gw-40, new firmware.
+
+### Why
+
+The "baseline ~10-20% loss" of 2026-09-17 came from 4/35 and 6/29. The 95%
+intervals on those are 4.5-26% and 9.8-38%, so no single number follows from
+them. Known timing causes (gw-40 deaf during its own ~123 ms keepalives, and
+the two stations transmitting over each other) account for roughly 3-5%, not
+10-20%.
+
+---
+
 ## Unreleased — The Sense's USB id had no source, and now it has two (2026-09-25)
 
 ### Fixed
