@@ -44,6 +44,9 @@ fn rostered_boards_get_their_names() {
     // Not a XIAO, and a different OUI (48:CA:43). Rostered 2026-09-17 after a
     // day of running unrostered as `obc-esp32-s3-4b95f8`.
     assert_eq!(id_for("48:CA:43:4B:95:F8"), "obc-esp32-s3-003");
+    // Spare XIAO, rostered 2026-09-25 after running unrostered as
+    // `obc-esp32-s3-7f84cc`.
+    assert_eq!(id_for("64:E8:33:7F:84:CC"), "obc-esp32-s3-004");
 }
 
 /// The fallback is what protected this board before anyone wrote it down.

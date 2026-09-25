@@ -956,6 +956,12 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
     // ran unrostered for a day, self-naming `obc-esp32-s3-4b95f8` — the fallback
     // doing its job on a bench that also held the live node.
     //
+    // The fleet's spare: a third XIAO ESP32S3, node `obc-esp32-s3-004`, MAC
+    // 64:E8:33:7F:84:CC. Read 2026-09-25 from Windows PnP as
+    // `USB\VID_303A&PID_1001\64:E8:33:7F:84:CC`, in the same listing that
+    // measured the Sense's id above. It is the plain XIAO's 0x303a:0x1001 row
+    // and needs none of its own. Flash and PSRAM have not been measured.
+    //
     // ── Sipeed 6+1 Mic Array ──────────────────────────────────────────────────
     // Circular microphone array with 6 peripheral mics and 1 center mic,
     // powered by an STM32F103 MCU.  Appears as a USB audio device and

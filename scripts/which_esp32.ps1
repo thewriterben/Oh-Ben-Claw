@@ -31,6 +31,11 @@ $Known = @{
     Status = 'BENCH'
     Note   = 'LILYGO T-CameraPlus-S3 V1.1 (OV5640). Camera works; safe to reflash.'
   }
+  '64:E8:33:7F:84:CC' = @{
+    Id     = 'obc-esp32-s3-004'
+    Status = 'BENCH'
+    Note   = 'spare XIAO ESP32S3. Nothing depends on it -- safe to reflash.'
+  }
 }
 
 Write-Output "=== ESP32-S3 boards on native USB (VID_303A) ==="
