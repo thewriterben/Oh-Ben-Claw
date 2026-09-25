@@ -776,28 +776,16 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
-    // Camera (opt-in). Owns the SCCB and the parallel data bus; the pins are the
-    // board's, see camera.rs. The sensor part is whatever is fitted -- the XIAO
-    // Sense has an OV2640, the Lilygo T-CameraPlus-S3 an OV5640 (both measured
-    // 2026-09-16). This comment used to say "OV2640" and "GPIO4/5", which were
-    // the unverified map's numbers and were never this board's.
-    #[cfg(feature = "camera")]
-    match camera::init() {
-        // Not "OV2640 camera initialised": that line printed on a board with an
-        // OV5640 in it, two lines after the driver logged `Camera PID=0x5640`.
-        Ok(()) => info!("camera initialised"),
-        Err(e) => log::warn!("camera init failed ({e}); camera_capture falls back to stub"),
-    }
     // I2S microphone (SCK=GPIO0, WS=GPIO1, SD=GPIO2). Falls back to the stub RMS if
     // init fails or no mic is fitted.
     //
     // Disabled on the Waveshare 2.1 build: GPIO0 is the DHT22 there and GPIO1/2
     // are LCD lines — no mic is wirable; `audio_sample` serves the stub RMS.
     // Not on the Lilygo T-CameraPlus-S3 V1.0/V1.1: this init takes GPIO0/1/2, and
-    // on that board GPIO1/2 are the camera's SCCB. It runs *after* `camera::init`,
-    // so it would have reassigned the sensor's control bus out from under a
-    // camera that had just reported success -- a failure that would have looked
-    // like anything but an I2S driver. `BOARD.has_mic` is false there and the
+    // on that board GPIO1/2 are the camera's SCCB. Had it run after `camera::init`
+    // it would have reassigned the sensor's control bus out from under a camera
+    // that had just reported success -- a failure that would have looked like
+    // anything but an I2S driver. `BOARD.has_mic` is false there and the
     // const assertion below makes the two agree.
     #[cfg(not(any(feature = "board-waveshare-21", feature = "board-lilygo-tcam-s3-v11")))]
     {
@@ -818,6 +806,47 @@ fn main() -> anyhow::Result<()> {
             }
             Err(e) => log::warn!("I2S mic init failed ({e}); audio_sample falls back to stub"),
         }
+    }
+    // Camera (opt-in). Owns the SCCB and the parallel data bus; the pins are the
+    // board's, see camera.rs. The sensor part is whatever is fitted -- the XIAO
+    // Sense has an OV2640, the Lilygo T-CameraPlus-S3 an OV5640 (both measured
+    // 2026-09-16). This comment used to say "OV2640" and "GPIO4/5", which were
+    // the unverified map's numbers and were never this board's.
+    //
+    // **The camera MUST initialise after the I2S mic, and after anything else that
+    // allocates a GDMA channel.** Found 2026-09-25 on two XIAO Senses with two
+    // sensors (002/OV2640, a84de4/OV3660). Both showed the same fault: VSYNC
+    // arrived every frame, and `cam_hal: FB-SIZE: 0 != 76800` said not one byte
+    // of pixel data followed. The mechanism, read in both sources:
+    //
+    //   * esp32-camera 2.0.7 (`target/esp32s3/ll_cam.c`, `ll_cam_dma_init`) does
+    //     not use the GDMA driver. It scans the channel registers from the top
+    //     for one whose `in.link.addr` is 0, takes it ("DMA Channel=4"), and
+    //     programs it by direct register writes. The GDMA allocator never learns
+    //     that channel is in use.
+    //   * ESP-IDF v5.3.2 (`esp_hw_support/dma/gdma.c`, `gdma_acquire_group_handle`)
+    //     RESETS the whole GDMA block (`gdma_ll_reset_register`) the first time any
+    //     driver allocates a channel. The I2S RX driver is such a driver.
+    //
+    // So with the camera first, the mic's allocation wiped the camera's DMA
+    // setup in the same millisecond as "camera initialised". The capture peripheral kept
+    // raising VSYNC, which is its own interrupt, while its DMA never moved
+    // another byte. In JPEG mode an empty frame is dropped silently, which is
+    // why 002 only ever showed `Failed to get the frame on time`. The Lilygo
+    // worked because its build has no I2S mic (GPIO1/2 are its SCCB). Nothing
+    // was wrong with either Sense.
+    //
+    // With the mic first, the GDMA group already exists and is never reset
+    // again, and the allocator hands out pairs from 0 upward while the camera
+    // takes the highest free one. That holds only while fewer than five other
+    // GDMA channels are allocated. An esp32-camera that allocates through the
+    // GDMA driver would remove the ordering rule entirely.
+    #[cfg(feature = "camera")]
+    match camera::init() {
+        // Not "OV2640 camera initialised": that line printed on a board with an
+        // OV5640 in it, two lines after the driver logged `Camera PID=0x5640`.
+        Ok(()) => info!("camera initialised"),
+        Err(e) => log::warn!("camera init failed ({e}); camera_capture falls back to stub"),
     }
     // On-die temperature sensor: no wiring, real signal. The default range
     // (−10…80 °C) is the accurate one for a bench and a room; the driver
