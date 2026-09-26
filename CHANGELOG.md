@@ -31,6 +31,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   question, not a threshold one. Written up in
   `docs/VISION-DETECTOR-2026-09.md`. The walk window default went from 8 s
   to 11 s, and `--walk-seconds` now overrides a saved run's on `--replay`.
+- **002 (OV2640), walking ~1 ft away: 0 of 7 walks detected as well.** The
+  walker scores `edge` 8.8-13.5, so where `frac` crosses `FRAC_HI` the rule
+  says `nudge` -- the lamp's verdict on this board -- and the gate withheld
+  most walker frames. On both Senses the person lands where that board's lamp
+  lands; the difference is where in the frame the change is, which the
+  whole-frame scores do not keep. Fixture `person-002-1ft/`.
 - **The countdown runs on its own clock.** It was printed from the frame loop,
   which reads the clock once per frame; on 002 (1.3 s frames) counts were
   skipped and arrived out of order. It now runs on a timer thread against the

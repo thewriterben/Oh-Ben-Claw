@@ -491,3 +491,45 @@ not a tuning one, and nothing here changes the firmware.
 
 `thresholds_provisional` stays true, and on this evidence the reply should not
 be read as a person detector on 005 at all.
+
+### The second Sense: not seen either, and called a nudge when it is judged
+
+`tests/fixtures/vision-events-2026-09-26/person-002-1ft/`: the same session on
+obc-esp32-s3-002 (OV2640), walking about **1 ft** from the camera -- closer
+than 005's run, so the walker fills more of the frame. (A 3 ft run on 002
+exists on the bench machine and is not in the tree.) Frames take 1.3 s here,
+so the walker was in view for two or three frames per walk, 3-7 s after each
+cue. Room empty at the end; TV off.
+
+```
+quiet    38 judged, frac max 0.094, edge max 6.91 (002's noise floor, as in the lamp run)
+
+walker frames, all seven walks:  frac 0.30-0.54   edge 8.8-13.5
+judged walker frames:            3 (all in walk 6): quiet, quiet, nudge
+rule alone on walker frames:     nudge 9, quiet the rest
+walks detected:                  0 of 7;  between walks: 0 detections
+```
+
+**0 of 7 again, and the rule never says `motion` for this person either.**
+The walker's `edge` (8.8-13.5) is above `EDGE_NUDGE` 9.0 or next to it, so
+wherever `frac` crosses `FRAC_HI` the verdict is `nudge` -- the lamp's verdict
+on this board, and one that drops the reference. Where `frac` stays just under
+0.35 the verdict is `quiet`. The gate withheld most walker frames, as on 005.
+
+### Both Senses, one conclusion
+
+| | 005 (OV3660), ~3 ft | 002 (OV2640), ~1 ft |
+|---|---|---|
+| walks detected | 0 / 7 | 0 / 7 |
+| walker `edge` | 1.8-4.7 | 8.8-13.5 |
+| lamp switch `edge`, same board | 4.0-4.7 | 12.3-14.1 |
+| what the rule makes of the walker | `quiet` / `light` (a lamp) | `quiet` / `nudge` (a lamp, or a bump) |
+| walker frames the gate let through | 2 | 3 |
+
+On each board the person lands where that board's lamp lands, and on both the
+gate hides most of the person. The two whole-frame numbers the detector keeps
+-- how many pixels changed, and how much structure changed -- do not carry the
+difference between a person and a lamp, on either sensor, at either distance.
+What does differ is **where**: a lamp changes the whole frame at once, a
+walker changes the part of it they are in. That is the input to the next
+design, which is a proposal to write, not a change made here.
