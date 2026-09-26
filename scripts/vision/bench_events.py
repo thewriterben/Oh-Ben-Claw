@@ -541,7 +541,7 @@ def live(args, t: dict) -> str:
     return out
 
 
-def replay(out: str, t: dict) -> dict:
+def replay(out: str, t: dict, walk_s: float | None = None) -> dict:
     with open(os.path.join(out, "trace.jsonl"), encoding="utf-8") as fh:
         rows = [json.loads(l) for l in fh if l.strip()]
     with open(os.path.join(out, "marks.json"), encoding="utf-8") as fh:
@@ -552,7 +552,7 @@ def replay(out: str, t: dict) -> dict:
         with open(cues_path, encoding="utf-8") as fh:
             cue = json.load(fh)
     if cue.get("mode") == "person":
-        s = summarise_person(rows, cue["cues"], cue["walk_seconds"], t)
+        s = summarise_person(rows, cue["cues"], walk_s or cue["walk_seconds"], t)
     else:
         s = summarise(rows, marks, t, settle_delta())
     with open(os.path.join(out, "summary.json"), "w", encoding="utf-8") as fh:
@@ -668,8 +668,9 @@ def main() -> int:
     ap.add_argument("--every", type=float, default=None,
                     help="seconds between cues (default 15 for lamp, 20 for person)")
     ap.add_argument("--person-seconds", type=float, default=160.0)
-    ap.add_argument("--walk-seconds", type=float, default=8.0,
-                    help="how long after WALK NOW a frame counts as part of the walk")
+    ap.add_argument("--walk-seconds", type=float, default=None,
+                    help="how long after WALK NOW a frame counts as part of the walk "
+                         "(default 11; with --replay, overrides the run's saved value)")
     ap.add_argument("--lead", type=float, default=15.0, help="seconds to get out of shot")
     ap.add_argument("--replay", metavar="DIR", help="re-score a saved run")
     ap.add_argument("--selftest", action="store_true")
@@ -680,10 +681,13 @@ def main() -> int:
     if args.replay:
         out = args.replay
     elif args.port:
+        # 11 s: on 005 (2026-09-26) a walker at ~3 ft appeared ~3 s after NOW and
+        # was still in view at +10 s; the first default of 8 s cut walks short.
+        args.walk_seconds = args.walk_seconds or 11.0
         out = live(args, t)
     else:
         ap.error("--port is required (scripts/which_esp32.ps1 names it), or --replay DIR")
-    s = replay(out, t)
+    s = replay(out, t, args.walk_seconds if args.replay else None)
     (print_person_report if s.get("mode") == "person" else print_report)(s)
     print(f"\n  wrote {os.path.join(out, 'summary.json')}")
     return 0

@@ -435,3 +435,59 @@ kept as that, not as a floor.
 reset is dark (`first.jpg` brightness ~37 against ~95 for the frames after it),
 as was `grab_picture.py`'s first JPEG and `probe_detect`'s first frame. The
 driver appears to hand back a frame captured before auto-exposure settled.
+
+## A person walking through: not seen (2026-09-26)
+
+`tests/fixtures/vision-events-2026-09-26/person-005/`, `bench_events.py --mode
+person` on obc-esp32-s3-005: 40 quiet frames, then seven cued walks across the
+middle of the view, about 3 ft from the camera, which looks steeply down at the
+floor. Pictures at both ends show the room empty; the monitor in view is
+static. Scored with an 11 s window per walk (the first default, 8 s, was
+short: the walker appeared ~3 s after each cue and was in view until ~+10 s).
+
+```
+quiet    38 judged, frac max 0.0018, edge max 1.27, 0 detections
+
+walk  frames  judged  detected  frac max  edge max   rule alone on every frame
+  1      8       1       no       0.82      4.68     motion 1, light 2, quiet 5
+  2      8       2       no       0.15      2.99     quiet 8
+  3      9       3       no       0.43      2.58     light 1, quiet 8
+  4      8       4       no       0.23      3.08     quiet 8
+  5      8       8       no       0.03      1.19     quiet 8   (walker at the edge of view)
+  6      9       3       no       0.21      3.68     quiet 9
+  7      9       4       no       0.23      3.39     quiet 9
+
+between  64 frames, 0 detections
+```
+
+**0 of 7 walks detected.** Two mechanisms, each sufficient on its own:
+
+1. **The warm-up gate withholds the frames the person is in.** A body crossing
+   the view moves mean brightness by 5-15 grey levels frame to frame (114 ->
+   142 in walk 1) as auto-exposure reacts to it. `SETTLE_DELTA` is 3, so the
+   node answers `warming_up` for almost every frame with the walker in it:
+   across the seven walks, two frames containing the walker were judged, both
+   with the walker at the edge of view. The gate cannot tell "exposure is
+   hunting" from "something large came in", and it was built to be blind
+   through the first. The lamp sessions above are this same mechanism doing
+   what it was built for.
+2. **Where frames were scored, frac/edge put the person where a lamp is.** The
+   walker scores `edge` 1.8-4.7; a lamp switch on the same node scored
+   4.0-4.7. `frac` stays 0.07-0.24 for most walker frames -- under `FRAC_HI`
+   0.35, set from a host fixture where the person leaned in close -- and where
+   it is higher (walk 1: 0.59-0.82) `edge` is still at most 4.7. On this
+   sensor and view, `edge` does not separate a person from a lamp.
+
+**What this means.** On 005, as built, the detector is safe against lamps
+because it is blind through any brightness step, and a person produces
+brightness steps. Its two defences against the lamp (gate and `EDGE_LIGHT`)
+are exactly what hide a walker. No single threshold change fixes both: loosen
+the gate and lamps become detections through a rule that cannot tell them
+apart; lower `FRAC_HI` or `EDGE_LIGHT` and the lamp crosses them first. What
+would have to change is what is measured -- where in the frame the change is
+(a person is a localised change, a lamp is global), or brightness judged
+against more than one frame -- not the numbers. That is a design question,
+not a tuning one, and nothing here changes the firmware.
+
+`thresholds_provisional` stays true, and on this evidence the reply should not
+be read as a person detector on 005 at all.

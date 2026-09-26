@@ -21,6 +21,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   slow to leave is told apart from a false positive. `cues.json` is saved so
   `--replay` re-scores a person run. Selftest and a dry run against a
   simulated walker on a pty.
+- **First person session, 005 (OV3660): 0 of 7 walks detected.** Walking
+  ~3 ft from the camera, the walker moved brightness 5-15 levels per frame as
+  auto-exposure reacted, so the warm-up gate withheld almost every frame they
+  were in (two judged across seven walks). Where frames were scored, the
+  walker's `edge` (1.8-4.7) overlaps a lamp switch's on the same node
+  (4.0-4.7), and `frac` mostly stays under `FRAC_HI`. The gate and
+  `EDGE_LIGHT` that make lamps safe are what hide a person; a design
+  question, not a threshold one. Written up in
+  `docs/VISION-DETECTOR-2026-09.md`. The walk window default went from 8 s
+  to 11 s, and `--walk-seconds` now overrides a saved run's on `--replay`.
 
 ## Unreleased — Lamp switches, marked (2026-09-26)
 
