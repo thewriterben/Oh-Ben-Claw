@@ -5,6 +5,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A skill has to be a task (2026-09-26)
+
+### Changed
+
+- **The improvement pass now has a minimum bar** (`synthesis::below_bar`).
+  Fifteen days on the bench produced twenty-three learned skills and every one
+  was a frozen replay of a single prompt: a skill named after a voice note's
+  test phrase whose recipe was `date`, one named after a transcription
+  server's JSON envelope, seven minted from lines of Python pasted into the
+  console, one from a System 2 escalation prompt with a world snapshot inside
+  it. Used once, ever. The existing gates asked "is it safe, is it new" — never
+  "is it a task". Now an episode becomes a candidate only if its objective reads
+  as a request (two words or more; not code, data, or a prompt OBC wrote to
+  itself) and its recipe does more than a look-up (a clock command, a session
+  search, a world-memory read, a bare page load). Rejections are counted in the
+  pass report (`skipped_below_bar`, logged as `below_bar=`) and named at DEBUG
+  per episode. Every skill installed on the bench in that window would have
+  been refused.
+
 ## Unreleased — The base was talking over its own traffic (2026-09-25)
 
 ### Measured
