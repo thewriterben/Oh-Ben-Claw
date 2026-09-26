@@ -14,9 +14,9 @@ cd C:\src\obc
 .\scripts\build_camera.ps1 -Board xiao-sense -Port COM11     # build, flash, monitor
 ```
 
-§1–§3 say why it is shaped like that. The `camera-bringup` branch is no longer
-how a camera build is made; its greyscale capture and on-node detector commits
-are still only there, and move to `main` in a follow-up.
+§1–§3 say why it is shaped like that. The `camera-bringup` branch is retired:
+its greyscale capture, software JPEG encoder and on-node detector
+(`camera_detect`) are on `main` as of 2026-09-26.
 
 > **2026-09-16: `--features camera` alone no longer compiles.** A camera build
 > must also name its board, because the pin map is a property of the board and
@@ -185,7 +185,19 @@ On boot you should see `OV2640 camera initialised` (or a warning if init failed)
 {"id":"1","cmd":"camera_capture","args":{"quality":10}}
 ```
 A healthy board returns `ok:true` with a long base64 JPEG string (no longer the
-`STUB:` placeholder). Decode it to a `.jpg` to confirm the image.
+`STUB:` placeholder). Decode it to a `.jpg` to confirm the image. It is
+**monochrome**: the sensor captures `PIXFORMAT_GRAYSCALE` for the detector
+(ADR 2026-09-17, `camera.rs`), and `fmt2jpg_cb` encodes that frame in software.
+The console logs `capture: frame len=76800 B, 320x240, format=3` first, which is
+what `scripts/probe_sense_capture.py` counts.
+
+```json
+{"id":"2","cmd":"camera_detect"}
+```
+Compares this frame with the previous one. The first reply is `no_reference`,
+then `warming_up` while auto-exposure settles, then a `class`. Every reply
+carries `thresholds_provisional: true` until the thresholds are measured
+on-node (`docs/VISION-DETECTOR-2026-09.md`). `scripts/probe_detect.py` runs it.
 
 ## Troubleshooting / caveats
 

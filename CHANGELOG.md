@@ -5,6 +5,45 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The camera-bringup branch comes home (2026-09-26)
+
+### Added
+
+- **Greyscale capture, software JPEG, and `camera_detect`, on `main`.** The four
+  `camera-bringup` commits (2026-09-17) are cherry-picked, with their original
+  messages, onto the camera crate from the entry below; the branch's uncommented
+  component block is dropped in favour of `obc-esp32-s3-camera`'s. What arrives:
+  `PIXFORMAT_GRAYSCALE` at QVGA (76,800 B of Y8, `format=3`); `camera_capture`
+  encoding that frame with `fmt2jpg_cb`, so pictures are monochrome and checked
+  for `FFD8`/`FFD9`; `detector_math.rs` and the `camera_detect` command, with
+  `tests/firmware_detector_math.rs` (15 tests) holding it to
+  `scripts/vision/classify.py`; `probe_grey_capture.py`, `probe_detect.py`,
+  `scripts/vision/bench_floor.py`, `make_grey_pairs.py`, the grey-pair and
+  200-frame floor fixtures, and `docs/VISION-DETECTOR-2026-09.md`.
+- `main` now matches what the Senses were measured on. The 2026-09-25/26
+  capture results (002 20/20, 005 10/10, all `format=3`) came from greyscale
+  builds; until now `main`'s `camera.rs` still asked for JPEG.
+
+Also fixed: `build_camera.ps1 -Port` died before building on its first bench
+run, because espflash's "new version available" notice goes to stderr and
+Windows PowerShell made that fatal under `$ErrorActionPreference = 'Stop'`.
+The MAC read now tolerates stderr and still refuses a port with no MAC. And
+its cargo arguments were one string, not a list: `$x = if (...) { @('run') }`
+unwraps to a string in PowerShell and `+=` then concatenates, so the board
+feature never reached cargo and the build stopped at camera.rs's "needs a
+board feature" `compile_error!`. Now `[string[]]`, checked in PowerShell 7.
+
+The one conflict was `main.rs`'s module list, where `detector_math` and the
+PSRAM guard both landed; both are kept. Thresholds are still provisional.
+
+**Bench, 2026-09-26, the first camera build from `main`** (005, XIAO Sense,
+OV3660, via `build_camera.ps1`): `probe_sense_capture.py` 10/10
+`76800 B 320x240 format=3`; `probe_detect.py` `no_reference`, 2x `warming_up`
+(brightness 51.9 -> 124.8, frame 1 `frac` 1.0 held back by the gate), then 7/7
+`quiet` at `frac` 0.0, `edge` 0.63-0.66. Recorded in
+`docs/VISION-DETECTOR-2026-09.md`. The software-encoded JPEG picture from
+`camera_capture` has not been decoded and viewed yet.
+
 ## Unreleased — Camera builds from main (2026-09-26)
 
 ### Added

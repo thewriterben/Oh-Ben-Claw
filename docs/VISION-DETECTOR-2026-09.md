@@ -160,3 +160,151 @@ Nothing here has run on a node. The thresholds are measured against a host-side
 decode of JPEG frames; an on-node greyscale pipeline sees slightly different
 pixels (no JPEG round-trip) and the numbers must be re-measured there, not
 assumed to carry over.
+
+---
+
+# 2026-09-17: it runs on a node, and the re-measurement has not happened yet
+
+The detector is on `obc-esp32-s3-003` (LILYGO T-CameraPlus-S3 V1.1, OV5640),
+reachable as `camera_detect`, differencing the sensor's raw Y8 with no JPEG
+round trip. `scripts/probe_detect.py` drives it. The ADR for the single capture
+mode is OBC-Prime `docs/DECISIONS.md`, 2026-09-17.
+
+The rule is now implemented twice — `scripts/vision/classify.py` and
+`firmware/obc-esp32-s3/src/detector_math.rs` — and
+`tests/firmware_detector_math.rs` scores real frames through both and fails if
+they disagree, because two copies of one rule that nothing compares is how this
+tree has been bitten before.
+
+## The first on-node run, and why it is not the measurement
+
+Thirty frames at 0.4 s. Six of thirty were judged; the rest reported
+`warming_up`. Brightness wandered 84–119 where the host fixture held 108.7–111.0,
+and `frac` on frames the rule called quiet ran 0.11–0.23 against the host
+fixture's baseline max of 0.083.
+
+That looks exactly like the ADR's prediction coming true — raw Y8 carries sensor
+noise that JPEG quantisation smooths away, so more pixels cross a 12-grey-level
+threshold, and the floor rises. It is a tidy story and **this run is not evidence
+for it.**
+
+A picture taken during the same session shows a person at the bench, in frame,
+moving. So the brightness swing and the raised `frac` are confounded with an
+actual moving subject, and the run measures a room with someone in it. A floor
+measured on a scene that is not quiet is not a floor.
+
+This was nearly written up as "the thresholds do not carry over". It was caught
+by looking at the image the node had just produced — which only became possible
+in the same change, because the node could not encode a picture until then. The
+detector's own output could not have told anyone: `warming_up` is what it says
+both when auto-exposure is hunting and when the room is busy.
+
+## What the re-measurement needs
+
+An empty bench, nobody in frame, several minutes, lighting held still — the
+conditions `baseline_still` was captured under — and then the same for a lighting
+change. Until that exists:
+
+- every `camera_detect` reply carries `thresholds_provisional: true`
+- the three thresholds in `detector_math.rs` remain the host fixture's
+- nothing acts on `class`
+
+`SETTLE_DELTA` (3.0 grey levels, two consecutive frames) is in the same position:
+it came from a fixture whose exposure was stable, and the only run against it so
+far had a person in the frame.
+
+## What the run does establish
+
+- The detector executes on the node and returns per-frame `frac`, `edge` and
+  `mean` — the numbers a re-measurement needs.
+- The warm-up gate never once reported `quiet` while blind. `warming_up`,
+  `no_reference` and `quiet` are three distinct answers on the wire, and the
+  reply carries `why_no_class` rather than a silent absence.
+- `camera_capture` returns a real greyscale JPEG again (`FF D8` … `FF D9`),
+  encoded on the node by `jpge` from the Y8 frame. Quality is honoured: 1, 5 and
+  10 gave 2,894 / 5,982 / 22,540 bytes from the same 76,800-byte frame.
+
+## The floor, measured on an empty bench — and it is the opposite of the prediction
+
+`tests/fixtures/vision-floor-2026-09-17/` — 200 frames at 1 s from
+`obc-esp32-s3-003`, with `first.jpg` and `last.jpg` in the same directory
+showing an empty workshop corner at both ends of the run. Captured by
+`scripts/vision/bench_floor.py`.
+
+```
+                    on-node Y8        host fixture (JPEG round trip)
+frac   mean            0.0072                              0.041
+       p95             0.0087                              0.068
+       max             0.0095                              0.083
+edge   mean             1.178                               2.49
+       p95              1.26                                3.08
+       max              1.28                                3.40
+brightness        91.5 – 94.7 (3.2)                 108.7 – 111.0 (2.3)
+judged            198 / 200
+```
+
+**The on-node floor is roughly nine times lower on `frac` and nearly three times
+lower on `edge`.** The ADR predicted the opposite, in as many words: raw Y8
+carries sensor noise that JPEG quantisation smooths away, so more pixels should
+cross a 12-grey-level threshold and the floor should *rise*. It falls.
+
+The likely mechanism, stated as a hypothesis because this run cannot prove it:
+**the JPEG round trip was adding difference, not removing it.** Each frame is
+quantised independently, so two nearly-identical sensor frames decode to two
+visibly different images — block boundaries and DCT coefficients land
+differently. The host fixture was not measuring the room's noise floor so much
+as the encoder's. Differencing raw Y8 skips that entirely.
+
+**What this run does not control for.** It is a different scene, a different
+day, different light and a 1.0 s interval against the fixture's 0.75 s. Scene
+and pipeline are confounded, and the honest claim is "the floor on this bench
+with this pipeline is 0.0095 `frac` / 1.28 `edge`", not "JPEG was responsible
+for the difference". The clean experiment is both pipelines on one scene, and it
+is not expensive: capture JPEG and greyscale runs of the same still room.
+
+### Consequence for the thresholds: safe, and far too loose
+
+Zero of 199 scored frames would be called `motion` or `nudge` by the host
+thresholds. They are not dangerous here. They are **enormously** slack —
+`FRAC_HI` is 0.35 against a measured maximum of 0.0095, a factor of 37.
+
+That is not licence to lower them. A floor sets a lower bound on where a
+threshold may go; it says nothing about where the *events* sit, and a threshold
+tuned to one class is how a detector acquires false positives on the other
+three. `person`, `light_change` and `camera_nudge` have to be measured on-node
+too, and until they are `thresholds_provisional` stays true on every reply.
+
+### The warm-up gate holds up
+
+198 of 200 frames judged, brightness holding 91.5–94.7 across three and a half
+minutes. `SETTLE_DELTA = 3.0` was taken from the host fixture and is comfortable
+here. Frame 0 is `no_reference`, frame 1 is `warming_up`, and from frame 2 the
+node is judging — which is the designed behaviour and the first time it has been
+seen on a scene quiet enough to show it.
+
+## First run on a Sense, from `main` (2026-09-26)
+
+The first camera build from `main` (the `obc-esp32-s3-camera` crate, via
+`scripts/build_camera.ps1 -Board xiao-sense`) on obc-esp32-s3-005: XIAO ESP32S3
+Sense, OV3660, MAC `AC:27:6E:A8:4D:E4`, XCLK 10 MHz.
+
+`probe_sense_capture.py --count 10`: 10/10 `frame 76800 B 320x240 format=3`.
+
+`probe_detect.py 10 1.0 COM11`, a still scene on the bench:
+
+    #  state        class  frac  edge   mean
+    0  no_reference -      -     -      51.86
+    1  warming_up   -      1.0   4.59   124.83
+    2  warming_up   -      0.0   0.67   124.99
+    3-9 ready       quiet  0.0   0.63-0.66   124.68-124.79
+
+The warm-up gate did its job on a harder start than the Lilygo's: brightness
+went 51.9 -> 124.8 between the first two frames, and frame 1 scored `frac` 1.0.
+Without the gate, that frame would have been reported as a major event. After
+that, 7 of 7 judged frames were `quiet`.
+
+The quiet level is lower than the Lilygo floor above (`frac` 0.0 against a
+0.0095 max, `edge` 0.63-0.66 against 1.28), on a different sensor, scene and
+light, from 7 frames rather than 200. Treat it as a data point: it adds no
+bound the Lilygo floor did not already give, and it says nothing about where
+the events sit. `thresholds_provisional` stays true.

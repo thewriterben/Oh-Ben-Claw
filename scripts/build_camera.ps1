@@ -77,7 +77,18 @@ Write-Host "target   $env:CARGO_TARGET_DIR"
 
 # --- which chip is on the port ------------------------------------------------
 if ($Port) {
-    $info = & espflash board-info --port $Port 2>&1 | Out-String
+    # espflash logs to stderr (including a "new version available" notice), and
+    # Windows PowerShell turns redirected stderr into error records, which
+    # $ErrorActionPreference = 'Stop' makes fatal. Relax it for this one call and
+    # keep the text; the MAC regex below is the real check. (2026-09-26: the
+    # first run died here on the version notice, before anything was built.)
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $info = & espflash board-info --port $Port 2>&1 | ForEach-Object { "$_" } | Out-String
+    } finally {
+        $ErrorActionPreference = $eap
+    }
     $mac = [regex]::Match($info, '(?i)MAC address:\s*([0-9a-f]{2}(:[0-9a-f]{2}){5})')
     if (-not $mac.Success) {
         Write-Host $info
@@ -94,7 +105,12 @@ if ($Port) {
 # --- build, and flash if asked --------------------------------------------------
 Push-Location $crate
 try {
-    $cargoArgs = if ($Port) { @('run') } else { @('build') }
+    # [string[]], not `$x = if (...) { @('run') }`: PowerShell unwraps a
+    # one-element array returned from `if` into a plain string, and `+=` on a
+    # string concatenates. The first bench run (2026-09-26) handed cargo ONE
+    # argument, "run--release --features board-xiao-sense-- --port COM11", and
+    # the board feature never arrived as a feature.
+    [string[]]$cargoArgs = @(if ($Port) { 'run' } else { 'build' })
     $cargoArgs += @('--release', '--features', $feature)
     if ($Port) { $cargoArgs += @('--', '--port', $Port) }
     Write-Host ""
