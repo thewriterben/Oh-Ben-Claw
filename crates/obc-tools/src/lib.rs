@@ -255,15 +255,28 @@ mod risk_contract_tests {
             "schedule",
             "memory",
         ];
-        let tools = default_tools();
+        let mut tools = default_tools();
+        // The two world-memory writers need a store and are wired in main, not
+        // in `default_tools`; build them here so the contract covers them.
+        let mem = std::sync::Arc::new(obc_memory::world::WorldMemory::open_in_memory().unwrap());
+        tools.push(Box::new(builtin::incident::RecordIncidentTool::new(
+            std::sync::Arc::clone(&mem),
+        )));
+        tools.push(Box::new(builtin::world::WorldMemoryTool::new(mem)));
+        let mut checked = 0;
         for name in writers {
             let Some(t) = tools.iter().find(|t| t.name() == name) else {
                 continue; // not registered in this build (feature-gated)
             };
+            checked += 1;
             assert!(
                 !t.risk_class().reversible,
                 "{name} is a writer and must declare reversible: false"
             );
         }
+        assert!(
+            checked >= 7,
+            "only {checked} writers were registered; the contract went untested"
+        );
     }
 }
