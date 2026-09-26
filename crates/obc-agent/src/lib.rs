@@ -1256,18 +1256,33 @@ impl Agent {
         let (with_recipe, recipe_less): (Vec<_>, Vec<_>) = scored
             .into_iter()
             .partition(|s| s.episode.steps.iter().any(|st| st.ok));
+        // A floor (2026-09-26, first turn with the retrieval line live): the
+        // episode injected into a stated-preference turn shared *no word* with
+        // it (lexical 0.0) and ranked first in exactly one leg (fused 0.016,
+        // the dense one). One leg's opinion with no lexical support is a
+        // coincidence of embeddings, not experience. Keep an episode when the
+        // words overlap, or when two legs agree (fused above one first place).
+        const ONE_FIRST_PLACE: f32 = 1.0 / 61.0;
+        let (with_recipe, weak): (Vec<_>, Vec<_>) = with_recipe
+            .into_iter()
+            .partition(|s| s.lexical > 0.0 || s.fused > ONE_FIRST_PLACE + 0.001);
         let episodes: Vec<obc_memory::trajectory::Episode> =
             with_recipe.iter().map(|s| s.episode.clone()).collect();
 
         // One line per turn saying what was retrieved and why (2026-09-26):
         // the only way to measure how often the past leaks into the present.
-        if !skills.is_empty() || !with_recipe.is_empty() || !recipe_less.is_empty() {
+        if !skills.is_empty()
+            || !with_recipe.is_empty()
+            || !recipe_less.is_empty()
+            || !weak.is_empty()
+        {
             let objective_head: String = objective.chars().take(60).collect();
             tracing::info!(
                 k,
                 skills = skills.len(),
                 episodes = with_recipe.len(),
                 dropped_recipe_less = recipe_less.len(),
+                dropped_weak = weak.len(),
                 ids = ?with_recipe.iter().map(|s| s.episode.id.as_str()).collect::<Vec<_>>(),
                 fused = ?with_recipe.iter().map(|s| (s.fused * 1000.0).round() / 1000.0).collect::<Vec<_>>(),
                 lexical = ?with_recipe.iter().map(|s| (s.lexical * 100.0).round() / 100.0).collect::<Vec<_>>(),
@@ -1334,7 +1349,16 @@ impl Agent {
                 } else {
                     recipe
                 };
-                block.push_str(&format!("- \"{}\" → {}\n", ep.objective.trim(), recipe));
+                // The objective is a label for the recipe, not a document: a
+                // System 2 escalation prompt runs to 2,500 characters and 57 of
+                // them sat in the store, each a candidate to be pasted whole.
+                let label: String = ep.objective.trim().chars().take(160).collect();
+                let label = if label.len() < ep.objective.trim().len() {
+                    format!("{label}…")
+                } else {
+                    label
+                };
+                block.push_str(&format!("- \"{label}\" → {recipe}\n"));
             }
         }
         Some(block)

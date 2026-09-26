@@ -61,6 +61,20 @@ vision floor) move to `main` in a follow-up.
   system chars, tool count and schema chars, history messages and chars. The
   bench's cold turn had grown from 12.7k to 22k tokens and nothing said which
   part grew; `brain usage` gives the tokens, this gives the shape.
+## Unreleased — One leg's opinion is not experience (2026-09-26)
+
+### Changed
+
+- **Experience retrieval needs lexical support or two legs in agreement.**
+  The first turn with the retrieval line live showed an episode injected
+  into a stated-preference turn with lexical overlap 0.0 and a fused score
+  of one first place in one leg — the dense one. Such candidates are now
+  dropped and counted (`dropped_weak=`); an episode stays when the words
+  overlap or two legs rank it.
+- **Objectives in the experience block are labels, cut at 160 characters.**
+  A System 2 escalation prompt runs to ~2,500 characters; 57 of them sat in
+  the store and each was a candidate to be pasted whole into the prompt.
+
 ## Unreleased — A note is not a skill (2026-09-26)
 
 ### Fixed
