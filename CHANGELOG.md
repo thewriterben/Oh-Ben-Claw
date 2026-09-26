@@ -61,6 +61,15 @@ vision floor) move to `main` in a follow-up.
   system chars, tool count and schema chars, history messages and chars. The
   bench's cold turn had grown from 12.7k to 22k tokens and nothing said which
   part grew; `brain usage` gives the tokens, this gives the shape.
+## Unreleased — A note is not a skill (2026-09-26)
+
+### Fixed
+
+- **`memory` joins the forge's look-up/bookkeeping list.** An hour after the
+  notes block started working, the first note the agent ever wrote had become
+  a learned skill whose recipe re-adds that exact note (`learned_two_things_
+  about_how_i_work_i_am_in_mountain`, enabled at `simulate`). The minimum bar
+  (#177) now treats a note write like a clock read: not a procedure.
 
 ## Unreleased — Nobody will remind you (2026-09-26)
 

@@ -80,13 +80,17 @@ const NOT_A_REQUEST: &[&str] = &[
     "system 1 escalation",
 ];
 
-/// Tools whose call is a look-up, never a procedure worth a skill of its own.
+/// Tools whose call is a look-up or bookkeeping, never a procedure worth a
+/// skill of its own. `memory` joined on 2026-09-26: the first note the agent
+/// ever wrote became, an hour later, a skill whose recipe re-adds that exact
+/// note.
 const LOOKUP_TOOLS: &[&str] = &[
     "search_sessions",
     "world_memory",
     "mesh_status",
     "browser_snapshot",
     "browser_navigate",
+    "memory",
 ];
 
 /// Shell commands that only read a clock or an identity.
@@ -462,6 +466,17 @@ mod tests {
         ep.steps[0].args = json!({"url": "https://example.com"});
         assert!(below_bar(&ep).is_some(), "a lone page load is a look-up");
         assert!(below_bar(&success_episode("Ping", "shell", true)).is_some());
+        let mut ep = success_episode(
+            "Two things about how I work: I am in Mountain time",
+            "memory",
+            true,
+        );
+        ep.steps[0].args =
+            json!({"action": "add", "target": "user", "text": "Benji is in Mountain time"});
+        assert!(
+            below_bar(&ep).is_some(),
+            "writing a note is bookkeeping, not a skill"
+        );
 
         // Tasks clear it: a real command, an actuator, a look-up followed by work.
         let mut ep = success_episode("clean the build directory", "shell", true);
