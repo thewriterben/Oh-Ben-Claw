@@ -33,6 +33,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/VISION-DETECTOR-2026-09.md`, fixture in
   `tests/fixtures/vision-events-2026-09-26/005/`. The labeller's mark window
   went from one frame to two after that run showed a press 1.5 frames late.
+- **The labeller no longer trusts the marks blindly.** 002's first session had
+  a press with no flip and a flip with no press. A frame now counts as changed
+  if brightness stepped by at least `SETTLE_DELTA` (read from
+  `detector_math.rs`) or more than `FRAC_HI` of its pixels moved -- the second
+  so that a flip auto-exposure absorbed within a frame, the one the gate would
+  miss, still counts. A mark with no changed frame near it is reported as a
+  PHANTOM and makes no switch; a changed frame no mark explains is reported as
+  UNMARKED instead of being filed as steady.
 
 ## Unreleased — Look at the picture (2026-09-26)
 

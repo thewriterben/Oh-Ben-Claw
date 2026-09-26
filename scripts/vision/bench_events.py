@@ -65,6 +65,16 @@ def thresholds() -> dict:
     return out
 
 
+def settle_delta() -> float:
+    """The node's own SETTLE_DELTA, read out of detector_math.rs for the same reason."""
+    path = os.path.join(ROOT, "firmware", "obc-esp32-s3", "src", "detector_math.rs")
+    with open(path, encoding="utf-8") as fh:
+        m = re.search(r"pub const SETTLE_DELTA: f32 = ([0-9.]+);", fh.read())
+    if not m:
+        raise SystemExit("SETTLE_DELTA not found in detector_math.rs")
+    return float(m.group(1))
+
+
 def rule(frac: float, edge: float, t: dict) -> str:
     """classify.py's rule, verbatim in meaning."""
     if frac <= t["FRAC_HI"]:
@@ -82,7 +92,8 @@ def rule(frac: float, edge: float, t: dict) -> str:
 WINDOW = 2  # frames either side of a mark to look for the brightness step
 
 
-def label(rows: list[dict], marks: list[float]) -> None:
+def label(rows: list[dict], marks: list[float], settle: float = 3.0,
+          frac_hi: float = 0.35) -> list[dict]:
     """Give each lamp-phase frame a `tag`: switch, resettle or steady.
 
     A mark at time m first points at the first frame requested after it: the
@@ -95,6 +106,17 @@ def label(rows: list[dict], marks: list[float]) -> None:
     auto-exposure correction frame, and the flip itself (edge 4.71, the worst
     of the run) was filed as `steady`. Switches ~15 frames apart leave room. Frames after it
     are `resettle` until the node says `ready` again, then `steady`.
+
+    The marks are a person's, and a person misses one or presses without
+    flipping (both happened on 002's first session). So the labeller does not
+    trust them blindly. A frame "changed" if brightness stepped by at least
+    `settle` (what the gate sees) OR more than `frac_hi` of its pixels moved
+    (what the rule sees) -- the second matters because a flip auto-exposure
+    absorbed within one frame is exactly the one the gate misses. A mark with
+    no changed frame in its window is returned as a **phantom** and makes no
+    switch; a changed frame outside any switch's settling is tagged
+    **`unmarked`** -- a switch nobody pressed Enter for -- rather than filed as
+    steady, where it would poison the between-switch floor.
     """
     lamp = set(k for k, r in enumerate(rows) if r.get("phase") == "lamp")
     for r in rows:
@@ -106,13 +128,21 @@ def label(rows: list[dict], marks: list[float]) -> None:
             return -1.0
         return abs(rows[k]["mean"] - rows[k - 1]["mean"])
 
+    def changed(k):
+        return step(k) >= settle or (rows[k].get("frac") or 0.0) > frac_hi
+
     switch_at: dict[int, tuple[float, int]] = {}
+    phantoms: list[dict] = []
     for m in sorted(marks):
         k = next((k for k in sorted(lamp) if rows[k]["t_sent"] >= m), None)
         if k is None:
             continue  # marked after the last frame
         near = [c for c in range(k - WINDOW, k + WINDOW + 1) if c in lamp]
-        best = max(near, key=lambda c: (step(c), -abs(c - k)))
+        best = max(near, key=lambda c: (changed(c), step(c), rows[c].get("frac") or 0.0, -abs(c - k)))
+        if not changed(best):
+            phantoms.append({"mark": m, "near_frame": rows[k].get("i"),
+                             "largest_step": round(step(best), 2)})
+            continue
         switch_at.setdefault(best, (m, best - k))
 
     settling = False
@@ -125,8 +155,12 @@ def label(rows: list[dict], marks: list[float]) -> None:
         elif settling:
             settling = r.get("state") != "ready"
             r["tag"] = "resettle" if settling else "steady"
+        elif changed(k):
+            r["tag"] = "unmarked"
+            settling = r.get("state") != "ready"
         else:
             r["tag"] = "steady"
+    return phantoms
 
 
 # ── the report ───────────────────────────────────────────────────────────────
@@ -153,8 +187,8 @@ def floor_of(rows: list[dict]) -> dict:
     return out
 
 
-def summarise(rows: list[dict], marks: list[float], t: dict) -> dict:
-    label(rows, marks)
+def summarise(rows: list[dict], marks: list[float], t: dict, settle: float = 3.0) -> dict:
+    phantoms = label(rows, marks, settle, t["FRAC_HI"])
     for r in rows:
         if "frac" in r and "edge" in r:
             r["rule"] = rule(r["frac"], r["edge"], t)
@@ -163,7 +197,7 @@ def summarise(rows: list[dict], marks: list[float], t: dict) -> dict:
     lamp = [r for r in rows if r.get("phase") == "lamp"]
     switches = []
     for k, r in enumerate(rows):
-        if r.get("tag") != "switch":
+        if r.get("tag") not in ("switch", "unmarked"):
             continue
         before = next((x.get("mean") for x in reversed(rows[:k]) if "mean" in x), None)
         n = 0
@@ -177,7 +211,7 @@ def summarise(rows: list[dict], marks: list[float], t: dict) -> dict:
             "i": r.get("i"), "state": r.get("state"), "node_class": r.get("class"),
             "frac": r.get("frac"), "edge": r.get("edge"), "rule": r.get("rule"),
             "mean_before": before, "mean_after": r.get("mean"), "frames_to_ready": n,
-            "mark_offset": r.get("mark_offset"),
+            "mark_offset": r.get("mark_offset"), "marked": r.get("tag") == "switch",
         })
 
     def detections(xs):
@@ -205,13 +239,16 @@ def summarise(rows: list[dict], marks: list[float], t: dict) -> dict:
             "steady": floor_of(steady),
         },
         "switches": switches,
+        "phantom_marks": phantoms,
+        "unmarked_switches": sum(1 for w in switches if not w["marked"]),
+        "settle_delta": settle,
         "errors": sum(1 for r in rows if "error" in r),
     }
 
 
 def print_report(s: dict) -> None:
     q, l = s["quiet"], s["lamp"]
-    print(f"\n=== {s['node_id']}  ({s['marks']} lamp switches marked) ===")
+    print(f"\n=== {s['node_id']}  ({s['marks']} marks, {len(s['switches'])} switches found) ===")
     print(f"quiet  {q['frames']} frames, {q['judged']} judged; "
           f"frac max {q.get('frac', {}).get('max')}  edge max {q.get('edge', {}).get('max')}  "
           f"brightness {q.get('brightness')}")
@@ -223,12 +260,18 @@ def print_report(s: dict) -> None:
         fr = f"{w['frac']:.4f}" if w["frac"] is not None else "-"
         ed = f"{w['edge']:.2f}" if w["edge"] is not None else "-"
         print(f"  {w['i']!s:>6}   {w['state']!s:<12} {w['node_class'] or '-':<7} {fr:>7} {ed:>8}   "
-              f"{w['rule'] or '-':<7} {mb:>7} -> {ma:<7}   {w['frames_to_ready']!s:>8}  {w['mark_offset']:+d}")
+              f"{w['rule'] or '-':<7} {mb:>7} -> {ma:<7}   {w['frames_to_ready']!s:>8}  "
+              + (f"{w['mark_offset']:+d}" if w["marked"] else "UNMARKED"))
     print(f"\nlamp   {l['frames']} frames; node detections {l['node_detections']}; "
           f"node classes {l['node_classes']}")
     print(f"       gate held {l['switches_the_gate_held']}/{len(s['switches'])} switch frames; "
           f"rule alone on switch frames {l['rule_on_switch_frames']}; "
           f"rule motion/nudge on any lamp frame {l['rule_motion_or_nudge_any_frame']}")
+    for p in s["phantom_marks"]:
+        print(f"       PHANTOM MARK near frame {p['near_frame']}: nothing changed within {WINDOW} frames "
+              f"(largest brightness step {p['largest_step']}, no frac > FRAC_HI) -- not counted")
+    if s["unmarked_switches"]:
+        print(f"       {s['unmarked_switches']} UNMARKED switch(es): a brightness step with no Enter near it")
     st = l["steady"]
     print(f"       steady-state under each lamp setting: frac max {st.get('frac', {}).get('max')}  "
           f"edge max {st.get('edge', {}).get('max')}")
@@ -356,7 +399,7 @@ def replay(out: str, t: dict) -> dict:
         rows = [json.loads(l) for l in fh if l.strip()]
     with open(os.path.join(out, "marks.json"), encoding="utf-8") as fh:
         marks = json.load(fh)
-    s = summarise(rows, marks, t)
+    s = summarise(rows, marks, t, settle_delta())
     with open(os.path.join(out, "summary.json"), "w", encoding="utf-8") as fh:
         json.dump(s, fh, indent=2)
         fh.write("\n")
@@ -414,6 +457,18 @@ def selftest() -> int:
     s_2late = summarise([dict(x) for x in rows], [4.4, 6.5], t)
     if [w["i"] for w in s_2late["switches"]][:1] != [3]:
         fails.append(f"a mark two frames late was not pulled back: {[w['i'] for w in s_2late['switches']]}")
+    # A phantom press (no step near it) and a flip nobody marked.
+    ph = [dict(x) for x in rows] + [r(8, "lamp", 8, "ready", mean=60.1, **{"class": "quiet", "detection": False}),
+                                   r(9, "lamp", 9, "ready", mean=60.0, **{"class": "quiet", "detection": False}),
+                                   r(10, "lamp", 10, "ready", mean=60.1, **{"class": "quiet", "detection": False}),
+                                   r(11, "lamp", 11, "ready", mean=60.0, **{"class": "quiet", "detection": False}),
+                                   r(12, "lamp", 12, "ready", mean=60.1, **{"class": "quiet", "detection": False}),
+                                   r(13, "lamp", 13, "warming_up", frac=0.7, edge=12.0, mean=110.0)]
+    s_ph = summarise(ph, [2.5, 6.5, 9.5], t)
+    if len(s_ph["phantom_marks"]) != 1 or s_ph["unmarked_switches"] != 1:
+        fails.append(f"phantom {s_ph['phantom_marks']} unmarked {s_ph['unmarked_switches']}")
+    if ph[13].get("tag") != "unmarked" or s_ph["lamp"]["steady"].get("edge", {}).get("max", 0) > 1:
+        fails.append(f"unmarked step leaked into steady: tag {ph[13].get('tag')}")
     rows2 = [dict(x) for x in rows]
     rows2[7]["detection"] = True
     if summarise(rows2, [2.5, 6.5], t)["lamp"]["node_detections"] != 1:

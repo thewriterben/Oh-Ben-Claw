@@ -67,7 +67,8 @@
       "mean_before": 124.12000274658203,
       "mean_after": 154.2899932861328,
       "frames_to_ready": 3,
-      "mark_offset": -2
+      "mark_offset": -2,
+      "marked": true
     },
     {
       "i": 61,
@@ -79,7 +80,8 @@
       "mean_before": 127.30000305175781,
       "mean_after": 115.5,
       "frames_to_ready": 2,
-      "mark_offset": 1
+      "mark_offset": 1,
+      "marked": true
     },
     {
       "i": 76,
@@ -91,7 +93,8 @@
       "mean_before": 115.08999633789062,
       "mean_after": 127.05999755859375,
       "frames_to_ready": 2,
-      "mark_offset": 1
+      "mark_offset": 1,
+      "marked": true
     },
     {
       "i": 91,
@@ -103,7 +106,8 @@
       "mean_before": 126.79000091552734,
       "mean_after": 115.26000213623047,
       "frames_to_ready": 2,
-      "mark_offset": 1
+      "mark_offset": 1,
+      "marked": true
     },
     {
       "i": 106,
@@ -115,7 +119,8 @@
       "mean_before": 114.87999725341797,
       "mean_after": 127.01000213623047,
       "frames_to_ready": 2,
-      "mark_offset": 1
+      "mark_offset": 1,
+      "marked": true
     },
     {
       "i": 121,
@@ -127,7 +132,8 @@
       "mean_before": 125.9000015258789,
       "mean_after": 109.80000305175781,
       "frames_to_ready": 3,
-      "mark_offset": 1
+      "mark_offset": 1,
+      "marked": true
     },
     {
       "i": 136,
@@ -139,7 +145,8 @@
       "mean_before": 115.72000122070312,
       "mean_after": 127.7699966430664,
       "frames_to_ready": 2,
-      "mark_offset": 1
+      "mark_offset": 1,
+      "marked": true
     },
     {
       "i": 151,
@@ -151,8 +158,12 @@
       "mean_before": 126.5199966430664,
       "mean_after": 110.20999908447266,
       "frames_to_ready": 3,
-      "mark_offset": 1
+      "mark_offset": 1,
+      "marked": true
     }
   ],
+  "phantom_marks": [],
+  "unmarked_switches": 0,
+  "settle_delta": 3.0,
   "errors": 0
 }
