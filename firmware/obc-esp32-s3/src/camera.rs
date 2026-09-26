@@ -501,7 +501,22 @@ pub fn init() -> anyhow::Result<()> {
     cfg.pin_href = PINS.href;
     cfg.pin_pclk = PINS.pclk;
 
-    cfg.xclk_freq_hz = 20_000_000;
+    // XCLK: 10 MHz on the XIAO Sense, 20 MHz elsewhere.
+    //
+    // Measured 2026-09-25 with the GDMA fix in place: 002's OV2640 at 20 MHz
+    // runs ~25 fps, and 1 of 4 captures was aborted with `cam_hal:
+    // EV-VSYNC-OVF`. The driver's one-slot event queue was still full when the
+    // frame ended, because its task could not keep up with a DMA chunk every
+    // 24 lines. The Sense's OV3660 (a84de4) runs ~11 fps with 48-line chunks,
+    // under a quarter of that event rate, and went 10/10 with no overflow.
+    // Halving XCLK halves the OV2640's pixel clock and event rate; that is the
+    // test this change makes. The Lilygo's OV5640 captured cleanly at 20 MHz
+    // and is left alone.
+    #[cfg(feature = "board-xiao-sense")]
+    const XCLK_HZ: i32 = 10_000_000;
+    #[cfg(not(feature = "board-xiao-sense"))]
+    const XCLK_HZ: i32 = 20_000_000;
+    cfg.xclk_freq_hz = XCLK_HZ;
     cfg.ledc_timer = sys::ledc_timer_t_LEDC_TIMER_0;
     cfg.ledc_channel = sys::ledc_channel_t_LEDC_CHANNEL_0;
 
