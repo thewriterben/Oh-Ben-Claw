@@ -172,6 +172,18 @@ pub fn context_facts(
     Some((facts, withdrawn))
 }
 
+/// The first thing the block says, before any fact (2026-09-26). On the bench an
+/// operator turn about unit preferences became `mesh_status → device_health →
+/// record_incident` because the block carried a node's "offline" flag and the
+/// model took it for the task. Alerts have an owner — System 2 — and this block
+/// is the operator's turn, not an inbox. Option B of the three the operator was
+/// offered; option A (keep the block out of operator turns unless asked) is the
+/// fallback if the per-turn tool-call log shows this line being ignored.
+pub const WORLD_STATE_RULE: &str = "_Background, for your awareness only. Alerts and \
+    anomalies in here are handled by the escalation layer, not by you in this turn: do \
+    not investigate, diagnose or record anything below unless the operator's message \
+    asks about it._\n\n";
+
 pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Option<String> {
     let (facts, withdrawn) = context_facts(world, cfg, now_ms)?;
     let total_facts = facts.len();
@@ -228,6 +240,7 @@ pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Opt
 
     let mut out = String::new();
     out.push_str("## World state\n\n");
+    out.push_str(WORLD_STATE_RULE);
     out.push_str(
         "What you currently believe about the physical world, from your own perception \
          layer. `observed` came off a wire; `derived` you computed; `asserted` is a claim \
@@ -308,6 +321,30 @@ mod tests {
         // Nothing to say beats a heading with nothing under it — the model should not be
         // taught to expect a section that is usually empty.
         assert!(render(&store(), &WorldContextConfig::default(), 10_000).is_none());
+    }
+
+    #[test]
+    fn the_block_opens_with_the_background_rule() {
+        let w = store();
+        w.observe_as(
+            "mesh.n1.health",
+            json!({"status": "offline", "reason": "no mesh message for 90000 ms"}),
+            1_000,
+            1_000,
+            "mesh-supervisor",
+            Origin::Derived,
+        )
+        .unwrap();
+        let out = render(&w, &WorldContextConfig::default(), 61_000).unwrap();
+        let rule = out
+            .find("Background, for your awareness only")
+            .expect("rule present");
+        let fact = out.find("`mesh.n1.health`").expect("fact present");
+        assert!(rule < fact, "the rule comes before the first fact:\n{out}");
+        assert!(
+            out.contains("unless the operator's message asks about it"),
+            "{out}"
+        );
     }
 
     #[test]
