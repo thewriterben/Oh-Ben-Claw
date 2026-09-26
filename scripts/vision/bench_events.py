@@ -39,6 +39,7 @@ import argparse
 import base64
 import datetime
 import json
+import math
 import os
 import re
 import statistics
@@ -373,15 +374,37 @@ def live(args, t: dict) -> str:
             print(f"  {i}/{args.quiet}", flush=True)
         time.sleep(args.interval)
 
-    print(f"\nLAMP: {args.lamp_seconds:.0f} s. Switch the lamp about every 15 s and press ENTER "
-          "the moment you flip it. Stay out of shot.")
+    every = args.every
+    print(f"\nLAMP: {args.lamp_seconds:.0f} s. Every {every:.0f} s the script counts down "
+          "3, 2, 1 -- on SWITCH NOW, flip the lamp and press ENTER.\n"
+          "Exact timing does not matter: a press within ~2 s of the flip is matched to it,\n"
+          "and a missed or extra press is reported, not guessed. Stay out of shot.")
     armed.set()
-    end = time.time() + args.lamp_seconds
+    start = time.time()
+    end = start + args.lamp_seconds
+    # Cues are spaced from the start of the phase, the first one `every` s in, so
+    # the lamp has sat in its starting state long enough to settle. The last cue
+    # is kept clear of the end so its switch has frames to settle into.
+    cues = [start + every * n for n in range(1, int(args.lamp_seconds // every) + 1)
+            if start + every * n <= end - 5]
+    said: set[tuple[int, int]] = set()
     while time.time() < end:
         rows.append(frame(link, i, "lamp", t0))
         i += 1
-        if i % 15 == 0:
-            print(f"  {max(0, end - time.time()):.0f} s left, {len(marks)} switches marked", flush=True)
+        now = time.time()
+        # A frame takes ~1.3 s at the default pace, so a count is printed when
+        # its second has arrived rather than only inside a 1 s window that a
+        # slow frame could step over; NOW is printed once, however late.
+        for n, c in enumerate(cues):
+            left = c - now
+            if 0 < left <= 3:
+                count = math.ceil(left)
+                if (n, count) not in said:
+                    said.add((n, count))
+                    print(f"  switch {n + 1}/{len(cues)} in {count}", flush=True)
+            elif left <= 0 and (n, 0) not in said:
+                said.add((n, 0))
+                print(f"  >>> SWITCH NOW  ({n + 1}/{len(cues)})", flush=True)
         time.sleep(args.interval)
     armed.clear()
 
@@ -487,6 +510,7 @@ def main() -> int:
     ap.add_argument("--quiet", type=int, default=40, help="frames in the quiet phase")
     ap.add_argument("--lamp-seconds", type=float, default=150.0)
     ap.add_argument("--interval", type=float, default=1.0)
+    ap.add_argument("--every", type=float, default=15.0, help="seconds between lamp-switch cues")
     ap.add_argument("--lead", type=float, default=15.0, help="seconds to get out of shot")
     ap.add_argument("--replay", metavar="DIR", help="re-score a saved run")
     ap.add_argument("--selftest", action="store_true")

@@ -41,6 +41,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   miss, still counts. A mark with no changed frame near it is reported as a
   PHANTOM and makes no switch; a changed frame no mark explains is reported as
   UNMARKED instead of being filed as steady.
+- **The script says when to switch.** The operator was counting 15 s against
+  a progress line that did not match their count. The lamp phase now prints
+  `switch n/N in 3, 2, 1` and `>>> SWITCH NOW` every `--every` seconds (15 by
+  default); the operator flips and presses Enter on NOW. Counts catch up
+  rather than being skipped when a frame runs long.
 
 ## Unreleased — Look at the picture (2026-09-26)
 
