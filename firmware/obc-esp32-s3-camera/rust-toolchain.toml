@@ -1,0 +1,9 @@
+# The ESP32-S3 firmware builds with the Espressif Xtensa Rust toolchain
+# (installed via `espup install`), which provides the `xtensa-esp32s3-espidf`
+# target and a patched LLVM that recognises the `esp32s3` processor.
+#
+# This pin is required: the workspace root pins `channel = "stable"` for the host
+# CLI crate, and without this file `rustup` would walk up and select `stable`
+# (which has no Xtensa target) when building from this directory.
+[toolchain]
+channel = "esp"

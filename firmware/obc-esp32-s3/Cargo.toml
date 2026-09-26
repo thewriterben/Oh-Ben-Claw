@@ -27,8 +27,9 @@ log = "0.4"
 # futimes/lutimes/UTIME_OMIT). Keep it in [build-dependencies] only.
 [features]
 # Off by default: the default build needs no PSRAM and no esp32-camera IDF
-# component. Enable with `--features camera` AFTER adding `idf_component.yml` and
-# the PSRAM sdkconfig (see CAMERA.md). This feature disables the I2C sensor bus.
+# component. Camera builds are made from firmware/obc-esp32-s3-camera, where it
+# is the default (see CAMERA.md); built from here it cannot find its bindings.
+# This feature disables the I2C sensor bus.
 # The stated reason used to be that the camera SCCB shares pins 4/5 with it;
 # that stopped being true on 2026-08-21 when the default bus moved to GPIO5/6.
 # The gate is kept as a conservative default, not a necessity -- see camera.rs.
@@ -77,9 +78,8 @@ path = "src/main.rs"
 # esp-idf-sys pulls the esp32-camera managed component and generates Rust bindings
 # from `bindings_header` — `esp_camera.h` is NOT in esp-idf-sys's default bindings,
 # which is why the `camera_*` symbols were missing. This is a BUILD-LEVEL include
-# (not gated by the cargo feature): it pulls the component into every build. Comment
-# this block out — and the PSRAM lines in `sdkconfig.defaults` — for lean non-camera
-# builds. After changing this block, run `cargo clean` so esp-idf-sys regenerates.
+# (not gated by the cargo feature): it pulls the component into every build of the
+# crate whose manifest carries it.
 #
 # It CANNOT be gated on a cargo feature, and that was checked in esp-idf-sys
 # 0.37.2's source rather than assumed: `extra_components` is an exclude in
@@ -88,12 +88,14 @@ path = "src/main.rs"
 # read nowhere in that crate's build/. A camera-feature-OFF build with these
 # lines uncommented still downloads and compiles the component.
 #
-# DISABLED for lean/default builds. Uncomment ALL FOUR lines only on a
-# `camera-bringup` branch -- never commit them to main, because a default build
-# from such a tree produces a different binary from the one on the live mesh
-# node. PSRAM is handled separately and does NOT need an edit here: see
-# `sdkconfig.defaults.camera` and CAMERA.md §2. ADR: OBC-Prime docs/DECISIONS.md,
-# 2026-09-16.
+# So it stays commented HERE, always: this crate is the live mesh node's build.
+# Since 2026-09-26 the live copy of this block is in
+# ../obc-esp32-s3-camera/Cargo.toml, a crate with no sources of its own that
+# builds this one's main.rs with the component added -- esp-idf-sys reads the
+# block from whichever crate is the root. Camera builds are made there, from
+# main, with scripts/build_camera.ps1 (CAMERA.md §1-§3). The commented lines are
+# kept because scripts/check_camera_component_gate.py looks for them. ADR:
+# OBC-Prime docs/DECISIONS.md, 2026-09-16.
 # [[package.metadata.esp-idf-sys.extra_components]]
 # remote_component = { name = "espressif/esp32-camera", version = "2.0.7" }
 # bindings_header = "src/camera_bindings.h"

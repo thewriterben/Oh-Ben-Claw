@@ -484,6 +484,16 @@ jobs:
           else
             python3 scripts/check_camera_component_gate.py
           fi
+      # Since 2026-09-26 the camera build is its own crate,
+      # firmware/obc-esp32-s3-camera, which builds obc-esp32-s3's main.rs with
+      # the component added -- the only way to add it without it reaching the
+      # live node's build. Two manifests for one program drift: a dependency
+      # bumped in one and not the other, and the camera boards stop running
+      # "001's firmware plus a camera" without anything saying so.
+      - name: the camera crate is the node crate plus the camera
+        run: |
+          python3 scripts/check_camera_crate_drift.py --selftest
+          python3 scripts/check_camera_crate_drift.py
 
       - name: Install cargo-audit
         run: cargo install cargo-audit

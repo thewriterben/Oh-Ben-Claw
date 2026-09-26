@@ -36,6 +36,13 @@ Neither is a discipline problem that more discipline fixes. A prompt protects a
 human at a terminal and protects nothing else. This is the comparison a machine
 can make.
 
+# Where the camera build went (2026-09-26)
+
+The live block now lives in `firmware/obc-esp32-s3-camera/Cargo.toml`, a crate
+with no sources that builds this one's `main.rs` with the component added. So
+this manifest's block is commented on every branch, not just `main`, and
+check_camera_crate_drift.py keeps the two crates the same program.
+
 # Enforcement
 
 `--enforce` is passed by CI only on `main`, because the bring-up branch is

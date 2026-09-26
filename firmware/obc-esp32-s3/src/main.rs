@@ -169,6 +169,18 @@ mod dht;
 #[cfg(feature = "camera")]
 mod camera;
 
+// A build without the camera must not have PSRAM. The live node's build has
+// none (sdkconfig.defaults), so PSRAM here means a camera overlay leaked in:
+// `ESP_IDF_SDKCONFIG_DEFAULTS` left set in the shell from a camera build, or a
+// target dir whose esp-idf build a camera build made (build.rs). Either way the
+// binary is not the one on `obc-esp32-s3-001`, and this is where that stops.
+#[cfg(all(not(feature = "camera"), esp_idf_spiram))]
+compile_error!(
+    "PSRAM is on in a build without `camera`. Clear $env:ESP_IDF_SDKCONFIG_DEFAULTS \
+     and use this crate's own CARGO_TARGET_DIR (or `cargo clean` it): the esp-idf \
+     build came from a camera overlay. Camera builds live in firmware/obc-esp32-s3-camera."
+);
+
 /// Maximum line length for incoming serial commands (bytes).
 ///
 /// 2048, up from 512 on 2026-09-13: a `set_reflex_rules` with the two

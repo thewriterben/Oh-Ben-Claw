@@ -686,6 +686,8 @@ cargo espflash flash --monitor
 
 Works with the Waveshare ESP32-S3 Touch LCD 2.1, Seeed XIAO ESP32S3-Sense, and generic ESP32-S3 boards.
 
+Camera builds (XIAO ESP32S3 Sense, LILYGO T-CameraPlus-S3 V1.1) come from `firmware/obc-esp32-s3-camera`, which builds the same sources with the esp32-camera component added: `scripts/build_camera.ps1 -Board xiao-sense`. See [`CAMERA.md`](firmware/obc-esp32-s3/CAMERA.md).
+
 ### LoRa mesh nodes (`firmware/lora-node`, `firmware/heltec-lora-linktest`)
 
 Radios for the off-grid spine: `lora-node` is a dumb USB-serial ⇄ LoRa bridge
@@ -795,6 +797,7 @@ Oh-Ben-Claw/
 │   └── main.rs               # The binary: composes the agent from config
 ├── firmware/                 # The node end of the conversation
 │   ├── obc-esp32-s3/         # ESP32-S3 + on-MCU reflex/safing/Track 0 mirror
+│   ├── obc-esp32-s3-camera/  # The same firmware built with the camera component
 │   ├── heltec-lora-linktest/ # Heltec V3 (ESP32-S3 + SX1262) LoRa mesh node
 │   ├── lora-node/            # Arduino LoRa bridge sketch
 │   └── t-deck-terminal/      # T-Deck handheld terminal sketch
