@@ -57,6 +57,10 @@ vision floor) move to `main` in a follow-up.
   block promises "proven tool recipes"; an episode with none contributed only
   its objective text, which is exactly the parroting seen. They are dropped
   and counted (`dropped_recipe_less=`).
+- **Every turn logs what its prompt is made of** — `context composition`:
+  system chars, tool count and schema chars, history messages and chars. The
+  bench's cold turn had grown from 12.7k to 22k tokens and nothing said which
+  part grew; `brain usage` gives the tokens, this gives the shape.
 
 ## Unreleased — Nobody will remind you (2026-09-26)
 

@@ -781,6 +781,36 @@ impl Agent {
         // Stable tool set for this run (hot-added skills apply from the next run).
         let tool_list = self.tools_snapshot();
 
+        // What the prompt is made of, in chars (2026-09-26). The bench's cold
+        // turn had grown from 12.7k to 22k tokens and nothing said which part
+        // grew; `brain usage` gives the tokens, this gives the shape.
+        {
+            let mut system_chars = 0usize;
+            let mut history_chars = 0usize;
+            let mut history_msgs = 0usize;
+            for m in &messages {
+                if matches!(m.role, obc_providers::ChatRole::System) {
+                    system_chars += m.content.len();
+                } else {
+                    history_chars += m.content.len();
+                    history_msgs += 1;
+                }
+            }
+            let tool_chars: usize = tool_list
+                .iter()
+                .map(|t| t.description().len() + t.parameters_schema().to_string().len())
+                .sum();
+            tracing::info!(
+                session_id = %session_id,
+                system_chars,
+                tools = tool_list.len(),
+                tool_chars,
+                history_msgs,
+                history_chars,
+                "context composition"
+            );
+        }
+
         // Which brain answers this turn (parity item 3). Decided once per turn;
         // a cloud failure mid-turn falls back to local inside `complete_routed`.
         let (route, route_reason) = self.route_turn(session_id, tool_list.len());
