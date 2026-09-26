@@ -19,6 +19,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   promote <name>` turns a pending one on. Set `auto_enable = true` for the
   old behaviour.
 
+## Unreleased — Detector redesign, scored (2026-09-26)
+
+### Added
+
+- **`docs/VISION-DETECTOR-PROPOSAL-2026-09.md` and
+  `scripts/vision/compare_detectors.py`.** Five candidate designs scored side
+  by side with the current rule: whole-frame with `FRAC_HI` lowered,
+  gain-compensated whole-frame, an 8x6 grid on raw difference, a
+  gain-compensated grid, and per-cell correlation. Scored on the 148-frame host
+  fixture (which, checked by eye, has a person in frame in every set) and two
+  simulations of the Senses' failures -- a 15% auto-exposure step and a person
+  at a quarter of the area. Every design but the current one is calibrated the
+  same way, on the quiet set only. Lowering `FRAC_HI` finds 5 of 38 distant
+  people; every region design finds 17-32. Per-cell correlation is the only
+  design with no false detection on the quiet set and the AE step, so it could
+  replace the warm-up gate. Calibration is the open problem, and the host
+  fixture cannot answer the lamp question. Recommended, subject to frames
+  recorded on the Senses. No firmware change.
+
 ## Unreleased — A person, walking through (2026-09-26)
 
 ### Added
