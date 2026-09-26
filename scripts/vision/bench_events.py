@@ -509,24 +509,27 @@ def live(args, t: dict) -> str:
     tail = 5 if lamp else args.walk_seconds + 3
     cues = [start + every * n for n in range(1, int(seconds // every) + 1)
             if start + every * n <= end - tail]
-    said: set[tuple[int, int]] = set()
+    # The countdown runs on its own thread, against the wall clock. It used to be
+    # printed from the frame loop, which only looks at the clock once per frame:
+    # on 002 frames take long enough that counts were skipped and arrived out of
+    # step (2026-09-26), and a cue that arrives late is a walk that starts late.
+    def countdown():
+        for n, c in enumerate(cues):
+            for count in (3, 2, 1, 0):
+                wait = c - count - time.time()
+                if wait > 0:
+                    time.sleep(wait)
+                elif count and wait < -0.5:
+                    continue  # started too late for this count; do not print it late
+                if count:
+                    print(f"  {verb.lower()} {n + 1}/{len(cues)} in {count}", flush=True)
+                else:
+                    print(f"  >>> {verb} NOW  ({n + 1}/{len(cues)})", flush=True)
+
+    threading.Thread(target=countdown, daemon=True).start()
     while time.time() < end:
         rows.append(frame(link, i, args.mode, t0))
         i += 1
-        now = time.time()
-        # A frame takes ~1.3 s at the default pace, so a count is printed when
-        # its second has arrived rather than only inside a 1 s window that a
-        # slow frame could step over; NOW is printed once, however late.
-        for n, c in enumerate(cues):
-            left = c - now
-            if 0 < left <= 3:
-                count = math.ceil(left)
-                if (n, count) not in said:
-                    said.add((n, count))
-                    print(f"  {verb.lower()} {n + 1}/{len(cues)} in {count}", flush=True)
-            elif left <= 0 and (n, 0) not in said:
-                said.add((n, 0))
-                print(f"  >>> {verb} NOW  ({n + 1}/{len(cues)})", flush=True)
         time.sleep(args.interval)
     armed.clear()
 

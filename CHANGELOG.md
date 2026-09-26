@@ -31,6 +31,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   question, not a threshold one. Written up in
   `docs/VISION-DETECTOR-2026-09.md`. The walk window default went from 8 s
   to 11 s, and `--walk-seconds` now overrides a saved run's on `--replay`.
+- **The countdown runs on its own clock.** It was printed from the frame loop,
+  which reads the clock once per frame; on 002 (1.3 s frames) counts were
+  skipped and arrived out of order. It now runs on a timer thread against the
+  wall clock, verified at 2.2 s per frame. 002's first person session was
+  checked against it: every walk still fell 3-7 s after its cue, inside the
+  window.
 
 ## Unreleased — Lamp switches, marked (2026-09-26)
 
