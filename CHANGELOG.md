@@ -5,6 +5,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Lamp switches, marked (2026-09-26)
+
+### Added
+
+- **`scripts/vision/bench_events.py --port COMx`: the detector against lamp
+  switches, on the node.** A guided session: a quiet phase, then a lamp phase in
+  which the operator presses Enter the moment they flip the lamp. Every
+  `camera_detect` reply is kept with the wall clock, so each frame is labelled
+  `switch`, `resettle` or `steady` from the marks rather than from memory; a
+  mark is moved to the largest brightness step within one frame, since a hand
+  on a lamp and a finger on Enter are not simultaneous. The report scores both
+  layers of the node's protection: the warm-up gate (did it hold the switch
+  frame, and how many frames to `ready`) and the frac/edge rule on its own on
+  every scored frame, which is what a dimmer or daylight -- no brightness step,
+  no gate -- would face. Thresholds are read from `classify.py`, not retyped.
+  Pictures at both ends. `--replay DIR` re-scores a saved run; `--selftest`
+  runs offline. Dry-run end to end against a simulated node on a pty.
+  Person and camera-nudge are not measured by it; `thresholds_provisional`
+  stays true.
+- **First session, 005 (OV3660):** 0 detections from 8 marked lamp
+  switches; the warm-up gate held all 8 and the node was judging again 2-3
+  frames later. But the frac/edge rule alone would call 7 of 8 `motion`:
+  switch-frame `edge` is 4.02-4.71 against `EDGE_LIGHT` 4.20, which the host
+  fixture had set above a lamp's 3.28. On this sensor the gate is the only
+  protection against a lamp. Thresholds unchanged; written up in
+  `docs/VISION-DETECTOR-2026-09.md`, fixture in
+  `tests/fixtures/vision-events-2026-09-26/005/`. The labeller's mark window
+  went from one frame to two after that run showed a press 1.5 frames late.
+- **The labeller no longer trusts the marks blindly.** 002's first session had
+  a press with no flip and a flip with no press. A frame now counts as changed
+  if brightness stepped by at least `SETTLE_DELTA` (read from
+  `detector_math.rs`) or more than `FRAC_HI` of its pixels moved -- the second
+  so that a flip auto-exposure absorbed within a frame, the one the gate would
+  miss, still counts. A mark with no changed frame near it is reported as a
+  PHANTOM and makes no switch; a changed frame no mark explains is reported as
+  UNMARKED instead of being filed as steady.
+- **Second session, 002 (OV2640), TV and fan off:** 9/9 switches held by the
+  gate, 0 detections; the rule alone would call all 9 `nudge` (`edge`
+  12.3-14.1). Its quiet floor is sensor noise that rises in the dark --
+  `frac` ~0.11 and `edge` ~7.5 on every still frame (~0.07/6.3 lamp on,
+  ~0.13/8.3 lamp off) against 005's <= 0.007/1.25. Two Senses, a ~6-point
+  difference in quiet `edge`: one absolute threshold set does not fit both.
+  Recorded; thresholds unchanged. The TV-and-fan run is kept as
+  `002-tv-fan/`, where the node stayed `quiet` with both moving in view.
+- **The script says when to switch.** The operator was counting 15 s against
+  a progress line that did not match their count. The lamp phase now prints
+  `switch n/N in 3, 2, 1` and `>>> SWITCH NOW` every `--every` seconds (15 by
+  default); the operator flips and presses Enter on NOW. Counts catch up
+  rather than being skipped when a frame runs long.
+
 ## Unreleased — Look at the picture (2026-09-26)
 
 ### Added

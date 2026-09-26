@@ -1,0 +1,169 @@
+{
+  "node_id": "obc-esp32-s3-005",
+  "thresholds": {
+    "FRAC_HI": 0.35,
+    "EDGE_LIGHT": 4.2,
+    "EDGE_NUDGE": 9.0,
+    "PIXEL_EPS": 12.0
+  },
+  "marks": 8,
+  "quiet": {
+    "frames": 40,
+    "scored": 39,
+    "judged": 36,
+    "frac": {
+      "p95": 0.0042,
+      "max": 0.0043
+    },
+    "edge": {
+      "p95": 1.11,
+      "max": 1.25
+    },
+    "brightness": {
+      "min": 123.97,
+      "max": 128.31
+    },
+    "node_detections": 0,
+    "rule_motion_or_nudge": 0
+  },
+  "lamp": {
+    "frames": 115,
+    "node_detections": 0,
+    "node_classes": {
+      "quiet": 96
+    },
+    "rule_on_switch_frames": {
+      "light": 1,
+      "motion": 7
+    },
+    "rule_motion_or_nudge_any_frame": 7,
+    "switches_the_gate_held": 8,
+    "steady": {
+      "frames": 96,
+      "scored": 96,
+      "judged": 96,
+      "frac": {
+        "p95": 0.0062,
+        "max": 0.0068
+      },
+      "edge": {
+        "p95": 1.11,
+        "max": 1.25
+      },
+      "brightness": {
+        "min": 114.13,
+        "max": 127.46
+      }
+    }
+  },
+  "switches": [
+    {
+      "i": 43,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.7662000060081482,
+      "edge": 4.710000038146973,
+      "rule": "motion",
+      "mean_before": 124.12000274658203,
+      "mean_after": 154.2899932861328,
+      "frames_to_ready": 3,
+      "mark_offset": -2,
+      "marked": true
+    },
+    {
+      "i": 61,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.4715999960899353,
+      "edge": 4.349999904632568,
+      "rule": "motion",
+      "mean_before": 127.30000305175781,
+      "mean_after": 115.5,
+      "frames_to_ready": 2,
+      "mark_offset": 1,
+      "marked": true
+    },
+    {
+      "i": 76,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.4796999990940094,
+      "edge": 4.369999885559082,
+      "rule": "motion",
+      "mean_before": 115.08999633789062,
+      "mean_after": 127.05999755859375,
+      "frames_to_ready": 2,
+      "mark_offset": 1,
+      "marked": true
+    },
+    {
+      "i": 91,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.4611000120639801,
+      "edge": 4.320000171661377,
+      "rule": "motion",
+      "mean_before": 126.79000091552734,
+      "mean_after": 115.26000213623047,
+      "frames_to_ready": 2,
+      "mark_offset": 1,
+      "marked": true
+    },
+    {
+      "i": 106,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.4788999855518341,
+      "edge": 4.309999942779541,
+      "rule": "motion",
+      "mean_before": 114.87999725341797,
+      "mean_after": 127.01000213623047,
+      "frames_to_ready": 2,
+      "mark_offset": 1,
+      "marked": true
+    },
+    {
+      "i": 121,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.5249000191688538,
+      "edge": 4.019999980926514,
+      "rule": "light",
+      "mean_before": 125.9000015258789,
+      "mean_after": 109.80000305175781,
+      "frames_to_ready": 3,
+      "mark_offset": 1,
+      "marked": true
+    },
+    {
+      "i": 136,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.4918999969959259,
+      "edge": 4.429999828338623,
+      "rule": "motion",
+      "mean_before": 115.72000122070312,
+      "mean_after": 127.7699966430664,
+      "frames_to_ready": 2,
+      "mark_offset": 1,
+      "marked": true
+    },
+    {
+      "i": 151,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.5450999736785889,
+      "edge": 4.230000019073486,
+      "rule": "motion",
+      "mean_before": 126.5199966430664,
+      "mean_after": 110.20999908447266,
+      "frames_to_ready": 3,
+      "mark_offset": 1,
+      "marked": true
+    }
+  ],
+  "phantom_marks": [],
+  "unmarked_switches": 0,
+  "settle_delta": 3.0,
+  "errors": 0
+}

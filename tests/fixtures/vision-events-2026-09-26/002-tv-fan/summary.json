@@ -1,0 +1,181 @@
+{
+  "node_id": "obc-esp32-s3-002",
+  "thresholds": {
+    "FRAC_HI": 0.35,
+    "EDGE_LIGHT": 4.2,
+    "EDGE_NUDGE": 9.0,
+    "PIXEL_EPS": 12.0
+  },
+  "marks": 7,
+  "quiet": {
+    "frames": 40,
+    "scored": 39,
+    "judged": 38,
+    "frac": {
+      "p95": 0.1171,
+      "max": 0.1175
+    },
+    "edge": {
+      "p95": 7.9,
+      "max": 7.91
+    },
+    "brightness": {
+      "min": 102.82,
+      "max": 105.43
+    },
+    "node_detections": 0,
+    "rule_motion_or_nudge": 0
+  },
+  "lamp": {
+    "frames": 115,
+    "node_detections": 0,
+    "node_classes": {
+      "quiet": 86
+    },
+    "rule_on_switch_frames": {
+      "nudge": 9
+    },
+    "rule_motion_or_nudge_any_frame": 17,
+    "switches_the_gate_held": 9,
+    "steady": {
+      "frames": 86,
+      "scored": 86,
+      "judged": 86,
+      "frac": {
+        "p95": 0.1145,
+        "max": 0.1155
+      },
+      "edge": {
+        "p95": 7.78,
+        "max": 7.81
+      },
+      "brightness": {
+        "min": 104.42,
+        "max": 119.54
+      }
+    }
+  },
+  "switches": [
+    {
+      "i": 44,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.76419997215271,
+      "edge": 13.039999961853027,
+      "rule": "nudge",
+      "mean_before": 104.41999816894531,
+      "mean_after": 136.67999267578125,
+      "frames_to_ready": 3,
+      "mark_offset": 1,
+      "marked": true
+    },
+    {
+      "i": 62,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.6855000257492065,
+      "edge": 12.039999961853027,
+      "rule": "nudge",
+      "mean_before": 119.0999984741211,
+      "mean_after": 94.70999908447266,
+      "frames_to_ready": 3,
+      "mark_offset": 2,
+      "marked": true
+    },
+    {
+      "i": 72,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.7678999900817871,
+      "edge": 12.539999961853027,
+      "rule": "nudge",
+      "mean_before": 106.87000274658203,
+      "mean_after": 136.60000610351562,
+      "frames_to_ready": 8,
+      "mark_offset": null,
+      "marked": false
+    },
+    {
+      "i": 76,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.729200005531311,
+      "edge": 11.84000015258789,
+      "rule": "nudge",
+      "mean_before": 118.91999816894531,
+      "mean_after": 92.75,
+      "frames_to_ready": 4,
+      "mark_offset": 1,
+      "marked": true
+    },
+    {
+      "i": 91,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.6953999996185303,
+      "edge": 12.670000076293945,
+      "rule": "nudge",
+      "mean_before": 107.55000305175781,
+      "mean_after": 134.72999572753906,
+      "frames_to_ready": 3,
+      "mark_offset": 1,
+      "marked": true
+    },
+    {
+      "i": 106,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.6141999959945679,
+      "edge": 12.25,
+      "rule": "nudge",
+      "mean_before": 118.61000061035156,
+      "mean_after": 97.9000015258789,
+      "frames_to_ready": 3,
+      "mark_offset": 0,
+      "marked": true
+    },
+    {
+      "i": 121,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.7019000053405762,
+      "edge": 12.699999809265137,
+      "rule": "nudge",
+      "mean_before": 108.19000244140625,
+      "mean_after": 135.9600067138672,
+      "frames_to_ready": 3,
+      "mark_offset": 1,
+      "marked": true
+    },
+    {
+      "i": 136,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.5763000249862671,
+      "edge": 12.430000305175781,
+      "rule": "nudge",
+      "mean_before": 118.04000091552734,
+      "mean_after": 99.41999816894531,
+      "frames_to_ready": 3,
+      "mark_offset": null,
+      "marked": false
+    },
+    {
+      "i": 151,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.7023000121116638,
+      "edge": 12.729999542236328,
+      "rule": "nudge",
+      "mean_before": 107.63999938964844,
+      "mean_after": 135.72999572753906,
+      "frames_to_ready": 3,
+      "mark_offset": 1,
+      "marked": true
+    }
+  ],
+  "phantom_marks": [],
+  "unmarked_switches": 2,
+  "settle_delta": 3.0,
+  "errors": 0
+}

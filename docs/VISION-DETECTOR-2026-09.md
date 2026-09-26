@@ -308,3 +308,130 @@ The quiet level is lower than the Lilygo floor above (`frac` 0.0 against a
 light, from 7 frames rather than 200. Treat it as a data point: it adds no
 bound the Lilygo floor did not already give, and it says nothing about where
 the events sit. `thresholds_provisional` stays true.
+
+## Lamp switches on the node: the gate holds, the rule would not (2026-09-26)
+
+`tests/fixtures/vision-events-2026-09-26/005/`, recorded with
+`scripts/vision/bench_events.py` on obc-esp32-s3-005 (XIAO Sense, OV3660, raw
+Y8, XCLK 10 MHz): 40 quiet frames, then 150 s with a lamp switched about every
+15 s, each switch marked by the operator pressing Enter. Pictures at both ends.
+
+```
+quiet   40 frames, 36 judged   frac max 0.0043   edge max 1.25   brightness 124.0-128.3
+
+switch  frame  node          frac    edge   rule alone   brightness
+  1       43   warming_up   0.7662   4.71   motion       124.1 -> 154.3 (-> 127.4 next frame)
+  2       61   warming_up   0.4716   4.35   motion       127.3 -> 115.5
+  3       76   warming_up   0.4797   4.37   motion       115.1 -> 127.1
+  4       91   warming_up   0.4611   4.32   motion       126.8 -> 115.3
+  5      106   warming_up   0.4789   4.31   motion       114.9 -> 127.0
+  6      121   warming_up   0.5249   4.02   light        125.9 -> 109.8
+  7      136   warming_up   0.4919   4.43   motion       115.7 -> 127.8
+  8      151   warming_up   0.5451   4.23   motion       126.5 -> 110.2
+
+lamp    115 frames: 0 detections; all 96 judged frames `quiet`;
+        2-3 frames from each switch to `ready`;
+        between switches frac max 0.0068, edge max 1.25
+```
+
+**What the node did is right.** Every switch frame was held by the warm-up
+gate, no lamp frame was ever reported as a detection, and the node was judging
+again two or three frames later.
+
+**What the rule would have done on its own is not.** Seven of eight switches
+score `motion`. `EDGE_LIGHT` is 4.20, set above the host fixture's
+`light_change` maximum of 3.28; on this sensor and pipeline a lamp switch
+scores `edge` 4.02-4.71. The margin the rule was supposed to have against a
+lamp is gone here, and **on 005 the gate is the only thing between a lamp and
+a false detection.**
+
+The gate's own margin is comfortable. Auto-exposure re-levels within one frame,
+so the switch shows up as a single step of about 12 grey levels (lamp on
+~127, off ~115), and `SETTLE_DELTA` is 3. Where that protection would end is a
+light change that does not step brightness by 3 in one frame: a dimmer, a lamp
+warming up, daylight. Those would reach the rule on their own. None was
+measured here.
+
+Why `edge` is higher than the host fixture's is not established. Two
+candidates, neither tested: raw Y8 carries structure that JPEG quantisation
+smoothed away (the floor run above already showed the two pipelines differ),
+and a lamp is directional, so switching it moves shadows, which is a real
+structural change. Different sensor, room and lamp from the fixture, so this
+is one observation.
+
+**Not changed:** the thresholds, and `thresholds_provisional: true`. Deciding
+what to do about `EDGE_LIGHT` wants the second Sense's numbers and a person
+measured on-node, neither of which exists yet. Moving a threshold to fit the
+lamp alone is how a detector acquires false negatives on people.
+
+Method note: the first version of the labeller looked one frame either side of
+each Enter press. Switch 1 was pressed about 1.5 frames late, so it took the
+auto-exposure correction frame as the switch and filed the flip itself, the
+worst `edge` of the run, as a steady frame. The window is now two frames.
+
+## The second Sense: same verdict from the gate, a different sensor under it (2026-09-26)
+
+`tests/fixtures/vision-events-2026-09-26/002/`: the same session on
+obc-esp32-s3-002, the other XIAO Sense, which has an **OV2640** where 005 has
+an OV3660. Same build, same lamp. TV off and fan stopped: `last.jpg` shows a
+dark screen and sharp fan blades. All 9 presses matched a switch (offsets 0 to
++2).
+
+```
+                        005 (OV3660)            002 (OV2640)
+lamp switches           8, gate held 8          9, gate held 9
+node detections         0                       0
+frames to ready         2-3                     2-3
+switch-frame edge       4.02-4.71               12.32-14.14
+rule alone calls them   motion 7, light 1       nudge 9
+quiet frac              <= 0.0043               0.105-0.113 (every frame)
+quiet edge              <= 1.25                 7.33-7.66   (every frame)
+between switches, lamp on  (~125)   frac <= 0.007    frac ~0.07, edge ~6.3
+between switches, lamp off (~96-115) frac <= 0.007   frac ~0.13, edge ~8.3
+```
+
+**The node's behaviour is the same on both:** 17 real lamp switches, 17 held
+by the warm-up gate, 0 detections, judging again within three frames.
+
+**The rule alone holds a lamp on neither.** On 005 a lamp scores `motion`; on
+002 it scores `nudge`, which on a judged frame would also drop the reference.
+The host fixture put a lamp at `edge` <= 3.28, under `EDGE_LIGHT` 4.20. Here it
+is 4.0-4.7 on one sensor and 12-14 on the other.
+
+**002's floor is sensor noise, and it moves with the light.** Its quiet frames
+change by the same amount every frame -- `frac` 0.105-0.113 -- which is what
+independent per-pixel noise does (a fixed fraction of pixels crosses the
+12-level threshold each frame); brightness crept 89.5 -> 97.1 over the phase
+without frame-to-frame jumps, so it is not flicker banding. It tracks scene
+brightness: ~0.07 with the lamp on, ~0.13 with it off, the signature of gain
+rising in the dark. At matched brightness 005 is at <= 0.007. Read as Gaussian
+noise, that is a per-pixel sigma of roughly 5 grey levels on 002 against 3 on
+005 -- an estimate from `frac` alone, not a measurement of the sensor.
+
+**Consequence for the thresholds, recorded, not acted on:**
+
+* `EDGE_*` are absolute numbers, and the two Senses differ by ~6 in quiet
+  `edge` alone. 002 sits at 7.5 doing nothing, 83% of `EDGE_NUDGE`. One
+  threshold set cannot describe both; per-sensor thresholds, or thresholds
+  relative to each node's own measured floor, is a design decision for later.
+* `FRAC_HI` 0.35 still clears 002's floor, but by 2.3x in a dim scene, and the
+  floor rose as the room darkened. A darker room than this one is the next
+  thing that could put the rule into a `motion` call with nothing moving.
+* The gate is doing the work on both sensors, and it relies on a lamp stepping
+  brightness by more than 3 grey levels in a frame (here 12-37). A light change
+  that does not -- a dimmer, daylight -- would reach the rule alone, which the
+  numbers above say is not safe. Not measured.
+* Still unmeasured on any node: a person, a camera nudge.
+  `thresholds_provisional` stays true.
+
+**The first 002 session** (`002-tv-fan/`) had a playing TV and a running fan in
+view: quiet floor `frac` 0.117 and `edge` 7.8 on every frame, 7 presses against
+9 flips (two unmarked, which the labeller now reports). With both moving in
+frame, the node still judged every frame `quiet` and reported no detection --
+small moving areas are not a detection, which is what the rule is for. It is
+kept as that, not as a floor.
+
+**Side observation, not investigated:** the first picture after the port-open
+reset is dark (`first.jpg` brightness ~37 against ~95 for the frames after it),
+as was `grab_picture.py`'s first JPEG and `probe_detect`'s first frame. The
+driver appears to hand back a frame captured before auto-exposure settled.
