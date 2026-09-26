@@ -5,6 +5,50 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The base was talking over its own traffic (2026-09-25)
+
+### Measured
+
+- **`scripts/mesh_loss.py`, Run A, 45 minutes, 545 frames from gw-D8: 9.2%
+  loss (95% CI 7.0-11.9%). Every one of the 50 losses was `deaf`**: on the
+  air while gw-40 was transmitting its own keepalive. None was `silent`,
+  `rejected`, `crc` or `header`, and there was no frame-size effect. The
+  loss came in bursts (17/61 in the first five minutes, 0/61 later) as the
+  two stations' keepalive schedules drifted in and out of step. That is why
+  the earlier three-minute samples gave "10-20%" and "about half".
+- **Run C, the fix on both stations, 45 minutes, 542 frames: 1.5% loss
+  (95% CI 0.7-2.9%).** Collisions fell from 50 to 2. There were 12
+  listen-before-talk deferrals and 0 forced sends. No bursts: the worst
+  5-minute bin was 3/61. The run logged the mesh's first ever header error,
+  which proves the IRQ-mask fix on hardware. The remaining floor is 5
+  `silent` keepalives (0.9%), cause untested.
+- **gw-D8 did not start after a plain `espflash flash`** and sat silent in
+  the ROM downloader through a full run. Card 0 now says to hard-reset
+  (monitor, then Ctrl+R) and see keepalives before any capture.
+
+### Fixed
+
+- **The base's keepalive is 30 s, not 5 s** (`KEEPALIVE_MS`, keyed on
+  `no-relay`, the host-attached role). Nothing waits on it: the node
+  excludes keepalives from host-link liveness, and the host cannot hear the
+  station it is plugged into. Field stations keep 5 s.
+- **Keepalives listen before they talk.** `Sx1262::channel_busy` answers
+  "busy" when a frame is already arriving (HeaderValid, read without leaving
+  RX, since a trip through standby would abort that very frame) or when a
+  2-symbol CAD hears LoRa. A busy channel defers the keepalive 300-700 ms,
+  and after 5 deferrals it goes anyway. HeaderValid, CadDone and
+  CadDetected are in the IRQ mask, because a masked bit never latches (the
+  lesson of the CRC fix earlier the same day).
+- **The console command hold-off only ever delays a keepalive.** It was an
+  assignment, which with a 30 s period would have pulled every keepalive
+  forward to 3 s after each command.
+- `mesh_loss.py` counts listen-before-talk deferrals and forced sends on
+  each side.
+
+Compiled and verified on both stations by Run C.
+
+---
+
 ## Unreleased — The receiver could not see a broken frame (2026-09-25)
 
 ### Fixed

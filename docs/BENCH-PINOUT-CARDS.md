@@ -30,8 +30,8 @@ measurement wins.
 
 | Role | Node id | Port | Power | Wiring |
 |---|---|---|---|---|
-| base (host link) | **gw-40** | **COM4** | PC USB — *must* stay on the host | none — see below |
-| bridge (field) | **gw-D8** | **COM3** (USB on the bench; wall/bank in the field) | wall or power bank | **the node jumper pair belongs here** |
+| base (host link) | **gw-40** | **COM3** (2026-09-25) | PC USB — *must* stay on the host | none — see below |
+| bridge (field) | **gw-D8** | **COM12** (2026-09-25; USB on the bench; wall/bank in the field) | wall or power bank | **the node jumper pair belongs here** |
 | relay (Stage 3b) | **gw-90** | — | USB power only | none — radio only |
 | node | `obc-esp32-s3-001` | **COM6** | USB or bank | jumpers to the **bridge** = `gw-D8` |
 | camera node | `obc-esp32-s3-002` | **COM8** | USB | **no radio yet** — spine UART unwired |
@@ -68,8 +68,8 @@ guessing them is a way to silently strip a feature:
 
 | board | port | features |
 |---|---|---|
-| `gw-D8` | COM3 | `bench-low-power` |
-| `gw-40` | COM4 | `bench-low-power`, `bench-nvs-fault`, **`no-relay`** (2026-09-17) |
+| `gw-D8` | COM12 | `bench-low-power` |
+| `gw-40` | COM3 | `bench-low-power`, `bench-nvs-fault`, **`no-relay`** (2026-09-17) |
 
 `no-relay` was enabled on the base station because it is the sink and the
 firmware comment says a station with a host plugged in should not play relay.
@@ -105,7 +105,7 @@ because removing relaying did not remove it. That is the thing worth chasing, an
 it wants a longer run with the counting done on gap *rate* over many minutes
 rather than two three-minute samples.
 
-### The baseline-loss run (set up 2026-09-25, not yet run)
+### The baseline-loss run (2026-09-25): the base was talking over its own traffic
 
 Two samples of about 30 frames cannot support "10-20%". The 95% intervals are
 4.5-26% for 4/35 and 9.8-38% for 6/29. `relay_loss.py` also watched only the
@@ -120,22 +120,98 @@ IRQ mask left out CrcErr and HeaderErr. A masked IRQ never latches, so the
 - A CRC-failed frame was read out as good and died as `REJECTED … bad tag`.
 - A frame with a corrupt header vanished without a line.
 
-Run once on each firmware. The difference between the two runs is how much
-of the old "silent" loss was really frames that arrived broken.
+**Ports, a third correction.** Read by `espflash board-info` on 2026-09-25:
+COM3 is gw-40 (`3c:0f:02:ee:83:40`) and COM12 is gw-D8 (`3c:0f:02:ee:82:d8`).
+The table above is updated. Read the MAC, never the table.
+
+**Run A: the old firmware, 45 minutes, 545 frames.**
+
+```
+loss 50/545 = 9.2%  (95% CI 7.0-11.9%)
+fates: received 495, rejected 0, crc 0, header 0, deaf 50, silent 0
+keepalive 41/456 9.0%   uart 9/89 10.1%   (no size effect)
+5-min bins: 17/61 7/60 3/60 0/61 2/60 0/61 2/60 8/61 11/61
+rssi median -38 dBm, snr 12
+```
+
+- **Every loss was `deaf`.** All 50 missing frames were on the air while gw-40
+  was transmitting, which would put about 2 of the 50 there by chance. A
+  half-duplex radio cannot hear while it talks.
+- **Zero `silent`**, so the old IRQ mask was not hiding a pile of corrupt
+  frames. Its fix is still right, but it recovers none of this loss.
+- **No size effect**, so this is not the link: long frames did not die first.
+- **Bursty.** 17 of 61 lost in the first five minutes, then none for long
+  stretches, then 11 of 61 in the last five. The two stations' keepalive
+  schedules drift in and out of step, and each stretch in step is a run of
+  collisions. That is why the old two-sample "10-20%" and "about half"
+  disagreed with each other: they sampled different phases.
+
+**The fix, in both directions** (heltec `main.rs` and `sx1262.rs`):
+- The base (`no-relay`) keepalive goes from 5 s to 30 s. Nothing waits on
+  it: the node excludes keepalives from host-link liveness, and the host
+  cannot hear the station it is plugged into.
+- Every station's keepalive now listens before it talks
+  (`Sx1262::channel_busy`). It answers "busy" if a frame is already arriving
+  (HeaderValid, checked without leaving RX) or if a 2-symbol CAD hears LoRa.
+  A busy channel defers the keepalive 300-700 ms; after 5 deferrals it goes
+  anyway.
+- The console command hold-off now only ever delays a keepalive, rather than
+  pulling a 30 s one forward to 3 s.
+
+**Run C: both stations on the new firmware.** gw-D8 needs it too, for its own
+listen-before-talk. Both builds also carry the CRC and header IRQ fix, so
+Run C replaces the planned Run B.
 
 ```powershell
-# stop the brain first: it holds COM4. Read both banners before trusting the ports.
-python scripts\mesh_loss.py --selftest
-python scripts\mesh_loss.py --tx COM3 --rx COM4 --minutes 45 --label "gw-40 old IRQ mask"
-
+# stop the brain first. Read both MACs (espflash board-info) before trusting ports.
 . $env:USERPROFILE\export-esp.ps1; $env:CARGO_TARGET_DIR='C:\e'
 $env:OBC_SPINE_ROOT = (Get-Content $env:USERPROFILE\.obc\spine_root)
 cd firmware\heltec-lora-linktest
-cargo build --release --features bench-low-power,bench-nvs-fault,no-relay   # gw-40's full feature set, per the table above
-espflash flash --port COM4 C:\e\xtensa-esp32s3-espidf\release\heltec-lora-linktest
+cargo build --release --features bench-low-power,bench-nvs-fault,no-relay   # gw-40
+espflash flash --port COM3 C:\e\xtensa-esp32s3-espidf\release\heltec-lora-linktest
+cargo build --release --features bench-low-power                            # gw-D8
+espflash flash --port COM12 C:\e\xtensa-esp32s3-espidf\release\heltec-lora-linktest
 cd ..\..
-python scripts\mesh_loss.py --tx COM3 --rx COM4 --minutes 45 --label "gw-40 CRC+header IRQs unmasked"
+python scripts\mesh_loss.py --tx COM12 --rx COM3 --minutes 45 --label "C: base 30 s + LBT"
 ```
+
+Success looks like `deaf` falling from 9.2% toward zero and staying there in
+every 5-minute bin. The report counts listen-before-talk deferrals on each
+side. A high `forced` count would mean the channel was busier than the
+backoff allows for.
+
+⚠ **After a plain `espflash flash` (no `--monitor`), gw-D8 may not start.**
+On 2026-09-25 it stayed in the ROM downloader and printed nothing for a whole
+45-minute run, while gw-40 flashed the same way came up normally. A later
+`espflash monitor` connected through the flash stub and still showed no boot
+until Ctrl+R hard-reset it. Before starting any capture, open each station
+with `espflash monitor --port <port>`, press Ctrl+R, and see keepalives
+before you press Ctrl+C.
+
+**Run C: base 30 s + listen-before-talk, 45 minutes, 542 frames** (both
+stations on commit 2a54d08; gw-D8 ELF `fe1e72eb4`):
+
+```
+loss 8/542 = 1.5%  (95% CI 0.7-2.9%)       Run A: 9.2% (7.0-11.9%)
+fates: received 534, deaf 2, header 1, silent 5, rejected 0, crc 0
+keepalive 8/453 1.8%   uart 0/89 0.0%
+LBT: gw-D8 deferred 4 / forced 0;  gw-40 deferred 8 / forced 0
+5-min bins: 1/61 0/60 2/60 0/61 0/60 3/61 0/60 1/61 1/58
+rssi median -40 dBm, snr 13
+```
+
+- **Collisions fell from 50 to 2.** The two 95% intervals do not overlap.
+  The 12 deferrals are collisions that did not happen. The 2 left are frames
+  that started within the same CAD window, which listen-before-talk cannot
+  see.
+- **No bursts.** The worst bin is 3/61, where Run A's was 17/61.
+- **`header: 1` is the first header error ever logged on this mesh.** The
+  IRQ-mask fix works on hardware. Before it, that frame would have been
+  `silent`.
+- **The new floor is `silent`, 5 keepalives (0.9%).** These are frames
+  gw-40 recorded no trace of. Candidates, all untested: arrival during
+  gw-40's own CAD or TX setup, or a preamble too weak to trigger a header.
+  At this rate, telling them apart needs runs of several hours.
 
 Each run writes `results/mesh_loss-<stamp>.log` (the raw capture from both
 consoles) and a `.json` next to it. `--replay <log>` re-analyses a capture
