@@ -180,6 +180,39 @@ every 5-minute bin. The report counts listen-before-talk deferrals on each
 side. A high `forced` count would mean the channel was busier than the
 backoff allows for.
 
+⚠ **After a plain `espflash flash` (no `--monitor`), gw-D8 may not start.**
+On 2026-09-25 it stayed in the ROM downloader and printed nothing for a whole
+45-minute run, while gw-40 flashed the same way came up normally. A later
+`espflash monitor` connected through the flash stub and still showed no boot
+until Ctrl+R hard-reset it. Before starting any capture, open each station
+with `espflash monitor --port <port>`, press Ctrl+R, and see keepalives
+before you press Ctrl+C.
+
+**Run C: base 30 s + listen-before-talk, 45 minutes, 542 frames** (both
+stations on commit 2a54d08; gw-D8 ELF `fe1e72eb4`):
+
+```
+loss 8/542 = 1.5%  (95% CI 0.7-2.9%)       Run A: 9.2% (7.0-11.9%)
+fates: received 534, deaf 2, header 1, silent 5, rejected 0, crc 0
+keepalive 8/453 1.8%   uart 0/89 0.0%
+LBT: gw-D8 deferred 4 / forced 0;  gw-40 deferred 8 / forced 0
+5-min bins: 1/61 0/60 2/60 0/61 0/60 3/61 0/60 1/61 1/58
+rssi median -40 dBm, snr 13
+```
+
+- **Collisions fell from 50 to 2.** The two 95% intervals do not overlap.
+  The 12 deferrals are collisions that did not happen. The 2 left are frames
+  that started within the same CAD window, which listen-before-talk cannot
+  see.
+- **No bursts.** The worst bin is 3/61, where Run A's was 17/61.
+- **`header: 1` is the first header error ever logged on this mesh.** The
+  IRQ-mask fix works on hardware. Before it, that frame would have been
+  `silent`.
+- **The new floor is `silent`, 5 keepalives (0.9%).** These are frames
+  gw-40 recorded no trace of. Candidates, all untested: arrival during
+  gw-40's own CAD or TX setup, or a preamble too weak to trigger a header.
+  At this rate, telling them apart needs runs of several hours.
+
 Each run writes `results/mesh_loss-<stamp>.log` (the raw capture from both
 consoles) and a `.json` next to it. `--replay <log>` re-analyses a capture
 without the hardware. Keep node `obc-esp32-s3-001` jumpered and reporting as

@@ -16,6 +16,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   loss came in bursts (17/61 in the first five minutes, 0/61 later) as the
   two stations' keepalive schedules drifted in and out of step. That is why
   the earlier three-minute samples gave "10-20%" and "about half".
+- **Run C, the fix on both stations, 45 minutes, 542 frames: 1.5% loss
+  (95% CI 0.7-2.9%).** Collisions fell from 50 to 2. There were 12
+  listen-before-talk deferrals and 0 forced sends. No bursts: the worst
+  5-minute bin was 3/61. The run logged the mesh's first ever header error,
+  which proves the IRQ-mask fix on hardware. The remaining floor is 5
+  `silent` keepalives (0.9%), cause untested.
+- **gw-D8 did not start after a plain `espflash flash`** and sat silent in
+  the ROM downloader through a full run. Card 0 now says to hard-reset
+  (monitor, then Ctrl+R) and see keepalives before any capture.
 
 ### Fixed
 
@@ -36,8 +45,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `mesh_loss.py` counts listen-before-talk deferrals and forced sends on
   each side.
 
-Not compiled here (no Xtensa toolchain in this environment); rustfmt clean.
-Run C on Card 0 is the test.
+Compiled and verified on both stations by Run C.
 
 ---
 
