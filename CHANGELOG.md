@@ -16,6 +16,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   which proves the sensor delivered pixels, not that the software encoder made
   an image of them. Asks `capabilities` first and refuses `obc-esp32-s3-001`.
   `--selftest` includes the 2026-09-17 on-node picture (320x240).
+## Unreleased — The world block is background, not an inbox (2026-09-26)
+
+### Changed
+
+- **The world-state block opens with a rule: background, for awareness only;
+  alerts in it belong to the escalation layer; do not investigate, diagnose or
+  record anything below unless the operator asked.** On the bench an operator
+  turn about unit preferences became `mesh_status → device_health →
+  record_incident` because the block carried a node's "offline" flag. The
+  operator chose this over keeping the block out of operator turns; the
+  per-turn tool-call log will show whether the line holds.
 
 ## Unreleased — The camera-bringup branch comes home (2026-09-26)
 
