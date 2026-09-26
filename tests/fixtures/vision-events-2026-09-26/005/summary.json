@@ -33,41 +33,41 @@
       "quiet": 96
     },
     "rule_on_switch_frames": {
-      "light": 2,
-      "motion": 6
+      "light": 1,
+      "motion": 7
     },
     "rule_motion_or_nudge_any_frame": 7,
     "switches_the_gate_held": 8,
     "steady": {
-      "frames": 97,
-      "scored": 97,
+      "frames": 96,
+      "scored": 96,
       "judged": 96,
       "frac": {
-        "p95": 0.0063,
-        "max": 0.7662
+        "p95": 0.0062,
+        "max": 0.0068
       },
       "edge": {
-        "p95": 1.14,
-        "max": 4.71
+        "p95": 1.11,
+        "max": 1.25
       },
       "brightness": {
         "min": 114.13,
-        "max": 154.29
+        "max": 127.46
       }
     }
   },
   "switches": [
     {
-      "i": 44,
+      "i": 43,
       "state": "warming_up",
       "node_class": null,
-      "frac": 0.8860999941825867,
-      "edge": 3.609999895095825,
-      "rule": "light",
-      "mean_before": 154.2899932861328,
-      "mean_after": 127.38999938964844,
-      "frames_to_ready": 2,
-      "mark_offset": -1
+      "frac": 0.7662000060081482,
+      "edge": 4.710000038146973,
+      "rule": "motion",
+      "mean_before": 124.12000274658203,
+      "mean_after": 154.2899932861328,
+      "frames_to_ready": 3,
+      "mark_offset": -2
     },
     {
       "i": 61,
