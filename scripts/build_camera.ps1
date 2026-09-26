@@ -105,7 +105,12 @@ if ($Port) {
 # --- build, and flash if asked --------------------------------------------------
 Push-Location $crate
 try {
-    $cargoArgs = if ($Port) { @('run') } else { @('build') }
+    # [string[]], not `$x = if (...) { @('run') }`: PowerShell unwraps a
+    # one-element array returned from `if` into a plain string, and `+=` on a
+    # string concatenates. The first bench run (2026-09-26) handed cargo ONE
+    # argument, "run--release --features board-xiao-sense-- --port COM11", and
+    # the board feature never arrived as a feature.
+    [string[]]$cargoArgs = @(if ($Port) { 'run' } else { 'build' })
     $cargoArgs += @('--release', '--features', $feature)
     if ($Port) { $cargoArgs += @('--', '--port', $Port) }
     Write-Host ""

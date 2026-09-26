@@ -27,7 +27,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Also fixed: `build_camera.ps1 -Port` died before building on its first bench
 run, because espflash's "new version available" notice goes to stderr and
 Windows PowerShell made that fatal under `$ErrorActionPreference = 'Stop'`.
-The MAC read now tolerates stderr and still refuses a port with no MAC.
+The MAC read now tolerates stderr and still refuses a port with no MAC. And
+its cargo arguments were one string, not a list: `$x = if (...) { @('run') }`
+unwraps to a string in PowerShell and `+=` then concatenates, so the board
+feature never reached cargo and the build stopped at camera.rs's "needs a
+board feature" `compile_error!`. Now `[string[]]`, checked in PowerShell 7.
 
 The one conflict was `main.rs`'s module list, where `detector_math` and the
 PSRAM guard both landed; both are kept. Thresholds are still provisional, and
