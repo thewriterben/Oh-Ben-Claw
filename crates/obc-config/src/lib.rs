@@ -1409,6 +1409,14 @@ pub struct SelfImprovementConfig {
     /// skill that replayed the timer. Add `"tg-"` to keep phone chats out too.
     #[serde(default = "default_trajectory_skip")]
     pub skip_session_prefixes: Vec<String>,
+    /// Let a verified, non-physical learned skill enable itself (2026-09-26).
+    /// Default **false**: every learned skill is installed disabled with the
+    /// tag `pending:operator`, for `skill promote` by a person. Fifteen days
+    /// of auto-enabling on the bench produced twenty-seven skills, every one
+    /// a replay of a single prompt, one of which re-ran a write while being
+    /// verified. Capture, retrieval and the curator are unaffected.
+    #[serde(default)]
+    pub auto_enable: bool,
     /// Enable the offline description-evolution job (Phase 16 P4): an LLM
     /// periodically rewrites learned-skill descriptions from usage traces
     /// (diff-logged, revertible; never touches stage/enabled). Default false.

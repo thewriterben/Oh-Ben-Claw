@@ -5,6 +5,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Learned skills wait for a person (2026-09-26)
+
+### Changed
+
+- **`[self_improvement] auto_enable`, default `false`.** A verified,
+  non-physical learned skill is now installed disabled with the tag
+  `pending:operator` and listed in the pass report as pending, instead of
+  enabling itself. Fifteen days of auto-enabling on the bench produced
+  twenty-seven learned skills, every one a frozen replay of a single prompt,
+  used once in total, one of which re-ran a write while being verified.
+  Capture, retrieval, the curator and the minimum bar are unchanged; `skill
+  promote <name>` turns a pending one on. Set `auto_enable = true` for the
+  old behaviour.
+
 ## Unreleased — A person, walking through (2026-09-26)
 
 ### Added

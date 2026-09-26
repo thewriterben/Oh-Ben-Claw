@@ -3255,6 +3255,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 ],
                 config.self_improvement.max_learned.unwrap_or(500),
             )
+            .with_auto_enable(config.self_improvement.auto_enable)
             .with_obs(Arc::clone(&obs))
             .with_verification_rules(
                 config

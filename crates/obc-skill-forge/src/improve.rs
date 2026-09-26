@@ -15,8 +15,8 @@
 
 use super::curator::{self, CuratorPolicy};
 use super::synthesis::{
-    approve, chain_signature, parameterize, synthesize, tag_physical, touches_actuator,
-    VerificationCheck,
+    approve, chain_signature, parameterize, synthesize, tag_pending_operator, tag_physical,
+    touches_actuator, VerificationCheck,
 };
 use super::usage::UsageLedger;
 use super::{SkillForge, SkillManifest};
@@ -140,6 +140,9 @@ pub struct SkillImprover {
     physical_tools: Vec<String>,
     /// Cap on auto-installed learned skills.
     max_learned: usize,
+    /// Whether a verified, non-physical skill may enable itself. `false`
+    /// installs it disabled with `pending:operator` for a person to promote.
+    auto_enable: bool,
     /// Optional metrics: `self_improve_*` counters per pass.
     obs: Option<Arc<obc_observability::ObsContext>>,
     /// Configured verification requirements (`[[self_improvement.verification]]`).
@@ -161,6 +164,7 @@ impl SkillImprover {
             forge,
             physical_tools,
             max_learned,
+            auto_enable: true,
             obs: None,
             rules: Vec::new(),
             curator: None,
@@ -188,6 +192,12 @@ impl SkillImprover {
     /// matching physical candidates run their read-only `SensorAssertion`
     /// rules and, when all pass, are tagged `track0:sensor-verified` (still
     /// installed disabled — an operator promotes them).
+    /// Whether verified skills enable themselves (`[self_improvement] auto_enable`).
+    pub fn with_auto_enable(mut self, yes: bool) -> Self {
+        self.auto_enable = yes;
+        self
+    }
+
     pub fn with_verification_rules(mut self, rules: Vec<VerificationRule>) -> Self {
         self.rules = rules;
         self
@@ -379,6 +389,17 @@ impl SkillImprover {
                         break;
                     }
                 }
+            }
+            if verified && !self.auto_enable {
+                // Verified, safe, and still not the forge's call: installed
+                // disabled, tagged, listed for a person to promote.
+                let pending = tag_pending_operator(candidate);
+                if self.forge.install_skill(&pending).is_ok() {
+                    report.pending_supervised.push(name);
+                } else {
+                    report.rejected.push(name);
+                }
+                continue;
             }
             let installed_ok = if verified {
                 let approved = approve(candidate);
@@ -601,6 +622,42 @@ mod tests {
             .map(|m| m.name)
             .collect();
         assert_eq!(names, vec!["learned_check_the_weather".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn without_auto_enable_a_verified_skill_waits_for_a_person() {
+        let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
+        traj.record(&episode("e1", "check the weather", "http"))
+            .unwrap();
+        let dir = tmp_dir("pending");
+        let improver = SkillImprover::new(
+            Arc::clone(&traj),
+            SkillForge::new(&dir),
+            vec!["gpio_write".to_string()],
+            100,
+        )
+        .with_auto_enable(false);
+        let report = improver
+            .run_once(&MockExec(Outcome::Success), 0)
+            .await
+            .unwrap();
+        assert!(report.installed.is_empty(), "{report:?}");
+        assert_eq!(
+            report.pending_supervised,
+            vec!["learned_check_the_weather".to_string()]
+        );
+        let m = SkillForge::new(&dir)
+            .list_manifests()
+            .unwrap()
+            .into_iter()
+            .find(|m| m.name == "learned_check_the_weather")
+            .unwrap();
+        assert!(!m.enabled, "installed disabled");
+        assert!(
+            m.tags.iter().any(|t| t == "pending:operator"),
+            "{:?}",
+            m.tags
+        );
     }
 
     #[tokio::test]
