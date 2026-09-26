@@ -5,6 +5,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Look at the picture (2026-09-26)
+
+### Added
+
+- **`scripts/grab_picture.py --port COMx [--quality 1..10] [--count N]`.** Saves
+  `camera_capture` output to `results/pictures/` as a `.jpg` and says whether it
+  is one: FFD8 at the start, FFD9 at the end, and width/height read from the
+  JPEG's own frame header. The capture probe counts `frame len=76800` lines,
+  which proves the sensor delivered pixels, not that the software encoder made
+  an image of them. Asks `capabilities` first and refuses `obc-esp32-s3-001`.
+  `--selftest` includes the 2026-09-17 on-node picture (320x240).
+
 ## Unreleased — The camera-bringup branch comes home (2026-09-26)
 
 ### Added
