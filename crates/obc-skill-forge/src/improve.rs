@@ -127,6 +127,9 @@ pub struct ImproveReport {
     /// Candidates skipped because an installed skill already does exactly
     /// this (same kind, tool and arguments) under another name.
     pub skipped_duplicate_recipe: usize,
+    /// Episodes that never became candidates: the objective was not a request
+    /// or the recipe was a look-up only (see [`synthesis::below_bar`]).
+    pub skipped_below_bar: usize,
 }
 
 /// Drives the scan → synthesize → verify → install cycle.
@@ -219,8 +222,25 @@ impl SkillImprover {
         since_ts_ms: u64,
     ) -> anyhow::Result<ImproveReport> {
         let mut report = ImproveReport::default();
-        let episodes = self.trajectory.successful_since(since_ts_ms)?;
-        report.episodes_scanned = episodes.len();
+        let all = self.trajectory.successful_since(since_ts_ms)?;
+        report.episodes_scanned = all.len();
+        // The minimum bar (2026-09-26): only episodes that read as a task and
+        // do more than a look-up go on to become candidates.
+        let mut episodes = Vec::with_capacity(all.len());
+        for ep in all {
+            match super::synthesis::below_bar(&ep) {
+                Some(reason) => {
+                    report.skipped_below_bar += 1;
+                    tracing::debug!(
+                        episode = %ep.id,
+                        session = %ep.session_id,
+                        reason,
+                        "Phase 16: episode below the skill bar"
+                    );
+                }
+                None => episodes.push(ep),
+            }
+        }
 
         let installed_manifests = self.forge.list_manifests().unwrap_or_default();
         // Same recipe under another name is the same skill: the bench grew
@@ -431,11 +451,15 @@ impl SkillImprover {
             let pass_start = now_ms();
             match self.run_once(executor.as_ref(), since).await {
                 Ok(rep) => {
-                    if !rep.installed.is_empty() || !rep.pending_supervised.is_empty() {
+                    if !rep.installed.is_empty()
+                        || !rep.pending_supervised.is_empty()
+                        || rep.skipped_below_bar > 0
+                    {
                         tracing::info!(
                             installed = rep.installed.len(),
                             pending_supervised = rep.pending_supervised.len(),
                             rejected = rep.rejected.len(),
+                            below_bar = rep.skipped_below_bar,
                             "Phase 16 self-improvement pass"
                         );
                     }
@@ -522,6 +546,61 @@ mod tests {
             duration_ms: None,
             tokens_est: None,
         }
+    }
+
+    #[tokio::test]
+    async fn the_pass_refuses_prompt_replays_and_still_installs_tasks() {
+        let traj = Arc::new(TrajectoryStore::open_in_memory().unwrap());
+        // The bench's four kinds of junk, verbatim in spirit.
+        let mut voice = episode("e1", "Here is the voice note you requested.", "shell");
+        voice.steps[0].args = json!({"command": "date"});
+        let mut envelope = episode(
+            "e2",
+            r#"{"text": "What time is it in Shanghai?", "duration_s": 10.4, "language": "en"}"#,
+            "shell",
+        );
+        envelope.steps[0].args = json!({"command": "date -u"});
+        let pasted = episode(
+            "e3",
+            "from neuprint import fetch_adjacencies",
+            "world_memory",
+        );
+        let mut system2 = episode(
+            "e4",
+            "SYSTEM 1 ESCALATION (reflex layer could not resolve this)",
+            "mesh_status",
+        );
+        system2.steps[0].args = json!({});
+        // …and one real task.
+        let task = episode("e5", "check the weather", "http");
+        for ep in [&voice, &envelope, &pasted, &system2, &task] {
+            traj.record(ep).unwrap();
+        }
+        let dir = tmp_dir("bar");
+        let improver = SkillImprover::new(
+            Arc::clone(&traj),
+            SkillForge::new(&dir),
+            vec!["gpio_write".to_string()],
+            100,
+        );
+        let report = improver
+            .run_once(&MockExec(Outcome::Success), 0)
+            .await
+            .unwrap();
+        assert_eq!(report.episodes_scanned, 5);
+        assert_eq!(report.skipped_below_bar, 4);
+        assert_eq!(report.candidates, 1);
+        assert_eq!(
+            report.installed,
+            vec!["learned_check_the_weather".to_string()]
+        );
+        let names: Vec<String> = SkillForge::new(&dir)
+            .list_manifests()
+            .unwrap()
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
+        assert_eq!(names, vec!["learned_check_the_weather".to_string()]);
     }
 
     #[tokio::test]

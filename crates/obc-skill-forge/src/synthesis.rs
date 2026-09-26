@@ -62,6 +62,101 @@ fn slugify(objective: &str) -> String {
 /// Longest slug a learned skill's name carries after `learned_`.
 pub const MAX_SLUG_LEN: usize = 48;
 
+/// Objective prefixes that are not an operator asking for something: pasted
+/// code or data, and the prompts OBC writes to itself (timers, System 2).
+const NOT_A_REQUEST: &[&str] = &[
+    "{",
+    "[",
+    "#",
+    "<",
+    "from ",
+    "import ",
+    "pip ",
+    "def ",
+    "class ",
+    "print(",
+    "let ",
+    "fn ",
+    "system 1 escalation",
+];
+
+/// Tools whose call is a look-up, never a procedure worth a skill of its own.
+const LOOKUP_TOOLS: &[&str] = &[
+    "search_sessions",
+    "world_memory",
+    "mesh_status",
+    "browser_snapshot",
+    "browser_navigate",
+];
+
+/// Shell commands that only read a clock or an identity.
+const CLOCK_COMMANDS: &[&str] = &[
+    "date", "uptime", "whoami", "pwd", "hostname", "uname", "id", "cal", "echo", "true",
+];
+
+/// Is this step a look-up rather than work?
+fn is_lookup_step(tool: &str, args: &Value) -> bool {
+    if LOOKUP_TOOLS.contains(&tool) {
+        return true;
+    }
+    if tool == "shell" {
+        let cmd = args
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        // `date`, `date -u`, `echo hi` — but not `date && rm …`, not pipes.
+        let simple = !cmd.contains("&&") && !cmd.contains('|') && !cmd.contains(';');
+        let head = cmd.split_whitespace().next().unwrap_or("");
+        return simple && CLOCK_COMMANDS.contains(&head);
+    }
+    false
+}
+
+/// The minimum bar for minting a skill from an episode (2026-09-26).
+///
+/// Fifteen days on the bench produced twenty-three learned skills and every
+/// one was a frozen replay of a single prompt: a skill named after a voice
+/// note's test phrase whose recipe was `date`, one named after a transcription
+/// server's JSON envelope, seven minted from lines of Python pasted into the
+/// console, one from a System 2 escalation prompt with a world snapshot inside
+/// it. The three gates that existed asked "is it safe, is it new" — never "is
+/// it a task anyone will ask for again". This asks that, cheaply:
+///
+/// * the objective must read as a request (two words or more, not code, not
+///   data, not a prompt OBC wrote to itself);
+/// * the recipe must do something beyond a look-up (a clock, a session
+///   search, a world-memory read, a bare page load).
+///
+/// Returns the reason an episode falls short, or `None` if it clears the bar.
+pub fn below_bar(ep: &Episode) -> Option<&'static str> {
+    let objective = ep.objective.trim();
+    let lower = objective.to_lowercase();
+    if objective.split_whitespace().count() < 2 {
+        return Some("objective too short to be a task");
+    }
+    if NOT_A_REQUEST.iter().any(|p| lower.starts_with(p)) {
+        return Some("objective is code, data or a prompt OBC wrote to itself");
+    }
+    // `x = f(...)` / `a, b = f(...)`: an assignment is a line of code.
+    if let Some((lhs, _)) = objective.split_once('=') {
+        let lhs = lhs.trim();
+        if !lhs.is_empty()
+            && lhs
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ',' || c == ' ')
+            && objective.contains('(')
+        {
+            return Some("objective is code, data or a prompt OBC wrote to itself");
+        }
+    }
+    let ok_steps: Vec<_> = ep.steps.iter().filter(|s| s.ok).collect();
+    if !ok_steps.is_empty() && ok_steps.iter().all(|s| is_lookup_step(&s.tool, &s.args)) {
+        return Some("recipe is a look-up only (clock, search, memory read, page load)");
+    }
+    None
+}
+
 /// Synthesize a reusable, quarantined skill from a successful episode.
 ///
 /// A single successful step becomes a `Delegate` recipe; **multiple** all-ok
@@ -316,6 +411,78 @@ mod tests {
             duration_ms: None,
             tokens_est: None,
         }
+    }
+
+    #[test]
+    fn the_bar_rejects_replays_of_prompts_and_keeps_tasks() {
+        let mut ep = success_episode("Here is the voice note you requested.", "shell", true);
+        ep.steps[0].args = json!({"command": "date"});
+        assert_eq!(
+            below_bar(&ep),
+            Some("recipe is a look-up only (clock, search, memory read, page load)")
+        );
+        ep.steps[0].args = json!({"command": "date -u"});
+        assert!(below_bar(&ep).is_some());
+
+        let mut ep = success_episode(
+            r#"{"text": "What time is it in Shanghai?", "duration_s": 10.4, "language": "en"}"#,
+            "shell",
+            true,
+        );
+        ep.steps[0].args = json!({"command": "df -h"});
+        assert_eq!(
+            below_bar(&ep),
+            Some("objective is code, data or a prompt OBC wrote to itself")
+        );
+        for code in [
+            "from neuprint import fetch_adjacencies",
+            "import os",
+            "# Get connectivity",
+            "neurons, syndist = fetch_neurons(\"DNge104\")",
+            "client = Client(\"https://neuprint.janelia.org\", dataset='x')",
+            "SYSTEM 1 ESCALATION (reflex layer could not resolve this)",
+        ] {
+            let mut ep = success_episode(code, "http", true);
+            ep.steps[0].args = json!({"url": "https://example.com"});
+            assert!(below_bar(&ep).is_some(), "{code}");
+        }
+
+        let mut ep = success_episode(
+            "Use the search_sessions tool to find the nozzle temp",
+            "search_sessions",
+            true,
+        );
+        ep.steps[0].args = json!({"query": "nozzle temperature M3"});
+        assert!(below_bar(&ep).is_some());
+        let mut ep = success_episode(
+            "navigate to example.com and click the first link",
+            "browser_navigate",
+            true,
+        );
+        ep.steps[0].args = json!({"url": "https://example.com"});
+        assert!(below_bar(&ep).is_some(), "a lone page load is a look-up");
+        assert!(below_bar(&success_episode("Ping", "shell", true)).is_some());
+
+        // Tasks clear it: a real command, an actuator, a look-up followed by work.
+        let mut ep = success_episode("clean the build directory", "shell", true);
+        ep.steps[0].args = json!({"command": "rm -rf target/tmp && cargo build"});
+        assert_eq!(below_bar(&ep), None);
+        assert_eq!(
+            below_bar(&success_episode("turn on the fan", "gpio_write", true)),
+            None
+        );
+        let mut ep = success_episode("check the printer and log it", "world_memory", true);
+        ep.steps.push(EpisodeStep {
+            tool: "record_incident".into(),
+            args: json!({"what": "nozzle cold"}),
+            result: "ok".into(),
+            ok: true,
+        });
+        assert_eq!(
+            below_bar(&ep),
+            None,
+            "a look-up followed by work is a procedure"
+        );
     }
 
     #[test]
