@@ -24,6 +24,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   capture results (002 20/20, 005 10/10, all `format=3`) came from greyscale
   builds; until now `main`'s `camera.rs` still asked for JPEG.
 
+Also fixed: `build_camera.ps1 -Port` died before building on its first bench
+run, because espflash's "new version available" notice goes to stderr and
+Windows PowerShell made that fatal under `$ErrorActionPreference = 'Stop'`.
+The MAC read now tolerates stderr and still refuses a port with no MAC.
+
 The one conflict was `main.rs`'s module list, where `detector_math` and the
 PSRAM guard both landed; both are kept. Thresholds are still provisional, and
 greyscale plus the software encoder has not yet run on a Sense from a `main`

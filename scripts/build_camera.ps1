@@ -77,7 +77,18 @@ Write-Host "target   $env:CARGO_TARGET_DIR"
 
 # --- which chip is on the port ------------------------------------------------
 if ($Port) {
-    $info = & espflash board-info --port $Port 2>&1 | Out-String
+    # espflash logs to stderr (including a "new version available" notice), and
+    # Windows PowerShell turns redirected stderr into error records, which
+    # $ErrorActionPreference = 'Stop' makes fatal. Relax it for this one call and
+    # keep the text; the MAC regex below is the real check. (2026-09-26: the
+    # first run died here on the version notice, before anything was built.)
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $info = & espflash board-info --port $Port 2>&1 | ForEach-Object { "$_" } | Out-String
+    } finally {
+        $ErrorActionPreference = $eap
+    }
     $mac = [regex]::Match($info, '(?i)MAC address:\s*([0-9a-f]{2}(:[0-9a-f]{2}){5})')
     if (-not $mac.Success) {
         Write-Host $info
