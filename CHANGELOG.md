@@ -42,6 +42,26 @@ and the CI scripts, not by an Xtensa build. The first `build_camera.ps1` run is
 their test. The `camera-bringup` commits (greyscale capture, on-node detector,
 vision floor) move to `main` in a follow-up.
 
+## Unreleased — Say what you remembered (2026-09-26)
+
+### Changed
+
+- **Every turn that retrieves experience logs what it retrieved and why.**
+  `experience retrieved into the prompt` at INFO: `k`, the learned skills
+  matched, the episode ids, their fused rank score and lexical overlap, the
+  first sixty characters of the objective. `TrajectoryStore::similar_scored`
+  carries the numbers; `similar` is unchanged for callers. On the bench a
+  fresh session had answered a stated preference with talk of printer
+  profiles from an unrelated episode and nothing had recorded the retrieval.
+- **Episodes without a tool call no longer enter the experience block.** The
+  block promises "proven tool recipes"; an episode with none contributed only
+  its objective text, which is exactly the parroting seen. They are dropped
+  and counted (`dropped_recipe_less=`).
+- **Every turn logs what its prompt is made of** — `context composition`:
+  system chars, tool count and schema chars, history messages and chars. The
+  bench's cold turn had grown from 12.7k to 22k tokens and nothing said which
+  part grew; `brain usage` gives the tokens, this gives the shape.
+
 ## Unreleased — Nobody will remind you (2026-09-26)
 
 ### Changed

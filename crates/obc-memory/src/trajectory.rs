@@ -95,6 +95,17 @@ pub struct EpisodeStep {
     pub ok: bool,
 }
 
+/// One result of [`TrajectoryStore::similar_scored`]: the episode and why it ranked.
+#[derive(Debug, Clone)]
+pub struct SimilarEpisode {
+    pub episode: Episode,
+    /// Reciprocal-rank-fusion score across the legs that returned it (higher
+    /// is better; ~0.016 is "first in one leg", ~0.049 "first in all three").
+    pub fused: f32,
+    /// Plain token overlap between the objective and this episode's objective.
+    pub lexical: f32,
+}
+
 /// A captured agent run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Episode {
@@ -495,6 +506,19 @@ impl TrajectoryStore {
     /// Only episodes surfaced by at least one leg are returned, best first;
     /// ties break newest-first. Fully deterministic given the same store.
     pub fn similar(&self, objective: &str, k: usize) -> Result<Vec<Episode>> {
+        Ok(self
+            .similar_scored(objective, k)?
+            .into_iter()
+            .map(|s| s.episode)
+            .collect())
+    }
+
+    /// [`similar`](Self::similar) with the numbers that put each episode there:
+    /// the fused rank score and the plain lexical overlap with the objective.
+    /// Added 2026-09-26 so a turn can say *what* it retrieved and *why* — a
+    /// fresh session on the bench answered a stated preference with talk of
+    /// printer profiles from an unrelated episode, and nothing had logged it.
+    pub fn similar_scored(&self, objective: &str, k: usize) -> Result<Vec<SimilarEpisode>> {
         const MIN_SCORE: f32 = 0.2;
         const MIN_COSINE: f32 = 0.3;
         const RRF_K: f32 = 60.0;
@@ -617,7 +641,11 @@ impl TrajectoryStore {
         Ok(ranked
             .into_iter()
             .take(k)
-            .map(|(_, i)| candidates[i].clone())
+            .map(|(fused, i)| SimilarEpisode {
+                lexical: lexical_score(objective, &candidates[i].objective),
+                fused,
+                episode: candidates[i].clone(),
+            })
             .collect())
     }
 
