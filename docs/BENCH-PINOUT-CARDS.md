@@ -28,19 +28,46 @@ below had `gw-D8` as the base on COM3 and `gw-40` as the field bridge. Both are 
 now — whether the boards were swapped since or the table was always wrong, the
 measurement wins.
 
-| Role | Node id | Port | Power | Wiring |
-|---|---|---|---|---|
-| base (host link) | **gw-40** | **COM3** (2026-09-25) | PC USB — *must* stay on the host | none — see below |
-| bridge (field) | **gw-D8** | **COM12** (2026-09-25; USB on the bench; wall/bank in the field) | wall or power bank | **the node jumper pair belongs here** |
-| relay (Stage 3b) | **gw-90** | — | USB power only | none — radio only |
-| node | `obc-esp32-s3-001` | **COM6** | USB or bank | jumpers to the **bridge** = `gw-D8` |
-| camera node | `obc-esp32-s3-002` | **COM8** | USB | **no radio yet** — spine UART unwired |
-| camera node (Lilygo) | `obc-esp32-s3-003` | COM10 when plugged | USB | **no radio yet** - LILYGO T-CameraPlus-S3 V1.1, OV5640 |
-| spare | `obc-esp32-s3-004` | not measured - read the banner | USB | none - spare XIAO ESP32S3, MAC 64:E8:33:7F:84:CC |
-| camera node (Sense #2) | `obc-esp32-s3-005` | COM11 when plugged | USB | **no radio yet** - XIAO ESP32S3 Sense, OV3660, MAC AC:27:6E:A8:4D:E4 |
+**Boards are named by what they print, never by a COM number.** This table was
+corrected three times in a fortnight (2026-09-15, 09-17, 09-26) because Windows hands
+out a new COM number on every re-plug and the number had been written down as if it
+were part of the board. The identity column below is what to read; the *only* place a
+port number belongs is `[lora_gateway] port` in the live config, set on the day, and
+the "How to find it" recipe says how to get that number in under a minute.
 
-How each row was established, so the next person can redo it in two minutes rather
-than infer it from traffic (which is what Card 0 exists to stop):
+| Role | Node id | How to find it | Power | Wiring |
+|---|---|---|---|---|
+| base (host link) | **gw-40** | CP210x bridge whose banner prints `Gateway 40` | PC USB — *must* stay on the host | none — see below |
+| bridge (field) | **gw-D8** | CP210x bridge whose banner prints `Gateway D8` (`espflash` MAC `3c:0f:02:ee:82:d8`) | wall or power bank | **the node jumper pair belongs here** |
+| relay (Stage 3b) | **gw-90** | CP210x bridge whose banner prints `Gateway 90` | USB power only | none — radio only |
+| node | `obc-esp32-s3-001` | Espressif native USB (`303a:1001`); banner names the node | USB or bank | jumpers to the **bridge** = `gw-D8` |
+| camera node | `obc-esp32-s3-002` | Espressif native USB; banner names the node | USB | **no radio yet** — spine UART unwired |
+| camera node (Lilygo) | `obc-esp32-s3-003` | Espressif native USB; banner names the node | USB | **no radio yet** - LILYGO T-CameraPlus-S3 V1.1, OV5640 |
+| spare | `obc-esp32-s3-004` | Espressif native USB; MAC 64:E8:33:7F:84:CC | USB | none - spare XIAO ESP32S3 |
+| camera node (Sense #2) | `obc-esp32-s3-005` | Espressif native USB; MAC AC:27:6E:A8:4D:E4 | USB | **no radio yet** - XIAO ESP32S3 Sense, OV3660 |
+
+**How to find it (Windows, one minute).** The three gateway boards are the only
+Silicon Labs CP210x devices on the bench; the ESP32-S3 nodes all share Espressif's
+native id and are told apart by their banner or MAC.
+
+```powershell
+Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -like '*(COM*' } |
+  ForEach-Object { $_.Name + ' | ' + $_.DeviceID }
+```
+
+lists every serial device with its USB id (`VID_10C4&PID_EA60` = CP210x, a gateway;
+`VID_303A&PID_1001` = an ESP32-S3 node). Then, for each CP210x port, open it at 115200
+and press reset (or just power it): the first lines are the banner, and the two hex
+digits after `Gateway` are the node id. `espflash board-info --port COMx` prints the
+MAC instead, and `node = mac[5]`, so it answers the same question without a reset.
+Write the id on tape, put the number in the config, and do not put the number here.
+
+*Seen 2026-09-26, as an example of the drift and not as a fact to rely on:* the CP210x
+bridges enumerated as COM3 and COM5, `gw-40` on COM5 (it had been COM4 on 09-17 and
+COM3 on 09-15); the Espressif nodes were COM6 and COM8.
+
+How each row was established on 2026-09-15, kept as the worked example of the method
+(the COM numbers in it were true that day and are not now — see the rule above):
 
 - **`gw-D8` is on COM5** — `espflash flash --port COM5` printed
   `MAC address: 3c:0f:02:ee:82:d8`. The MAC is the id (`node = mac[5]`), so this is
@@ -55,21 +82,23 @@ than infer it from traffic (which is what Card 0 exists to stop):
 
 All three radios self-test clean (`status=0xA2`, syncword readback `0x1424`).
 
-⚠ **Ports re-measured 2026-09-17, and they had moved again.** The table above said
+⚠ **Ports re-measured 2026-09-17, and they had moved again.** The table then said
 `gw-40` on COM3 and `gw-D8` on COM5; both boot banners were read directly that day and
-say otherwise — COM3 prints `Gateway D8`, COM4 prints `Gateway 40`, and COM5 is not
-present at all. The live config agrees (`station = `gw-40`, `port = `COM4`). This is the
-second correction to this table; read the banner, never the table, before flashing.
+said otherwise — COM3 printed `Gateway D8`, COM4 printed `Gateway 40`, and COM5 was not
+present at all. On 2026-09-26, after `gw-40` had been unplugged for a fortnight and
+re-plugged, it came back as COM5. That was the third correction, and the reason the
+table above no longer carries port numbers: read the banner, put the number in the
+config, and never in a document.
 
 ### `no-relay` on gw-40, measured 2026-09-17 — the flag works, the benefit does not reproduce
 
 Each station's build is now recorded here, because the 7b restore showed that
 guessing them is a way to silently strip a feature:
 
-| board | port | features |
-|---|---|---|
-| `gw-D8` | COM12 | `bench-low-power` |
-| `gw-40` | COM3 | `bench-low-power`, `bench-nvs-fault`, **`no-relay`** (2026-09-17) |
+| board (by banner) | features |
+|---|---|
+| `Gateway D8` | `bench-low-power` |
+| `Gateway 40` | `bench-low-power`, `bench-nvs-fault`, **`no-relay`** (2026-09-17) |
 
 `no-relay` was enabled on the base station because it is the sink and the
 firmware comment says a station with a host plugged in should not play relay.
@@ -121,8 +150,9 @@ IRQ mask left out CrcErr and HeaderErr. A masked IRQ never latches, so the
 - A frame with a corrupt header vanished without a line.
 
 **Ports, a third correction.** Read by `espflash board-info` on 2026-09-25:
-COM3 is gw-40 (`3c:0f:02:ee:83:40`) and COM12 is gw-D8 (`3c:0f:02:ee:82:d8`).
-The table above is updated. Read the MAC, never the table.
+COM3 was gw-40 (`3c:0f:02:ee:83:40`) and COM12 was gw-D8 (`3c:0f:02:ee:82:d8`); by
+2026-09-26 gw-40 was COM5. The MACs are the durable part of that sentence. Read the
+MAC or the banner, never a table.
 
 **Run A: the old firmware, 45 minutes, 545 frames.**
 
@@ -260,8 +290,9 @@ traffic (`main.rs`):
 Gateway 40 — UART1(TX=4,RX=2) ⇄ LoRa. Wire compute TX→GPIO2, GND↔GND.
 ```
 
-Power each board in turn, note the two hex digits, write them on tape *and* in this
-table. Ten minutes once, versus inferring it wrongly every time.
+Power each board in turn, note the two hex digits, write them on tape. The table at
+the top names boards by exactly this banner; the COM number it happens to have today
+goes in the live config and nowhere else.
 
 ⚠ **The base station `gw-D8` on COM3 was overwritten on 2026-08-22.** Node firmware
 (`firmware/obc-esp32-s3`, default XIAO pin map) was flashed to it by mistake: the XIAO was
@@ -298,7 +329,8 @@ node GND              ◄─►  bridge GND            common reference
 ```
 
 **"bridge" is a role, and the board holding it changes.** As of 2026-09-15 that is
-**`gw-D8`, on COM5** — *not* the board on COM3, which is the base and must stay bare.
+**`gw-D8`** (the bridge whose banner prints `Gateway D8`; on COM5 that day) — *not* the
+base, which must stay bare.
 This block used to name `gw-40` outright; the boards then swapped roles and the
 instruction silently became the failure mode two paragraphs down. Wire by role, confirm
 the id from the boot banner or the flash MAC, and only then pick up a jumper.
@@ -399,8 +431,8 @@ keep in walkthrough **Stage 3b** (true 3-hop test).
 | MISO | 11 | | TCXO | via **DIO3** (1.8 V) |
 | | | | RF switch | via **DIO2** |
 
-**Phase-B UART bridge to the XIAO node** (`heltec-gw` **only** — currently `gw-D8`/COM5;
-never the base) — `[fw]` `src/main.rs`, `docs/PHASE-B-LORA-MESH.md`
+**Phase-B UART bridge to the XIAO node** (`heltec-gw` **only** — currently `gw-D8`, the
+board whose banner prints `Gateway D8`; never the base) — `[fw]` `src/main.rs`, `docs/PHASE-B-LORA-MESH.md`
 | Signal | Heltec GPIO | Direction |
 |---|---|---|
 | RX (from XIAO TX) | **GPIO2** | XIAO GPIO43 → here |
