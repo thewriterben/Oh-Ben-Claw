@@ -1213,12 +1213,38 @@ impl Agent {
         skills.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         skills.truncate(k);
 
-        // Similar past successful episodes (proven recipes).
-        let episodes = self
+        // Similar past successful episodes (proven recipes). An episode with no
+        // tool call has no recipe to offer — the block would carry only its
+        // objective text, which is how a fresh session came to answer a stated
+        // preference with talk of printer profiles (bench, 2026-09-26). Those
+        // are dropped here, and counted.
+        let scored = self
             .trajectory
             .as_ref()
-            .and_then(|t| t.similar(objective, k).ok())
+            .and_then(|t| t.similar_scored(objective, k).ok())
             .unwrap_or_default();
+        let (with_recipe, recipe_less): (Vec<_>, Vec<_>) = scored
+            .into_iter()
+            .partition(|s| s.episode.steps.iter().any(|st| st.ok));
+        let episodes: Vec<obc_memory::trajectory::Episode> =
+            with_recipe.iter().map(|s| s.episode.clone()).collect();
+
+        // One line per turn saying what was retrieved and why (2026-09-26):
+        // the only way to measure how often the past leaks into the present.
+        if !skills.is_empty() || !with_recipe.is_empty() || !recipe_less.is_empty() {
+            let objective_head: String = objective.chars().take(60).collect();
+            tracing::info!(
+                k,
+                skills = skills.len(),
+                episodes = with_recipe.len(),
+                dropped_recipe_less = recipe_less.len(),
+                ids = ?with_recipe.iter().map(|s| s.episode.id.as_str()).collect::<Vec<_>>(),
+                fused = ?with_recipe.iter().map(|s| (s.fused * 1000.0).round() / 1000.0).collect::<Vec<_>>(),
+                lexical = ?with_recipe.iter().map(|s| (s.lexical * 100.0).round() / 100.0).collect::<Vec<_>>(),
+                objective = %objective_head,
+                "experience retrieved into the prompt"
+            );
+        }
 
         let novel = assessment.is_some_and(|a| a.novel);
         if skills.is_empty() && episodes.is_empty() && !novel {
