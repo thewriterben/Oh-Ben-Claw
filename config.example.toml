@@ -182,6 +182,13 @@ timeout_secs = 30
 # interval_secs = 3600
 # retrieval_k = 3
 #
+# Learned skills never enable themselves (2026-09-26): a verified recipe is
+# installed disabled with the tag `pending:operator`; `oh-ben-claw skill list`
+# shows it and `skill promote <name>` turns it on. Set true to go back to
+# auto-enabling — the bench ran that way for fifteen days and got twenty-seven
+# replays of single prompts, one of which re-ran a write while being verified.
+# auto_enable = false
+#
 # The curator (2026-09-11) runs after each pass so learned skills earn their
 # context rent: a learned skill whose recipe (kind, tool, arguments) matches
 # another's is disabled in favour of the more-used one; one unused for

@@ -361,6 +361,19 @@ pub fn touches_actuator(ep: &Episode, physical_tools: &[&str]) -> bool {
 /// `simulate` stage the agent chokepoint only reports what would run — the
 /// skill cannot actuate anything until an operator promotes it on a clean
 /// record (`oh-ben-claw skill promote`).
+/// A verified, non-physical recipe that still waits for a person: installed
+/// **disabled** (so it costs no prompt space and cannot run) with a tag the
+/// operator can list and `skill promote`. The forge's default since
+/// 2026-09-26 (`[self_improvement] auto_enable = false`).
+pub fn tag_pending_operator(mut manifest: SkillManifest) -> SkillManifest {
+    if !manifest.tags.iter().any(|t| t == "pending:operator") {
+        manifest.tags.push("pending:operator".to_string());
+    }
+    manifest.stage = obc_tool_api::RolloutStage::Simulate;
+    manifest.enabled = false;
+    manifest
+}
+
 pub fn tag_physical(mut manifest: SkillManifest) -> SkillManifest {
     if !manifest.tags.iter().any(|t| t == "track0:supervised") {
         manifest.tags.push("track0:supervised".to_string());
