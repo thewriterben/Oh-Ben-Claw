@@ -21,6 +21,16 @@ use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+/// The head of the notes block: what the two files are for and, above all,
+/// *when* to write one. Sits in every prompt, empty files or not.
+pub const STANDING_INSTRUCTION: &str = "## Notes\n\n\
+Your own curated notes, kept with the `memory` tool. They are short on purpose. \
+Write one in the same turn you learn something that will still be true next week: \
+who the operator is and how they want things done goes in `user`; this machine, \
+its services and the work in progress go in `memory`. Not chit-chat, not one-off \
+answers, not sensor facts (those live in world memory). When an entry turns out \
+wrong, replace or remove it. Nobody will remind you.\n";
+
 /// Character cap on `MEMORY.md` (Hermes's figure).
 pub const MEMORY_LIMIT: usize = 2_200;
 /// Character cap on `USER.md` (Hermes's figure).
@@ -159,17 +169,18 @@ impl Notes {
         })
     }
 
-    /// What every prompt carries: both files, labelled, or `None` when both are
-    /// empty so an unused feature costs nothing.
+    /// What every prompt carries: the standing instruction on *when* to write a
+    /// note, then both files, labelled.
+    ///
+    /// Until 2026-09-26 this returned `None` while both files were empty, "so
+    /// an unused feature costs nothing" — and the feature stayed unused: in
+    /// fifteen days and 138 turns on the bench the model never called
+    /// `memory` once, because nothing ever told it when to. The block is now
+    /// always present (about 90 tokens when empty) and says when.
     pub fn render(&self) -> Option<String> {
         let user = self.entries(Target::User);
         let memory = self.entries(Target::Memory);
-        if user.is_empty() && memory.is_empty() {
-            return None;
-        }
-        let mut out = String::from(
-            "## Notes\n\nYour own curated notes, kept with the `memory` tool. They are short on purpose.\n",
-        );
+        let mut out = String::from(STANDING_INSTRUCTION);
         if !user.is_empty() {
             out.push_str("\n### About the operator\n");
             out.push_str(&render_entries(&user));
@@ -232,7 +243,15 @@ mod tests {
     #[test]
     fn add_replace_remove_round_trip_through_the_file() {
         let n = notes();
-        assert!(n.render().is_none(), "nothing yet, nothing rendered");
+        let empty = n
+            .render()
+            .expect("the standing instruction is always there");
+        assert!(empty.contains("same turn you learn something"), "{empty}");
+        assert!(
+            !empty.contains("### About the operator"),
+            "no empty sections"
+        );
+        assert!(!empty.contains("### Working notes"), "no empty sections");
         n.add(
             Target::User,
             "Name: Benji. Prefers evidence before conclusions.",
