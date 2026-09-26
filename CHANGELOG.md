@@ -37,6 +37,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   replace the warm-up gate. Calibration is the open problem, and the host
   fixture cannot answer the lamp question. Recommended, subject to frames
   recorded on the Senses. No firmware change.
+- **Decided: design E, and a detection means "take a picture now"** -- so a
+  miss is the expensive error, latency matters, and a lamp lighting someone in
+  view is a fine moment for a picture. Recorded in the proposal.
+- **`bench_events.py --record` and `compare_detectors.py --session DIR`.** A
+  recording saves a picture every frame (instead of asking the node's
+  detector) with the usual phases, cues and marks; `--session` labels the
+  frames with the same code as the node's own runs, rebuilds the node's
+  warm-up state from the frames' brightness, calibrates every design on the
+  recording's own quiet phase, and reports lamp false triggers and person
+  walks detected with latency. Dry-run end to end against a fake node serving
+  fixture frames; the first run exposed that a recording has no `ready` state
+  to end a switch's settling, now rebuilt with the node's own rule.
 
 ## Unreleased — A person, walking through (2026-09-26)
 

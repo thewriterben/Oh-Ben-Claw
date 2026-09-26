@@ -3,6 +3,7 @@
 two failures the 2026-09-26 bench found.
 
     python scripts/vision/compare_detectors.py
+    python scripts/vision/compare_detectors.py --session DIR [DIR ...]   # recordings
 
 # Why this exists
 
@@ -280,7 +281,121 @@ def run(data, CANDIDATES):
               f"person: {hit:>2}   small person: {small:>2}")
 
 
+# ── recorded sessions (bench_events.py --record) ─────────────────────────────
+#
+# A recording is the real thing the host fixture and the simulations stand in
+# for: the Senses, their own sensors and view, an empty room, a lamp with nobody
+# in view, a person walking in. Each frame is labelled by the same code that
+# labels the node's own runs (bench_events.label for lamp switches,
+# the cue windows for walks), and every design is calibrated on that
+# recording's own quiet phase -- which is what a node would do on install.
+
+SKIP_WARMUP = 3  # the first frames after the port-open reset: stale, then AE converging
+
+
+def load_session(d):
+    import json
+    import bench_events as be
+    with open(os.path.join(d, "trace.jsonl"), encoding="utf-8") as fh:
+        rows = [json.loads(l) for l in fh if l.strip()]
+    with open(os.path.join(d, "cues.json"), encoding="utf-8") as fh:
+        cue = json.load(fh)
+    with open(os.path.join(d, "marks.json"), encoding="utf-8") as fh:
+        marks = json.load(fh)
+    rows = [r for r in rows if "file" in r]
+    for r in rows:
+        img = np.asarray(Image.open(os.path.join(d, r["file"])).convert("L"), dtype=np.float32)
+        r["_img"], r["mean"] = img, float(img.mean())
+    # A recording has no node verdicts, so the node's warm-up state is rebuilt
+    # from the frames' own brightness with the node's rule (detector_math.rs
+    # WarmUp: `ready` after SETTLE_RUN consecutive steps under SETTLE_DELTA).
+    # The labeller needs it to know where a switch's settling ends; it is not
+    # used to gate any candidate, which all score every frame.
+    settle, run, last = be.settle_delta(), 0, None
+    for r in rows:
+        if last is None:
+            r["state"] = "no_reference"
+        else:
+            run = run + 1 if abs(r["mean"] - last) < settle else 0
+            r["state"] = "ready" if run >= 2 else "warming_up"
+        last = r["mean"]
+    if cue["mode"] == "lamp":
+        be.label(rows, marks, settle, FRAC_HI)
+    else:
+        for r in rows:
+            if r["phase"] != "person":
+                r["tag"] = r["phase"]
+                continue
+            hit = [n for n, c in enumerate(cue["cues"]) if c <= r["t_sent"] < c + cue["walk_seconds"]]
+            r["tag"] = "walk" if hit else "between"
+            if hit:
+                r["walk"] = hit[0]
+    return rows, cue
+
+
+def score_session(d, per_cell):
+    rows, cue = load_session(d)
+    quiet = [r for r in rows if r["tag"] == "quiet"][SKIP_WARMUP:]
+    qpairs = [(a["_img"], b["_img"]) for a, b in zip(quiet, quiet[1:])]
+    # The phase pairs: each frame against the one before it, across the phase
+    # boundary too, exactly as the node would see them.
+    phase = [k for k, r in enumerate(rows) if r["tag"] != "quiet"]
+    cands = build(qpairs, per_cell)
+    out = {}
+    for name, fn in cands:
+        v = {k: fn(rows[k - 1]["_img"], rows[k]["_img"]) for k in phase if k > 0}
+        qv = [fn(a, b) for a, b in qpairs]
+        res = {"quiet_detect": qv.count("detect")}
+        if cue["mode"] == "lamp":
+            for tag in ("switch", "unmarked", "resettle", "steady"):
+                ks = [k for k in v if rows[k]["tag"] == tag]
+                res[tag] = (sum(v[k] == "detect" for k in ks), sum(v[k] == "global" for k in ks), len(ks))
+        else:
+            walks = []
+            for n, c in enumerate(cue["cues"]):
+                ks = [k for k in v if rows[k].get("walk") == n]
+                det = [k for k in ks if v[k] == "detect"]
+                walks.append(round(rows[det[0]]["t_sent"] - c, 1) if det else None)
+            res["walks"] = walks
+            bs = [k for k in v if rows[k]["tag"] == "between"]
+            res["between"] = (sum(v[k] == "detect" for k in bs), len(bs))
+        out[name] = res
+    return rows, cue, out
+
+
+def report_session(d):
+    for per_cell in (False, True):
+        rows, cue, out = score_session(d, per_cell)
+        node = os.path.basename(os.path.normpath(d))
+        print("=" * 100)
+        print(f"  {node}: {cue['mode']} recording, {len(rows)} frames; calibrated on its own quiet phase, "
+              + ("one threshold per design" if not per_cell else "one threshold per cell"))
+        print("=" * 100)
+        if cue["mode"] == "lamp":
+            print("  design                 quiet   switch det/glob/n   unmarked      resettle      steady"
+                  "        (nobody in view: every detect is a false trigger)")
+            for name, r in out.items():
+                cells_ = "".join(f"  {r[t][0]:>3}/{r[t][1]:>3}/{r[t][2]:<4}" for t in ("switch", "unmarked", "resettle", "steady"))
+                print(f"  {name:<22} {r['quiet_detect']:>4} {cells_}")
+        else:
+            print("  design                 quiet   walks detected   first detection, s after WALK NOW     between (false/n)")
+            for name, r in out.items():
+                w = r["walks"]
+                got = sum(x is not None for x in w)
+                lat = " ".join("-" if x is None else f"{x:.1f}" for x in w)
+                print(f"  {name:<22} {r['quiet_detect']:>4}   {got:>2}/{len(w):<12}  {lat:<36}  {r['between'][0]}/{r['between'][1]}")
+        print()
+
+
 def main() -> int:
+    if "--session" in sys.argv:
+        dirs = sys.argv[sys.argv.index("--session") + 1:]
+        if not dirs:
+            print("usage: compare_detectors.py --session DIR [DIR ...]")
+            return 2
+        for d in dirs:
+            report_session(d)
+        return 0
     if not os.path.isdir(ROOT):
         print(f"fixture not found: {ROOT}")
         return 2

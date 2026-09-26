@@ -1,6 +1,8 @@
 # Detector redesign: options, scored (2026-09-26)
 
-**Status: a proposal to choose from. Nothing here changes the firmware.**
+**Status: decided 2026-09-26 -- design E, per-cell correlation; a detection
+means "take a picture now". Next is recording real frames on the Senses (below).
+Nothing here changes the firmware yet.**
 
 `docs/VISION-DETECTOR-2026-09.md` ends with the bench result that forces this:
 across 21 walks on two XIAO Senses, the on-node detector detected **no one**.
@@ -135,3 +137,38 @@ calibration command that stores per-node thresholds.
   threshold), so it keeps needing the gate -- the thing that hid people close up.
 * **D (gain-compensated grid):** as C on AE (28 false), and the whole-frame fit
   is dragged by a large nearby person.
+
+## Decision (2026-09-26)
+
+**Design E, per-cell correlation, replacing the warm-up gate. A detection is a
+trigger to take a picture.** What that purpose settles:
+
+* **A miss is the expensive error.** A false trigger costs one picture nobody
+  needed; a missed person costs the only picture that mattered. Thresholds lean
+  toward sensitivity, and the bench numbers to beat are walks detected.
+* **Latency matters.** The picture has to be taken while the person is still in
+  view, so the useful number is seconds from a person appearing to the first
+  detection, and the first frame they are in should be enough.
+* **A lamp lighting a person who is in view is a fine moment for a picture.**
+  The false trigger that counts is a lamp, or the camera's own exposure, with
+  nobody in view -- which the host fixture never contains and a recording on
+  the Senses will.
+
+## Recording the Senses
+
+`bench_events.py --record` runs the usual lamp or person session but saves a
+picture every frame (`camera_capture`) instead of asking the node's detector,
+into `results/vision-events/<node>-<stamp>-rec-<mode>/frames/`.
+`compare_detectors.py --session DIR` then labels those frames with the same
+code that labels the node's own runs (Enter marks for lamp switches, cue
+windows for walks), calibrates every design on that recording's own quiet
+phase -- an empty room, as a node would on install -- and reports, per design:
+
+* lamp, nobody in view: detections on switch, unmarked, resettling and steady
+  frames, every one of them a false trigger;
+* person: walks detected, seconds from `WALK NOW` to the first detection, and
+  detections between walks.
+
+Wanted: on 005 and 002, a lamp session with nobody in view, and person sessions
+at ~1 ft and ~3 ft. Dry-run end to end against a fake node serving fixture
+frames; no real recording exists yet.
