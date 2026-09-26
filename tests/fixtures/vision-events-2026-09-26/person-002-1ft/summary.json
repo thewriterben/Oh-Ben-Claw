@@ -1,0 +1,180 @@
+{
+  "mode": "person",
+  "node_id": "obc-esp32-s3-002",
+  "thresholds": {
+    "FRAC_HI": 0.35,
+    "EDGE_LIGHT": 4.2,
+    "EDGE_NUDGE": 9.0,
+    "PIXEL_EPS": 12.0
+  },
+  "walk_seconds": 11.0,
+  "quiet": {
+    "frames": 40,
+    "scored": 39,
+    "judged": 38,
+    "frac": {
+      "p95": 0.0919,
+      "max": 0.0941
+    },
+    "edge": {
+      "p95": 6.84,
+      "max": 6.91
+    },
+    "brightness": {
+      "min": 86.08,
+      "max": 86.79
+    },
+    "node_detections": 0
+  },
+  "walks": [
+    {
+      "walk": 1,
+      "frames": 8,
+      "judged": 5,
+      "node_classes": {
+        "quiet": 5
+      },
+      "detected": false,
+      "first_detection_s": null,
+      "gate_withheld": 0,
+      "nudge": 0,
+      "rule_alone": {
+        "quiet": 8
+      },
+      "frac_max": 0.3439,
+      "edge_max": 9.76
+    },
+    {
+      "walk": 2,
+      "frames": 9,
+      "judged": 5,
+      "node_classes": {
+        "quiet": 5
+      },
+      "detected": false,
+      "first_detection_s": null,
+      "gate_withheld": 0,
+      "nudge": 0,
+      "rule_alone": {
+        "quiet": 9
+      },
+      "frac_max": 0.3326,
+      "edge_max": 11.34
+    },
+    {
+      "walk": 3,
+      "frames": 9,
+      "judged": 5,
+      "node_classes": {
+        "quiet": 5
+      },
+      "detected": false,
+      "first_detection_s": null,
+      "gate_withheld": 2,
+      "nudge": 0,
+      "rule_alone": {
+        "nudge": 2,
+        "quiet": 7
+      },
+      "frac_max": 0.5427,
+      "edge_max": 13.49
+    },
+    {
+      "walk": 4,
+      "frames": 8,
+      "judged": 5,
+      "node_classes": {
+        "quiet": 5
+      },
+      "detected": false,
+      "first_detection_s": null,
+      "gate_withheld": 2,
+      "nudge": 0,
+      "rule_alone": {
+        "nudge": 2,
+        "quiet": 6
+      },
+      "frac_max": 0.4165,
+      "edge_max": 10.35
+    },
+    {
+      "walk": 5,
+      "frames": 8,
+      "judged": 5,
+      "node_classes": {
+        "quiet": 5
+      },
+      "detected": false,
+      "first_detection_s": null,
+      "gate_withheld": 2,
+      "nudge": 0,
+      "rule_alone": {
+        "nudge": 2,
+        "quiet": 6
+      },
+      "frac_max": 0.3915,
+      "edge_max": 9.28
+    },
+    {
+      "walk": 6,
+      "frames": 9,
+      "judged": 7,
+      "node_classes": {
+        "nudge": 1,
+        "quiet": 6
+      },
+      "detected": false,
+      "first_detection_s": null,
+      "gate_withheld": 0,
+      "nudge": 1,
+      "rule_alone": {
+        "nudge": 1,
+        "quiet": 8
+      },
+      "frac_max": 0.3548,
+      "edge_max": 9.83
+    },
+    {
+      "walk": 7,
+      "frames": 8,
+      "judged": 5,
+      "node_classes": {
+        "quiet": 5
+      },
+      "detected": false,
+      "first_detection_s": null,
+      "gate_withheld": 2,
+      "nudge": 0,
+      "rule_alone": {
+        "nudge": 2,
+        "quiet": 6
+      },
+      "frac_max": 0.5114,
+      "edge_max": 12.4
+    }
+  ],
+  "walks_detected": 0,
+  "between": {
+    "frames": 64,
+    "scored": 64,
+    "judged": 64,
+    "frac": {
+      "p95": 0.0932,
+      "max": 0.0955
+    },
+    "edge": {
+      "p95": 6.83,
+      "max": 6.94
+    },
+    "brightness": {
+      "min": 84.07,
+      "max": 86.58
+    },
+    "node_detections": 0,
+    "detections_after_cue_s": [],
+    "node_classes": {
+      "quiet": 64
+    }
+  },
+  "errors": 0
+}

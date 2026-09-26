@@ -435,3 +435,123 @@ kept as that, not as a floor.
 reset is dark (`first.jpg` brightness ~37 against ~95 for the frames after it),
 as was `grab_picture.py`'s first JPEG and `probe_detect`'s first frame. The
 driver appears to hand back a frame captured before auto-exposure settled.
+
+## A person walking through: not seen (2026-09-26)
+
+`tests/fixtures/vision-events-2026-09-26/person-005/`, `bench_events.py --mode
+person` on obc-esp32-s3-005: 40 quiet frames, then seven cued walks across the
+middle of the view, about 3 ft from the camera, which looks steeply down at the
+floor. Pictures at both ends show the room empty; the monitor in view is
+static. Scored with an 11 s window per walk (the first default, 8 s, was
+short: the walker appeared ~3 s after each cue and was in view until ~+10 s).
+
+```
+quiet    38 judged, frac max 0.0018, edge max 1.27, 0 detections
+
+walk  frames  judged  detected  frac max  edge max   rule alone on every frame
+  1      8       1       no       0.82      4.68     motion 1, light 2, quiet 5
+  2      8       2       no       0.15      2.99     quiet 8
+  3      9       3       no       0.43      2.58     light 1, quiet 8
+  4      8       4       no       0.23      3.08     quiet 8
+  5      8       8       no       0.03      1.19     quiet 8   (walker at the edge of view)
+  6      9       3       no       0.21      3.68     quiet 9
+  7      9       4       no       0.23      3.39     quiet 9
+
+between  64 frames, 0 detections
+```
+
+**0 of 7 walks detected.** Two mechanisms, each sufficient on its own:
+
+1. **The warm-up gate withholds the frames the person is in.** A body crossing
+   the view moves mean brightness by 5-15 grey levels frame to frame (114 ->
+   142 in walk 1) as auto-exposure reacts to it. `SETTLE_DELTA` is 3, so the
+   node answers `warming_up` for almost every frame with the walker in it:
+   across the seven walks, two frames containing the walker were judged, both
+   with the walker at the edge of view. The gate cannot tell "exposure is
+   hunting" from "something large came in", and it was built to be blind
+   through the first. The lamp sessions above are this same mechanism doing
+   what it was built for.
+2. **Where frames were scored, frac/edge put the person where a lamp is.** The
+   walker scores `edge` 1.8-4.7; a lamp switch on the same node scored
+   4.0-4.7. `frac` stays 0.07-0.24 for most walker frames -- under `FRAC_HI`
+   0.35, set from a host fixture where the person leaned in close -- and where
+   it is higher (walk 1: 0.59-0.82) `edge` is still at most 4.7. On this
+   sensor and view, `edge` does not separate a person from a lamp.
+
+**What this means.** On 005, as built, the detector is safe against lamps
+because it is blind through any brightness step, and a person produces
+brightness steps. Its two defences against the lamp (gate and `EDGE_LIGHT`)
+are exactly what hide a walker. No single threshold change fixes both: loosen
+the gate and lamps become detections through a rule that cannot tell them
+apart; lower `FRAC_HI` or `EDGE_LIGHT` and the lamp crosses them first. What
+would have to change is what is measured -- where in the frame the change is
+(a person is a localised change, a lamp is global), or brightness judged
+against more than one frame -- not the numbers. That is a design question,
+not a tuning one, and nothing here changes the firmware.
+
+`thresholds_provisional` stays true, and on this evidence the reply should not
+be read as a person detector on 005 at all.
+
+### The second Sense: not seen either, and called a nudge when it is judged
+
+`tests/fixtures/vision-events-2026-09-26/person-002-1ft/`: the same session on
+obc-esp32-s3-002 (OV2640), walking about **1 ft** from the camera -- closer
+than 005's run, so the walker fills more of the frame. Frames take 1.3 s here,
+so the walker was in view for two or three frames per walk, 3-7 s after each
+cue. Room empty at the end; TV off.
+
+```
+quiet    38 judged, frac max 0.094, edge max 6.91 (002's noise floor, as in the lamp run)
+
+walker frames, all seven walks:  frac 0.30-0.54   edge 8.8-13.5
+judged walker frames:            3 (all in walk 6): quiet, quiet, nudge
+rule alone on walker frames:     nudge 9, quiet the rest
+walks detected:                  0 of 7;  between walks: 0 detections
+```
+
+**0 of 7 again, and the rule never says `motion` for this person either.**
+The walker's `edge` (8.8-13.5) is above `EDGE_NUDGE` 9.0 or next to it, so
+wherever `frac` crosses `FRAC_HI` the verdict is `nudge` -- the lamp's verdict
+on this board, and one that drops the reference. Where `frac` stays just under
+0.35 the verdict is `quiet`. The gate withheld most walker frames, as on 005.
+
+### 002 again at 3 ft: the gate lets the walker through, and the rule still misses
+
+`person-002-3ft/`: the same session a few minutes earlier, walking ~3 ft away
+as on 005. Room empty at the end, darker than the 1 ft run.
+
+```
+quiet    38 judged, frac max 0.102, edge max 6.29
+
+walker frames (frac > 0.15), all seven walks:   25, of which 18 judged
+walker frac 0.15-0.27, edge 7.7-11.5            every judged one: quiet
+walks detected: 0 of 7;  between walks: 0 detections
+```
+
+Here the gate is **not** what hides the walker: from 3 ft, in this lighting,
+the body moved brightness too little to trip `SETTLE_DELTA` on most frames,
+and 18 of 25 walker frames were judged. The rule called every one `quiet`,
+because the walker changes 15-27% of the pixels and `FRAC_HI` is 0.35 -- even
+though `edge` sat at 7.7-11.5 against a quiet floor of 6.3, a difference the
+rule never gets to use once `frac` has said `quiet`. So the two failures are
+separate: close up the gate hides the person; further away the whole-frame
+`frac` is too small to register them. Either alone is enough for 0 of 7.
+
+### Both Senses, one conclusion
+
+| | 005 (OV3660), ~3 ft | 002 (OV2640), ~3 ft | 002 (OV2640), ~1 ft |
+|---|---|---|---|
+| walks detected | 0 / 7 | 0 / 7 | 0 / 7 |
+| walker `frac` | mostly 0.07-0.24 | 0.15-0.27 | 0.30-0.54 |
+| walker `edge` | 1.8-4.7 | 7.7-11.5 | 8.8-13.5 |
+| lamp switch `edge`, same board | 4.0-4.7 | 12.3-14.1 | 12.3-14.1 |
+| what the rule makes of the walker | `quiet` / `light` (a lamp) | `quiet` | `quiet` / `nudge` (a lamp, or a bump) |
+| walker frames the gate let through | 2 | 18 of 25 | 3 |
+
+On each board the person lands either where that board's lamp lands or under
+`FRAC_HI`, and wherever the walker moves the brightness the gate hides them. The two whole-frame numbers the detector keeps
+-- how many pixels changed, and how much structure changed -- do not carry the
+difference between a person and a lamp, on either sensor, at either distance.
+What does differ is **where**: a lamp changes the whole frame at once, a
+walker changes the part of it they are in. That is the input to the next
+design, which is a proposal to write, not a change made here.

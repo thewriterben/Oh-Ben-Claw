@@ -5,6 +5,51 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A person, walking through (2026-09-26)
+
+### Added
+
+- **`bench_events.py --mode person`.** The same session shape as the lamp
+  phase, with `WALK NOW` cues every 20 s: walk into view, across and out. A
+  walker cannot press Enter mid-stride, so the script's own cue times label
+  the walks (the `--walk-seconds`, default 8, after each cue). Per walk, the
+  report says whether the node detected it and how soon, and counts the two
+  ways a person could go unseen: frames the warm-up gate withheld while
+  pixels really changed (a body in frame moves the brightness, which is what
+  the gate reacts to), and `nudge` verdicts, which drop the reference. Between
+  walks it counts detections and times each against the last cue, so a walker
+  slow to leave is told apart from a false positive. `cues.json` is saved so
+  `--replay` re-scores a person run. Selftest and a dry run against a
+  simulated walker on a pty.
+- **First person session, 005 (OV3660): 0 of 7 walks detected.** Walking
+  ~3 ft from the camera, the walker moved brightness 5-15 levels per frame as
+  auto-exposure reacted, so the warm-up gate withheld almost every frame they
+  were in (two judged across seven walks). Where frames were scored, the
+  walker's `edge` (1.8-4.7) overlaps a lamp switch's on the same node
+  (4.0-4.7), and `frac` mostly stays under `FRAC_HI`. The gate and
+  `EDGE_LIGHT` that make lamps safe are what hide a person; a design
+  question, not a threshold one. Written up in
+  `docs/VISION-DETECTOR-2026-09.md`. The walk window default went from 8 s
+  to 11 s, and `--walk-seconds` now overrides a saved run's on `--replay`.
+- **002 (OV2640), walking ~1 ft away: 0 of 7 walks detected as well.** The
+  walker scores `edge` 8.8-13.5, so where `frac` crosses `FRAC_HI` the rule
+  says `nudge` -- the lamp's verdict on this board -- and the gate withheld
+  most walker frames. On both Senses the person lands where that board's lamp
+  lands; the difference is where in the frame the change is, which the
+  whole-frame scores do not keep. Fixture `person-002-1ft/`.
+- **002 at ~3 ft: 0 of 7, for a different reason.** The gate let 18 of 25
+  walker frames through (a distant body moves brightness less), and the rule
+  called every one `quiet`: the walker changes 15-27% of pixels, under
+  `FRAC_HI` 0.35, although `edge` (7.7-11.5) sat clearly above the quiet
+  floor (6.3). Close up the gate hides a person; further away whole-frame
+  `frac` is too small. Fixture `person-002-3ft/`.
+- **The countdown runs on its own clock.** It was printed from the frame loop,
+  which reads the clock once per frame; on 002 (1.3 s frames) counts were
+  skipped and arrived out of order. It now runs on a timer thread against the
+  wall clock, verified at 2.2 s per frame. 002's first person session was
+  checked against it: every walk still fell 3-7 s after its cue, inside the
+  window.
+
 ## Unreleased — Lamp switches, marked (2026-09-26)
 
 ### Added
