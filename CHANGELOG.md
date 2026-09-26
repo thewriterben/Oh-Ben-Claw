@@ -5,6 +5,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A person, walking through (2026-09-26)
+
+### Added
+
+- **`bench_events.py --mode person`.** The same session shape as the lamp
+  phase, with `WALK NOW` cues every 20 s: walk into view, across and out. A
+  walker cannot press Enter mid-stride, so the script's own cue times label
+  the walks (the `--walk-seconds`, default 8, after each cue). Per walk, the
+  report says whether the node detected it and how soon, and counts the two
+  ways a person could go unseen: frames the warm-up gate withheld while
+  pixels really changed (a body in frame moves the brightness, which is what
+  the gate reacts to), and `nudge` verdicts, which drop the reference. Between
+  walks it counts detections and times each against the last cue, so a walker
+  slow to leave is told apart from a false positive. `cues.json` is saved so
+  `--replay` re-scores a person run. Selftest and a dry run against a
+  simulated walker on a pty.
+
 ## Unreleased — Lamp switches, marked (2026-09-26)
 
 ### Added

@@ -2,6 +2,7 @@
 """Measure the on-node detector against lamp switches, with the switches marked.
 
     python scripts/vision/bench_events.py --port COM11 [--quiet 40] [--lamp-seconds 150]
+    python scripts/vision/bench_events.py --port COM11 --mode person [--person-seconds 160]
     python scripts/vision/bench_events.py --replay results/vision-events/005-...
     python scripts/vision/bench_events.py --selftest
 
@@ -25,8 +26,14 @@ node that protection has two layers, and this measures both:
     not step brightness, never trips the gate, and leaves the rule alone to
     decide. So the rule is scored on every frame that has scores, gated or not.
 
-Person and camera-nudge are not measured here; nothing in this run says
-anything about where those events sit. `thresholds_provisional` stays true.
+`--mode person` runs the same shape with WALK NOW cues: walk into view, across
+and out. The cue times label the walks (no key to press mid-stride), and the
+report says per walk whether the node detected it, how soon, and the two ways
+a person could go unseen: the warm-up gate withholding judgement because a
+body moved the brightness, and a `nudge` dropping the reference.
+
+Camera-nudge is not measured by either mode. `thresholds_provisional` stays
+true.
 
 Writes results/vision-events/<node>-<stamp>/: first.jpg, last.jpg (the scene
 at both ends -- look at them before believing a quiet phase was quiet),
@@ -283,6 +290,109 @@ def print_report(s: dict) -> None:
         print(f"  {s['errors']} frame(s) had no reply or an error.")
 
 
+# ── the person phase ─────────────────────────────────────────────────────────
+
+
+def summarise_person(rows: list[dict], cues: list[float], walk_s: float, t: dict) -> dict:
+    """Score walks through the frame, one window per cue.
+
+    A person cannot press Enter while crossing the room, so the script's own
+    cue times are the labels: the `walk_s` seconds after each `WALK NOW` are a
+    walk window, and every person-phase frame outside one is `between`. The
+    walker is in view for part of each window, not all of it, so the question
+    answered per walk is "did the node detect it, and how soon" -- not a
+    frame-level recall, which these labels cannot support.
+
+    The two ways a person could go unseen are counted, not assumed away:
+    `gate_withheld` (the frame changed -- `frac` over `FRAC_HI` -- but the
+    warm-up gate gave no class, because a body in frame moved the brightness)
+    and `nudge` (a judged frame scored `nudge`, which drops the reference and
+    blinds the node for the frames after).
+    """
+    for r in rows:
+        if "frac" in r and "edge" in r:
+            r["rule"] = rule(r["frac"], r["edge"], t)
+        if r.get("phase") != "person":
+            r["tag"] = r.get("phase", "?")
+            continue
+        hit = [n for n, c in enumerate(cues) if c <= r["t_sent"] < c + walk_s]
+        r["tag"] = "walk" if hit else "between"
+        if hit:
+            r["walk"] = hit[0]
+
+    walks = []
+    for n, c in enumerate(cues):
+        w = [r for r in rows if r.get("walk") == n]
+        det = [r for r in w if r.get("detection") is True]
+        scored = [r for r in w if "frac" in r]
+        walks.append({
+            "walk": n + 1, "frames": len(w),
+            "judged": sum(1 for r in w if r.get("state") == "ready"),
+            "node_classes": {k: sum(1 for r in w if r.get("class") == k)
+                             for k in sorted({r.get("class") for r in w if r.get("class")})},
+            "detected": bool(det),
+            "first_detection_s": round(det[0]["t_sent"] - c, 1) if det else None,
+            "gate_withheld": sum(1 for r in w if r.get("state") != "ready"
+                                 and (r.get("frac") or 0) > t["FRAC_HI"]),
+            "nudge": sum(1 for r in w if r.get("class") == "nudge"),
+            "rule_alone": {k: sum(1 for r in scored if r.get("rule") == k)
+                           for k in sorted({r.get("rule") for r in scored})},
+            "frac_max": round(max((r["frac"] for r in scored), default=0), 4),
+            "edge_max": round(max((r["edge"] for r in scored), default=0), 2),
+        })
+    between = [r for r in rows if r.get("tag") == "between"]
+    quiet = [r for r in rows if r.get("tag") == "quiet"]
+    # A walker slow to leave frame spills past the window; timing each
+    # between-walks detection against the last cue lets a reader tell that
+    # tail (~walk_s + a few s) from a detection with nobody there.
+    spill = []
+    for r in between:
+        if r.get("detection") is True:
+            before = [c for c in cues if c <= r["t_sent"]]
+            spill.append({"i": r.get("i"),
+                          "after_cue_s": round(r["t_sent"] - before[-1], 1) if before else None})
+    return {
+        "mode": "person",
+        "node_id": next((r.get("node_id") for r in rows if r.get("node_id")), None),
+        "thresholds": t, "walk_seconds": walk_s,
+        "quiet": {**floor_of(quiet),
+                  "node_detections": sum(1 for r in quiet if r.get("detection") is True)},
+        "walks": walks,
+        "walks_detected": sum(1 for w in walks if w["detected"]),
+        "between": {**floor_of(between),
+                    "node_detections": sum(1 for r in between if r.get("detection") is True),
+                    "detections_after_cue_s": spill,
+                    "node_classes": {k: sum(1 for r in between if r.get("class") == k)
+                                     for k in sorted({r.get("class") for r in between if r.get("class")})}},
+        "errors": sum(1 for r in rows if "error" in r),
+    }
+
+
+def print_person_report(s: dict) -> None:
+    q, b = s["quiet"], s["between"]
+    print(f"\n=== {s['node_id']}  ({len(s['walks'])} walks, {s['walk_seconds']:.0f} s window each) ===")
+    print(f"quiet    {q['frames']} frames, {q['judged']} judged; frac max {q.get('frac', {}).get('max')}  "
+          f"edge max {q.get('edge', {}).get('max')}; node detections {q['node_detections']}")
+    print("\n  walk  frames judged  detected  first(s)  gate-withheld  nudge  frac max  edge max  "
+          "node classes / rule alone")
+    for w in s["walks"]:
+        print(f"  {w['walk']:>4}  {w['frames']:>6} {w['judged']:>6}  {('YES' if w['detected'] else 'no'):>8}  "
+              f"{w['first_detection_s'] if w['first_detection_s'] is not None else '-':>8}  "
+              f"{w['gate_withheld']:>13}  {w['nudge']:>5}  {w['frac_max']:>8}  {w['edge_max']:>8}  "
+              f"{w['node_classes']} / {w['rule_alone']}")
+    print(f"\nbetween walks  {b['frames']} frames; node detections {b['node_detections']}; "
+          f"classes {b['node_classes']}")
+    if b["detections_after_cue_s"]:
+        when = ", ".join(f"{d['after_cue_s']} s" for d in b["detections_after_cue_s"])
+        print(f"               seconds after the last WALK NOW: {when}\n"
+              f"               (just past {s['walk_seconds']:.0f} s is a walker still leaving; "
+              "long after is a false positive)")
+    print(f"\n  {s['walks_detected']}/{len(s['walks'])} walks detected.  Look at first.jpg and "
+          "last.jpg: the room must be empty at both ends.")
+    if s["errors"]:
+        print(f"  {s['errors']} frame(s) had no reply or an error.")
+
+
 # ── the live run ─────────────────────────────────────────────────────────────
 
 
@@ -352,21 +462,23 @@ def live(args, t: dict) -> str:
 
     marks: list[float] = []
     armed = threading.Event()
+    lamp = args.mode == "lamp"
 
     def watch_enter():
         for _ in sys.stdin:
             if armed.is_set():
                 marks.append(time.time())
-                print(f"    [switch {len(marks)} marked]", flush=True)
+                print(f"    [{'switch' if lamp else 'mark'} {len(marks)} marked]", flush=True)
 
     threading.Thread(target=watch_enter, daemon=True).start()
 
-    print(f"\nLamp in its starting state, and get out of shot. First picture in {args.lead:.0f} s.")
+    start_state = "Lamp in its starting state, and get" if lamp else "Get"
+    print(f"\n{start_state} out of shot. First picture in {args.lead:.0f} s.")
     time.sleep(args.lead)
     link.snap("snap0", os.path.join(out, "first.jpg"))
 
     rows, t0, i = [], time.time(), 0
-    print(f"\nQUIET: {args.quiet} frames. Nothing moves, lamp stays as it is.")
+    print(f"\nQUIET: {args.quiet} frames. Nothing moves" + (", lamp stays as it is." if lamp else "."))
     for _ in range(args.quiet):
         rows.append(frame(link, i, "quiet", t0))
         i += 1
@@ -374,22 +486,32 @@ def live(args, t: dict) -> str:
             print(f"  {i}/{args.quiet}", flush=True)
         time.sleep(args.interval)
 
-    every = args.every
-    print(f"\nLAMP: {args.lamp_seconds:.0f} s. Every {every:.0f} s the script counts down "
-          "3, 2, 1 -- on SWITCH NOW, flip the lamp and press ENTER.\n"
-          "Exact timing does not matter: a press within ~2 s of the flip is matched to it,\n"
-          "and a missed or extra press is reported, not guessed. Stay out of shot.")
+    every = args.every or (15.0 if lamp else 20.0)
+    seconds = args.lamp_seconds if lamp else args.person_seconds
+    if lamp:
+        print(f"\nLAMP: {seconds:.0f} s. Every {every:.0f} s the script counts down "
+              "3, 2, 1 -- on SWITCH NOW, flip the lamp and press ENTER.\n"
+              "Exact timing does not matter: a press within ~2 s of the flip is matched to it,\n"
+              "and a missed or extra press is reported, not guessed. Stay out of shot.")
+        verb = "SWITCH"
+    else:
+        print(f"\nPERSON: {seconds:.0f} s. Every {every:.0f} s the script counts down 3, 2, 1 -- "
+              "on WALK NOW, walk into view,\n"
+              f"across the frame at a normal pace and back out, within about {args.walk_seconds:.0f} s. "
+              "No key to press.\nBetween walks, stay out of shot and keep still.")
+        verb = "WALK"
     armed.set()
     start = time.time()
-    end = start + args.lamp_seconds
+    end = start + seconds
     # Cues are spaced from the start of the phase, the first one `every` s in, so
-    # the lamp has sat in its starting state long enough to settle. The last cue
-    # is kept clear of the end so its switch has frames to settle into.
-    cues = [start + every * n for n in range(1, int(args.lamp_seconds // every) + 1)
-            if start + every * n <= end - 5]
+    # the scene has sat still long enough to settle. The last cue is kept clear
+    # of the end so what it starts has frames to finish in.
+    tail = 5 if lamp else args.walk_seconds + 3
+    cues = [start + every * n for n in range(1, int(seconds // every) + 1)
+            if start + every * n <= end - tail]
     said: set[tuple[int, int]] = set()
     while time.time() < end:
-        rows.append(frame(link, i, "lamp", t0))
+        rows.append(frame(link, i, args.mode, t0))
         i += 1
         now = time.time()
         # A frame takes ~1.3 s at the default pace, so a count is printed when
@@ -401,13 +523,15 @@ def live(args, t: dict) -> str:
                 count = math.ceil(left)
                 if (n, count) not in said:
                     said.add((n, count))
-                    print(f"  switch {n + 1}/{len(cues)} in {count}", flush=True)
+                    print(f"  {verb.lower()} {n + 1}/{len(cues)} in {count}", flush=True)
             elif left <= 0 and (n, 0) not in said:
                 said.add((n, 0))
-                print(f"  >>> SWITCH NOW  ({n + 1}/{len(cues)})", flush=True)
+                print(f"  >>> {verb} NOW  ({n + 1}/{len(cues)})", flush=True)
         time.sleep(args.interval)
     armed.clear()
 
+    with open(os.path.join(out, "cues.json"), "w", encoding="utf-8") as fh:
+        json.dump({"mode": args.mode, "cues": cues, "walk_seconds": args.walk_seconds}, fh)
     link.snap("snap1", os.path.join(out, "last.jpg"))
     with open(os.path.join(out, "trace.jsonl"), "w", encoding="utf-8") as fh:
         for r in rows:
@@ -422,7 +546,15 @@ def replay(out: str, t: dict) -> dict:
         rows = [json.loads(l) for l in fh if l.strip()]
     with open(os.path.join(out, "marks.json"), encoding="utf-8") as fh:
         marks = json.load(fh)
-    s = summarise(rows, marks, t, settle_delta())
+    cues_path = os.path.join(out, "cues.json")
+    cue = {}
+    if os.path.isfile(cues_path):  # lamp runs before 2026-09-26 evening have none
+        with open(cues_path, encoding="utf-8") as fh:
+            cue = json.load(fh)
+    if cue.get("mode") == "person":
+        s = summarise_person(rows, cue["cues"], cue["walk_seconds"], t)
+    else:
+        s = summarise(rows, marks, t, settle_delta())
     with open(os.path.join(out, "summary.json"), "w", encoding="utf-8") as fh:
         json.dump(s, fh, indent=2)
         fh.write("\n")
@@ -492,6 +624,27 @@ def selftest() -> int:
         fails.append(f"phantom {s_ph['phantom_marks']} unmarked {s_ph['unmarked_switches']}")
     if ph[13].get("tag") != "unmarked" or s_ph["lamp"]["steady"].get("edge", {}).get("max", 0) > 1:
         fails.append(f"unmarked step leaked into steady: tag {ph[13].get('tag')}")
+    # Person mode: cue at 10, 8 s windows. Walk 1 detected on its second frame
+    # after one gate-withheld frame; walk 2 missed with a nudge; one false
+    # positive between walks.
+    def p(i, ts, state, frac, edge, **kw):
+        return r(i, "person", ts, state, frac=frac, edge=edge, **kw)
+    prow = [r(0, "quiet", 0, "ready", **{"class": "quiet", "detection": False}),
+            p(1, 9, "ready", 0.01, 1.0, **{"class": "quiet", "detection": False}),
+            p(2, 10.5, "warming_up", 0.6, 6.0),
+            p(3, 12, "ready", 0.5, 6.0, **{"class": "motion", "detection": True}),
+            p(4, 19, "ready", 0.01, 1.0, **{"class": "quiet", "detection": False}),
+            p(5, 25, "ready", 0.6, 3.0, **{"class": "light", "detection": False}),
+            p(6, 30, "ready", 0.9, 11.0, **{"class": "nudge", "detection": False}),
+            p(7, 34, "ready", 0.5, 6.0, **{"class": "motion", "detection": True})]
+    sp = summarise_person(prow, [10.0, 30.0], 3.0, t)
+    w1, w2 = sp["walks"]
+    if not (w1["detected"] and w1["first_detection_s"] == 2.0 and w1["gate_withheld"] == 1):
+        fails.append(f"walk 1 {w1}")
+    if w2["detected"] or w2["nudge"] != 1:
+        fails.append(f"walk 2 {w2}")
+    if sp["walks_detected"] != 1 or sp["between"]["node_detections"] != 1:
+        fails.append(f"person totals {sp['walks_detected']} / between {sp['between']['node_detections']}")
     rows2 = [dict(x) for x in rows]
     rows2[7]["detection"] = True
     if summarise(rows2, [2.5, 6.5], t)["lamp"]["node_detections"] != 1:
@@ -500,7 +653,8 @@ def selftest() -> int:
         print("SELFTEST FAILED\n  " + "\n  ".join(fails))
         return 1
     print("selftest ok: thresholds read from classify.py, rule, switch/resettle/steady labelling, "
-          "frames_to_ready, gate-held count, detections counted")
+          "frames_to_ready, gate-held count, detections counted; person windows, "
+          "gate-withheld, nudge, latency, false positives")
     return 0
 
 
@@ -510,7 +664,12 @@ def main() -> int:
     ap.add_argument("--quiet", type=int, default=40, help="frames in the quiet phase")
     ap.add_argument("--lamp-seconds", type=float, default=150.0)
     ap.add_argument("--interval", type=float, default=1.0)
-    ap.add_argument("--every", type=float, default=15.0, help="seconds between lamp-switch cues")
+    ap.add_argument("--mode", choices=("lamp", "person"), default="lamp")
+    ap.add_argument("--every", type=float, default=None,
+                    help="seconds between cues (default 15 for lamp, 20 for person)")
+    ap.add_argument("--person-seconds", type=float, default=160.0)
+    ap.add_argument("--walk-seconds", type=float, default=8.0,
+                    help="how long after WALK NOW a frame counts as part of the walk")
     ap.add_argument("--lead", type=float, default=15.0, help="seconds to get out of shot")
     ap.add_argument("--replay", metavar="DIR", help="re-score a saved run")
     ap.add_argument("--selftest", action="store_true")
@@ -525,7 +684,7 @@ def main() -> int:
     else:
         ap.error("--port is required (scripts/which_esp32.ps1 names it), or --replay DIR")
     s = replay(out, t)
-    print_report(s)
+    (print_person_report if s.get("mode") == "person" else print_report)(s)
     print(f"\n  wrote {os.path.join(out, 'summary.json')}")
     return 0
 
