@@ -2,10 +2,21 @@
 
 The camera is **opt-in**. The default firmware build needs no PSRAM and no camera
 component — `camera_capture` returns a stub. This guide turns on a real OV2640
-capture via the `espressif/esp32-camera` IDF component. It takes **two** cargo
-features (`camera` plus a board), **one** environment variable, and **one**
-uncommented block in `Cargo.toml` that cannot be feature-gated — read §1 before
-you uncomment it.
+capture via the `espressif/esp32-camera` IDF component.
+
+**Since 2026-09-26 a camera build is made from `main`**, from its own crate,
+`firmware/obc-esp32-s3-camera`, which has no sources of its own: it builds this
+crate's `src/main.rs` with the camera component added. One command does it:
+
+```powershell
+cd C:\src\obc
+.\scripts\build_camera.ps1 -Board xiao-sense                 # build only
+.\scripts\build_camera.ps1 -Board xiao-sense -Port COM11     # build, flash, monitor
+```
+
+§1–§3 say why it is shaped like that. The `camera-bringup` branch is no longer
+how a camera build is made; its greyscale capture and on-node detector commits
+are still only there, and move to `main` in a follow-up.
 
 > **2026-09-16: `--features camera` alone no longer compiles.** A camera build
 > must also name its board, because the pin map is a property of the board and
@@ -23,10 +34,14 @@ you uncomment it.
 >
 > **The overlay is not interchangeable.** PSRAM mode is a property of the module:
 > the XIAO is octal, the Lilygo is quad. Pairing a board with the wrong overlay
-> does not fail cleanly — the board boots and `esp_camera_init` fails, or PSRAM
-> misbehaves quietly. Nothing enforces the pairing at compile time, because
-> sdkconfig is invisible to `cfg`; the table above is the enforcement, which is to
-> say it is you.
+> does not fail cleanly on hardware — the board boots and `esp_camera_init`
+> fails, or PSRAM misbehaves quietly. **Since 2026-09-26 it fails at compile
+> time instead.** This used to say sdkconfig is invisible to `cfg`; it is not.
+> esp-idf-sys turns every enabled kconfig bool into an `esp_idf_<name>` cfg and
+> the crate's `build.rs` passes them on, so `camera.rs` refuses a camera build
+> without `esp_idf_spiram`, a Sense without `esp_idf_spiram_mode_oct`, and a
+> Lilygo without `esp_idf_spiram_mode_quad`. Nothing here has compiled that
+> check on hardware yet; the first camera build from `main` is its test.
 >
 > **V1.2 is a different board.** Only three camera pins differ (VSYNC, PWDN,
 > RESET — GPIO3 and GPIO4 swap roles), which is exactly what makes it dangerous,
@@ -60,55 +75,67 @@ you uncomment it.
 > bench job, not an edit. `main.rs` and `camera.rs` also disagree about
 > whether this board has a camera connector at all; resolve that first.
 
-## 1. Pull the camera component — **this step dirties the whole tree**
+## 1. The camera component, and why it has a crate of its own
 
-Uncomment the four `[[package.metadata.esp-idf-sys.extra_components]]` lines at
-the bottom of `Cargo.toml`. `esp-idf-sys` generates `idf_component.yml` from them,
-downloads the component, compiles it into the ESP-IDF, and generates the
-`esp_camera_*` / `camera_config_t` bindings that `src/camera.rs` uses.
+`esp-idf-sys` adds the component from a
+`[[package.metadata.esp-idf-sys.extra_components]]` block, generates
+`idf_component.yml` from it, downloads and compiles the component into the
+ESP-IDF, and generates the `esp_camera_*` / `camera_config_t` bindings that
+`src/camera.rs` uses.
 
-> **There is no way to gate this on a cargo feature, and it is not for want of
-> looking.** `extra_components` is passed to `try_from_env()` as an *exclude*
+> **There is no way to gate that block on a cargo feature, and it is not for want
+> of looking.** `extra_components` is passed to `try_from_env()` as an *exclude*
 > (`cargo_driver/config.rs:72-74`) and its own doc comment says "This option is
 > not available as an environment variable." Worse, the `cargo metadata` call that
 > reads it passes no feature flags at all (`config.rs:107-113`), and
 > `CARGO_FEATURE_*` is never read anywhere in esp-idf-sys's `build/`. The build
 > script structurally cannot see which of your features are on.
 >
-> So with those lines uncommented, a **default** build — camera feature off —
-> still downloads the component, still compiles it, still emits the bindings
-> module, and produces a different binary from the one on the live node.
+> What it *can* see is which crate is the root. The block is read from the root
+> crate's manifest and its direct dependencies
+> (`cargo_driver/config.rs:240-320`). So the block lives, uncommented, in
+> `firmware/obc-esp32-s3-camera/Cargo.toml`, and this crate's copy stays
+> commented — `scripts/check_camera_component_gate.py --enforce` holds that on
+> `main`. A build of this crate is the live node's build, whatever branch you are
+> on; a build of the camera crate is a camera build. Which one you get is the
+> directory you build in, not a branch name or a variable you have to remember.
 >
-> Containment is therefore social, and deliberately visible: **the block stays
-> commented on `main`, and camera bring-up happens on a `camera-bringup`
-> branch.** A tree that would flash the wrong thing to `obc-esp32-s3-001` is then
-> a branch name you can see in your prompt, not a note in a document you are not
-> reading. Do not commit an uncommented block to `main`. See `DECISIONS.md`
-> (OBC-Prime), 2026-09-16.
+> Two options that were rejected, for the record (2026-09-26): a helper crate
+> carrying the block as an *optional* dependency never appears in the
+> featureless `cargo metadata` resolve, and a non-optional one reaches every
+> build; selecting the root with `ESP_IDF_SYS_ROOT_CRATE` works, but a forgotten
+> variable is a silently different binary, which is the failure this exists to
+> prevent.
+
+The camera crate must stay the same program as this one. Its dependencies,
+features, bin name, `.cargo/config.toml` and `rust-toolchain.toml` are compared
+with this crate's by `scripts/check_camera_crate_drift.py` in CI.
 
 ## 2. Configure PSRAM (required for the frame buffer)
 
-**Do not edit `sdkconfig.defaults`.** That file is read by *every* build from this
-tree, so forcing PSRAM on there changes the binary a default build produces —
-including one flashed to the live mesh node, whose PSRAM mode is unverified and
-whose boot that can break. The overlay already exists as
-`sdkconfig.defaults.camera-<board>`; you select it per-build with an environment
-variable:
+**Do not edit `sdkconfig.defaults`.** That file is read by *every* build,
+including one flashed to the live mesh node, whose boot PSRAM can break. The
+overlays are `sdkconfig.defaults.camera-<board>` in this directory, and the camera
+crate names them itself:
 
-```powershell
-$env:ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults;sdkconfig.defaults.camera-xiao-sense"
-```
+- Its manifest's `[package.metadata.esp-idf-sys] esp_idf_sdkconfig_defaults`
+  names `sdkconfig.defaults` plus the **Sense** overlay (two of the three camera
+  boards on the bench are Senses).
+- `ESP_IDF_SDKCONFIG_DEFAULTS`, when set, **wins** over the manifest and
+  **replaces** its list rather than appending (`set_when_none`,
+  `config.rs:139-144`). `build_camera.ps1` always sets it, to both files by
+  absolute path, for the board you name — so a value left in the shell from an
+  earlier build is overwritten rather than trusted.
 
-Semicolon-separated, later files win, and the variable **replaces** the default
-list rather than appending — so `sdkconfig.defaults` must be named explicitly or
-you lose the 32 KB main-task stack. (`esp-idf-sys` 0.37.2: `build/config.rs:25-27`
-declares the var, `parse::list` at `config.rs:187-202` splits on `;`,
-`set_when_none` at `config.rs:139-144` is why it replaces.) It is declared
-`cargo:rerun-if-env-changed`, so setting or clearing it re-triggers the build
-script on its own.
+Naming only the overlay drops the 32 KB main-task stack and boot-loops for a
+reason that looks nothing like its cause; naming none leaves PSRAM off. The
+second is now a compile error (see the table above). The variable is
+`cargo:rerun-if-env-changed`, so switching boards re-runs the esp-idf build on
+its own.
 
-Unset the variable — or open a fresh shell — before building anything for the
-live node. Its absence is what makes a default build a default build.
+The reverse leak is guarded too: a build of **this** crate with PSRAM on — the
+variable left set from a camera build, or an esp-idf build a camera build made —
+is a `compile_error!` in `main.rs`, because it is not the live node's binary.
 
 **Measured 2026-09-16 on the XIAO, `TODO(source)` closed.** `MODE_OCT` is correct
 on the XIAO ESP32S3 Sense (MAC `64:E8:33:7E:7E:04`, chip rev v0.2, ESP-IDF
@@ -117,18 +144,38 @@ v5.3.2): boot log reports `esp_psram: SPI SRAM memory test OK` and `Adding pool 
 — the Lilygo is the opposite and that is the whole reason these overlays are
 per-board.
 
-## 3. Build with the features
+## 3. Build (and flash)
 
 ```powershell
-git switch -c camera-bringup                  # §1: the tree is dirty, make it visible
-$env:CARGO_TARGET_DIR = "C:\e"                # Windows path-length workaround
-$env:ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults;sdkconfig.defaults.camera-xiao-sense"
-cargo build --release --features camera,board-xiao-sense
-cargo espflash flash --release --features camera,board-xiao-sense --monitor
+cd C:\src\obc
+.\scripts\which_esp32.ps1                                          # which port is which board
+.\scripts\build_camera.ps1 -Board xiao-sense -Port COM11
+.\scripts\build_camera.ps1 -Board lilygo-tcam-v11 -Port COMx       # the Lilygo
 ```
 
-Substitute the board feature for your board. `--features camera` on its own stops
-at a `compile_error!` that lists the options — that is the point of it.
+What the script does, so it can be done by hand if it has to be:
+
+```powershell
+. $env:USERPROFILE\export-esp.ps1
+$env:CARGO_TARGET_DIR = "C:\ec-cam"     # NOT the node build's target dir -- see below
+$env:ESP_IDF_SDKCONFIG_DEFAULTS = "C:\src\obc\firmware\obc-esp32-s3\sdkconfig.defaults;C:\src\obc\firmware\obc-esp32-s3\sdkconfig.defaults.camera-xiao-sense"
+cd C:\src\obc\firmware\obc-esp32-s3-camera
+cargo run --release --features board-xiao-sense -- --port COM11
+```
+
+`camera` is the camera crate's default feature; the board feature is still
+required. With `-Port`, the script reads the chip's MAC with
+`espflash board-info` first and refuses `obc-esp32-s3-001`.
+
+**The target dir must be the camera crate's own.** esp-idf-sys's build output is
+keyed by esp-idf-sys's features, not by which crate is the root, and its build
+script does not re-run when a manifest's metadata changes — so two crates in one
+target dir share one esp-idf build (on 2026-09-16 that destroyed the bring-up
+branch's camera bindings). The shared `build.rs` records which crate first built
+in a target dir and refuses the other with that explanation. A target dir that
+already held camera builds of *this* crate from the `camera-bringup` days (for
+example `C:\ec`) has a camera esp-idf in it: `cargo clean` it, or the next node
+build stops at the PSRAM `compile_error!` in `main.rs`.
 
 On boot you should see `OV2640 camera initialised` (or a warning if init failed).
 
@@ -154,13 +201,13 @@ A healthy board returns `ok:true` with a long base64 JPEG string (no longer the
   buffer). Checking the wrong signal here costs you a measurement on a board you
   only think you flashed — which happened once this session already, when a
   timed-out command left the old binary running and the "result" was noise.
-- **No PSRAM at all in the build** — check `$env:ESP_IDF_SDKCONFIG_DEFAULTS` is
-  set in *this* shell. It is per-shell by design; a fresh terminal is a default
-  build.
-- **Boot loops or a short main-task stack after setting the variable** — you
-  probably wrote only `sdkconfig.defaults.camera` into it. The variable replaces
-  the list, it does not extend it, so the 32 KB stack silently reverted to the
-  IDF default. Name both files.
+- **No PSRAM at all in the build** — now a `compile_error!` naming the fix
+  rather than a camera that never captures. Build through `build_camera.ps1`, or
+  from `firmware/obc-esp32-s3-camera`, whose manifest names the overlay.
+- **Boot loops or a short main-task stack after setting the variable by hand** —
+  you probably wrote only the overlay into it. The variable replaces the list, it
+  does not extend it, so the 32 KB stack silently reverted to the IDF default.
+  Name both files, as the script does.
 - **Dead end, so nobody re-derives it:** `sdkconfig.defaults.<profile>` is
   expanded automatically (`common.rs:263-300`), but `profile` comes from cargo's
   `PROFILE`, which is only ever `debug` or `release` (`common.rs:259-261`). A

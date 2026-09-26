@@ -1,0 +1,86 @@
+# The camera build of the ESP32-S3 node firmware. It exists so a camera build
+# can be made from `main`, and so the live mesh node's build cannot change when
+# it is.
+#
+# There are no sources here. The binary is `../obc-esp32-s3/src/main.rs`, built
+# by `../obc-esp32-s3/build.rs`, under the same bin name, so log targets
+# (`obc_esp32_s3::camera`) and every script that reads them are unchanged.
+#
+# # Why a second crate and not a feature
+#
+# The esp32-camera IDF component can only be added through
+# `[[package.metadata.esp-idf-sys.extra_components]]`, and esp-idf-sys 0.37.2
+# reads that from the root crate's manifest and its direct dependencies only,
+# via a `cargo metadata` call that is passed no feature flags. There is no
+# environment variable for it (`extra_components` is an exclude in
+# `try_from_env()`). So in `obc-esp32-s3` the block would reach every build,
+# including the one flashed to `obc-esp32-s3-001`. Here it reaches only this
+# crate's builds, and `obc-esp32-s3/Cargo.toml` stays byte-for-byte what the
+# live node is built from (scripts/check_camera_component_gate.py).
+#
+# # What must stay in step
+#
+# [dependencies], [build-dependencies], every feature but `default`, the bin
+# name, `.cargo/config.toml` and `rust-toolchain.toml` must match
+# `../obc-esp32-s3`. scripts/check_camera_crate_drift.py compares them in CI.
+#
+# # Building
+#
+# Use scripts/build_camera.ps1 -Board xiao-sense (or lilygo-tcam-v11). It sets a
+# CARGO_TARGET_DIR of its own: esp-idf-sys's build output is keyed by its own
+# features, not by which crate is the root, so the two crates sharing one target
+# dir would share one esp-idf build. build.rs refuses that mix outright.
+[workspace]
+
+[package]
+name = "obc-esp32-s3-camera"
+version = "0.1.0"
+edition = "2021"
+authors = ["thewriterben"]
+description = "Camera build of the Oh-Ben-Claw ESP32-S3 node firmware (sources in ../obc-esp32-s3)."
+build = "../obc-esp32-s3/build.rs"
+
+[dependencies]
+esp-idf-svc = { version = "0.52", features = ["std", "experimental"] }
+esp-idf-hal = "0.46"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+log = "0.4"
+
+[features]
+# The point of this crate. A board feature is still required: `camera` alone is
+# a compile_error in camera.rs naming the choice.
+default = ["camera"]
+# Meanings, and why each exists: see ../obc-esp32-s3/Cargo.toml.
+camera = []
+board-xiao-sense = []
+board-lilygo-tcam-s3-v11 = []
+board-unverified-map = []
+board-waveshare-21 = []
+
+[build-dependencies]
+embuild = "0.33"
+
+[[bin]]
+name = "obc-esp32-s3"
+path = "../obc-esp32-s3/src/main.rs"
+
+# Paths here resolve against this crate's directory (the workspace dir).
+#
+# The Sense overlay is the default because two of the three camera boards on the
+# bench are Senses. The Lilygo overrides it through ESP_IDF_SDKCONFIG_DEFAULTS
+# (the environment wins over this table), which build_camera.ps1 sets. Getting
+# it wrong is a compile_error in camera.rs, not a boot loop: the PSRAM mode
+# comes back to Rust as `esp_idf_spiram_mode_*` cfgs and is checked against the
+# board feature.
+[package.metadata.esp-idf-sys]
+esp_idf_sdkconfig_defaults = [
+    "../obc-esp32-s3/sdkconfig.defaults",
+    "../obc-esp32-s3/sdkconfig.defaults.camera-xiao-sense",
+]
+
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp32-camera", version = "2.0.7" }
+bindings_header = "../obc-esp32-s3/src/camera_bindings.h"
+bindings_module = "camera"   # bindings land in their own esp_idf_sys::camera module

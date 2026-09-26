@@ -5,6 +5,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Camera builds from main (2026-09-26)
+
+### Added
+
+- **`firmware/obc-esp32-s3-camera`: the camera build, made from `main`.** The
+  esp32-camera IDF component can only be added by an `extra_components` block,
+  which esp-idf-sys reads from the root crate's manifest with no feature flags,
+  so it could not live in `obc-esp32-s3` without reaching the live node's build;
+  camera work happened on a `camera-bringup` branch instead. The new crate has no
+  sources: it builds `obc-esp32-s3/src/main.rs` (same bin name, same log
+  targets) with the component block live, `camera` on by default, and the Sense
+  overlay named in its manifest. `obc-esp32-s3/Cargo.toml` keeps its commented
+  block (`check_camera_component_gate.py` still enforces it).
+- **`scripts/build_camera.ps1 -Board xiao-sense|lilygo-tcam-v11 [-Port COMx]`.**
+  Sets both sdkconfig files by absolute path for the board (overwriting any
+  value left in the shell), uses its own target dir (`C:\ec-cam`), and with
+  `-Port` reads the chip's MAC first and refuses `obc-esp32-s3-001`.
+  `tests/firmware_identity_roster.rs` checks that MAC against the roster.
+- **`scripts/check_camera_crate_drift.py` (CI, with `--selftest`).** The two
+  manifests must agree on dependencies, features other than `default`, bin name,
+  `.cargo/config.toml` and `rust-toolchain.toml`.
+- **Compile-time PSRAM checks.** esp-idf-sys exposes enabled kconfig bools as
+  `esp_idf_*` cfgs, so `camera.rs` now refuses a camera build without PSRAM, a
+  Sense without OCT, and a Lilygo without QUAD, and `main.rs` refuses PSRAM in a
+  build without `camera` (a camera overlay leaking into the live node's build).
+  CAMERA.md used to say sdkconfig was invisible to `cfg`; it is not.
+- **`build.rs` refuses a target dir shared between the two crates.** esp-idf-sys's
+  output is keyed by its own features, not by the root crate, so both crates in
+  one target dir would share one esp-idf build. The first crate to build there
+  claims it; the other stops with the fix.
+
+Not yet compiled on hardware: the camera crate, the cfg checks and the
+target-dir guard are checked here by `cargo metadata`, a stub run of the guard
+and the CI scripts, not by an Xtensa build. The first `build_camera.ps1` run is
+their test. The `camera-bringup` commits (greyscale capture, on-node detector,
+vision floor) move to `main` in a follow-up.
+
 ## Unreleased — Nobody will remind you (2026-09-26)
 
 ### Changed

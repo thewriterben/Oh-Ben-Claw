@@ -106,6 +106,37 @@ compile_error!(
      pick one."
 );
 
+// The frame buffer needs PSRAM, and each board's module needs its own PSRAM
+// mode: the Sense is OCT, the Lilygo V1.1 is QUAD. A wrong or missing overlay
+// used to show up as a camera that initialised and never produced a frame, or
+// as a boot loop; esp-idf-sys hands the sdkconfig back as `esp_idf_*` cfgs, so
+// it is checked here instead. The overlay is chosen by
+// firmware/obc-esp32-s3-camera's manifest (Sense) or by
+// scripts/build_camera.ps1 (either board).
+#[cfg(all(feature = "camera", not(esp_idf_spiram)))]
+compile_error!(
+    "`camera` without PSRAM: the sdkconfig overlay was not applied. Build from \
+     firmware/obc-esp32-s3-camera (scripts/build_camera.ps1), which selects it."
+);
+#[cfg(all(
+    feature = "board-xiao-sense",
+    esp_idf_spiram,
+    not(esp_idf_spiram_mode_oct)
+))]
+compile_error!(
+    "`board-xiao-sense` needs OCT PSRAM: use sdkconfig.defaults.camera-xiao-sense \
+     (scripts/build_camera.ps1 -Board xiao-sense)."
+);
+#[cfg(all(
+    feature = "board-lilygo-tcam-s3-v11",
+    esp_idf_spiram,
+    not(esp_idf_spiram_mode_quad)
+))]
+compile_error!(
+    "`board-lilygo-tcam-s3-v11` needs QUAD PSRAM: use \
+     sdkconfig.defaults.camera-lilygo-tcam-v11 (scripts/build_camera.ps1 -Board lilygo-tcam-v11)."
+);
+
 use anyhow::Context;
 // esp32-camera bindings live in their own module (see Cargo.toml `bindings_module`).
 use esp_idf_svc::sys::camera as sys;

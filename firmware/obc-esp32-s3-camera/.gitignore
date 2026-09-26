@@ -1,0 +1,5 @@
+# Rust / ESP-IDF build output — never committed.
+/target
+
+# esp-idf-sys places its build tree here on some setups.
+/.embuild

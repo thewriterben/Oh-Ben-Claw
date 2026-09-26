@@ -224,6 +224,27 @@ fn preflash_gate_knows_every_rostered_board() {
     }
 }
 
+/// The camera build script refuses to flash the live mesh node by its MAC.
+///
+/// `scripts/build_camera.ps1` carries that one MAC as a literal, because it runs
+/// on the bench machine before anything is built. If the live node were ever
+/// re-rostered, a stale literal there would refuse the wrong board and wave the
+/// live one through, so it is compared against the roster's entry for 001.
+#[test]
+fn camera_flash_refuses_the_rostered_live_node() {
+    let rel = "scripts/build_camera.ps1";
+    let script = read(rel);
+    let (live_mac, _) = ROSTER
+        .iter()
+        .find(|(_, name)| *name == "obc-esp32-s3-001")
+        .expect("the roster names obc-esp32-s3-001");
+    assert!(
+        script.contains(&format!("$LiveMac = '{live_mac}'")),
+        "{rel} does not refuse {live_mac}, the MAC the firmware roster gives \
+         obc-esp32-s3-001. Its $LiveMac must be that value."
+    );
+}
+
 /// The constant this whole change removed must not come back.
 ///
 /// Comments are stripped first. The first version of this test did not do that
