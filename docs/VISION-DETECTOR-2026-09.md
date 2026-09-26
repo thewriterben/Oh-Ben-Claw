@@ -281,3 +281,30 @@ minutes. `SETTLE_DELTA = 3.0` was taken from the host fixture and is comfortable
 here. Frame 0 is `no_reference`, frame 1 is `warming_up`, and from frame 2 the
 node is judging — which is the designed behaviour and the first time it has been
 seen on a scene quiet enough to show it.
+
+## First run on a Sense, from `main` (2026-09-26)
+
+The first camera build from `main` (the `obc-esp32-s3-camera` crate, via
+`scripts/build_camera.ps1 -Board xiao-sense`) on obc-esp32-s3-005: XIAO ESP32S3
+Sense, OV3660, MAC `AC:27:6E:A8:4D:E4`, XCLK 10 MHz.
+
+`probe_sense_capture.py --count 10`: 10/10 `frame 76800 B 320x240 format=3`.
+
+`probe_detect.py 10 1.0 COM11`, a still scene on the bench:
+
+    #  state        class  frac  edge   mean
+    0  no_reference -      -     -      51.86
+    1  warming_up   -      1.0   4.59   124.83
+    2  warming_up   -      0.0   0.67   124.99
+    3-9 ready       quiet  0.0   0.63-0.66   124.68-124.79
+
+The warm-up gate did its job on a harder start than the Lilygo's: brightness
+went 51.9 -> 124.8 between the first two frames, and frame 1 scored `frac` 1.0.
+Without the gate, that frame would have been reported as a major event. After
+that, 7 of 7 judged frames were `quiet`.
+
+The quiet level is lower than the Lilygo floor above (`frac` 0.0 against a
+0.0095 max, `edge` 0.63-0.66 against 1.28), on a different sensor, scene and
+light, from 7 frames rather than 200. Treat it as a data point: it adds no
+bound the Lilygo floor did not already give, and it says nothing about where
+the events sit. `thresholds_provisional` stays true.

@@ -34,9 +34,15 @@ feature never reached cargo and the build stopped at camera.rs's "needs a
 board feature" `compile_error!`. Now `[string[]]`, checked in PowerShell 7.
 
 The one conflict was `main.rs`'s module list, where `detector_math` and the
-PSRAM guard both landed; both are kept. Thresholds are still provisional, and
-greyscale plus the software encoder has not yet run on a Sense from a `main`
-build.
+PSRAM guard both landed; both are kept. Thresholds are still provisional.
+
+**Bench, 2026-09-26, the first camera build from `main`** (005, XIAO Sense,
+OV3660, via `build_camera.ps1`): `probe_sense_capture.py` 10/10
+`76800 B 320x240 format=3`; `probe_detect.py` `no_reference`, 2x `warming_up`
+(brightness 51.9 -> 124.8, frame 1 `frac` 1.0 held back by the gate), then 7/7
+`quiet` at `frac` 0.0, `edge` 0.63-0.66. Recorded in
+`docs/VISION-DETECTOR-2026-09.md`. The software-encoded JPEG picture from
+`camera_capture` has not been decoded and viewed yet.
 
 ## Unreleased — Camera builds from main (2026-09-26)
 
