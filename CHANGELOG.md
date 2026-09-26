@@ -5,6 +5,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Nobody will remind you (2026-09-26)
+
+### Changed
+
+- **The notes block tells the model when to write a note, and is always
+  present.** `MEMORY.md` and `USER.md` (parity item 4, 2026-09-11) went
+  fifteen days and 138 turns on the bench without a single `memory` call: the
+  block was rendered only once the files had content, and nothing anywhere
+  said *when* a note is due. `Notes::render` now always returns the block,
+  headed by a standing instruction — write in the same turn you learn
+  something that will still be true next week; operator facts to `user`, the
+  machine and the work to `memory`; not chit-chat, not sensor facts; fix what
+  turns out wrong — followed by whichever files have entries. About 90 tokens
+  when empty. The tool description says the same in one line.
+
 ## Unreleased — A skill has to be a task (2026-09-26)
 
 ### Changed

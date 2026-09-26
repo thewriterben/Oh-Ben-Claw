@@ -2664,11 +2664,17 @@ mod notes_context_tests {
             .with_notes(Arc::clone(&notes));
 
         let ctx = agent.build_context(&session).unwrap();
-        assert_eq!(
-            ctx[0].content,
-            AgentConfig::default().system_prompt,
-            "empty notes add nothing"
+        assert!(
+            ctx[0]
+                .content
+                .starts_with(AgentConfig::default().system_prompt.trim_end()),
+            "the system prompt comes first"
         );
+        assert!(
+            ctx[0].content.contains("same turn you learn something"),
+            "empty notes still carry the standing instruction (2026-09-26)"
+        );
+        assert!(!ctx[0].content.contains("### About the operator"));
 
         notes
             .add(

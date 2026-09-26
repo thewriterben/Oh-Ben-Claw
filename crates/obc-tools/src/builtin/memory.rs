@@ -41,8 +41,9 @@ impl Tool for MemoryTool {
          target `memory` = working notes about this machine, the bench and ongoing \
          work (2,200 characters); target `user` = who the operator is and how they \
          want things done (1,375 characters). Actions: list, add, replace, remove. \
-         One short factual line per entry. When a file is full, replace or remove \
-         an entry before adding. Not for sensor facts (world_memory) or transcripts."
+         One short factual line per entry. Use it unprompted, in the same turn you \
+         learn something durable. When a file is full, replace or remove an entry \
+         before adding. Not for sensor facts (world_memory) or transcripts."
     }
 
     fn parameters_schema(&self) -> Value {
