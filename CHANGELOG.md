@@ -5,6 +5,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Lamp switches, marked (2026-09-26)
+
+### Added
+
+- **`scripts/vision/bench_events.py --port COMx`: the detector against lamp
+  switches, on the node.** A guided session: a quiet phase, then a lamp phase in
+  which the operator presses Enter the moment they flip the lamp. Every
+  `camera_detect` reply is kept with the wall clock, so each frame is labelled
+  `switch`, `resettle` or `steady` from the marks rather than from memory; a
+  mark is moved to the largest brightness step within one frame, since a hand
+  on a lamp and a finger on Enter are not simultaneous. The report scores both
+  layers of the node's protection: the warm-up gate (did it hold the switch
+  frame, and how many frames to `ready`) and the frac/edge rule on its own on
+  every scored frame, which is what a dimmer or daylight -- no brightness step,
+  no gate -- would face. Thresholds are read from `classify.py`, not retyped.
+  Pictures at both ends. `--replay DIR` re-scores a saved run; `--selftest`
+  runs offline. Dry-run end to end against a simulated node on a pty.
+  Person and camera-nudge are not measured by it; `thresholds_provisional`
+  stays true.
+
 ## Unreleased — Look at the picture (2026-09-26)
 
 ### Added
