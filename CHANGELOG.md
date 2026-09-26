@@ -41,6 +41,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   miss, still counts. A mark with no changed frame near it is reported as a
   PHANTOM and makes no switch; a changed frame no mark explains is reported as
   UNMARKED instead of being filed as steady.
+- **Second session, 002 (OV2640), TV and fan off:** 9/9 switches held by the
+  gate, 0 detections; the rule alone would call all 9 `nudge` (`edge`
+  12.3-14.1). Its quiet floor is sensor noise that rises in the dark --
+  `frac` ~0.11 and `edge` ~7.5 on every still frame (~0.07/6.3 lamp on,
+  ~0.13/8.3 lamp off) against 005's <= 0.007/1.25. Two Senses, a ~6-point
+  difference in quiet `edge`: one absolute threshold set does not fit both.
+  Recorded; thresholds unchanged. The TV-and-fan run is kept as
+  `002-tv-fan/`, where the node stayed `quiet` with both moving in view.
 - **The script says when to switch.** The operator was counting 15 s against
   a progress line that did not match their count. The lamp phase now prints
   `switch n/N in 3, 2, 1` and `>>> SWITCH NOW` every `--every` seconds (15 by

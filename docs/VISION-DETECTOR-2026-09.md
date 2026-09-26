@@ -368,3 +368,70 @@ Method note: the first version of the labeller looked one frame either side of
 each Enter press. Switch 1 was pressed about 1.5 frames late, so it took the
 auto-exposure correction frame as the switch and filed the flip itself, the
 worst `edge` of the run, as a steady frame. The window is now two frames.
+
+## The second Sense: same verdict from the gate, a different sensor under it (2026-09-26)
+
+`tests/fixtures/vision-events-2026-09-26/002/`: the same session on
+obc-esp32-s3-002, the other XIAO Sense, which has an **OV2640** where 005 has
+an OV3660. Same build, same lamp. TV off and fan stopped: `last.jpg` shows a
+dark screen and sharp fan blades. All 9 presses matched a switch (offsets 0 to
++2).
+
+```
+                        005 (OV3660)            002 (OV2640)
+lamp switches           8, gate held 8          9, gate held 9
+node detections         0                       0
+frames to ready         2-3                     2-3
+switch-frame edge       4.02-4.71               12.32-14.14
+rule alone calls them   motion 7, light 1       nudge 9
+quiet frac              <= 0.0043               0.105-0.113 (every frame)
+quiet edge              <= 1.25                 7.33-7.66   (every frame)
+between switches, lamp on  (~125)   frac <= 0.007    frac ~0.07, edge ~6.3
+between switches, lamp off (~96-115) frac <= 0.007   frac ~0.13, edge ~8.3
+```
+
+**The node's behaviour is the same on both:** 17 real lamp switches, 17 held
+by the warm-up gate, 0 detections, judging again within three frames.
+
+**The rule alone holds a lamp on neither.** On 005 a lamp scores `motion`; on
+002 it scores `nudge`, which on a judged frame would also drop the reference.
+The host fixture put a lamp at `edge` <= 3.28, under `EDGE_LIGHT` 4.20. Here it
+is 4.0-4.7 on one sensor and 12-14 on the other.
+
+**002's floor is sensor noise, and it moves with the light.** Its quiet frames
+change by the same amount every frame -- `frac` 0.105-0.113 -- which is what
+independent per-pixel noise does (a fixed fraction of pixels crosses the
+12-level threshold each frame); brightness crept 89.5 -> 97.1 over the phase
+without frame-to-frame jumps, so it is not flicker banding. It tracks scene
+brightness: ~0.07 with the lamp on, ~0.13 with it off, the signature of gain
+rising in the dark. At matched brightness 005 is at <= 0.007. Read as Gaussian
+noise, that is a per-pixel sigma of roughly 5 grey levels on 002 against 3 on
+005 -- an estimate from `frac` alone, not a measurement of the sensor.
+
+**Consequence for the thresholds, recorded, not acted on:**
+
+* `EDGE_*` are absolute numbers, and the two Senses differ by ~6 in quiet
+  `edge` alone. 002 sits at 7.5 doing nothing, 83% of `EDGE_NUDGE`. One
+  threshold set cannot describe both; per-sensor thresholds, or thresholds
+  relative to each node's own measured floor, is a design decision for later.
+* `FRAC_HI` 0.35 still clears 002's floor, but by 2.3x in a dim scene, and the
+  floor rose as the room darkened. A darker room than this one is the next
+  thing that could put the rule into a `motion` call with nothing moving.
+* The gate is doing the work on both sensors, and it relies on a lamp stepping
+  brightness by more than 3 grey levels in a frame (here 12-37). A light change
+  that does not -- a dimmer, daylight -- would reach the rule alone, which the
+  numbers above say is not safe. Not measured.
+* Still unmeasured on any node: a person, a camera nudge.
+  `thresholds_provisional` stays true.
+
+**The first 002 session** (`002-tv-fan/`) had a playing TV and a running fan in
+view: quiet floor `frac` 0.117 and `edge` 7.8 on every frame, 7 presses against
+9 flips (two unmarked, which the labeller now reports). With both moving in
+frame, the node still judged every frame `quiet` and reported no detection --
+small moving areas are not a detection, which is what the rule is for. It is
+kept as that, not as a floor.
+
+**Side observation, not investigated:** the first picture after the port-open
+reset is dark (`first.jpg` brightness ~37 against ~95 for the frames after it),
+as was `grab_picture.py`'s first JPEG and `probe_detect`'s first frame. The
+driver appears to hand back a frame captured before auto-exposure settled.
