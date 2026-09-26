@@ -33,26 +33,25 @@
       "quiet": 86
     },
     "rule_on_switch_frames": {
-      "nudge": 6,
-      "quiet": 1
+      "nudge": 9
     },
     "rule_motion_or_nudge_any_frame": 17,
-    "switches_the_gate_held": 6,
+    "switches_the_gate_held": 9,
     "steady": {
-      "frames": 95,
-      "scored": 95,
-      "judged": 85,
+      "frames": 86,
+      "scored": 86,
+      "judged": 86,
       "frac": {
-        "p95": 0.2847,
-        "max": 0.7679
+        "p95": 0.1145,
+        "max": 0.1155
       },
       "edge": {
-        "p95": 7.81,
-        "max": 12.54
+        "p95": 7.78,
+        "max": 7.81
       },
       "brightness": {
-        "min": 94.71,
-        "max": 136.6
+        "min": 104.42,
+        "max": 119.54
       }
     }
   },
@@ -67,19 +66,34 @@
       "mean_before": 104.41999816894531,
       "mean_after": 136.67999267578125,
       "frames_to_ready": 3,
-      "mark_offset": 1
+      "mark_offset": 1,
+      "marked": true
     },
     {
-      "i": 59,
-      "state": "ready",
-      "node_class": "quiet",
-      "frac": 0.060499999672174454,
-      "edge": 6.050000190734863,
-      "rule": "quiet",
-      "mean_before": 118.73999786376953,
-      "mean_after": 118.87999725341797,
-      "frames_to_ready": 0,
-      "mark_offset": -1
+      "i": 62,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.6855000257492065,
+      "edge": 12.039999961853027,
+      "rule": "nudge",
+      "mean_before": 119.0999984741211,
+      "mean_after": 94.70999908447266,
+      "frames_to_ready": 3,
+      "mark_offset": 2,
+      "marked": true
+    },
+    {
+      "i": 72,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.7678999900817871,
+      "edge": 12.539999961853027,
+      "rule": "nudge",
+      "mean_before": 106.87000274658203,
+      "mean_after": 136.60000610351562,
+      "frames_to_ready": 8,
+      "mark_offset": null,
+      "marked": false
     },
     {
       "i": 76,
@@ -91,7 +105,8 @@
       "mean_before": 118.91999816894531,
       "mean_after": 92.75,
       "frames_to_ready": 4,
-      "mark_offset": 1
+      "mark_offset": 1,
+      "marked": true
     },
     {
       "i": 91,
@@ -103,7 +118,8 @@
       "mean_before": 107.55000305175781,
       "mean_after": 134.72999572753906,
       "frames_to_ready": 3,
-      "mark_offset": 1
+      "mark_offset": 1,
+      "marked": true
     },
     {
       "i": 106,
@@ -115,7 +131,8 @@
       "mean_before": 118.61000061035156,
       "mean_after": 97.9000015258789,
       "frames_to_ready": 3,
-      "mark_offset": 0
+      "mark_offset": 0,
+      "marked": true
     },
     {
       "i": 121,
@@ -127,7 +144,21 @@
       "mean_before": 108.19000244140625,
       "mean_after": 135.9600067138672,
       "frames_to_ready": 3,
-      "mark_offset": 1
+      "mark_offset": 1,
+      "marked": true
+    },
+    {
+      "i": 136,
+      "state": "warming_up",
+      "node_class": null,
+      "frac": 0.5763000249862671,
+      "edge": 12.430000305175781,
+      "rule": "nudge",
+      "mean_before": 118.04000091552734,
+      "mean_after": 99.41999816894531,
+      "frames_to_ready": 3,
+      "mark_offset": null,
+      "marked": false
     },
     {
       "i": 151,
@@ -139,8 +170,12 @@
       "mean_before": 107.63999938964844,
       "mean_after": 135.72999572753906,
       "frames_to_ready": 3,
-      "mark_offset": 1
+      "mark_offset": 1,
+      "marked": true
     }
   ],
+  "phantom_marks": [],
+  "unmarked_switches": 2,
+  "settle_delta": 3.0,
   "errors": 0
 }
