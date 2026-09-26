@@ -214,6 +214,12 @@ pub enum Closure {
     /// Withdrawn because something it was derived from is no longer believed — the
     /// undercutting case. Names the source whose retirement started the walk.
     Unsupported(String),
+    /// Withdrawn by a person, through `oh-ben-claw world withdraw`, with the reason they
+    /// gave (2026-09-26). The first closure that is a decision rather than a consequence:
+    /// on the bench a node's "offline" flag outlived the supervisor that wrote it and sat
+    /// in every prompt for eleven days, and the only way to close it was to edit the
+    /// database by hand.
+    Operator(String),
     /// Withdrawn because a declared retention policy says a belief of this kind is no
     /// longer current. Names the policy's entity prefix.
     ///
@@ -232,6 +238,7 @@ impl Closure {
             Closure::SourceStopped(s) => Some(format!("source-stopped:{s}")),
             Closure::Unsupported(s) => Some(format!("unsupported:{s}")),
             Closure::Expired(p) => Some(format!("expired:{p}")),
+            Closure::Operator(why) => Some(format!("operator:{why}")),
         }
     }
 
@@ -249,6 +256,7 @@ impl Closure {
                 Some(("source-stopped", s)) => Closure::SourceStopped(s.to_string()),
                 Some(("unsupported", s)) => Closure::Unsupported(s.to_string()),
                 Some(("expired", p)) => Closure::Expired(p.to_string()),
+                Some(("operator", why)) => Closure::Operator(why.to_string()),
                 _ => Closure::Superseded,
             },
             None => Closure::Superseded,
@@ -259,7 +267,10 @@ impl Closure {
     pub fn is_withdrawal(&self) -> bool {
         matches!(
             self,
-            Closure::SourceStopped(_) | Closure::Unsupported(_) | Closure::Expired(_)
+            Closure::SourceStopped(_)
+                | Closure::Unsupported(_)
+                | Closure::Expired(_)
+                | Closure::Operator(_)
         )
     }
 }
@@ -962,6 +973,28 @@ impl WorldMemory {
         Ok(n > 0)
     }
 
+    /// Stop believing every open fact about `entity`, as of `at_ms`, for `why`.
+    /// Returns the ids closed (empty when nothing was open). The operator's
+    /// path in (`oh-ben-claw world withdraw`); [`close_fact`](Self::close_fact)
+    /// row by row underneath, history kept.
+    pub fn withdraw_entity(&self, entity: &str, at_ms: u64, why: &Closure) -> Result<Vec<i64>> {
+        let ids: Vec<i64> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "SELECT id FROM world_facts WHERE entity = ?1 AND valid_to IS NULL ORDER BY id",
+            )?;
+            let rows = stmt.query_map(params![entity], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<i64>>>()?
+        };
+        let mut closed = Vec::with_capacity(ids.len());
+        for id in ids {
+            if self.close_fact(id, at_ms, why)? {
+                closed.push(id);
+            }
+        }
+        Ok(closed)
+    }
+
     /// Whether a fact's justification still stands — evaluated now, not when it was
     /// written.
     ///
@@ -1134,6 +1167,48 @@ impl WorldMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_operator_withdrawal_closes_every_open_fact_and_reads_back_as_one() {
+        let w = WorldMemory::open_in_memory().unwrap();
+        w.observe(
+            "mesh.gw-40.health",
+            serde_json::json!({"status": "offline"}),
+            1_000,
+            1_000,
+            "mesh-supervisor",
+        )
+        .unwrap();
+        let closed = w
+            .withdraw_entity(
+                "mesh.gw-40.health",
+                5_000,
+                &Closure::Operator("host's own station; supervisor no longer judges it".into()),
+            )
+            .unwrap();
+        assert_eq!(closed.len(), 1);
+        assert!(
+            w.current("mesh.gw-40.health").unwrap().is_none(),
+            "no longer believed"
+        );
+        let hist = w.history("mesh.gw-40.health").unwrap();
+        let c = Closure::of(&hist[0]);
+        assert!(
+            matches!(c, Closure::Operator(ref why) if why.starts_with("host's own station")),
+            "{c:?}"
+        );
+        assert!(c.is_withdrawal());
+        assert!(
+            w.withdraw_entity(
+                "mesh.gw-40.health",
+                6_000,
+                &Closure::Operator("again".into())
+            )
+            .unwrap()
+            .is_empty(),
+            "nothing left to close"
+        );
+    }
     use serde_json::json;
 
     #[test]

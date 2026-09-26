@@ -214,6 +214,7 @@ pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Opt
                     format!("undercut — something it rested on went away with `{s}`")
                 }
                 Closure::Expired(p) => format!("aged out under the `{p}` retention policy"),
+                Closure::Operator(why) => format!("withdrawn by the operator — {why}"),
                 // Superseded rows are excluded by `withdrawn_since`; an unparseable tag
                 // lands here and is reported honestly rather than guessed at.
                 _ => "withdrawn (reason unrecorded)".to_string(),
