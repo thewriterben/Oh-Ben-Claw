@@ -5,6 +5,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The camera-bringup branch comes home (2026-09-26)
+
+### Added
+
+- **Greyscale capture, software JPEG, and `camera_detect`, on `main`.** The four
+  `camera-bringup` commits (2026-09-17) are cherry-picked, with their original
+  messages, onto the camera crate from the entry below; the branch's uncommented
+  component block is dropped in favour of `obc-esp32-s3-camera`'s. What arrives:
+  `PIXFORMAT_GRAYSCALE` at QVGA (76,800 B of Y8, `format=3`); `camera_capture`
+  encoding that frame with `fmt2jpg_cb`, so pictures are monochrome and checked
+  for `FFD8`/`FFD9`; `detector_math.rs` and the `camera_detect` command, with
+  `tests/firmware_detector_math.rs` (15 tests) holding it to
+  `scripts/vision/classify.py`; `probe_grey_capture.py`, `probe_detect.py`,
+  `scripts/vision/bench_floor.py`, `make_grey_pairs.py`, the grey-pair and
+  200-frame floor fixtures, and `docs/VISION-DETECTOR-2026-09.md`.
+- `main` now matches what the Senses were measured on. The 2026-09-25/26
+  capture results (002 20/20, 005 10/10, all `format=3`) came from greyscale
+  builds; until now `main`'s `camera.rs` still asked for JPEG.
+
+The one conflict was `main.rs`'s module list, where `detector_math` and the
+PSRAM guard both landed; both are kept. Thresholds are still provisional, and
+greyscale plus the software encoder has not yet run on a Sense from a `main`
+build.
+
 ## Unreleased — Camera builds from main (2026-09-26)
 
 ### Added
