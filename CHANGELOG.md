@@ -61,6 +61,21 @@ vision floor) move to `main` in a follow-up.
   system chars, tool count and schema chars, history messages and chars. The
   bench's cold turn had grown from 12.7k to 22k tokens and nothing said which
   part grew; `brain usage` gives the tokens, this gives the shape.
+## Unreleased — Writers say so (2026-09-26)
+
+### Fixed
+
+- **`record_incident`, `world_memory`, `ota_update` and the four acting
+  browser tools declare `reversible: false`.** The self-improvement pass
+  verifies a learned skill by running its recipe, and treats any tool with
+  the default risk class as safe to run. On 2026-09-26 it minted an
+  autonomous skill from an operator turn the world-state block had hijacked
+  (`mesh_status → device_health → record_incident`) and, while verifying it,
+  filed a second `incident.obc-esp32-s3-001`. With the declaration the forge
+  quarantines such recipes for operator promotion, as it already did for
+  `schedule` (#156) and `memory`. A test pins the contract for the writers
+  among the built-ins.
+
 ## Unreleased — One leg's opinion is not experience (2026-09-26)
 
 ### Changed

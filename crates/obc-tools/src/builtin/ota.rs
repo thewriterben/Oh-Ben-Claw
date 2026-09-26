@@ -6,7 +6,7 @@
 //! - STM32: Flash via probe-rs (USB debug probe)
 //! - Arduino: Serial flash via avrdude
 
-use crate::traits::{Tool, ToolResult};
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -22,6 +22,16 @@ pub struct OtaUpdateTool;
 impl Tool for OtaUpdateTool {
     fn name(&self) -> &str {
         "ota_update"
+    }
+
+    fn risk_class(&self) -> RiskClass {
+        // A firmware update on a node. Never something to re-run as a side effect
+        // of verifying a learned skill (2026-09-26).
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::Low,
+            physical: false,
+        }
     }
 
     fn description(&self) -> &str {

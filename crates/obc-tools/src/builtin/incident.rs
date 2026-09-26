@@ -19,7 +19,7 @@
 //! Facts land at `incident.<subject>`, which is deliberately outside `mesh.*` and any
 //! other perception namespace — an agent's conclusion is never mistaken for a reading.
 
-use crate::traits::{Tool, ToolResult};
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use obc_memory::world::{Origin, WorldMemory};
 use serde_json::{json, Value};
@@ -74,6 +74,19 @@ impl RecordIncidentTool {
 impl Tool for RecordIncidentTool {
     fn name(&self) -> &str {
         "record_incident"
+    }
+
+    fn risk_class(&self) -> RiskClass {
+        // A write into world memory: replaying it files the same incident again.
+        // The self-improvement pass did exactly that on 2026-09-26, minting an
+        // autonomous skill from a hijacked turn and, while verifying it, writing a
+        // second `incident.obc-esp32-s3-001`. Not reversible: the forge quarantines
+        // such recipes for operator promotion instead of running them.
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::Low,
+            physical: false,
+        }
     }
 
     fn description(&self) -> &str {

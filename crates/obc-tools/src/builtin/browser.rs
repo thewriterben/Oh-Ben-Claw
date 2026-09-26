@@ -33,7 +33,7 @@
 //! | `browser_close_tab` | Close the active tab |
 
 use super::browser_cdp::{self, Cdp};
-use crate::{Tool, ToolResult};
+use crate::{traits::BlastRadius, traits::RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use obc_conscience::{ReachDecision, ReachGate};
 use serde::{Deserialize, Serialize};
@@ -667,6 +667,15 @@ impl Tool for BrowserClickTool {
         "browser_click"
     }
 
+    fn risk_class(&self) -> RiskClass {
+        // A click acts on a live page; replaying it acts again (2026-09-26).
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::Low,
+            physical: false,
+        }
+    }
+
     fn description(&self) -> &str {
         "Click an element on the current browser page using a CSS selector. \
          Use browser_snapshot first to identify the selectors available on the page."
@@ -755,6 +764,15 @@ impl BrowserTypeTool {
 impl Tool for BrowserTypeTool {
     fn name(&self) -> &str {
         "browser_type"
+    }
+
+    fn risk_class(&self) -> RiskClass {
+        // Typing into a live page is a side effect; replaying it types again.
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::Low,
+            physical: false,
+        }
     }
 
     fn description(&self) -> &str {
@@ -974,6 +992,15 @@ impl Tool for BrowserNewTabTool {
         "browser_new_tab"
     }
 
+    fn risk_class(&self) -> RiskClass {
+        // Opens a tab in the shared headless Chrome; replaying it leaks tabs.
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::Low,
+            physical: false,
+        }
+    }
+
     fn description(&self) -> &str {
         "Open a new browser tab. Optionally navigate to a URL in the new tab immediately."
     }
@@ -1033,6 +1060,15 @@ impl BrowserCloseTabTool {
 impl Tool for BrowserCloseTabTool {
     fn name(&self) -> &str {
         "browser_close_tab"
+    }
+
+    fn risk_class(&self) -> RiskClass {
+        // Closes a tab someone else may be using; replaying it closes another.
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::Low,
+            physical: false,
+        }
     }
 
     fn description(&self) -> &str {

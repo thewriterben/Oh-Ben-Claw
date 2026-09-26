@@ -234,3 +234,36 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod risk_contract_tests {
+    use super::*;
+
+    /// Every built-in that writes somewhere durable must say so, or the
+    /// self-improvement pass will re-run it while verifying a learned skill
+    /// (it re-created timers on 2026-09-11 and filed an incident on 2026-09-26).
+    #[test]
+    fn writers_are_not_replayable() {
+        let writers = [
+            "record_incident",
+            "world_memory",
+            "ota_update",
+            "browser_click",
+            "browser_type",
+            "browser_new_tab",
+            "browser_close_tab",
+            "schedule",
+            "memory",
+        ];
+        let tools = default_tools();
+        for name in writers {
+            let Some(t) = tools.iter().find(|t| t.name() == name) else {
+                continue; // not registered in this build (feature-gated)
+            };
+            assert!(
+                !t.risk_class().reversible,
+                "{name} is a writer and must declare reversible: false"
+            );
+        }
+    }
+}

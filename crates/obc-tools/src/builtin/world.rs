@@ -4,7 +4,7 @@
 //! subsystem suites) can `observe` real-world state and recall it with
 //! `current`/`at`/`history`. Writes are non-destructive and time-valid.
 
-use crate::traits::{Tool, ToolResult};
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use obc_memory::world::{Origin, WorldMemory};
 use serde_json::{json, Value};
@@ -43,6 +43,17 @@ impl WorldMemoryTool {
 impl Tool for WorldMemoryTool {
     fn name(&self) -> &str {
         "world_memory"
+    }
+
+    fn risk_class(&self) -> RiskClass {
+        // `observe` writes a fact; a replayed observation asserts something the
+        // agent did not see again. The read actions share the tool, so the whole
+        // tool is declared non-replayable (2026-09-26).
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::Low,
+            physical: false,
+        }
     }
 
     fn description(&self) -> &str {
