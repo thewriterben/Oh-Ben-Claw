@@ -24,6 +24,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   runs offline. Dry-run end to end against a simulated node on a pty.
   Person and camera-nudge are not measured by it; `thresholds_provisional`
   stays true.
+- **First session, 005 (OV3660):** 0 detections from 8 marked lamp
+  switches; the warm-up gate held all 8 and the node was judging again 2-3
+  frames later. But the frac/edge rule alone would call 7 of 8 `motion`:
+  switch-frame `edge` is 4.02-4.71 against `EDGE_LIGHT` 4.20, which the host
+  fixture had set above a lamp's 3.28. On this sensor the gate is the only
+  protection against a lamp. Thresholds unchanged; written up in
+  `docs/VISION-DETECTOR-2026-09.md`, fixture in
+  `tests/fixtures/vision-events-2026-09-26/005/`. The labeller's mark window
+  went from one frame to two after that run showed a press 1.5 frames late.
 
 ## Unreleased — Look at the picture (2026-09-26)
 

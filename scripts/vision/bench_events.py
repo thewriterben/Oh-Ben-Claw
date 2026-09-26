@@ -79,18 +79,24 @@ def rule(frac: float, edge: float, t: dict) -> str:
 # ── labelling ────────────────────────────────────────────────────────────────
 
 
+WINDOW = 2  # frames either side of a mark to look for the brightness step
+
+
 def label(rows: list[dict], marks: list[float]) -> None:
     """Give each lamp-phase frame a `tag`: switch, resettle or steady.
 
     A mark at time m first points at the first frame requested after it: the
     sensor captures when the request arrives, so that is the first frame that
     can have seen the new light. But a hand on a lamp and a finger on Enter are
-    not simultaneous -- half a second either way is one frame at 1 s -- so the
-    switch frame is taken as the one with the largest brightness step within one
-    frame of that, and `mark_offset` records how far it moved. Frames after it
+    not simultaneous, so the switch frame is taken as the one with the largest
+    brightness step within WINDOW frames of that, and `mark_offset` records how
+    far it moved. WINDOW was 1 until the first real session (005, 2026-09-26):
+    switch 1 there was pressed ~1.5 frames late, the labeller took the
+    auto-exposure correction frame, and the flip itself (edge 4.71, the worst
+    of the run) was filed as `steady`. Switches ~15 frames apart leave room. Frames after it
     are `resettle` until the node says `ready` again, then `steady`.
     """
-    lamp = [k for k, r in enumerate(rows) if r.get("phase") == "lamp"]
+    lamp = set(k for k, r in enumerate(rows) if r.get("phase") == "lamp")
     for r in rows:
         if r.get("phase") != "lamp":
             r["tag"] = r.get("phase", "?")
@@ -102,15 +108,15 @@ def label(rows: list[dict], marks: list[float]) -> None:
 
     switch_at: dict[int, tuple[float, int]] = {}
     for m in sorted(marks):
-        k = next((k for k in lamp if rows[k]["t_sent"] >= m), None)
+        k = next((k for k in sorted(lamp) if rows[k]["t_sent"] >= m), None)
         if k is None:
             continue  # marked after the last frame
-        near = [c for c in (k - 1, k, k + 1) if c in lamp]
+        near = [c for c in range(k - WINDOW, k + WINDOW + 1) if c in lamp]
         best = max(near, key=lambda c: (step(c), -abs(c - k)))
         switch_at.setdefault(best, (m, best - k))
 
     settling = False
-    for k in lamp:
+    for k in sorted(lamp):
         r = rows[k]
         if k in switch_at:
             r["tag"] = "switch"
@@ -404,6 +410,10 @@ def selftest() -> int:
     s_late = summarise(late, [3.4, 6.5], t)
     if [w["i"] for w in s_late["switches"]] != [3, 7] or s_late["switches"][0]["mark_offset"] != -1:
         fails.append(f"late mark not pulled back to the step: {[(w['i'], w['mark_offset']) for w in s_late['switches']]}")
+    # Two frames late, as switch 1 of the first real session was.
+    s_2late = summarise([dict(x) for x in rows], [4.4, 6.5], t)
+    if [w["i"] for w in s_2late["switches"]][:1] != [3]:
+        fails.append(f"a mark two frames late was not pulled back: {[w['i'] for w in s_2late['switches']]}")
     rows2 = [dict(x) for x in rows]
     rows2[7]["detection"] = True
     if summarise(rows2, [2.5, 6.5], t)["lamp"]["node_detections"] != 1:
