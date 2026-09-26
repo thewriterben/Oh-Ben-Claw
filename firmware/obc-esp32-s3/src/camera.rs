@@ -441,15 +441,17 @@ const PINS: CameraPins = CameraPins {
 // clean for two minutes, then returned 10/10 `frame len=76800 B, 320x240,
 // format=3`. Both Senses and both sensors now capture.
 //
-// STILL OPEN, and different: 002's fourth try returned null. The console shows
-// `cam_hal: EV-VSYNC-OVF`, meaning the driver's one-slot event queue was still
-// full when the frame ended, so that frame was aborted. The driver task is
-// not keeping up with 24-line DMA chunks at the OV2640's 25 fps. The OV3660
-// supports that reading without proving it: it runs at ~11 fps with 48-line
-// chunks (under a quarter of the event rate), and it never logged the overflow
-// and never missed a frame. Candidates, untested: XCLK 20 -> 10 MHz (halves
-// the OV2640's event rate), CPU 160 -> 240 MHz, and the byte-by-byte
-// YUV-to-grey copy.
+// RESOLVED 2026-09-26, and different from the fault above: 002's fourth try
+// had returned null with `cam_hal: EV-VSYNC-OVF`. The driver's one-slot event
+// queue was still full when the frame ended, so its task was not keeping up
+// with 24-line DMA chunks at the OV2640's ~25 fps. The OV3660 (~11 fps,
+// 48-line chunks) never overflowed, which pointed at the rate. XCLK went from
+// 20 to 10 MHz on the Sense (see `XCLK_HZ` in `init`). At 20 MHz the overflow
+// had logged continuously from boot; at 10 MHz, 002 ran two minutes without a
+// single one, and then returned 20/20 `frame len=76800 B, 320x240, format=3`
+// (ELF 5e74389dd, probe_sense_capture.py). The OV2640's own PLL dividers are
+// unchanged (`clk_div: 3, pclk_div: 8`), so halving its input halved its pixel
+// clock, as intended.
 //
 // ── 2026-09-16: FIRST IMAGE OFF A NODE ───────────────────────────────────────
 //
@@ -509,9 +511,9 @@ pub fn init() -> anyhow::Result<()> {
     // frame ended, because its task could not keep up with a DMA chunk every
     // 24 lines. The Sense's OV3660 (a84de4) runs ~11 fps with 48-line chunks,
     // under a quarter of that event rate, and went 10/10 with no overflow.
-    // Halving XCLK halves the OV2640's pixel clock and event rate; that is the
-    // test this change makes. The Lilygo's OV5640 captured cleanly at 20 MHz
-    // and is left alone.
+    // Halving XCLK halves the OV2640's pixel clock and event rate. Verified
+    // 2026-09-26 on 002: no overflow in two minutes, then 20/20 frames. The
+    // Lilygo's OV5640 captured cleanly at 20 MHz and is left alone.
     #[cfg(feature = "board-xiao-sense")]
     const XCLK_HZ: i32 = 10_000_000;
     #[cfg(not(feature = "board-xiao-sense"))]
