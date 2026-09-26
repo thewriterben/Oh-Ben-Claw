@@ -18,6 +18,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Capture, retrieval, the curator and the minimum bar are unchanged; `skill
   promote <name>` turns a pending one on. Set `auto_enable = true` for the
   old behaviour.
+## Unreleased — Stop believing it, on purpose (2026-09-26)
+
+### Added
+
+- **`oh-ben-claw world show <entity|prefix.>` and `world withdraw <entity> --reason "…"`.**
+  A belief that has outlived its grounds could until now only be closed by
+  editing the database: on the bench `mesh.gw-40.health = offline` sat in
+  every prompt for eleven days after the supervisor stopped judging gw-40.
+  `withdraw` closes every open fact about the entity bitemporally — nothing
+  deleted, history intact — with a new `Closure::Operator(reason)` that reads
+  back as a withdrawal (tag `operator:<reason>`) and is shown to the agent
+  once as "withdrawn by the operator — <reason>".
 
 ## Unreleased — A person, walking through (2026-09-26)
 

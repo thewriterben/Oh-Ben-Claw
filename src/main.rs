@@ -96,6 +96,10 @@ enum Commands {
     #[command(subcommand)]
     Skill(SkillCommands),
 
+    /// World memory: what the agent believes, and stop believing it.
+    #[command(subcommand)]
+    World(WorldCommands),
+
     /// Run the MCP server standalone (stdio for host integration, http for
     /// gateways and the official conformance suite).
     McpServe {
@@ -223,6 +227,24 @@ enum PeripheralCommands {
 }
 
 #[derive(Subcommand, Debug)]
+enum WorldCommands {
+    /// Show the open facts for an entity, or every open fact with a prefix.
+    Show {
+        /// Entity name (`mesh.gw-40.health`) or prefix ending in `.` (`mesh.gw-40.`).
+        entity: String,
+    },
+    /// Stop believing every open fact about an entity, with a reason. Nothing is
+    /// deleted: the rows close bitemporally and read back as an operator withdrawal.
+    Withdraw {
+        /// Exact entity name.
+        entity: String,
+        /// Why, in a few words — recorded on the fact and shown to the agent once.
+        #[arg(long)]
+        reason: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum HistoryCommands {
     /// List all conversation sessions.
     List,
@@ -329,6 +351,9 @@ async fn main() -> Result<()> {
         }
         Commands::History(cmd) => {
             run_history(cmd).await?;
+        }
+        Commands::World(cmd) => {
+            run_world(&config, cmd)?;
         }
         Commands::Skill(cmd) => {
             run_skill(&config, cmd)?;
@@ -4429,6 +4454,70 @@ fn run_skill(config: &Config, cmd: SkillCommands) -> Result<()> {
         SkillCommands::Remove { name } => {
             forge.remove_skill(&name)?;
             println!("'{name}' removed from the forge");
+        }
+    }
+    Ok(())
+}
+
+/// `oh-ben-claw world …`: read or withdraw beliefs in the store the agent uses.
+fn run_world(config: &Config, cmd: WorldCommands) -> Result<()> {
+    use oh_ben_claw::memory::world::{Closure, WorldMemory};
+    let world_path = config.perception.world_db_path.clone().unwrap_or_else(|| {
+        oh_ben_claw::config::paths::in_data_dir("world.db")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let world = WorldMemory::open(&world_path)
+        .with_context(|| format!("opening world memory at {world_path}"))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    match cmd {
+        WorldCommands::Show { entity } => {
+            let facts = if let Some(prefix) = entity.strip_suffix('.') {
+                world.open_facts_with_prefix(&format!("{prefix}."))?
+            } else {
+                world.current(&entity)?.into_iter().collect()
+            };
+            if facts.is_empty() {
+                println!("nothing currently believed about `{entity}`");
+            }
+            for f in facts {
+                let age_s = now.saturating_sub(f.valid_from) / 1000;
+                println!(
+                    "{}  #{}  {}  ({}, {}, {}s ago)",
+                    f.entity,
+                    f.id,
+                    f.value,
+                    f.origin.as_str(),
+                    f.source,
+                    age_s
+                );
+            }
+        }
+        WorldCommands::Withdraw { entity, reason } => {
+            let reason = reason.trim();
+            if reason.is_empty() {
+                anyhow::bail!("--reason must say why; it is recorded on the fact");
+            }
+            let closed =
+                world.withdraw_entity(&entity, now, &Closure::Operator(reason.to_string()))?;
+            if closed.is_empty() {
+                println!("nothing open about `{entity}`; nothing changed");
+            } else {
+                println!(
+                    "withdrawn {} fact(s) about `{entity}` ({}): {}",
+                    closed.len(),
+                    reason,
+                    closed
+                        .iter()
+                        .map(|i| format!("#{i}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                println!("history kept; the agent will see the withdrawal once, then not at all");
+            }
         }
     }
     Ok(())
