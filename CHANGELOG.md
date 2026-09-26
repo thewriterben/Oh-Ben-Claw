@@ -37,6 +37,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   most walker frames. On both Senses the person lands where that board's lamp
   lands; the difference is where in the frame the change is, which the
   whole-frame scores do not keep. Fixture `person-002-1ft/`.
+- **002 at ~3 ft: 0 of 7, for a different reason.** The gate let 18 of 25
+  walker frames through (a distant body moves brightness less), and the rule
+  called every one `quiet`: the walker changes 15-27% of pixels, under
+  `FRAC_HI` 0.35, although `edge` (7.7-11.5) sat clearly above the quiet
+  floor (6.3). Close up the gate hides a person; further away whole-frame
+  `frac` is too small. Fixture `person-002-3ft/`.
 - **The countdown runs on its own clock.** It was printed from the frame loop,
   which reads the clock once per frame; on 002 (1.3 s frames) counts were
   skipped and arrived out of order. It now runs on a timer thread against the
