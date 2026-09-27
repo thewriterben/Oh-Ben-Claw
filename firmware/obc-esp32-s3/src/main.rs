@@ -289,17 +289,18 @@ const I2C_PINS: (i32, i32) = match BOARD.i2c {
     None => (-1, -1),
 };
 
-/// DHT22/AM2302 data line. Uses D10 (GPIO9) — a free exposed pad that avoids the
-/// actuator outputs, the I2C bus (5/6), and the I2S mic pins (1/2). Wire the
-/// module's `out` pin here (with `+`→3V3 and `-`→GND).
-#[cfg(not(feature = "board-waveshare-21"))]
-const DHT22_GPIO: i32 = 9;
+/// DHT22/AM2302 data line, a board fact since 2026-09-26 (`board::ACTIVE.dht22_gpio`):
+/// D10/GPIO9 on the XIAO, IO0 on the Waveshare, none on the LILYGO where GPIO9 is
+/// the camera's Y7. `None` means the pin is never driven.
+const DHT22_GPIO: Option<i32> = board::ACTIVE.dht22_gpio;
 
-/// DHT22/AM2302 data line (Waveshare 2.1 board): header pin `IO0` = GPIO0, the
-/// board's one spare pin. Add a 10 kΩ pull-up to 3V3 — it doubles as the BOOT
-/// strapping hold-high (the DHT22 idles high, so normal boot is preserved).
-#[cfg(feature = "board-waveshare-21")]
-const DHT22_GPIO: i32 = 0;
+/// Environment telemetry cadence (2026-09-26). Three tiny typed frames a minute
+/// — `temperature`, `humidity`, `pressure` — each `{"type":…,"value":…}`, which
+/// the host gateway files as `mesh.<node>.<type>` with no host change and a
+/// reflex `Sensor` rule can read (`fact_to_f64` takes a top-level `value`).
+/// Real readings only: the stub values `read_sensor` falls back to when no
+/// BME280 answers must never leave the node as if measured.
+const ENV_INTERVAL_MS: u64 = 60_000;
 
 // ── Agent State ───────────────────────────────────────────────────────────────
 
@@ -917,6 +918,8 @@ fn main() -> anyhow::Result<()> {
     // means lost. Kept well under the host `stale_ms` (set stale_ms ≥ ~3× this).
     const BEACON_INTERVAL_MS: u64 = 30_000;
     let mut last_beacon_ms: u64 = 0;
+    // Environment telemetry (BME280 over I2C): see `ENV_INTERVAL_MS`.
+    let mut last_env_ms: u64 = 0;
     // Link watchdog: time of last host contact on *either* link — a USB byte or a
     // mesh command addressed to us. If the host goes silent past the safing
     // timeout, the built-in `safe-link-offline` rule fires (on-MCU offline
@@ -1072,10 +1075,12 @@ fn main() -> anyhow::Result<()> {
             // per ~2 s (the sensor's minimum) and reuse the last good value in
             // between. Overrides the stubbed sensor.temperature with a real reading
             // so overheat/safing rules act on measured data; adds sensor.humidity.
-            if now.saturating_sub(agent_state.dht_last_read_ms) >= 2000 {
-                agent_state.dht_last_read_ms = now;
-                if let Ok((t, h)) = dht::read_dht22(DHT22_GPIO) {
-                    agent_state.dht_last = Some((t, h));
+            if let Some(pin) = DHT22_GPIO {
+                if now.saturating_sub(agent_state.dht_last_read_ms) >= 2000 {
+                    agent_state.dht_last_read_ms = now;
+                    if let Ok((t, h)) = dht::read_dht22(pin) {
+                        agent_state.dht_last = Some((t, h));
+                    }
                 }
             }
             if let Some((t, h)) = agent_state.dht_last {
@@ -1194,6 +1199,38 @@ fn main() -> anyhow::Result<()> {
             let spine_msg = beacon.to_string();
             send_line(&mut usb, &spine_msg, LineKind::Report);
             mirror_spine(&mut spine_uart, &spine_msg);
+        }
+
+        // Environment telemetry: what the room is like, once a minute, from a
+        // BME280 that actually answered. Read the bus directly so the stub
+        // fallback in `read_sensor` cannot be mistaken for a measurement; a
+        // node with no sensor sends nothing and the host sees nothing, which is
+        // the honest state. Three frames of ~70 bytes, well under the 228-byte
+        // spine payload limit and far below the keepalive traffic.
+        if now.saturating_sub(last_env_ms) >= ENV_INTERVAL_MS {
+            last_env_ms = now;
+            if let Some(bus) = agent_state.sensors.as_mut() {
+                for (quantity, field, unit) in [
+                    ("temperature", "temperature", "C"),
+                    ("humidity", "humidity", "%"),
+                    ("pressure", "pressure", "hPa"),
+                ] {
+                    if let Some(Ok(value)) = bus.read("bme280", field) {
+                        let rounded = (value * 100.0).round() / 100.0;
+                        let msg = serde_json::json!({
+                            "type": quantity,
+                            "node_id": identity::node_id(),
+                            "value": rounded,
+                            "unit": unit,
+                            "sensor": "bme280",
+                            "ts_ms": now,
+                        })
+                        .to_string();
+                        send_line(&mut usb, &msg, LineKind::Report);
+                        mirror_spine(&mut spine_uart, &msg);
+                    }
+                }
+            }
         }
     }
 }
@@ -1523,7 +1560,10 @@ fn handle_request(line: &str, state: &mut AgentState) -> anyhow::Result<Response
                     .to_string();
                 if sensor == "dht22" {
                     // Not on the I2C bus — its own single-wire GPIO (D10). ~5 ms read.
-                    let (t, h) = dht::read_dht22(DHT22_GPIO)?;
+                    let Some(pin) = DHT22_GPIO else {
+                        anyhow::bail!("this board has no DHT22 pin ({})", board::ACTIVE.name);
+                    };
+                    let (t, h) = dht::read_dht22(pin)?;
                     let v = match field.as_str() {
                         "temperature" => t,
                         "humidity" => h,

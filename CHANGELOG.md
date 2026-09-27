@@ -5,6 +5,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The node says what the room is like (2026-09-26)
+
+### Added
+
+- **Environment telemetry from the node firmware.** Once a minute a node with
+  a BME280 on its I2C bus sends `temperature`, `humidity` and `pressure` as
+  three tiny typed frames (`{"type":"temperature","value":22.1,"unit":"C",
+  "sensor":"bme280",…}`), mirrored to the spine like the beacon. The host
+  gateway already files any typed payload as `mesh.<node>.<type>`, so the
+  facts land with no host change and a reflex `Sensor` rule can read them.
+  Real readings only: the bus is read directly, so the stub values
+  `read_sensor` falls back to when no sensor answers never leave the node.
+  The bench had received zero environmental facts in its life; every fact in
+  the store was radio-link telemetry.
+
+### Fixed
+
+- **The DHT22 pin is a board fact, and the LILYGO has none.** `Board` gains
+  `dht22_gpio: Option<i32>`; the reflex tick and the `sensor_read dht22`
+  command use it and do nothing when it is `None`. Until now the tick pulsed
+  GPIO9 low for ~1.2 ms every 2 s on every board — and on the LILYGO
+  T-CameraPlus-S3 GPIO9 is the camera's data line Y7.
+
 ## Unreleased — Learned skills wait for a person (2026-09-26)
 
 ### Changed
