@@ -31,6 +31,11 @@ pub struct Board {
     pub i2c: Option<(i32, i32)>,
     /// Whether an I2S microphone is wirable and compiled in.
     pub has_mic: bool,
+    /// The DHT22 single-wire data pin, when this board has a free pad for one.
+    /// `None` means the reflex tick never touches the pin (2026-09-26): until
+    /// then the tick pulsed GPIO9 low every 2 s on every board, and on the
+    /// LILYGO T-CameraPlus-S3 GPIO9 is the camera's data line Y7.
+    pub dht22_gpio: Option<i32>,
 }
 
 /// Seeed XIAO ESP32-S3 (Sense) — the default build.
@@ -59,6 +64,9 @@ pub const XIAO_ESP32_S3: Board = Board {
     output_pins: &[21, 3, 7, 8],
     i2c: Some((5, 6)),
     has_mic: true,
+    // D10 (GPIO9): a free exposed pad clear of the outputs, the I2C bus and the
+    // I2S pins. Wire `out` here, `+`→3V3, `-`→GND.
+    dht22_gpio: Some(9),
 };
 
 /// Waveshare ESP32-S3-Touch-LCD-2.1 (`--features board-waveshare-21`).
@@ -72,6 +80,9 @@ pub const WAVESHARE_ESP32_S3_TOUCH_LCD_21: Board = Board {
     output_pins: &[43, 44],
     i2c: Some((15, 7)),
     has_mic: false,
+    // Header pin IO0, the board's one spare pin; needs a 10 kΩ pull-up to 3V3,
+    // which doubles as the BOOT strapping hold-high.
+    dht22_gpio: Some(0),
 };
 
 /// LILYGO T-CameraPlus-S3, revision **V1.0/V1.1** (`--features board-lilygo-tcam-s3-v11`).
@@ -111,6 +122,8 @@ pub const LILYGO_T_CAMERA_PLUS_S3_V11: Board = Board {
     output_pins: &[],
     i2c: None,
     has_mic: false,
+    // GPIO9 is camera Y7 here (`camera.rs`), and no other pad is documented free.
+    dht22_gpio: None,
 };
 
 /// The board this build targets. The only `#[cfg]` in this module.
