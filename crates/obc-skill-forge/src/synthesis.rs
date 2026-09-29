@@ -91,6 +91,7 @@ const LOOKUP_TOOLS: &[&str] = &[
     "browser_snapshot",
     "browser_navigate",
     "memory",
+    "load_tools",
 ];
 
 /// Shell commands that only read a clock or an identity.
