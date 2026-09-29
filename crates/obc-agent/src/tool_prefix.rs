@@ -19,7 +19,7 @@
 //! across turns; a loaded schema joins the `tools` array, which providers
 //! cache separately.
 
-use obc_tool_api::{Tool, ToolResult};
+use obc_tool_api::{RiskClass, Tool, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -175,7 +175,18 @@ pub struct LoadTools;
 #[async_trait::async_trait]
 impl Tool for LoadTools {
     fn name(&self) -> &str {
-        LOAD_TOOLS
+        // A literal, not the constant: `scripts/check_physical_tools.py`
+        // classifies tools by their literal name (a computed one must declare
+        // its risk explicitly). `load_tools_is_named_by_the_constant` keeps
+        // the two equal.
+        "load_tools"
+    }
+
+    /// Prompt shaping only: no hardware, no side effect beyond this session's
+    /// tool list. Declared rather than inherited so the risk is stated where
+    /// the tool is, as every built-in does.
+    fn risk_class(&self) -> RiskClass {
+        RiskClass::default()
     }
 
     fn description(&self) -> &str {
@@ -314,9 +325,17 @@ mod tests {
         fn description(&self) -> &str {
             self.1
         }
+        fn risk_class(&self) -> RiskClass {
+            RiskClass::default()
+        }
         async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
             Ok(ToolResult::ok("ok"))
         }
+    }
+
+    #[test]
+    fn load_tools_is_named_by_the_constant() {
+        assert_eq!(LoadTools.name(), LOAD_TOOLS);
     }
 
     fn registry() -> Vec<Arc<dyn Tool>> {
