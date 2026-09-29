@@ -80,6 +80,8 @@ tracing = { version = "0.1", default-features = false }
 uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }
 
 [dev-dependencies]
+# `tool_prefix` tests parse an `[agent.tools]` table the way config loading does.
+toml = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # `tests/posture_level_replay.rs` reads the brain's own trajectory store to
 # choose rung 1's constants from data. It reads the stored embeddings, which

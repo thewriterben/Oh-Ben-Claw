@@ -97,6 +97,7 @@ pub mod posture;
 pub mod routing;
 pub mod scheduled;
 pub mod system2;
+pub mod tool_prefix;
 pub mod world_context;
 pub use edge::{EdgeAgent, EdgeAgentBuilder};
 pub use handle::{AgentEvent, AgentHandle};
@@ -118,7 +119,7 @@ use obc_skill_forge::rollout::RolloutTracker;
 use obc_skill_forge::{SkillForge, SkillTool};
 use obc_tool_api::{RiskClass, RolloutStage, Tool};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 /// Maximum tool-use iterations per user message to prevent runaway loops.
@@ -148,6 +149,12 @@ pub struct Agent {
     /// Names of tools that came from the skill forge (managed by
     /// [`Agent::sync_skills`]); disjoint from built-in tool names.
     skill_names: Mutex<HashSet<String>>,
+    /// Per session, the shelved tools the model has pulled into the prompt
+    /// with `load_tools` (`[agent.tools]`, 2026-09-28). In memory only: a
+    /// restart starts every session from the configured `full` list again.
+    loaded_tools: Mutex<HashMap<String, BTreeSet<String>>>,
+    /// Set once the unknown names in `[agent.tools] full` have been logged.
+    tools_warned: std::sync::atomic::AtomicBool,
     /// Optional policy engine for tool execution enforcement.
     policy: Option<PolicyEngine>,
     /// Optional observability context (Phase 15 WS5): when attached, every
@@ -291,6 +298,8 @@ impl Agent {
             memory,
             tools: RwLock::new(tools.into_iter().map(Arc::from).collect()),
             skill_names: Mutex::new(HashSet::new()),
+            loaded_tools: Mutex::new(HashMap::new()),
+            tools_warned: std::sync::atomic::AtomicBool::new(false),
             policy: None,
             obs: None,
             safety: None,
@@ -619,14 +628,58 @@ impl Agent {
         reg.extend(tools.into_iter().map(Arc::<dyn Tool>::from));
     }
 
-    /// A point-in-time snapshot of the tool registry, boxed for the provider
-    /// call. Each element is an `Arc` clone — cheap, and keeps the tool alive
-    /// even if the registry changes mid-run.
-    fn tools_snapshot(&self) -> Vec<Box<dyn Tool>> {
+    /// The tools the model sees this turn: a point-in-time snapshot of the
+    /// registry (each element an `Arc` clone — cheap, and keeps the tool alive
+    /// if the registry changes mid-run), split by `[agent.tools]` into full
+    /// schemas and shelved names. With no `full` list it is the whole registry.
+    fn tools_for_turn(&self, session_id: &str) -> tool_prefix::TurnTools {
         let reg = self.tools.read().unwrap_or_else(|p| p.into_inner());
-        reg.iter()
-            .map(|t| Box::new(Arc::clone(t)) as Box<dyn Tool>)
-            .collect()
+        if self.config.tools.shelves()
+            && !self
+                .tools_warned
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            let unknown = self.config.tools.unknown_full(&reg);
+            if !unknown.is_empty() {
+                tracing::warn!(
+                    names = ?unknown,
+                    "[agent.tools] full names no registered tool: ignored"
+                );
+            }
+        }
+        let loaded = self.loaded_tools.lock().unwrap_or_else(|p| p.into_inner());
+        let none = BTreeSet::new();
+        tool_prefix::split(
+            &self.config.tools,
+            &reg,
+            loaded.get(session_id).unwrap_or(&none),
+        )
+    }
+
+    /// Answer a `load_tools` call: remember the names for this session and
+    /// say what happened. The caller re-splits the tools for the next step.
+    fn load_tools(
+        &self,
+        session_id: &str,
+        args: &str,
+        active: &[Box<dyn Tool>],
+    ) -> tool_prefix::LoadOutcome {
+        let names = tool_prefix::parse_names(args);
+        let registry: BTreeSet<String> = {
+            let reg = self.tools.read().unwrap_or_else(|p| p.into_inner());
+            reg.iter().map(|t| t.name().to_string()).collect()
+        };
+        let active: BTreeSet<String> = active.iter().map(|t| t.name().to_string()).collect();
+        let mut all = self.loaded_tools.lock().unwrap_or_else(|p| p.into_inner());
+        let loaded = all.entry(session_id.to_string()).or_default();
+        tool_prefix::apply_load(&names, &registry, &active, loaded)
+    }
+
+    /// How many tools are registered, whatever the prompt carries. The router's
+    /// `tool_threshold` counts this, so shelving schemas does not move a turn
+    /// between brains.
+    fn registry_len(&self) -> usize {
+        self.tools.read().unwrap_or_else(|p| p.into_inner()).len()
     }
 
     /// Look up a registered tool by name (shared handle).
@@ -778,8 +831,12 @@ impl Agent {
         let mut tool_calls_made = Vec::new();
         let mut final_response = String::new();
 
-        // Stable tool set for this run (hot-added skills apply from the next run).
-        let tool_list = self.tools_snapshot();
+        // The tool set for this run (hot-added skills apply from the next run).
+        // It changes only when the model calls `load_tools` for a shelved one.
+        let tool_prefix::TurnTools {
+            active: mut tool_list,
+            shelved: mut tools_shelved,
+        } = self.tools_for_turn(session_id);
 
         // What the prompt is made of, in chars (2026-09-26). The bench's cold
         // turn had grown from 12.7k to 22k tokens and nothing said which part
@@ -805,6 +862,7 @@ impl Agent {
                 system_chars,
                 tools = tool_list.len(),
                 tool_chars,
+                tools_shelved = tools_shelved.len(),
                 history_msgs,
                 history_chars,
                 "context composition"
@@ -813,7 +871,7 @@ impl Agent {
 
         // Which brain answers this turn (parity item 3). Decided once per turn;
         // a cloud failure mid-turn falls back to local inside `complete_routed`.
-        let (route, route_reason) = self.route_turn(session_id, tool_list.len());
+        let (route, route_reason) = self.route_turn(session_id, self.registry_len());
         if self.routing.is_some() {
             tracing::info!(session_id = %session_id, route = route.as_str(), reason = route_reason, "routing");
         }
@@ -881,6 +939,49 @@ impl Agent {
                     call_id = %call.id,
                     "Executing tool call"
                 );
+                // `load_tools` is answered here, not by the chokepoint: it
+                // changes the prompt for the next step, which only this loop
+                // can do. Read-only, no policy to evaluate.
+                if call.name == tool_prefix::LOAD_TOOLS && self.config.tools.shelves() {
+                    self.emit(AgentEvent::ToolCall {
+                        session_id: session_id.to_string(),
+                        call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        args: serde_json::from_str(&call.args).unwrap_or(serde_json::Value::Null),
+                    });
+                    let t0 = std::time::Instant::now();
+                    let outcome = self.load_tools(session_id, &call.args, &tool_list);
+                    let tool_prefix::TurnTools { active, shelved } =
+                        self.tools_for_turn(session_id);
+                    tool_list = active;
+                    tools_shelved = shelved;
+                    let result_str = outcome.message();
+                    tracing::info!(
+                        session_id = %session_id,
+                        loaded = ?outcome.loaded,
+                        unknown = ?outcome.unknown,
+                        tools = tool_list.len(),
+                        tools_shelved = tools_shelved.len(),
+                        "tools loaded on request"
+                    );
+                    let duration_ms = t0.elapsed().as_millis() as u64;
+                    self.emit(AgentEvent::ToolResult {
+                        session_id: session_id.to_string(),
+                        call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        success: outcome.unknown.is_empty(),
+                        output: result_str.clone(),
+                        duration_ms,
+                    });
+                    tool_calls_made.push(ToolCallRecord {
+                        name: call.name.clone(),
+                        args: call.args.clone(),
+                        result: result_str.clone(),
+                        duration_ms,
+                    });
+                    tool_results.push((call.id.clone(), call.name.clone(), result_str));
+                    continue;
+                }
                 if let Some(ledger) = &self.skill_usage {
                     let is_skill = self
                         .skill_names
@@ -1393,10 +1494,19 @@ impl Agent {
         objective: Option<&str>,
         assessment: Option<&obc_memory::mushroom::Assessment>,
     ) -> Result<Vec<ChatMessage>> {
-        let system = match self.notes.as_ref().and_then(|n| n.render()) {
+        let mut system = match self.notes.as_ref().and_then(|n| n.render()) {
             Some(notes) => format!("{}\n\n{notes}", self.config.system_prompt.trim_end()),
             None => self.config.system_prompt.clone(),
         };
+        // The shelf (`[agent.tools]`): the same bytes every turn, so it lives
+        // in the system message and not in the ephemeral tail.
+        if let Some(shelf) = {
+            let reg = self.tools.read().unwrap_or_else(|p| p.into_inner());
+            tool_prefix::catalog(&self.config.tools, &reg)
+        } {
+            let trimmed = system.trim_end().to_string();
+            system = format!("{trimmed}\n\n{shelf}");
+        }
         let mut messages = vec![ChatMessage {
             role: ChatRole::System,
             content: system,
@@ -2181,6 +2291,10 @@ pub struct AgentConfig {
     /// `max_history` messages, as before 2026-09-11.
     #[serde(default = "default_true")]
     pub compaction: bool,
+    /// `[agent.tools]`: which tool schemas ride in every prompt. Empty `full`
+    /// (the default) is all of them; see [`tool_prefix`].
+    #[serde(default)]
+    pub tools: tool_prefix::ToolPrefixConfig,
 }
 
 fn default_context_tokens() -> usize {
@@ -2206,6 +2320,7 @@ impl Default for AgentConfig {
             compaction_threshold: default_compaction_threshold(),
             compaction_keep_tail: default_compaction_keep_tail(),
             compaction: default_true(),
+            tools: tool_prefix::ToolPrefixConfig::default(),
         }
     }
 }

@@ -5,6 +5,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Only the schemas a turn needs (2026-09-28)
+
+### Added
+
+- **`[agent.tools]`: a shelf for tool schemas.** Two months of bench logs
+  showed 152 executed tool calls using 18 of the 31 registered tools, the top
+  five making 109 of them — while every prompt carried all 31 schemas, about
+  26 k characters and half of a cold prefix. `full = ["mesh_status", "shell",
+  …]` now names the tools whose schema rides in every prompt; the rest stay
+  registered (the chokepoint, skill replay, `mcp-serve` and `a2a-serve` are
+  unchanged) but appear in the system prompt as one line each under "Tools on
+  the shelf", with a built-in `load_tools` the model calls to pull a schema
+  into the prompt for the rest of the session. The shelf text depends on the
+  config and the registry only, so the system message stays byte-stable for
+  prompt caching; a loaded schema joins the `tools` array. The `context
+  composition` line gains `tools_shelved`; a `tools loaded on request` line
+  says what was pulled in. The router's `tool_threshold` still counts the
+  whole registry. Default: no `full` list, everything in every prompt, as
+  before. `load_tools` counts as a look-up for the skill forge.
+
+---
+
 ## Unreleased — The node says what the room is like (2026-09-26)
 
 ### Added

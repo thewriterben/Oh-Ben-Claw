@@ -54,6 +54,19 @@ current state of the machine or the mesh; otherwise just answer. Confirm before
 writing files, running shell commands, or changing configuration.
 """
 
+# Which tool schemas ride in every prompt (2026-09-28). By default all of them:
+# on the bench that was 31 schemas, ~26 k characters, half of a cold prompt,
+# for a brain that had used 18 of them in two months. Name the ones worth the
+# space in `full`; the rest stay registered and callable, but the prompt only
+# lists them by name under "Tools on the shelf" with a built-in `load_tools`
+# the model calls to pull a schema in for the rest of the session. Watch the
+# `context composition` log line (tools / tool_chars / tools_shelved) and the
+# `tools loaded on request` lines to tune the list: a tool the model loads on
+# most turns belongs in `full`; one it never loads is fine on the shelf.
+# [agent.tools]
+# full = ["mesh_status", "shell", "world_memory", "record_incident", "schedule", "memory", "search_sessions", "device_health"]
+# catalog = true    # false: shelved tools are simply absent from the prompt
+
 # ── Where this instance keeps its data ───────────────────────────────────────
 # Unset means the platform convention: ~/.local/share/oh-ben-claw on Linux,
 # %APPDATA%\thewriterben\oh-ben-claw\data on Windows, ~/Library/Application
