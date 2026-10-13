@@ -37,7 +37,7 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     pub fn new(_config: ProviderConfig) -> Self {
         Self {
-            client: Client::new(),
+            client: crate::http_client(),
         }
     }
 

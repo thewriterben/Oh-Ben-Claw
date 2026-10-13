@@ -20,7 +20,7 @@ impl CompatibleProvider {
     pub fn new(config: ProviderConfig) -> Self {
         Self {
             config,
-            client: Client::new(),
+            client: crate::http_client(),
         }
     }
 }
