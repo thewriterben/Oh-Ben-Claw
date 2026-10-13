@@ -1384,6 +1384,11 @@ pub struct ReflexConfig {
     /// `sensor.{quantity}` exceeds `threshold`.
     #[serde(default)]
     pub safing_overheat: Vec<OverheatConfig>,
+    /// Camera nodes to escalate on when `camera.{node}` reports `blind` or
+    /// `failed` (safing). The fact is written by `oh-ben-claw camera-watch
+    /// --node <name>`, into the same world memory. E.g. `["lilygo"]`.
+    #[serde(default)]
+    pub safing_cameras: Vec<String>,
 }
 
 /// System 2 slow-reasoner configuration (`[system2]`, Phase 18).

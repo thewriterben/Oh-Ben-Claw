@@ -35,6 +35,8 @@ description = "Open Body Control's peripheral layer: the board and accessory reg
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
+# The camera reply is a base64 JPEG (esp32_link.rs).
+base64 = "0.22"
 obc-config = { path = "../obc-config" }
 # The registry is not defined here. `lib.rs` re-exports
 # `obc_planner::peripherals::registry` under the old name, which is why the

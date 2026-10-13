@@ -46,14 +46,17 @@
 //!   is the bench's normal (see the `reply_dropped` history); three in a row
 //!   is not.
 //!
-//! # Not wired yet
+//! # What feeds it
 //!
-//! Nothing on the host produces frames: the agent has no route to a camera
-//! node's pixels (no MQTT on the firmware, and the host's ESP32 serial branch
-//! registers no tools). Today only `scripts/vision/capture_set.py` reads the
-//! camera. Until a frame source exists, this module and its rules have no
-//! runtime caller. They are the consumer half, built and tested against the
-//! real fixture first, so the producer has something defined to feed.
+//! `oh-ben-claw camera-watch --port <dev> --node <name>` (2026-10-13) holds
+//! a USB link to a camera node open (`obc_peripherals::esp32_link`), captures
+//! on an interval, and writes `camera.{node}` into the same world memory the
+//! agent uses. `[reflex] safing_cameras = ["<name>"]` adds
+//! [`camera_health_rules`] to a running agent. Before that command existed,
+//! nothing on the host could read a node's pixels; only
+//! `scripts/vision/capture_set.py` could. **It has not yet run against a
+//! board**: `tests/camera_watch_e2e.rs` drives it over an in-memory node that
+//! speaks the firmware's protocol and serves the bench fixture's frames.
 
 use crate::motion::{self, FrameClass, Scores};
 use obc_memory::world::WorldMemory;
@@ -276,6 +279,24 @@ impl CameraHealth {
         Ok(verdict)
     }
 
+    /// One capture attempt, as a frame source reports it: JPEG bytes, or why
+    /// there are none. A JPEG that will not decode is a failed capture, not
+    /// an error: the camera produced nothing usable, and that is what
+    /// `failed` is for.
+    pub fn observe_capture(
+        &self,
+        capture: Result<Vec<u8>, String>,
+        now_ms: u64,
+    ) -> anyhow::Result<CameraVerdict> {
+        match capture {
+            Ok(jpeg) => match crate::jpeg::decode_grey(&jpeg) {
+                Ok(f) => self.observe_frame(&f.pixels, f.width, f.height, now_ms),
+                Err(e) => self.observe_failure(&format!("{e:#}"), now_ms),
+            },
+            Err(reason) => self.observe_failure(&reason, now_ms),
+        }
+    }
+
     fn record(&self, v: &CameraVerdict, failure: Option<&str>) -> anyhow::Result<()> {
         let Some(world) = &self.world else {
             return Ok(());
@@ -327,9 +348,8 @@ that nothing is happening. Do not treat a quiet scene from it as quiet. Check th
 the light; `consecutive_failures` and `failure` mean look at the node and its \
 link. Tell the operator; do not retry captures in a loop.";
 
-/// Reflexes on one camera's health: `blind` or `failed` escalates. Merge into
-/// the live engine alongside the safing rules, once a frame source feeds
-/// [`CameraHealth`] (see the module docs: none does yet).
+/// Reflexes on one camera's health: `blind` or `failed` escalates. Added to a
+/// running agent by `[reflex] safing_cameras`.
 pub fn camera_health_rules(node: &str, debounce_ms: u64) -> Vec<ReflexRule> {
     let entity = format!("camera.{node}");
     let mode = |m: CameraMode| Condition::State {

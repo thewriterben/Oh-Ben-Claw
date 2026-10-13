@@ -189,8 +189,15 @@ event (`camera.{node}.motion`). `camera_health_rules` escalates on `blind` and
   **Nothing blind has been recorded**, so this is a margin below what was seen,
   not a measurement. Record a covered lens next time the camera is on the bench.
 
-It has **no runtime caller yet**: nothing on the host receives frames from a
-node. It is the consumer half, built against the real recordings first.
+**What feeds it:** `oh-ben-claw camera-watch --port <dev> --node <name>`. It
+holds a USB link to the node open; opening the port reboots an ESP32-S3, so it
+waits 3.5 s and drains the boot chatter first, as `capture_set.py` does. It
+captures on an interval and records `camera.<name>` into the agent's world
+memory. `[reflex] safing_cameras = ["<name>"]` makes a running agent escalate
+on `blind` or `failed`. `tests/camera_watch_e2e.rs` drives the whole path over
+an in-memory node that speaks the firmware's protocol and serves this fixture.
+**It has not run against a board.** The open-reset, real USB timing and a
+filling ring are what one bench run has to confirm.
 
 ## What this means for the node
 

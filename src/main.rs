@@ -210,6 +210,28 @@ enum Commands {
         public_key: Option<String>,
     },
 
+    /// Watch a camera node over USB: capture a frame every interval, judge it
+    /// (warming, ok, lighting shift, nudged, blind, failed) and record
+    /// `camera.<node>` in world memory, where a running agent's reflexes read
+    /// it. Opening the port reboots an ESP32-S3; this waits that out first.
+    CameraWatch {
+        /// Serial port of the camera node, e.g. /dev/ttyACM0 or COM10.
+        #[arg(long)]
+        port: String,
+        /// Name to record it under (`camera.<node>`).
+        #[arg(long)]
+        node: String,
+        /// Milliseconds between captures.
+        #[arg(long, default_value = "1000")]
+        interval_ms: u64,
+        /// Stop after this many captures (default: run until interrupted).
+        #[arg(long)]
+        count: Option<u64>,
+        /// Serial baud rate. USB-Serial-JTAG ignores it; a UART bridge does not.
+        #[arg(long, default_value = "115200")]
+        baud: u32,
+    },
+
     /// Run system diagnostics to check configuration and connectivity.
     Doctor,
 }
@@ -381,6 +403,15 @@ async fn main() -> Result<()> {
         }
         Commands::AuditVerify { path, public_key } => {
             run_audit_verify(&config, path.as_deref(), public_key.as_deref())?;
+        }
+        Commands::CameraWatch {
+            port,
+            node,
+            interval_ms,
+            count,
+            baud,
+        } => {
+            run_camera_watch(&config, &port, &node, interval_ms, count, baud).await?;
         }
         Commands::Doctor => {
             oh_ben_claw::doctor::run(&config)?;
@@ -1923,6 +1954,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             let safing = oh_ben_claw::agent::safing::standard_safing_rules(&opts);
             info!(count = safing.len(), "Phase 18 safing rules appended");
             rules.extend(safing);
+            // Cameras: `camera-watch` writes `camera.<node>`; these escalate
+            // when one goes blind or fails. They live with the camera code
+            // (obc-vision), not in the safing library, as the vision rules do.
+            for node in &config.reflex.safing_cameras {
+                rules.extend(oh_ben_claw::vision::camera_health::camera_health_rules(
+                    node, 5_000,
+                ));
+            }
         }
         if config.perception.vision_rules.enabled {
             let vc = &config.perception.vision_rules;
@@ -4072,6 +4111,81 @@ async fn run_peripheral(mut config: Config, cmd: PeripheralCommands) -> Result<(
 /// set and print the report. This is the residual risk the conscience gate can't
 /// cover — it can only gate labels the detector emits, so a person the detector
 /// misses entirely is never seen by the gate. See `obc_conscience::detector_eval`.
+#[cfg(feature = "hardware")]
+async fn run_camera_watch(
+    config: &Config,
+    port: &str,
+    node: &str,
+    interval_ms: u64,
+    count: Option<u64>,
+    baud: u32,
+) -> Result<()> {
+    use oh_ben_claw::peripherals::esp32_link::{Esp32Link, ReplyTimeout, REPLY_TIMEOUT};
+    use oh_ben_claw::vision::camera_health::CameraHealth;
+
+    // The same world memory `start` uses, so a running agent's reflexes see
+    // `camera.<node>` as soon as it is written.
+    let world_path = config
+        .perception
+        .world_db_path
+        .clone()
+        .unwrap_or_else(|| track0_data_path("world.db"));
+    if let Some(parent) = std::path::Path::new(&world_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let world = Arc::new(
+        oh_ben_claw::memory::world::WorldMemory::open(&world_path)
+            .with_context(|| format!("opening world memory at {world_path}"))?,
+    );
+    let health = CameraHealth::new(node).with_world_memory(world);
+
+    println!("opening {port} (the node reboots; waiting it out)...");
+    let mut link = Esp32Link::open_serial(port, baud).await?;
+    println!("recording camera.{node} into {world_path}");
+
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    };
+    let mut n = 0u64;
+    while count.is_none_or(|c| n < c) {
+        // A link that times out is a failed capture, and counts toward
+        // `failed`; a link that is gone (port closed, cable out) ends the watch.
+        let capture = match link.capture_jpeg(REPLY_TIMEOUT).await {
+            Ok(c) => c,
+            Err(e) if e.downcast_ref::<ReplyTimeout>().is_some() => Err(format!("{e:#}")),
+            Err(e) => return Err(e.context(format!("camera link on {port} lost"))),
+        };
+        let v = health.observe_capture(capture, now())?;
+        let detail = match (v.class, v.scores, v.contrast) {
+            (Some(c), Some(s), _) => {
+                format!("{} frac={:.3} edge={:.2}", c.as_str(), s.frac, s.edge)
+            }
+            (_, _, Some(contrast)) => format!("contrast={contrast:.1}"),
+            _ => "no frame".to_string(),
+        };
+        let event = if v.motion_event { "  MOTION" } else { "" };
+        println!("{n:>5}  {:<14} {detail}{event}", v.mode.as_str());
+        n += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "hardware"))]
+async fn run_camera_watch(
+    _config: &Config,
+    _port: &str,
+    _node: &str,
+    _interval_ms: u64,
+    _count: Option<u64>,
+    _baud: u32,
+) -> Result<()> {
+    bail!("camera-watch needs a serial port: this build has no `hardware` feature")
+}
+
 fn run_audit_verify(config: &Config, path: Option<&str>, public_key: Option<&str>) -> Result<()> {
     let audit_path = path
         .map(str::to_string)

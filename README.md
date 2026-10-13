@@ -659,6 +659,8 @@ Commands:
   consent-check    Decide a multi-party-consent frame against a consent ledger
   audit-verify     Verify the Track 0 action audit: the HMAC chain, and the
                    Ed25519 signatures against the public key
+  camera-watch     Capture from a camera node over USB, judge its health, and
+                   record camera.<node> in world memory
   doctor           Run system diagnostics
   help             Print this message or the help of a subcommand
 
@@ -677,7 +679,8 @@ This block is condensed from `--help` output rather than remembered. It
 previously advertised a `setup` wizard and a `service` manager, neither of which
 has ever existed, and omitted four commands that do. The 2026-08 rewrite that
 said so still omitted four (`a2a-serve`, `eval-detector`, `replay-decisions`,
-`consent-check`); they were added on 2026-10-13, with `audit-verify`. Check it against
+`consent-check`); they were added on 2026-10-13, with `audit-verify` and
+`camera-watch`. Check it against
 `oh-ben-claw --help` when a subcommand changes.
 
 ---
