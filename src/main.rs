@@ -2701,11 +2701,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // grants gate every tool call (composing with Track 0 + trust). Full
     // autonomy (the default) passes everything; under supervised/manual an
     // un-granted tool is refused in this autonomous loop.
-    let approval = Arc::new(oh_ben_claw::approval::ApprovalManager::from_config(
-        &config.autonomy,
-    ));
+    //
     // Track 0 dynamic trust: refuse physical actions from a node whose behavior
     // (latency/failures) has demoted it; every tool round-trip feeds the score.
+    // Built first so the approval manager holds the same scorer: the agent's own
+    // check only acts on `Deny`, and the probation tier (`RequireApproval`) is
+    // enforced by `ApprovalManager::decide` alone. Until 2026-10-13 the manager
+    // was built without it, so a node on probation kept its auto-approval.
     let trust_scorer = if config.safety.enabled && config.safety.dynamic_trust {
         info!("Track 0 dynamic trust scoring enabled");
         Some(Arc::new(
@@ -2713,6 +2715,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         ))
     } else {
         None
+    };
+    let approval = {
+        let manager = oh_ben_claw::approval::ApprovalManager::from_config(&config.autonomy);
+        Arc::new(match &trust_scorer {
+            Some(scorer) => manager.with_trust(Arc::clone(scorer)),
+            None => manager,
+        })
     };
     // Track 0 taint tracking: opt-in (unset ⇒ off). Shared by both the plain
     // and orchestrator inner agents.
