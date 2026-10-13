@@ -446,6 +446,15 @@ levels). Six files, so: plan first, go-ahead, then small steps.
    and it is disabled on this deployment. Until one source is on, the body's
    novelty distribution over percepts is unmeasured and rung 2 is still
    open, now for want of a *subject* rather than a *path*.
+   **2026-10-13: a candidate subject.** `[perception] camera_percepts`
+   feeds a camera's *events* (`crates/obc-vision/src/camera_percepts.rs`):
+   entering lighting_shift / nudged / blind / failed, and the start of each
+   motion episode (after a quiet minute), with the UTC hour in the text so
+   "motion at 03:00" can differ from the daytime traffic. The source is
+   `oh-ben-claw camera-watch` writing `camera.<node>`. Run over the bench
+   fixture, the person set's 20 motion frames reduce to one percept. Nothing
+   has run on a live camera yet, so the distribution is still unmeasured;
+   what changed is that there is now something to point the body at.
 3. The second bound slot. Slot 0 is the die-temperature LED; nothing else
    on the node is slot-bound, which is why §7 defers slot selection.
 4. ~~A neuromorphic-silicon survey to sit beside `EDGE-LM-2026-09.md`~~ —

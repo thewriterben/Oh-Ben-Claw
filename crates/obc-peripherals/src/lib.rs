@@ -26,6 +26,10 @@
 //! | Any Linux SBC | native | `hardware` | i2c_scan, i2c_read, i2c_write, spi_transfer, pwm_control |
 
 pub mod bus_tools;
+/// The held-open USB link to an `obc-esp32-s3` node and its line protocol.
+/// Always compiled (it runs over any async stream); the real serial port is
+/// behind `hardware`.
+pub mod esp32_link;
 pub mod onboarding;
 /// The board and accessory registry — re-exported from the [`obc_planner`]
 /// crate. It moved because it is the planner's input and has no I/O; the

@@ -179,6 +179,13 @@ fn default_tg_voice() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DiscordConfig {
     pub token: Option<String>,
+    /// Discord user IDs (snowflakes, e.g. `"123456789012345678"`).
+    /// Who may talk to the agent through this channel. **Empty refuses
+    /// everyone**: the agent holds physical tools, and a bot that answers
+    /// whoever finds it is a remote control for them. Until 2026-10-13 this
+    /// channel had no list at all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 /// Configuration for the Slack channel.
@@ -188,6 +195,13 @@ pub struct SlackConfig {
     pub app_token: Option<String>,
     /// Bot User OAuth Token (`xoxb-…`) used to post messages.
     pub bot_token: Option<String>,
+    /// Slack member IDs (e.g. `"U0123ABCD"`).
+    /// Who may talk to the agent through this channel. **Empty refuses
+    /// everyone**: the agent holds physical tools, and a bot that answers
+    /// whoever finds it is a remote control for them. Until 2026-10-13 this
+    /// channel had no list at all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 /// Configuration for the WhatsApp Business Cloud API channel.
@@ -201,6 +215,12 @@ pub struct WhatsAppConfig {
     pub verify_token: Option<String>,
     /// Local port for the webhook HTTP server (default: 8444).
     pub webhook_port: Option<u16>,
+    /// The Meta app secret (App Dashboard → Settings → Basic). Every webhook
+    /// POST must carry `X-Hub-Signature-256`, an HMAC-SHA256 of the raw body
+    /// under this secret; one that does not is refused. Required: without it
+    /// the channel does not start (or set `WHATSAPP_APP_SECRET`).
+    #[serde(default)]
+    pub app_secret: Option<String>,
 }
 
 /// Configuration for the iMessage channel (macOS only).
@@ -224,6 +244,13 @@ pub struct MatrixConfig {
     pub homeserver: Option<String>,
     /// Access token for the bot Matrix account.
     pub access_token: Option<String>,
+    /// Matrix user IDs (e.g. `"@ben:matrix.org"`).
+    /// Who may talk to the agent through this channel. **Empty refuses
+    /// everyone**: the agent holds physical tools, and a bot that answers
+    /// whoever finds it is a remote control for them. Until 2026-10-13 this
+    /// channel had no list at all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 // ── IRC Configuration (new in Phase 10) ──────────────────────────────────────
@@ -267,6 +294,15 @@ pub struct IrcConfig {
     /// SASL PLAIN password.
     #[serde(default)]
     pub sasl_password: Option<String>,
+    /// IRC nicks. A nick is only an identity if the network enforces
+    /// registration (NickServ with enforcement); on one that does not, anyone
+    /// can take a listed nick, so treat this as a speed bump there.
+    /// Who may talk to the agent through this channel. **Empty refuses
+    /// everyone**: the agent holds physical tools, and a bot that answers
+    /// whoever finds it is a remote control for them. Until 2026-10-13 this
+    /// channel had no list at all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 fn default_irc_nick() -> String {
@@ -337,6 +373,13 @@ pub struct MattermostConfig {
     /// Team name the bot operates in (used for display only).
     #[serde(default)]
     pub team_name: Option<String>,
+    /// Mattermost user IDs (the 26-character ID, not the username).
+    /// Who may talk to the agent through this channel. **Empty refuses
+    /// everyone**: the agent holds physical tools, and a bot that answers
+    /// whoever finds it is a remote control for them. Until 2026-10-13 this
+    /// channel had no list at all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 /// Configuration for all channels.
@@ -399,9 +442,20 @@ pub struct FeishuConfig {
     #[serde(default)]
     pub app_secret: Option<String>,
     /// Verification token shown in the Event Subscription settings of the app.
-    /// When set, every incoming webhook payload's `token` field must match.
+    /// Every incoming webhook payload's `token` field must match. Required:
+    /// without it the channel does not start, because the listener is on
+    /// `0.0.0.0` and the token is the only thing that tells Feishu's POSTs from
+    /// anyone else's. (Until 2026-10-13 it was checked only "when set".)
     #[serde(default)]
     pub verification_token: Option<String>,
+    /// Feishu `open_id`s (e.g. `"ou_xxxxxxxx"`).
+    /// Who may talk to the agent through this channel. **Empty refuses
+    /// everyone**: the agent holds physical tools, and a bot that answers
+    /// whoever finds it is a remote control for them. Until 2026-10-13 this
+    /// channel had no list at all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+
     /// Local port for the webhook HTTP server (default: 18790).
     #[serde(default)]
     pub webhook_port: Option<u16>,
@@ -731,6 +785,13 @@ pub struct PerceptionConfig {
     /// (detections, health, audio, spatial fusion); see [`GenericPollConfig`].
     #[serde(default)]
     pub polls: Vec<GenericPollConfig>,
+    /// Cameras whose events reach the mushroom body as percepts (entering
+    /// lighting_shift / nudged / blind / failed, and the start of each motion
+    /// episode), read from the `camera.<node>` facts `oh-ben-claw camera-watch
+    /// --node <node>` writes. Needs `world_memory = true` and a mushroom body
+    /// (`[self_improvement.mushroom]`). E.g. `["lilygo"]`.
+    #[serde(default)]
+    pub camera_percepts: Vec<String>,
     /// Vision-driven reflex + foresight rules keyed on ClawCam detections.
     #[serde(default)]
     pub vision_rules: VisionRulesConfig,
@@ -1330,6 +1391,11 @@ pub struct ReflexConfig {
     /// `sensor.{quantity}` exceeds `threshold`.
     #[serde(default)]
     pub safing_overheat: Vec<OverheatConfig>,
+    /// Camera nodes to escalate on when `camera.{node}` reports `blind` or
+    /// `failed` (safing). The fact is written by `oh-ben-claw camera-watch
+    /// --node <name>`, into the same world memory. E.g. `["lilygo"]`.
+    #[serde(default)]
+    pub safing_cameras: Vec<String>,
 }
 
 /// System 2 slow-reasoner configuration (`[system2]`, Phase 18).
@@ -2323,6 +2389,21 @@ impl Config {
         // nothing could reach. Implementing TLS means reinstating that feature on a
         // version whose certificate handling is not vulnerable, and wiring
         // `set_transport` — not just deleting this check.
+        // Same failure, second place. The IRC adapter opens a plain TcpStream
+        // whatever `use_tls` says (its `_tls` parameter is never read), and
+        // `use_tls` defaults to true on the TLS port, so `PASS` and the SASL
+        // PLAIN password went to a server that expected a handshake, in the
+        // clear. Found 2026-10-13. Wrapping the stream in tokio-rustls is the
+        // real fix; until then, cleartext has to be asked for by name.
+        if self.channels.irc.host.is_some() && self.channels.irc.use_tls {
+            anyhow::bail!(
+                "channels.irc.use_tls = true (the default), but the IRC adapter does \
+                 not implement TLS — the connection, including any password or SASL \
+                 credentials, would be cleartext. Set channels.irc.use_tls = false \
+                 (and a plaintext port, usually 6667) only for a server on a trusted \
+                 network, or leave IRC unconfigured."
+            );
+        }
         if self.spine.tls {
             anyhow::bail!(
                 "spine.tls = true, but MQTT-over-TLS is not implemented — the \
@@ -2504,19 +2585,83 @@ impl Config {
             }
         }
 
-        // ── P2P node_id format ─────────────────────────────────────────────────
+        // ── P2P spine: not wired ───────────────────────────────────────────────
+        // `run_start` connects a spine only for `kind = "mqtt"`. Any other kind
+        // started no spine at all, in silence: no peripheral tools, and the P2P
+        // frame-auth and pairing gates in obc-spine/p2p.rs unreachable. The
+        // `P2pSpine` itself works (EdgeAgent::start_p2p drives it) but nothing
+        // in the binary constructs either. Found 2026-10-13. Wiring it means a
+        // TCP listener and a UDP discovery socket on the brain, which wants its
+        // own change and its own test; until then, refuse rather than pretend.
         if self.spine.kind == "p2p" {
-            if let Some(ref id) = self.spine.p2p_node_id {
-                if id.trim().is_empty() {
-                    anyhow::bail!("spine.p2p_node_id is set but empty");
-                }
-                if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-                    warnings.push(format!(
-                        "spine.p2p_node_id '{}' contains characters other than \
-                         alphanumerics and hyphens",
-                        id
-                    ));
-                }
+            anyhow::bail!(
+                "spine.kind = \"p2p\" is not wired into `start`: it would run with no \
+                 spine and no peripheral tools. Use kind = \"mqtt\" until the P2P spine \
+                 is connected (see crates/obc-spine/src/p2p.rs)."
+            );
+        }
+        if self.spine.kind != "mqtt" {
+            warnings.push(format!(
+                "spine.kind = {:?} is not a spine `start` knows; no spine will be connected",
+                self.spine.kind
+            ));
+        }
+        // Same gap, one layer up: nothing constructs an EdgeAgent, so `[edge]`
+        // changes nothing. A warning, not a refusal, because the NanoPi
+        // reference deployment sets it.
+        if self.edge.enabled {
+            warnings.push(
+                "edge.enabled = true has no effect: the edge agent loop is not wired \
+                 into `start` (nothing constructs an EdgeAgent)"
+                    .to_string(),
+            );
+        }
+
+        // ── Channel allowlists ─────────────────────────────────────────────────
+        // An empty `allowed_users` refuses everyone (fail closed), so a channel
+        // configured without one starts and then answers nobody. Said here, at
+        // boot, because the alternative is a bot that is silently deaf.
+        // "Configured" mirrors each adapter's own `new()` test, without the env
+        // fallbacks it also reads.
+        let ch = &self.channels;
+        for (name, configured, empty) in [
+            (
+                "discord",
+                ch.discord.token.is_some(),
+                ch.discord.allowed_users.is_empty(),
+            ),
+            (
+                "slack",
+                ch.slack.app_token.is_some() && ch.slack.bot_token.is_some(),
+                ch.slack.allowed_users.is_empty(),
+            ),
+            (
+                "matrix",
+                ch.matrix.homeserver.is_some() && ch.matrix.access_token.is_some(),
+                ch.matrix.allowed_users.is_empty(),
+            ),
+            (
+                "irc",
+                ch.irc.host.is_some(),
+                ch.irc.allowed_users.is_empty(),
+            ),
+            (
+                "mattermost",
+                ch.mattermost.server_url.is_some() && ch.mattermost.token.is_some(),
+                ch.mattermost.allowed_users.is_empty(),
+            ),
+            (
+                "feishu",
+                ch.feishu.app_id.is_some() && ch.feishu.app_secret.is_some(),
+                ch.feishu.allowed_users.is_empty(),
+            ),
+        ] {
+            if configured && empty {
+                warnings.push(format!(
+                    "channels.{name} is configured but channels.{name}.allowed_users is \
+                     empty, which refuses everyone: the bot will answer nobody until \
+                     you list who may use it"
+                ));
             }
         }
 
@@ -2724,6 +2869,44 @@ mod tests {
         let err = config.validate().unwrap_err().to_string();
         assert!(err.contains("not implemented"), "{err}");
         assert!(err.contains("cleartext"), "{err}");
+    }
+
+    #[test]
+    fn validate_refuses_irc_tls_it_cannot_provide() {
+        // The adapter never read `use_tls`, and it defaults to true: the
+        // password went out in the clear on the TLS port.
+        // Parsed, not `Config::default()`: the serde default is what a real
+        // config file gets, and it is the one that is true.
+        let mut config: Config =
+            toml::from_str("[channels.irc]\nhost = \"irc.example.org\"\n").unwrap();
+        assert!(
+            config.channels.irc.use_tls,
+            "default is what makes this bite"
+        );
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("does not implement TLS"), "{err}");
+        // Cleartext asked for by name is allowed, and IRC left unset is untouched.
+        config.channels.irc.use_tls = false;
+        config.validate().unwrap();
+        config.channels.irc.host = None;
+        config.channels.irc.use_tls = true;
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn validate_warns_when_a_channel_allowlist_refuses_everyone() {
+        let mut config = Config::default();
+        config.channels.discord.token = Some("t".into());
+        let warnings = config.validate().unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("channels.discord.allowed_users")),
+            "{warnings:?}"
+        );
+        config.channels.discord.allowed_users = vec!["123".into()];
+        let warnings = config.validate().unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("allowed_users")));
     }
 
     #[test]
@@ -3022,31 +3205,22 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_empty_p2p_node_id() {
+    fn validate_refuses_the_unwired_p2p_spine() {
         let mut config = Config::default();
         config.spine.kind = "p2p".to_string();
-        config.spine.p2p_node_id = Some("  ".to_string());
-        assert!(config.validate().is_err());
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("not wired"), "{err}");
     }
 
     #[test]
-    fn validate_warns_p2p_node_id_bad_chars() {
+    fn validate_warns_that_edge_mode_does_nothing() {
         let mut config = Config::default();
-        config.spine.kind = "p2p".to_string();
-        config.spine.p2p_node_id = Some("node_one!".to_string());
+        config.edge.enabled = true;
         let warnings = config.validate().unwrap();
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("p2p_node_id") && w.contains("characters")));
-    }
-
-    #[test]
-    fn validate_accepts_good_p2p_node_id() {
-        let mut config = Config::default();
-        config.spine.kind = "p2p".to_string();
-        config.spine.p2p_node_id = Some("node-42-abc".to_string());
-        let warnings = config.validate().unwrap();
-        assert!(!warnings.iter().any(|w| w.contains("p2p_node_id")));
+        assert!(
+            warnings.iter().any(|w| w.contains("edge.enabled")),
+            "{warnings:?}"
+        );
     }
 
     #[test]

@@ -22,7 +22,7 @@
 //! * Only processes posts in channels the bot belongs to.
 //! * The bot ignores its own messages to avoid feedback loops.
 
-use crate::utils::chunk_text;
+use crate::utils::{chunk_text, sender_allowed};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use obc_agent::Agent;
@@ -153,6 +153,7 @@ impl MattermostChannel {
             tokio::time::interval(Duration::from_secs(MM_WS_PING_INTERVAL_SECS));
         let agent = self.agent.clone();
         let provider_config = self.provider_config.clone();
+        let allowed_users = self.config.allowed_users.clone();
         let http = self.http.clone();
         let server_owned = server.to_string();
         let token_owned = token.to_string();
@@ -180,6 +181,13 @@ impl MattermostChannel {
                                             if let Ok(post) = serde_json::from_str::<MmPost>(post_str) {
                                                 // Ignore bot's own messages
                                                 if post.user_id == bot_user_id {
+                                                    continue;
+                                                }
+                                                if !sender_allowed(
+                                                    "mattermost",
+                                                    &allowed_users,
+                                                    &post.user_id,
+                                                ) {
                                                     continue;
                                                 }
                                                 // Only handle regular messages

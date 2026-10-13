@@ -567,14 +567,10 @@ impl ApprovalManager {
     /// granted. Non-physical actions, a trusted node, or no scorer attached fall
     /// through to the ordinary [`needs_approval`](Self::needs_approval) rules.
     pub fn decide(&self, tool_name: &str, node_id: Option<&str>, risk: RiskClass) -> Decision {
-        if risk.physical {
-            if let (Some(scorer), Some(node)) = (&self.trust, node_id) {
-                match trust::gate(scorer.level(node), risk) {
-                    TrustGate::Deny => return Decision::Deny,
-                    TrustGate::RequireApproval => return Decision::NeedsApproval,
-                    TrustGate::Allow => {}
-                }
-            }
+        match self.trust_gate(node_id, risk) {
+            Some(TrustGate::Deny) => return Decision::Deny,
+            Some(TrustGate::RequireApproval) => return Decision::NeedsApproval,
+            Some(TrustGate::Allow) | None => {}
         }
         // Track 0: irreversible / high-blast physical actions default to
         // **per-call approval**. Only an explicit `auto_approve` listing or a
@@ -592,6 +588,16 @@ impl ApprovalManager {
         } else {
             Decision::Allow
         }
+    }
+
+    /// What behavioral trust alone says about this call: `None` when it has no
+    /// say (no scorer attached, no node, or a non-physical action).
+    fn trust_gate(&self, node_id: Option<&str>, risk: RiskClass) -> Option<TrustGate> {
+        if !risk.physical {
+            return None;
+        }
+        let (scorer, node) = (self.trust.as_ref()?, node_id?);
+        Some(trust::gate(scorer.level(node), risk))
     }
 
     /// Prompt the user for approval of a tool call.
@@ -800,6 +806,16 @@ pub fn approval_authorize(
     match approval.decide(tool, Some(node_id), risk) {
         Decision::Allow => Ok(()),
         Decision::Deny => Err("denied by approval policy".to_string()),
+        // Named apart, because under `Full` autonomy the other reason cannot
+        // apply and an operator reading it would look in the wrong place.
+        Decision::NeedsApproval
+            if approval.trust_gate(Some(node_id), risk) == Some(TrustGate::RequireApproval) =>
+        {
+            Err(format!(
+                "requires operator approval (node '{node_id}' is on trust probation after \
+                 recent failures, so its physical actions lose auto-approval)"
+            ))
+        }
         Decision::NeedsApproval => Err(
             "requires operator approval (autonomy is supervised/manual and it is not auto-approved or granted)"
                 .to_string(),
@@ -1020,6 +1036,17 @@ mod tests {
             mgr.decide("move", Some("rover"), phys_low()),
             Decision::NeedsApproval
         );
+    }
+
+    #[test]
+    fn probation_refuses_physical_under_full_autonomy_and_says_why() {
+        // The case main.rs could not reach before the scorer was attached:
+        // Full autonomy passes everything, so only trust can stop this call.
+        let mgr = manager(&config_full(), false).with_trust(scorer_at(2));
+        let err = approval_authorize(Some(&mgr), "move", "rover", phys_low()).unwrap_err();
+        assert!(err.contains("trust probation"), "{err}");
+        // A healthy node under the same manager is untouched.
+        assert!(approval_authorize(Some(&mgr), "move", "other", phys_low()).is_ok());
     }
 
     #[test]

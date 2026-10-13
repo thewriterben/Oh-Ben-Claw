@@ -42,7 +42,7 @@
 // would make the struct a worse description of the wire than the vendor's own docs.
 // Scoped to this file deliberately — the crate root carries no blanket allow.
 #![allow(dead_code)]
-use crate::utils::chunk_text;
+use crate::utils::{chunk_text, sender_allowed};
 use anyhow::{Context, Result};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
 use obc_agent::Agent;
@@ -146,7 +146,8 @@ struct FeishuState {
     provider_config: ProviderConfig,
     app_id: String,
     app_secret: String,
-    verification_token: Option<String>,
+    verification_token: String,
+    allowed_users: Vec<String>,
     http: reqwest::Client,
     token_cache: Arc<RwLock<TokenCache>>,
 }
@@ -176,6 +177,19 @@ impl FeishuChannel {
             .app_secret
             .clone()
             .or_else(|| std::env::var("FEISHU_APP_SECRET").ok())?;
+        let Some(verification_token) = config
+            .verification_token
+            .clone()
+            .or_else(|| std::env::var("FEISHU_VERIFICATION_TOKEN").ok())
+            .filter(|t| !t.is_empty())
+        else {
+            tracing::error!(
+                "Feishu is configured but channels.feishu.verification_token (or \
+                 FEISHU_VERIFICATION_TOKEN) is not set; the channel is not started, \
+                 because without it the webhook cannot tell Feishu from anyone else"
+            );
+            return None;
+        };
 
         Some(Self {
             state: FeishuState {
@@ -183,10 +197,8 @@ impl FeishuChannel {
                 provider_config,
                 app_id,
                 app_secret,
-                verification_token: config
-                    .verification_token
-                    .clone()
-                    .or_else(|| std::env::var("FEISHU_VERIFICATION_TOKEN").ok()),
+                verification_token,
+                allowed_users: config.allowed_users.clone(),
                 http: reqwest::Client::new(),
                 token_cache: Arc::new(RwLock::new(TokenCache::default())),
             },
@@ -228,24 +240,23 @@ async fn receive_event(
     State(state): State<FeishuState>,
     Json(payload): Json<FeishuEvent>,
 ) -> impl IntoResponse {
-    // 1. URL verification handshake
+    // 1. Verify the token, on every payload. The URL-verification handshake
+    // carries it too, so it is checked first rather than echoed to anyone.
+    if payload.token.as_deref() != Some(state.verification_token.as_str()) {
+        tracing::warn!("Feishu webhook: invalid verification token");
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "invalid token" })),
+        );
+    }
+
+    // 2. URL verification handshake
     if let Some(challenge) = &payload.challenge {
         tracing::debug!("Feishu webhook URL verification");
         return (
             StatusCode::OK,
             Json(serde_json::json!({ "challenge": challenge })),
         );
-    }
-
-    // 2. Verify token if configured
-    if let Some(expected) = &state.verification_token {
-        if payload.token.as_deref() != Some(expected.as_str()) {
-            tracing::warn!("Feishu webhook: invalid verification token");
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "invalid token" })),
-            );
-        }
     }
 
     // 3. Only handle im.message.receive_v1 events
@@ -257,6 +268,15 @@ async fn receive_event(
     let Some(event) = payload.event else {
         return (StatusCode::OK, Json(serde_json::json!({})));
     };
+    let sender = event
+        .sender
+        .as_ref()
+        .and_then(|s| s.sender_id.as_ref())
+        .and_then(|id| id.open_id.as_deref())
+        .unwrap_or("");
+    if !sender_allowed("feishu", &state.allowed_users, sender) {
+        return (StatusCode::OK, Json(serde_json::json!({})));
+    }
     let Some(message) = event.message else {
         return (StatusCode::OK, Json(serde_json::json!({})));
     };

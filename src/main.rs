@@ -199,6 +199,43 @@ enum Commands {
         policy: String,
     },
 
+    /// Verify the Track 0 action audit log: the HMAC chain (edits, insertions,
+    /// deletions, reordering) with the audit key, and the Ed25519 signatures
+    /// with the public key. Exits non-zero on any failure.
+    AuditVerify {
+        /// Audit log to check (default: `[safety] audit_log_path`, else the
+        /// data dir's `action_audit.jsonl`).
+        #[arg(long)]
+        path: Option<String>,
+        /// Ed25519 public key (hex) to check signatures against. Defaults to
+        /// the `<log>.pub` file written at startup; pass it explicitly when
+        /// you do not trust the host the log came from.
+        #[arg(long)]
+        public_key: Option<String>,
+    },
+
+    /// Watch a camera node over USB: capture a frame every interval, judge it
+    /// (warming, ok, lighting shift, nudged, blind, failed) and record
+    /// `camera.<node>` in world memory, where a running agent's reflexes read
+    /// it. Opening the port reboots an ESP32-S3; this waits that out first.
+    CameraWatch {
+        /// Serial port of the camera node, e.g. /dev/ttyACM0 or COM10.
+        #[arg(long)]
+        port: String,
+        /// Name to record it under (`camera.<node>`).
+        #[arg(long)]
+        node: String,
+        /// Milliseconds between captures.
+        #[arg(long, default_value = "1000")]
+        interval_ms: u64,
+        /// Stop after this many captures (default: run until interrupted).
+        #[arg(long)]
+        count: Option<u64>,
+        /// Serial baud rate. USB-Serial-JTAG ignores it; a UART bridge does not.
+        #[arg(long, default_value = "115200")]
+        baud: u32,
+    },
+
     /// Run system diagnostics to check configuration and connectivity.
     Doctor,
 }
@@ -389,12 +426,170 @@ async fn main() -> Result<()> {
         } => {
             run_consent_check(&config, &frame, &ledger, &purpose, &policy)?;
         }
+        Commands::AuditVerify { path, public_key } => {
+            run_audit_verify(&config, path.as_deref(), public_key.as_deref())?;
+        }
+        Commands::CameraWatch {
+            port,
+            node,
+            interval_ms,
+            count,
+            baud,
+        } => {
+            run_camera_watch(&config, &port, &node, interval_ms, count, baud).await?;
+        }
         Commands::Doctor => {
             oh_ben_claw::doctor::run(&config)?;
         }
     }
 
     Ok(())
+}
+
+// ── Track 0: physical-action safety (shared by plain agent + orchestrator) ──
+// Resolve the audit MAC key with a secure precedence:
+//   explicit config key > vault (if unlockable via OBC_VAULT_PASSWORD)
+//   > node pairing secret > a persisted, auto-generated random key.
+// The old hardcoded dev key is gone — a published constant would let anyone
+// forge audit entries.
+fn track0_data_path(name: &str) -> String {
+    oh_ben_claw::config::paths::in_data_dir(name)
+        .to_string_lossy()
+        .into_owned()
+}
+fn track0_random_key() -> String {
+    use rand::RngCore;
+    let mut buf = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut buf);
+    hex::encode(buf)
+}
+/// The secrets vault, opened and unlocked with `OBC_VAULT_PASSWORD`, or `None`
+/// when it is disabled, the password is unset, or either step fails.
+fn open_unlocked_vault(
+    vault_enabled: bool,
+    vault_path: Option<&str>,
+) -> Option<security::SecretsVault> {
+    if !vault_enabled {
+        return None;
+    }
+    let pw = std::env::var("OBC_VAULT_PASSWORD").ok()?;
+    let vpath = vault_path
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| track0_data_path("vault.db"));
+    let vault = security::SecretsVault::open(&vpath).ok()?;
+    vault.unlock(&pw).ok()?;
+    Some(vault)
+}
+
+/// The vault entry holding the audit's Ed25519 secret key (hex).
+const AUDIT_SIGNING_KEY_ENTRY: &str = "OBC_TRACK0_AUDIT_SIGNING_KEY";
+
+/// Where the audit's public key is written: beside the log, so a verifier
+/// finds it. It is public by design; a verifier who distrusts the host should
+/// take it from the startup log line or another copy instead, since anyone who
+/// can rewrite the log can rewrite this file too.
+fn audit_public_key_path(audit_path: &str) -> String {
+    format!("{audit_path}.pub")
+}
+
+/// The Ed25519 signer for the action audit, kept only in the vault: loaded,
+/// or generated and stored on first use. `None` when the vault is not
+/// available, and then the audit is MAC-chained but unsigned, which is said
+/// out loud. Signing was ticked done in the ROADMAP and never attached until
+/// 2026-10-13; `with_signer` had only test callers.
+///
+/// There is deliberately no file fallback as `resolve_audit_key` has: a
+/// signature is worth something only if the key cannot be read off the disk
+/// by whoever can also edit the log.
+fn resolve_audit_signer(
+    vault_enabled: bool,
+    vault_path: Option<&str>,
+) -> Option<security::audit_sign::AuditSigner> {
+    let Some(vault) = open_unlocked_vault(vault_enabled, vault_path) else {
+        tracing::warn!(
+            "Track 0: audit records are MAC-chained but NOT signed — Ed25519 signing \
+             keeps its key only in the vault ([security] vault_enabled = true and \
+             OBC_VAULT_PASSWORD set)"
+        );
+        return None;
+    };
+    let signer = match vault.get(AUDIT_SIGNING_KEY_ENTRY) {
+        Ok(Some(hex)) => match security::audit_sign::AuditSigner::from_hex(&hex) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("Track 0: the vault's audit signing key is malformed ({e}); records will be unsigned");
+                return None;
+            }
+        },
+        Ok(None) => {
+            let s = security::audit_sign::AuditSigner::generate();
+            if let Err(e) = vault.set(AUDIT_SIGNING_KEY_ENTRY, &s.secret_hex()) {
+                tracing::error!("Track 0: could not store a new audit signing key in the vault ({e}); records will be unsigned");
+                return None;
+            }
+            tracing::info!("Track 0: generated an audit signing key and stored it in the vault");
+            s
+        }
+        Err(e) => {
+            tracing::error!("Track 0: could not read the audit signing key from the vault ({e}); records will be unsigned");
+            return None;
+        }
+    };
+    Some(signer)
+}
+
+fn resolve_audit_key(
+    explicit: Option<&str>,
+    vault_enabled: bool,
+    vault_path: Option<&str>,
+    pairing_secret: Option<&str>,
+) -> Vec<u8> {
+    if let Some(k) = explicit {
+        return k.as_bytes().to_vec();
+    }
+    // Vault: only usable when the operator supplies the master password.
+    if let Some(vault) = open_unlocked_vault(vault_enabled, vault_path) {
+        match vault.get("OBC_TRACK0_AUDIT_KEY") {
+            Ok(Some(k)) => {
+                tracing::info!("Track 0: audit key loaded from vault");
+                return k.into_bytes();
+            }
+            Ok(None) => {
+                let k = track0_random_key();
+                if vault.set("OBC_TRACK0_AUDIT_KEY", &k).is_ok() {
+                    tracing::info!("Track 0: generated audit key stored in vault");
+                    return k.into_bytes();
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    if let Some(k) = pairing_secret {
+        tracing::info!("Track 0: deriving audit key from the node pairing secret");
+        return k.as_bytes().to_vec();
+    }
+    // Persisted random key (secret + stable across restarts).
+    let key_path = track0_data_path("action_audit.key");
+    if let Ok(existing) = std::fs::read_to_string(&key_path) {
+        let trimmed = existing.trim();
+        if !trimmed.is_empty() {
+            return trimmed.as_bytes().to_vec();
+        }
+    }
+    let k = track0_random_key();
+    if let Some(parent) = std::path::Path::new(&key_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::write(&key_path, &k) {
+        Ok(_) => tracing::warn!(
+            path = %key_path,
+            "Track 0: generated a persisted random audit key — set [safety].audit_key or enable the vault for production"
+        ),
+        Err(e) => {
+            tracing::warn!("Track 0: could not persist audit key ({e}); using an ephemeral key")
+        }
+    }
+    k.into_bytes()
 }
 
 async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<()> {
@@ -456,8 +651,24 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         if let Some(parent) = std::path::Path::new(&audit_path).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        let signer = resolve_audit_signer(
+            config.security.vault_enabled,
+            config.security.vault_path.as_deref(),
+        );
         match security::ActionAuditor::open(key, audit_path.clone()) {
             Ok(auditor) => {
+                let auditor = match signer {
+                    Some(signer) => {
+                        let public = signer.public_hex();
+                        let pub_path = audit_public_key_path(&audit_path);
+                        if let Err(e) = std::fs::write(&pub_path, format!("{public}\n")) {
+                            tracing::warn!(path = %pub_path, "Track 0: could not write the audit public key ({e})");
+                        }
+                        info!(public_key = %public, "Track 0 action audit records are Ed25519-signed");
+                        auditor.with_signer(signer)
+                    }
+                    None => auditor,
+                };
                 action_auditor = Some(Arc::new(std::sync::Mutex::new(auditor)));
                 info!(path = %audit_path, "Track 0 action audit log active");
             }
@@ -735,86 +946,6 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             "deployment inventory recorded; set deployment.auto_plan = true to \
              re-check it against the current planner at startup"
         );
-    }
-
-    // ── Track 0: physical-action safety (shared by plain agent + orchestrator) ──
-    // Resolve the audit MAC key with a secure precedence:
-    //   explicit config key > vault (if unlockable via OBC_VAULT_PASSWORD)
-    //   > node pairing secret > a persisted, auto-generated random key.
-    // The old hardcoded dev key is gone — a published constant would let anyone
-    // forge audit entries.
-    fn track0_data_path(name: &str) -> String {
-        oh_ben_claw::config::paths::in_data_dir(name)
-            .to_string_lossy()
-            .into_owned()
-    }
-    fn track0_random_key() -> String {
-        use rand::RngCore;
-        let mut buf = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut buf);
-        hex::encode(buf)
-    }
-    fn resolve_audit_key(
-        explicit: Option<&str>,
-        vault_enabled: bool,
-        vault_path: Option<&str>,
-        pairing_secret: Option<&str>,
-    ) -> Vec<u8> {
-        if let Some(k) = explicit {
-            return k.as_bytes().to_vec();
-        }
-        // Vault: only usable when the operator supplies the master password.
-        if vault_enabled {
-            if let Ok(pw) = std::env::var("OBC_VAULT_PASSWORD") {
-                let vpath = vault_path
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| track0_data_path("vault.db"));
-                if let Ok(vault) = security::SecretsVault::open(&vpath) {
-                    if vault.unlock(&pw).is_ok() {
-                        match vault.get("OBC_TRACK0_AUDIT_KEY") {
-                            Ok(Some(k)) => {
-                                tracing::info!("Track 0: audit key loaded from vault");
-                                return k.into_bytes();
-                            }
-                            Ok(None) => {
-                                let k = track0_random_key();
-                                if vault.set("OBC_TRACK0_AUDIT_KEY", &k).is_ok() {
-                                    tracing::info!("Track 0: generated audit key stored in vault");
-                                    return k.into_bytes();
-                                }
-                            }
-                            Err(_) => {}
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(k) = pairing_secret {
-            tracing::info!("Track 0: deriving audit key from the node pairing secret");
-            return k.as_bytes().to_vec();
-        }
-        // Persisted random key (secret + stable across restarts).
-        let key_path = track0_data_path("action_audit.key");
-        if let Ok(existing) = std::fs::read_to_string(&key_path) {
-            let trimmed = existing.trim();
-            if !trimmed.is_empty() {
-                return trimmed.as_bytes().to_vec();
-            }
-        }
-        let k = track0_random_key();
-        if let Some(parent) = std::path::Path::new(&key_path).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match std::fs::write(&key_path, &k) {
-            Ok(_) => tracing::warn!(
-                path = %key_path,
-                "Track 0: generated a persisted random audit key — set [safety].audit_key or enable the vault for production"
-            ),
-            Err(e) => {
-                tracing::warn!("Track 0: could not persist audit key ({e}); using an ephemeral key")
-            }
-        }
-        k.into_bytes()
     }
 
     // (Track 0 safety gate + action auditor are built earlier, before the tool
@@ -1848,6 +1979,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             let safing = oh_ben_claw::agent::safing::standard_safing_rules(&opts);
             info!(count = safing.len(), "Phase 18 safing rules appended");
             rules.extend(safing);
+            // Cameras: `camera-watch` writes `camera.<node>`; these escalate
+            // when one goes blind or fails. They live with the camera code
+            // (obc-vision), not in the safing library, as the vision rules do.
+            for node in &config.reflex.safing_cameras {
+                rules.extend(oh_ben_claw::vision::camera_health::camera_health_rules(
+                    node, 5_000,
+                ));
+            }
         }
         if config.perception.vision_rules.enabled {
             let vc = &config.perception.vision_rules;
@@ -2726,11 +2865,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // grants gate every tool call (composing with Track 0 + trust). Full
     // autonomy (the default) passes everything; under supervised/manual an
     // un-granted tool is refused in this autonomous loop.
-    let approval = Arc::new(oh_ben_claw::approval::ApprovalManager::from_config(
-        &config.autonomy,
-    ));
+    //
     // Track 0 dynamic trust: refuse physical actions from a node whose behavior
     // (latency/failures) has demoted it; every tool round-trip feeds the score.
+    // Built first so the approval manager holds the same scorer: the agent's own
+    // check only acts on `Deny`, and the probation tier (`RequireApproval`) is
+    // enforced by `ApprovalManager::decide` alone. Until 2026-10-13 the manager
+    // was built without it, so a node on probation kept its auto-approval.
     let trust_scorer = if config.safety.enabled && config.safety.dynamic_trust {
         info!("Track 0 dynamic trust scoring enabled");
         Some(Arc::new(
@@ -2738,6 +2879,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         ))
     } else {
         None
+    };
+    let approval = {
+        let manager = oh_ben_claw::approval::ApprovalManager::from_config(&config.autonomy);
+        Arc::new(match &trust_scorer {
+            Some(scorer) => manager.with_trust(Arc::clone(scorer)),
+            None => manager,
+        })
     };
     // Track 0 taint tracking: opt-in (unset ⇒ off). Shared by both the plain
     // and orchestrator inner agents.
@@ -2911,6 +3059,40 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         tracing::warn!(
             "[[perception.polls]] configured but [perception] world_memory = false; nothing will be recorded"
         );
+    }
+    // Cameras → mushroom body. `camera-watch` (another process) writes
+    // `camera.<node>`; this reads it and perceives only events. Same rule as
+    // the polls: a camera that asks to be perceived and cannot be says so once.
+    if !config.perception.camera_percepts.is_empty() {
+        match (&world_mem, &trajectory_store) {
+            (Some(world), Some(traj)) if traj.has_mushroom() => {
+                for node in config.perception.camera_percepts.clone() {
+                    let world = Arc::clone(world);
+                    let traj = Arc::clone(traj);
+                    info!(camera = %node, "camera events → mushroom body");
+                    tokio::spawn(async move {
+                        let mut percepts =
+                            oh_ben_claw::vision::camera_percepts::CameraPercepts::new(&node);
+                        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
+                        loop {
+                            ticker.tick().await;
+                            if let Err(e) = percepts.feed(&world, &traj) {
+                                tracing::warn!(camera = %node, "camera percept not recorded: {e}");
+                            }
+                        }
+                    });
+                }
+            }
+            (None, _) => tracing::warn!(
+                "[perception] camera_percepts configured but world_memory = false; \
+                 there are no camera facts to read"
+            ),
+            _ => tracing::warn!(
+                "[perception] camera_percepts configured but no mushroom body is attached \
+                 ([self_improvement.mushroom] enabled, and `semantic`); camera events \
+                 reach world memory only"
+            ),
+        }
     }
     // Phase 16 P3: Track 0 staged rollout — clean-run record + auto-demotion.
     let rollout_tracker = Arc::new(oh_ben_claw::skill_forge::rollout::RolloutTracker::load(
@@ -3989,6 +4171,123 @@ async fn run_peripheral(mut config: Config, cmd: PeripheralCommands) -> Result<(
 /// set and print the report. This is the residual risk the conscience gate can't
 /// cover — it can only gate labels the detector emits, so a person the detector
 /// misses entirely is never seen by the gate. See `obc_conscience::detector_eval`.
+#[cfg(feature = "hardware")]
+async fn run_camera_watch(
+    config: &Config,
+    port: &str,
+    node: &str,
+    interval_ms: u64,
+    count: Option<u64>,
+    baud: u32,
+) -> Result<()> {
+    use oh_ben_claw::peripherals::esp32_link::{Esp32Link, ReplyTimeout, REPLY_TIMEOUT};
+    use oh_ben_claw::vision::camera_health::CameraHealth;
+
+    // The same world memory `start` uses, so a running agent's reflexes see
+    // `camera.<node>` as soon as it is written.
+    let world_path = config
+        .perception
+        .world_db_path
+        .clone()
+        .unwrap_or_else(|| track0_data_path("world.db"));
+    if let Some(parent) = std::path::Path::new(&world_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let world = Arc::new(
+        oh_ben_claw::memory::world::WorldMemory::open(&world_path)
+            .with_context(|| format!("opening world memory at {world_path}"))?,
+    );
+    let health = CameraHealth::new(node).with_world_memory(world);
+
+    println!("opening {port} (the node reboots; waiting it out)...");
+    let mut link = Esp32Link::open_serial(port, baud).await?;
+    println!("recording camera.{node} into {world_path}");
+
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    };
+    let mut n = 0u64;
+    while count.is_none_or(|c| n < c) {
+        // A link that times out is a failed capture, and counts toward
+        // `failed`; a link that is gone (port closed, cable out) ends the watch.
+        let capture = match link.capture_jpeg(REPLY_TIMEOUT).await {
+            Ok(c) => c,
+            Err(e) if e.downcast_ref::<ReplyTimeout>().is_some() => Err(format!("{e:#}")),
+            Err(e) => return Err(e.context(format!("camera link on {port} lost"))),
+        };
+        let v = health.observe_capture(capture, now())?;
+        let detail = match (v.class, v.scores, v.contrast) {
+            (Some(c), Some(s), _) => {
+                format!("{} frac={:.3} edge={:.2}", c.as_str(), s.frac, s.edge)
+            }
+            (_, _, Some(contrast)) => format!("contrast={contrast:.1}"),
+            _ => "no frame".to_string(),
+        };
+        let event = if v.motion_event { "  MOTION" } else { "" };
+        println!("{n:>5}  {:<14} {detail}{event}", v.mode.as_str());
+        n += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "hardware"))]
+async fn run_camera_watch(
+    _config: &Config,
+    _port: &str,
+    _node: &str,
+    _interval_ms: u64,
+    _count: Option<u64>,
+    _baud: u32,
+) -> Result<()> {
+    bail!("camera-watch needs a serial port: this build has no `hardware` feature")
+}
+
+fn run_audit_verify(config: &Config, path: Option<&str>, public_key: Option<&str>) -> Result<()> {
+    let audit_path = path
+        .map(str::to_string)
+        .or_else(|| config.safety.audit_log_path.clone())
+        .unwrap_or_else(|| track0_data_path("action_audit.jsonl"));
+    if !std::path::Path::new(&audit_path).exists() {
+        bail!("no audit log at {audit_path}");
+    }
+    // The same resolution `start` uses, so the key that wrote the log checks it.
+    let key = resolve_audit_key(
+        config.safety.audit_key.as_deref(),
+        config.security.vault_enabled,
+        config.security.vault_path.as_deref(),
+        config.security.pairing_secret.as_deref(),
+    );
+    let chained = security::audit::verify(&audit_path, &key)
+        .with_context(|| format!("HMAC chain check failed for {audit_path}"))?;
+    println!("chain:      {chained} record(s) verified ({audit_path})");
+
+    let public = match public_key {
+        Some(k) => Some(k.trim().to_string()),
+        None => std::fs::read_to_string(audit_public_key_path(&audit_path))
+            .ok()
+            .map(|s| s.trim().to_string()),
+    };
+    match public {
+        Some(public) => {
+            let signed = security::audit::verify_signatures(&audit_path, &public)
+                .with_context(|| format!("signature check failed for {audit_path}"))?;
+            println!("signatures: {signed} record(s) verified against {public}");
+            if signed == 0 {
+                println!("            (no record is signed; signing needs the vault)");
+            }
+        }
+        None => println!(
+            "signatures: not checked — no --public-key and no {}",
+            audit_public_key_path(&audit_path)
+        ),
+    }
+    Ok(())
+}
+
 fn run_eval_detector(config: &Config, frames_path: &str) -> Result<()> {
     let raw = std::fs::read_to_string(frames_path)
         .with_context(|| format!("reading eval frames from {frames_path}"))?;
