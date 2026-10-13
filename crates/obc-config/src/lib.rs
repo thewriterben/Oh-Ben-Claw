@@ -2570,20 +2570,36 @@ impl Config {
             }
         }
 
-        // ── P2P node_id format ─────────────────────────────────────────────────
+        // ── P2P spine: not wired ───────────────────────────────────────────────
+        // `run_start` connects a spine only for `kind = "mqtt"`. Any other kind
+        // started no spine at all, in silence: no peripheral tools, and the P2P
+        // frame-auth and pairing gates in obc-spine/p2p.rs unreachable. The
+        // `P2pSpine` itself works (EdgeAgent::start_p2p drives it) but nothing
+        // in the binary constructs either. Found 2026-10-13. Wiring it means a
+        // TCP listener and a UDP discovery socket on the brain, which wants its
+        // own change and its own test; until then, refuse rather than pretend.
         if self.spine.kind == "p2p" {
-            if let Some(ref id) = self.spine.p2p_node_id {
-                if id.trim().is_empty() {
-                    anyhow::bail!("spine.p2p_node_id is set but empty");
-                }
-                if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-                    warnings.push(format!(
-                        "spine.p2p_node_id '{}' contains characters other than \
-                         alphanumerics and hyphens",
-                        id
-                    ));
-                }
-            }
+            anyhow::bail!(
+                "spine.kind = \"p2p\" is not wired into `start`: it would run with no \
+                 spine and no peripheral tools. Use kind = \"mqtt\" until the P2P spine \
+                 is connected (see crates/obc-spine/src/p2p.rs)."
+            );
+        }
+        if self.spine.kind != "mqtt" {
+            warnings.push(format!(
+                "spine.kind = {:?} is not a spine `start` knows; no spine will be connected",
+                self.spine.kind
+            ));
+        }
+        // Same gap, one layer up: nothing constructs an EdgeAgent, so `[edge]`
+        // changes nothing. A warning, not a refusal, because the NanoPi
+        // reference deployment sets it.
+        if self.edge.enabled {
+            warnings.push(
+                "edge.enabled = true has no effect: the edge agent loop is not wired \
+                 into `start` (nothing constructs an EdgeAgent)"
+                    .to_string(),
+            );
         }
 
         // ── Channel allowlists ─────────────────────────────────────────────────
@@ -3174,31 +3190,22 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_empty_p2p_node_id() {
+    fn validate_refuses_the_unwired_p2p_spine() {
         let mut config = Config::default();
         config.spine.kind = "p2p".to_string();
-        config.spine.p2p_node_id = Some("  ".to_string());
-        assert!(config.validate().is_err());
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("not wired"), "{err}");
     }
 
     #[test]
-    fn validate_warns_p2p_node_id_bad_chars() {
+    fn validate_warns_that_edge_mode_does_nothing() {
         let mut config = Config::default();
-        config.spine.kind = "p2p".to_string();
-        config.spine.p2p_node_id = Some("node_one!".to_string());
+        config.edge.enabled = true;
         let warnings = config.validate().unwrap();
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("p2p_node_id") && w.contains("characters")));
-    }
-
-    #[test]
-    fn validate_accepts_good_p2p_node_id() {
-        let mut config = Config::default();
-        config.spine.kind = "p2p".to_string();
-        config.spine.p2p_node_id = Some("node-42-abc".to_string());
-        let warnings = config.validate().unwrap();
-        assert!(!warnings.iter().any(|w| w.contains("p2p_node_id")));
+        assert!(
+            warnings.iter().any(|w| w.contains("edge.enabled")),
+            "{warnings:?}"
+        );
     }
 
     #[test]

@@ -75,14 +75,15 @@ initial_backoff_ms = 500
 max_backoff_ms     = 15000
 backoff_multiplier = 2.0
 
-# ── P2P Spine ─────────────────────────────────────────────────────────────────
-# Instead of a central MQTT broker, use the built-in P2P mesh so peripheral
-# nodes discover each other via mDNS and communicate directly over TCP.
+# ── Spine ─────────────────────────────────────────────────────────────────────
+# This example used kind = "p2p". `start` never connected a P2P spine, so it ran
+# with no spine at all; validation now refuses "p2p" until it is wired. The P2P
+# settings below are kept for when it is (discovery is UDP broadcast, not mDNS).
 
 [spine]
-kind              = "p2p"
-host              = "0.0.0.0"
-port              = 1883                   # Ignored for P2P but kept for compat
+kind              = "mqtt"
+host              = "localhost"
+port              = 1883
 tool_timeout_secs = 45
 
 # P2P-specific settings

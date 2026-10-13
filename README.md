@@ -177,7 +177,7 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 
 **Multi-Device Orchestration** lets a single agent command a fleet of hardware nodes simultaneously. Each node registers its capabilities dynamically over the MQTT spine, and the central agent merges all available tools into a single unified registry.
 
-**MQTT Communication Spine** replaces direct serial-only connections with a scalable publish-subscribe model, so devices can live anywhere on the network (or the internet via a tunnel) and be added or removed without restarting the core agent. A **P2P broker-free mesh** lets nodes discover each other directly via UDP broadcast discovery + direct TCP.
+**MQTT Communication Spine** replaces direct serial-only connections with a scalable publish-subscribe model, so devices can live anywhere on the network (or the internet via a tunnel) and be added or removed without restarting the core agent. A **P2P broker-free mesh** (`crates/obc-spine/src/p2p.rs`: UDP broadcast discovery + direct TCP) exists as a library but is **not wired into `start`**; `spine.kind = "p2p"` is refused at validation rather than starting with no spine, as it silently did until 2026-10-13.
 
 **Multi-Modal I/O** provides a unified interface to the physical world: see (cameras on ESP32-S3 / Raspberry Pi), hear (I2S mics or the Sipeed 6+1 array), sense (I2C/SPI sensors like BME280, MPU6050, DHT22), and act (GPIO / actuators).
 
