@@ -137,14 +137,17 @@ typing_indicators = true
 
 [channels.discord]
 # token = "MTIz..."               # Discord bot token
+# allowed_users = ["123456789012345678"]   # required: empty refuses everyone
 
 [channels.slack]
 # app_token = "xapp-..."          # Slack Socket Mode app token
 # bot_token = "xoxb-..."          # Slack bot OAuth token
+# allowed_users = ["U0123ABCD"]   # required: empty refuses everyone
 
 [channels.matrix]
 # homeserver   = "https://matrix.example.com"
 # access_token = "syt_..."
+# allowed_users = ["@you:matrix.example.com"]   # required: empty refuses everyone
 
 [channels.irc]
 # The IRC adapter does not implement TLS yet, and config validation refuses
@@ -157,6 +160,7 @@ typing_indicators = true
 # channels = ["#oh-ben-claw", "#edge-ai"]
 # sasl_username = "nexus-prime"
 # sasl_password = "your-password"
+# allowed_users = ["your-registered-nick"]   # required: empty refuses everyone
 
 [channels.signal]
 # cli_url      = "http://localhost:8080"
@@ -166,6 +170,7 @@ typing_indicators = true
 [channels.mattermost]
 # server_url = "https://mm.example.com"
 # token      = "your-personal-access-token"
+# allowed_users = ["your-26-char-user-id"]   # required: empty refuses everyone
 
 # ── A2A (Agent-to-Agent) Protocol ─────────────────────────────────────────────
 # Advertise this agent on the A2A network so peer agents can discover and

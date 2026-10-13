@@ -179,6 +179,13 @@ fn default_tg_voice() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DiscordConfig {
     pub token: Option<String>,
+    /// Discord user IDs (snowflakes, e.g. `"123456789012345678"`).
+    /// Who may talk to the agent through this channel. **Empty refuses
+    /// everyone**: the agent holds physical tools, and a bot that answers
+    /// whoever finds it is a remote control for them. Until 2026-10-13 this
+    /// channel had no list at all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 /// Configuration for the Slack channel.
@@ -188,6 +195,13 @@ pub struct SlackConfig {
     pub app_token: Option<String>,
     /// Bot User OAuth Token (`xoxb-…`) used to post messages.
     pub bot_token: Option<String>,
+    /// Slack member IDs (e.g. `"U0123ABCD"`).
+    /// Who may talk to the agent through this channel. **Empty refuses
+    /// everyone**: the agent holds physical tools, and a bot that answers
+    /// whoever finds it is a remote control for them. Until 2026-10-13 this
+    /// channel had no list at all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 /// Configuration for the WhatsApp Business Cloud API channel.
@@ -230,6 +244,13 @@ pub struct MatrixConfig {
     pub homeserver: Option<String>,
     /// Access token for the bot Matrix account.
     pub access_token: Option<String>,
+    /// Matrix user IDs (e.g. `"@ben:matrix.org"`).
+    /// Who may talk to the agent through this channel. **Empty refuses
+    /// everyone**: the agent holds physical tools, and a bot that answers
+    /// whoever finds it is a remote control for them. Until 2026-10-13 this
+    /// channel had no list at all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 // ── IRC Configuration (new in Phase 10) ──────────────────────────────────────
@@ -273,6 +294,15 @@ pub struct IrcConfig {
     /// SASL PLAIN password.
     #[serde(default)]
     pub sasl_password: Option<String>,
+    /// IRC nicks. A nick is only an identity if the network enforces
+    /// registration (NickServ with enforcement); on one that does not, anyone
+    /// can take a listed nick, so treat this as a speed bump there.
+    /// Who may talk to the agent through this channel. **Empty refuses
+    /// everyone**: the agent holds physical tools, and a bot that answers
+    /// whoever finds it is a remote control for them. Until 2026-10-13 this
+    /// channel had no list at all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 fn default_irc_nick() -> String {
@@ -343,6 +373,13 @@ pub struct MattermostConfig {
     /// Team name the bot operates in (used for display only).
     #[serde(default)]
     pub team_name: Option<String>,
+    /// Mattermost user IDs (the 26-character ID, not the username).
+    /// Who may talk to the agent through this channel. **Empty refuses
+    /// everyone**: the agent holds physical tools, and a bot that answers
+    /// whoever finds it is a remote control for them. Until 2026-10-13 this
+    /// channel had no list at all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 /// Configuration for all channels.
@@ -405,9 +442,20 @@ pub struct FeishuConfig {
     #[serde(default)]
     pub app_secret: Option<String>,
     /// Verification token shown in the Event Subscription settings of the app.
-    /// When set, every incoming webhook payload's `token` field must match.
+    /// Every incoming webhook payload's `token` field must match. Required:
+    /// without it the channel does not start, because the listener is on
+    /// `0.0.0.0` and the token is the only thing that tells Feishu's POSTs from
+    /// anyone else's. (Until 2026-10-13 it was checked only "when set".)
     #[serde(default)]
     pub verification_token: Option<String>,
+    /// Feishu `open_id`s (e.g. `"ou_xxxxxxxx"`).
+    /// Who may talk to the agent through this channel. **Empty refuses
+    /// everyone**: the agent holds physical tools, and a bot that answers
+    /// whoever finds it is a remote control for them. Until 2026-10-13 this
+    /// channel had no list at all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+
     /// Local port for the webhook HTTP server (default: 18790).
     #[serde(default)]
     pub webhook_port: Option<u16>,
@@ -2533,6 +2581,54 @@ impl Config {
             }
         }
 
+        // ── Channel allowlists ─────────────────────────────────────────────────
+        // An empty `allowed_users` refuses everyone (fail closed), so a channel
+        // configured without one starts and then answers nobody. Said here, at
+        // boot, because the alternative is a bot that is silently deaf.
+        // "Configured" mirrors each adapter's own `new()` test, without the env
+        // fallbacks it also reads.
+        let ch = &self.channels;
+        for (name, configured, empty) in [
+            (
+                "discord",
+                ch.discord.token.is_some(),
+                ch.discord.allowed_users.is_empty(),
+            ),
+            (
+                "slack",
+                ch.slack.app_token.is_some() && ch.slack.bot_token.is_some(),
+                ch.slack.allowed_users.is_empty(),
+            ),
+            (
+                "matrix",
+                ch.matrix.homeserver.is_some() && ch.matrix.access_token.is_some(),
+                ch.matrix.allowed_users.is_empty(),
+            ),
+            (
+                "irc",
+                ch.irc.host.is_some(),
+                ch.irc.allowed_users.is_empty(),
+            ),
+            (
+                "mattermost",
+                ch.mattermost.server_url.is_some() && ch.mattermost.token.is_some(),
+                ch.mattermost.allowed_users.is_empty(),
+            ),
+            (
+                "feishu",
+                ch.feishu.app_id.is_some() && ch.feishu.app_secret.is_some(),
+                ch.feishu.allowed_users.is_empty(),
+            ),
+        ] {
+            if configured && empty {
+                warnings.push(format!(
+                    "channels.{name} is configured but channels.{name}.allowed_users is \
+                     empty, which refuses everyone: the bot will answer nobody until \
+                     you list who may use it"
+                ));
+            }
+        }
+
         // ── Channel token format validation ────────────────────────────────────
         if let Some(ref token) = self.channels.telegram.token {
             // Telegram bot tokens look like "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
@@ -2759,6 +2855,22 @@ mod tests {
         config.channels.irc.host = None;
         config.channels.irc.use_tls = true;
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn validate_warns_when_a_channel_allowlist_refuses_everyone() {
+        let mut config = Config::default();
+        config.channels.discord.token = Some("t".into());
+        let warnings = config.validate().unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("channels.discord.allowed_users")),
+            "{warnings:?}"
+        );
+        config.channels.discord.allowed_users = vec!["123".into()];
+        let warnings = config.validate().unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("allowed_users")));
     }
 
     #[test]

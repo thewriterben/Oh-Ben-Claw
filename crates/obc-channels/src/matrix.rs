@@ -24,7 +24,7 @@
 // would make the struct a worse description of the wire than the vendor's own docs.
 // Scoped to this file deliberately — the crate root carries no blanket allow.
 #![allow(dead_code)]
-use crate::utils::chunk_text;
+use crate::utils::{chunk_text, sender_allowed};
 use anyhow::{Context, Result};
 use obc_agent::Agent;
 use obc_config::{MatrixConfig, ProviderConfig};
@@ -124,6 +124,7 @@ pub struct MatrixChannel {
     homeserver: String,
     access_token: String,
     http: reqwest::Client,
+    allowed_users: Vec<String>,
 }
 
 impl MatrixChannel {
@@ -153,6 +154,7 @@ impl MatrixChannel {
             homeserver,
             access_token,
             http: reqwest::Client::new(),
+            allowed_users: config.allowed_users.clone(),
         })
     }
 
@@ -296,6 +298,10 @@ impl MatrixChannel {
             return Ok(());
         }
 
+        if !sender_allowed("matrix", &self.allowed_users, &event.sender) {
+            return Ok(());
+        }
+
         let body = match event.content["body"].as_str() {
             Some(b) if !b.trim().is_empty() => b.trim().to_string(),
             _ => return Ok(()),
@@ -373,6 +379,7 @@ mod tests {
         let config = obc_config::MatrixConfig {
             homeserver: None,
             access_token: None,
+            allowed_users: vec![],
         };
         assert!(config.homeserver.is_none());
         assert!(config.access_token.is_none());

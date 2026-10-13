@@ -17,7 +17,7 @@
 //! messages only.
 
 use crate::typing::TypingTask;
-use crate::utils::chunk_text;
+use crate::utils::{chunk_text, sender_allowed};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use obc_agent::Agent;
@@ -61,6 +61,7 @@ pub struct DiscordChannel {
     http: reqwest::Client,
     /// Whether to send typing indicators while the agent processes.
     typing_indicators: bool,
+    allowed_users: Vec<String>,
 }
 
 impl DiscordChannel {
@@ -95,6 +96,7 @@ impl DiscordChannel {
             token,
             http: reqwest::Client::new(),
             typing_indicators,
+            allowed_users: config.allowed_users.clone(),
         })
     }
 
@@ -239,6 +241,10 @@ impl DiscordChannel {
             .to_string();
 
         let author_id = data["author"]["id"].as_str().unwrap_or("unknown");
+        // Before the built-in commands too: `!clear` wipes a session.
+        if !sender_allowed("discord", &self.allowed_users, author_id) {
+            return Ok(());
+        }
 
         tracing::debug!(
             channel_id = %channel_id,
