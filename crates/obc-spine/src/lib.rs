@@ -226,6 +226,18 @@ pub type MessageHandler = Arc<dyn Fn(&str, &[u8]) + Send + Sync>;
 /// Registered `(topic_filter, handler)` pairs the event loop dispatches to.
 type Handlers = Arc<std::sync::Mutex<Vec<(String, MessageHandler)>>>;
 
+/// Every filter the brain must hold on the broker: the two it always needs
+/// (announcements, tool results) followed by the handlers' own. Re-issued on
+/// each ConnAck, because a clean session forgets them across a reconnect.
+fn subscription_filters(handler_filters: &[String]) -> Vec<String> {
+    let mut filters = vec![
+        format!("{TOPIC_PREFIX}/nodes/+/announce"),
+        format!("{TOPIC_PREFIX}/tools/+/result/+"),
+    ];
+    filters.extend(handler_filters.iter().cloned());
+    filters
+}
+
 /// MQTT topic-filter match (`+` = one level, `#` = rest).
 pub fn topic_matches(filter: &str, topic: &str) -> bool {
     let fs: Vec<&str> = filter.split('/').collect();
@@ -369,13 +381,12 @@ impl SpineClient {
         let (client, mut event_loop) = AsyncClient::new(opts, 128);
         self.mqtt_client = Some(client.clone());
 
-        // Subscribe to node announcements and tool results
-        client
-            .subscribe(format!("{TOPIC_PREFIX}/nodes/+/announce"), QoS::AtLeastOnce)
-            .await?;
-        client
-            .subscribe(format!("{TOPIC_PREFIX}/tools/+/result/+"), QoS::AtLeastOnce)
-            .await?;
+        // Subscribe to node announcements and tool results. These are queued
+        // before the first ConnAck; every later ConnAck re-issues them (below).
+        for filter in subscription_filters(&[]) {
+            client.subscribe(filter, QoS::AtLeastOnce).await?;
+        }
+        let resubscriber = client.clone();
 
         let pending_calls = Arc::clone(&self.pending_calls);
         let node_registry = Arc::clone(&self.node_registry);
@@ -471,6 +482,25 @@ impl SpineClient {
                             }
                         }
                     }
+                    // The session is clean, so a broker that drops us forgets our
+                    // subscriptions, and rumqttc does not restore them. Without
+                    // this, announcements and results stop arriving after the
+                    // first reconnect and every tool call times out. `try_` because
+                    // this task is the request channel's only consumer: awaiting a
+                    // full channel here would wait on ourselves.
+                    Ok(Event::Incoming(Packet::ConnAck(_))) => {
+                        let extra: Vec<String> = handlers
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .iter()
+                            .map(|(filter, _)| filter.clone())
+                            .collect();
+                        for filter in subscription_filters(&extra) {
+                            if let Err(e) = resubscriber.try_subscribe(&filter, QoS::AtLeastOnce) {
+                                tracing::warn!(%filter, "MQTT resubscribe after connect failed: {e}");
+                            }
+                        }
+                    }
                     Ok(_) => {}
                     Err(e) => {
                         tracing::warn!("MQTT event loop error: {}", e);
@@ -535,9 +565,14 @@ impl SpineClient {
 
         let request_topic = topic_tool_call(node_id, tool_name);
         let payload = serde_json::to_vec(&request)?;
-        client
+        if let Err(e) = client
             .publish(request_topic, QoS::AtLeastOnce, false, payload)
-            .await?;
+            .await
+        {
+            // Nothing will ever answer a call that was never sent.
+            self.pending_calls.lock().await.remove(&call_id);
+            return Err(e.into());
+        }
 
         let timeout = Duration::from_secs(self.config.tool_timeout_secs);
         match tokio::time::timeout(timeout, rx).await {
@@ -707,6 +742,19 @@ impl Tool for MqttNodeTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resubscription_covers_announces_results_and_every_handler() {
+        let filters = subscription_filters(&["obc/fleet/heartbeat/+".to_string()]);
+        // What a reconnect restores must still route what the brain listens for.
+        assert!(filters
+            .iter()
+            .any(|f| topic_matches(f, &topic_announce("node-1"))));
+        assert!(filters
+            .iter()
+            .any(|f| topic_matches(f, &topic_tool_result("node-1", "c-1"))));
+        assert!(filters.iter().any(|f| f == "obc/fleet/heartbeat/+"));
+    }
 
     #[test]
     fn topic_matching_handles_wildcards() {
