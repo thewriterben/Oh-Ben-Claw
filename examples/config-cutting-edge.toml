@@ -147,11 +147,14 @@ typing_indicators = true
 # access_token = "syt_..."
 
 [channels.irc]
-host     = "irc.libera.chat"
-port     = 6697
-use_tls  = true
-nickname = "nexus-prime"
-channels = ["#oh-ben-claw", "#edge-ai"]
+# The IRC adapter does not implement TLS yet, and config validation refuses
+# use_tls = true rather than send credentials in the clear. Libera requires
+# TLS for SASL, so this stays commented out until the adapter has it.
+# host     = "irc.libera.chat"
+# port     = 6697
+# use_tls  = true
+# nickname = "nexus-prime"
+# channels = ["#oh-ben-claw", "#edge-ai"]
 # sasl_username = "nexus-prime"
 # sasl_password = "your-password"
 

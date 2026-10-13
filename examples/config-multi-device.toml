@@ -88,7 +88,7 @@ node_id = "rpi-living-room"
 # Connect to an IRC server and join channels.
 # host     = "irc.libera.chat"
 # port     = 6697
-# use_tls  = true
+# use_tls  = true   # not implemented yet: validation refuses this; see irc.rs
 # nickname = "oh-ben-claw"
 # channels = ["#ai-bots", "#myserver"]
 # Optional SASL authentication:

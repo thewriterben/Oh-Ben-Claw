@@ -2315,6 +2315,21 @@ impl Config {
         // nothing could reach. Implementing TLS means reinstating that feature on a
         // version whose certificate handling is not vulnerable, and wiring
         // `set_transport` — not just deleting this check.
+        // Same failure, second place. The IRC adapter opens a plain TcpStream
+        // whatever `use_tls` says (its `_tls` parameter is never read), and
+        // `use_tls` defaults to true on the TLS port, so `PASS` and the SASL
+        // PLAIN password went to a server that expected a handshake, in the
+        // clear. Found 2026-10-13. Wrapping the stream in tokio-rustls is the
+        // real fix; until then, cleartext has to be asked for by name.
+        if self.channels.irc.host.is_some() && self.channels.irc.use_tls {
+            anyhow::bail!(
+                "channels.irc.use_tls = true (the default), but the IRC adapter does \
+                 not implement TLS — the connection, including any password or SASL \
+                 credentials, would be cleartext. Set channels.irc.use_tls = false \
+                 (and a plaintext port, usually 6667) only for a server on a trusted \
+                 network, or leave IRC unconfigured."
+            );
+        }
         if self.spine.tls {
             anyhow::bail!(
                 "spine.tls = true, but MQTT-over-TLS is not implemented — the \
@@ -2716,6 +2731,28 @@ mod tests {
         let err = config.validate().unwrap_err().to_string();
         assert!(err.contains("not implemented"), "{err}");
         assert!(err.contains("cleartext"), "{err}");
+    }
+
+    #[test]
+    fn validate_refuses_irc_tls_it_cannot_provide() {
+        // The adapter never read `use_tls`, and it defaults to true: the
+        // password went out in the clear on the TLS port.
+        // Parsed, not `Config::default()`: the serde default is what a real
+        // config file gets, and it is the one that is true.
+        let mut config: Config =
+            toml::from_str("[channels.irc]\nhost = \"irc.example.org\"\n").unwrap();
+        assert!(
+            config.channels.irc.use_tls,
+            "default is what makes this bite"
+        );
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("does not implement TLS"), "{err}");
+        // Cleartext asked for by name is allowed, and IRC left unset is untouched.
+        config.channels.irc.use_tls = false;
+        config.validate().unwrap();
+        config.channels.irc.host = None;
+        config.channels.irc.use_tls = true;
+        config.validate().unwrap();
     }
 
     #[test]
