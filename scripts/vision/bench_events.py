@@ -436,13 +436,33 @@ class Link:
         print(f"  wrote {os.path.basename(path)}")
 
 
-def frame(link: Link, i: int, phase: str, t0: float) -> dict:
+def frame(link: Link, i: int, phase: str, t0: float, record: str | None = None,
+          quality: int = 8) -> dict:
+    """One step: ask the node's detector, or -- with `record` -- save a picture.
+
+    A recording keeps the pixels instead of the node's verdict, so candidate
+    detectors can be scored on them later (scripts/vision/compare_detectors.py
+    --session). The detector is not also asked: `camera_detect` and
+    `camera_capture` each take their own frame, so asking both would pair a
+    verdict with a different picture.
+    """
     sent = time.time()
-    o = link.request(f"f{i}", "camera_detect", {})
-    if not o or not o.get("ok"):
-        row = {"error": (o or {}).get("error", "no reply")}
+    if record:
+        o = link.request(f"f{i}", "camera_capture", {"quality": quality}, timeout=25)
+        if not o or not o.get("ok"):
+            row = {"error": (o or {}).get("error", "no reply")}
+        else:
+            data = base64.b64decode(o["result"])
+            name = f"{i:04d}.jpg"
+            with open(os.path.join(record, name), "wb") as fh:
+                fh.write(data)
+            row = {"file": f"frames/{name}", "bytes": len(data)}
     else:
-        row = o["result"] if isinstance(o["result"], dict) else json.loads(o["result"])
+        o = link.request(f"f{i}", "camera_detect", {})
+        if not o or not o.get("ok"):
+            row = {"error": (o or {}).get("error", "no reply")}
+        else:
+            row = o["result"] if isinstance(o["result"], dict) else json.loads(o["result"])
     row.update({"i": i, "phase": phase, "t_sent": sent, "t": round(sent - t0, 2)})
     return row
 
@@ -455,9 +475,13 @@ def live(args, t: dict) -> str:
     if node == LIVE_NODE:
         sys.exit(f"{args.port} is {LIVE_NODE}, the live mesh node. No camera command sent.")
     short = (node or "unknown").replace("obc-esp32-s3-", "")
+    stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
     out = os.path.join(ROOT, "results", "vision-events",
-                       f"{short}-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}")
+                       f"{short}-{stamp}" + (f"-rec-{args.mode}" if args.record else ""))
     os.makedirs(out, exist_ok=True)
+    record = os.path.join(out, "frames") if args.record else None
+    if record:
+        os.makedirs(record, exist_ok=True)
     print(f"{args.port}: {node or 'node unidentified'}  ->  {out}")
 
     marks: list[float] = []
@@ -480,7 +504,7 @@ def live(args, t: dict) -> str:
     rows, t0, i = [], time.time(), 0
     print(f"\nQUIET: {args.quiet} frames. Nothing moves" + (", lamp stays as it is." if lamp else "."))
     for _ in range(args.quiet):
-        rows.append(frame(link, i, "quiet", t0))
+        rows.append(frame(link, i, "quiet", t0, record, args.record_quality))
         i += 1
         if i % 10 == 0:
             print(f"  {i}/{args.quiet}", flush=True)
@@ -528,13 +552,14 @@ def live(args, t: dict) -> str:
 
     threading.Thread(target=countdown, daemon=True).start()
     while time.time() < end:
-        rows.append(frame(link, i, args.mode, t0))
+        rows.append(frame(link, i, args.mode, t0, record, args.record_quality))
         i += 1
         time.sleep(args.interval)
     armed.clear()
 
     with open(os.path.join(out, "cues.json"), "w", encoding="utf-8") as fh:
-        json.dump({"mode": args.mode, "cues": cues, "walk_seconds": args.walk_seconds}, fh)
+        json.dump({"mode": args.mode, "cues": cues, "walk_seconds": args.walk_seconds,
+                   "record": bool(record)}, fh)
     link.snap("snap1", os.path.join(out, "last.jpg"))
     with open(os.path.join(out, "trace.jsonl"), "w", encoding="utf-8") as fh:
         for r in rows:
@@ -554,6 +579,9 @@ def replay(out: str, t: dict, walk_s: float | None = None) -> dict:
     if os.path.isfile(cues_path):  # lamp runs before 2026-09-26 evening have none
         with open(cues_path, encoding="utf-8") as fh:
             cue = json.load(fh)
+    if cue.get("record"):
+        raise SystemExit(f"{out} is a recording (pictures, no node verdicts); score it with "
+                         "scripts/vision/compare_detectors.py --session " + out)
     if cue.get("mode") == "person":
         s = summarise_person(rows, cue["cues"], walk_s or cue["walk_seconds"], t)
     else:
@@ -675,6 +703,10 @@ def main() -> int:
                     help="how long after WALK NOW a frame counts as part of the walk "
                          "(default 11; with --replay, overrides the run's saved value)")
     ap.add_argument("--lead", type=float, default=15.0, help="seconds to get out of shot")
+    ap.add_argument("--record", action="store_true",
+                    help="save a picture every frame instead of asking the node's detector; "
+                         "score it with scripts/vision/compare_detectors.py --session DIR")
+    ap.add_argument("--record-quality", type=int, default=8, help="1..10, as camera_capture")
     ap.add_argument("--replay", metavar="DIR", help="re-score a saved run")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
@@ -688,6 +720,15 @@ def main() -> int:
         # was still in view at +10 s; the first default of 8 s cut walks short.
         args.walk_seconds = args.walk_seconds or 11.0
         out = live(args, t)
+        if args.record:
+            with open(os.path.join(out, "trace.jsonl"), encoding="utf-8") as fh:
+                rows = [json.loads(l) for l in fh if l.strip()]
+            saved = sum(1 for r in rows if "file" in r)
+            print(f"\n  recorded {saved}/{len(rows)} frames in {out}"
+                  + (f"  ({len(rows) - saved} failed)" if saved < len(rows) else ""))
+            print("  Nothing is scored on the node in a recording. Push it as a fixture; it is scored by\n"
+                  "  scripts/vision/compare_detectors.py --session <dir>.")
+            return 0
     else:
         ap.error("--port is required (scripts/which_esp32.ps1 names it), or --replay DIR")
     s = replay(out, t, args.walk_seconds if args.replay else None)

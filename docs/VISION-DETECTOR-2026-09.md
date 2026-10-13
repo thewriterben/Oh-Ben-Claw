@@ -555,3 +555,8 @@ difference between a person and a lamp, on either sensor, at either distance.
 What does differ is **where**: a lamp changes the whole frame at once, a
 walker changes the part of it they are in. That is the input to the next
 design, which is a proposal to write, not a change made here.
+
+**Next:** `docs/VISION-DETECTOR-PROPOSAL-2026-09.md` scores five candidate
+redesigns against the host fixture and two simulations of these failures, and
+recommends per-cell correlation in place of the warm-up gate -- after frames
+recorded on the Senses have confirmed it.
