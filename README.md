@@ -657,6 +657,8 @@ Commands:
   replay-decisions Replay a conscience decision log against the current
                    policy; flags drift, and fails only on non-determinism
   consent-check    Decide a multi-party-consent frame against a consent ledger
+  audit-verify     Verify the Track 0 action audit: the HMAC chain, and the
+                   Ed25519 signatures against the public key
   doctor           Run system diagnostics
   help             Print this message or the help of a subcommand
 
@@ -675,7 +677,7 @@ This block is condensed from `--help` output rather than remembered. It
 previously advertised a `setup` wizard and a `service` manager, neither of which
 has ever existed, and omitted four commands that do. The 2026-08 rewrite that
 said so still omitted four (`a2a-serve`, `eval-detector`, `replay-decisions`,
-`consent-check`); they were added on 2026-10-13. Check it against
+`consent-check`); they were added on 2026-10-13, with `audit-verify`. Check it against
 `oh-ben-claw --help` when a subcommand changes.
 
 ---
