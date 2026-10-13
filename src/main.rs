@@ -3035,6 +3035,40 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             "[[perception.polls]] configured but [perception] world_memory = false; nothing will be recorded"
         );
     }
+    // Cameras → mushroom body. `camera-watch` (another process) writes
+    // `camera.<node>`; this reads it and perceives only events. Same rule as
+    // the polls: a camera that asks to be perceived and cannot be says so once.
+    if !config.perception.camera_percepts.is_empty() {
+        match (&world_mem, &trajectory_store) {
+            (Some(world), Some(traj)) if traj.has_mushroom() => {
+                for node in config.perception.camera_percepts.clone() {
+                    let world = Arc::clone(world);
+                    let traj = Arc::clone(traj);
+                    info!(camera = %node, "camera events → mushroom body");
+                    tokio::spawn(async move {
+                        let mut percepts =
+                            oh_ben_claw::vision::camera_percepts::CameraPercepts::new(&node);
+                        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
+                        loop {
+                            ticker.tick().await;
+                            if let Err(e) = percepts.feed(&world, &traj) {
+                                tracing::warn!(camera = %node, "camera percept not recorded: {e}");
+                            }
+                        }
+                    });
+                }
+            }
+            (None, _) => tracing::warn!(
+                "[perception] camera_percepts configured but world_memory = false; \
+                 there are no camera facts to read"
+            ),
+            _ => tracing::warn!(
+                "[perception] camera_percepts configured but no mushroom body is attached \
+                 ([self_improvement.mushroom] enabled, and `semantic`); camera events \
+                 reach world memory only"
+            ),
+        }
+    }
     // Phase 16 P3: Track 0 staged rollout — clean-run record + auto-demotion.
     let rollout_tracker = Arc::new(oh_ben_claw::skill_forge::rollout::RolloutTracker::load(
         oh_ben_claw::skill_forge::rollout::RolloutTracker::default_path(),

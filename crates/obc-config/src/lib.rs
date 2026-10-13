@@ -785,6 +785,13 @@ pub struct PerceptionConfig {
     /// (detections, health, audio, spatial fusion); see [`GenericPollConfig`].
     #[serde(default)]
     pub polls: Vec<GenericPollConfig>,
+    /// Cameras whose events reach the mushroom body as percepts (entering
+    /// lighting_shift / nudged / blind / failed, and the start of each motion
+    /// episode), read from the `camera.<node>` facts `oh-ben-claw camera-watch
+    /// --node <node>` writes. Needs `world_memory = true` and a mushroom body
+    /// (`[self_improvement.mushroom]`). E.g. `["lilygo"]`.
+    #[serde(default)]
+    pub camera_percepts: Vec<String>,
     /// Vision-driven reflex + foresight rules keyed on ClawCam detections.
     #[serde(default)]
     pub vision_rules: VisionRulesConfig,

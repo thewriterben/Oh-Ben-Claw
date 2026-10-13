@@ -27,6 +27,7 @@
 //! thresholds were measured on.
 
 pub mod camera_health;
+pub mod camera_percepts;
 pub mod clawcam_actuate;
 pub mod clawcam_analytics;
 pub mod clawcam_ingest;

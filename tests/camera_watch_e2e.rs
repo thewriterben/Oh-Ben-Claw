@@ -17,6 +17,7 @@ use oh_ben_claw::agent::reflex::{Action, ReflexEngine};
 use oh_ben_claw::memory::world::WorldMemory;
 use oh_ben_claw::peripherals::esp32_link::Esp32Link;
 use oh_ben_claw::vision::camera_health::{camera_health_rules, CameraHealth, CameraMode};
+use oh_ben_claw::vision::camera_percepts::CameraPercepts;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,6 +75,8 @@ async fn frames_become_health_facts_and_a_dead_camera_escalates() {
     let world = Arc::new(WorldMemory::open_in_memory().unwrap());
     let health = CameraHealth::new("lilygo").with_world_memory(Arc::clone(&world));
     let engine = ReflexEngine::new(camera_health_rules("lilygo", 0));
+    let mut percepts = CameraPercepts::new("lilygo");
+    let mut perceived = Vec::new();
     let mut link = Esp32Link::new(host);
 
     // The loop `run_camera_watch` runs, minus the port and the sleep.
@@ -86,6 +89,7 @@ async fn frames_become_health_facts_and_a_dead_camera_escalates() {
         events += usize::from(v.motion_event);
         modes.push(v.mode);
         escalations.extend(engine.tick(&world, i * 800).unwrap());
+        perceived.extend(percepts.tick(&world).unwrap().into_iter().map(|p| p.text));
     }
 
     // The recorded frames: warm-up first, then the person set's 20 motion
@@ -106,4 +110,17 @@ async fn frames_become_health_facts_and_a_dead_camera_escalates() {
     assert!(
         matches!(&escalations[0].action, Action::Escalate { reason } if reason.contains("lilygo"))
     );
+
+    // And what the mushroom body would be handed: not 20 motion frames but
+    // one episode (they are 0.8 s apart), then the camera dying.
+    assert_eq!(
+        perceived
+            .iter()
+            .filter(|t| t.starts_with("motion at camera lilygo"))
+            .count(),
+        1,
+        "{perceived:?}"
+    );
+    assert_eq!(perceived.last().unwrap(), "camera lilygo stopped capturing");
+    assert!(perceived.len() <= 8, "events, not frames: {perceived:?}");
 }
