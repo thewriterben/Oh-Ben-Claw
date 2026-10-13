@@ -18,9 +18,13 @@
 //!
 //! The registered vision tool is `vision_analyze` in `tools::builtin::vision`,
 //! which is unaffected.
+//!
+//! [`motion`] is the frame-difference classifier measured on the camera bench
+//! (`scripts/vision/classify.py`), ported so CI holds it to the fixture.
 
 pub mod clawcam_actuate;
 pub mod clawcam_analytics;
 pub mod clawcam_ingest;
 pub mod clawcam_rules;
 pub mod clawcam_spatial;
+pub mod motion;

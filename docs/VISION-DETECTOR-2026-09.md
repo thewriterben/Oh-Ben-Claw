@@ -141,8 +141,33 @@ whole thing exists for. **Verified to fail:** raising `FRAC_HI` to 0.99 blinds
 the detector and the check reports 2 regressions and exits 1. A guard nobody has
 seen fail is not a guard.
 
-Not wired into CI yet. It needs `numpy` and `Pillow`, which the host test job
-does not currently install.
+**In CI since 2026-10-13, as a Rust port.** `crates/obc-vision/src/motion.rs`
+is the same rule with the same thresholds, taking greyscale buffers and nothing
+else, so the node can include the file the CI tests.
+`crates/obc-vision/tests/motion_fixture.rs` holds it to this fixture with no
+numpy or Pillow, in two parts:
+
+- **The rule.** `classify.py --scores` writes the Python's per-pair scores to
+  `tests/fixtures/vision-bench-2026-09-16/scores.txt`. Run through the Rust
+  rule, they must reproduce every recorded class and the `EXPECTED` counts
+  exactly.
+- **The scoring.** Rust decodes each JPEG, converts it to grey the way Pillow
+  does, and scores it. Every pair must land within 0.001 (`frac`) and 0.01
+  (`edge`) of the Python's scores. On Pillow's own pixels the two agree to 1e-6.
+
+It is two parts because porting turned up a fragile frame.
+`camera_nudge/024.jpg` scores edge **4.199912** under Pillow's libjpeg, 0.00009
+inside `light`, and **4.200503** under zune-jpeg, inside `motion`. The recorded
+counts depend on the JPEG decoder at the fourth decimal place. A count check
+after a different decoder would fail on the decoder rather than the classifier.
+The test pins that frame as the only one allowed to disagree, so a second such
+frame gets noticed rather than absorbed.
+
+**Verified to fail:** lowering `EDGE_LIGHT` to 4.19 fails the rule check on
+`person/014.jpg` (edge 4.1925). Reverting a border detail of the gradient fails
+the scoring check. (The first draft zeroed the gradient on the whole one-pixel
+border; numpy's slicing keeps the component along the border. That draft read
+edge ~1% low and still matched every count.)
 
 ## What this means for the node
 

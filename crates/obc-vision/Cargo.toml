@@ -49,3 +49,9 @@ tokio = { version = "1.42", default-features = false, features = [
 # month whose dependency list came from `cargo check -p` rather than an import
 # survey -- the smallest count of the thirteen, and still not zero.
 tracing = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+# Decodes the camera-bench fixture for `tests/motion_fixture.rs`. A test-only
+# dependency: the classifier itself takes greyscale buffers and decodes nothing.
+zune-jpeg = "0.5"
+zune-core = "0.5"
