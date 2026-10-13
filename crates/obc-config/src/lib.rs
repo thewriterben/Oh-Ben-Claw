@@ -201,6 +201,12 @@ pub struct WhatsAppConfig {
     pub verify_token: Option<String>,
     /// Local port for the webhook HTTP server (default: 8444).
     pub webhook_port: Option<u16>,
+    /// The Meta app secret (App Dashboard → Settings → Basic). Every webhook
+    /// POST must carry `X-Hub-Signature-256`, an HMAC-SHA256 of the raw body
+    /// under this secret; one that does not is refused. Required: without it
+    /// the channel does not start (or set `WHATSAPP_APP_SECRET`).
+    #[serde(default)]
+    pub app_secret: Option<String>,
 }
 
 /// Configuration for the iMessage channel (macOS only).

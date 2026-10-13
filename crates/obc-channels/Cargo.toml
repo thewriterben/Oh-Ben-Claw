@@ -29,6 +29,10 @@ axum = { version = "0.8", default-features = false, features = ["json", "http1",
 base64 = "0.22"
 console = "0.15"
 futures-util = { version = "0.3", default-features = false }
+# The WhatsApp webhook's X-Hub-Signature-256 check (HMAC-SHA256 of the body).
+hex = "0.4"
+hmac = "0.12"
+sha2 = "0.10"
 obc-agent = { path = "../obc-agent" }
 obc-reflex = { path = "../obc-reflex" }
 obc-config = { path = "../obc-config" }
