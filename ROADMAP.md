@@ -18,7 +18,7 @@ The initial release establishes the core architecture and demonstrates the key c
 - [x] ESP32-S3 sensor tools (camera, audio, sensor read) (`src/peripherals/sensors.rs`)
 - [x] ESP32-S3 firmware with serial + MQTT support (`firmware/obc-esp32-s3`)
 - [x] Configuration schema with MQTT Spine and multi-board support (`src/config/mod.rs`)
-- [x] CLI with `start`, `status`, `peripheral`, and `service` subcommands (`src/main.rs`)
+- [x] CLI with `start`, `status`, and `peripheral` subcommands (`src/main.rs`). This row also listed a `service` subcommand, which has never existed (corrected 2026-10-13)
 - [x] Architecture documentation (`docs/architecture/ARCHITECTURE.md`)
 - [x] Hardware datasheets (`docs/datasheets/`)
 - [x] CI/CD pipeline (`.github/workflows/ci.yml`)
@@ -253,7 +253,7 @@ Oh-Ben-Claw now exposes the same feature through its TOML configuration.
 
 - [x] **`ProxyConfig`** — `[proxy]` TOML section with `host`, `port`, `kind` (`http`/`socks5`), and optional credentials (`src/config/mod.rs`)
 - [x] `ProxyConfig::url()` builds the proxy URL string
-- [x] `ProxyConfig::apply_to_env()` sets `HTTP_PROXY` / `HTTPS_PROXY` for all downstream HTTP clients
+- [~] `ProxyConfig::apply_to_env()` sets `HTTP_PROXY` / `HTTPS_PROXY` for all downstream HTTP clients — **it has no callers** (found 2026-10-13): `[proxy]` parses and validates, and outbound traffic does not use it. Wiring it is not one line: it would also send a local Ollama and the gateway's own calls through the proxy unless `NO_PROXY` is set alongside, and it logs the URL with credentials in it
 - [x] `Config::validate()` extended to reject proxy configs missing `host` or `port`
 
 ### Feishu/Lark Channel (inspired by MimiClaw's Feishu integration)

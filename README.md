@@ -7,7 +7,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://github.com/thewriterben/Oh-Ben-Claw/actions"><img src="https://img.shields.io/github/actions/workflow/status/thewriterben/Oh-Ben-Claw/ci.yml?branch=main" alt="CI" /></a>
   <a href="https://github.com/thewriterben/Oh-Ben-Claw/releases"><img src="https://img.shields.io/github/v/release/thewriterben/Oh-Ben-Claw?include_prereleases" alt="Release" /></a>
-  <img src="https://img.shields.io/badge/tests-1000%2B%20passing-brightgreen" alt="1000+ tests passing" />
+  <img src="https://img.shields.io/badge/tests-1900%2B%20passing-brightgreen" alt="1900+ tests passing" />
   <img src="https://img.shields.io/badge/rust-stable-orange" alt="Rust stable" />
 </p>
 
@@ -177,7 +177,7 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 
 **Multi-Device Orchestration** lets a single agent command a fleet of hardware nodes simultaneously. Each node registers its capabilities dynamically over the MQTT spine, and the central agent merges all available tools into a single unified registry.
 
-**MQTT Communication Spine** replaces direct serial-only connections with a scalable publish-subscribe model, so devices can live anywhere on the network (or the internet via a tunnel) and be added or removed without restarting the core agent. A **P2P broker-free mesh** lets nodes discover each other directly via mDNS + TCP.
+**MQTT Communication Spine** replaces direct serial-only connections with a scalable publish-subscribe model, so devices can live anywhere on the network (or the internet via a tunnel) and be added or removed without restarting the core agent. A **P2P broker-free mesh** lets nodes discover each other directly via UDP broadcast discovery + direct TCP.
 
 **Multi-Modal I/O** provides a unified interface to the physical world: see (cameras on ESP32-S3 / Raspberry Pi), hear (I2S mics or the Sipeed 6+1 array), sense (I2C/SPI sensors like BME280, MPU6050, DHT22), and act (GPIO / actuators).
 
@@ -274,7 +274,7 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 
 **Operations** — `oh-ben-claw doctor` health checks (now including subsystem/safing coherence), token **cost tracking** with persistent budgets, **observability** (metrics + spans), scheduled tasks, encrypted secrets **vault**, and a tamper-evident **audit chain**.
 
-> **Nodes are authenticated now; their trust score is still not consulted.**
+> **Nodes are authenticated, and their trust score is consulted.**
 > This block said "**Nodes are not authenticated**" — that was true when written
 > on 2026-07-30 (`1a11d23`) and stopped being true the next day, and nothing
 > updated it for two days. Correcting a stale claim with a claim that then goes
@@ -283,7 +283,7 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 >
 > | Claim the old note made | Now (callers outside the defining module's own tests) |
 > |---|---|
-> | `pair_node` has zero callers | **one** — `spine/mod.rs:273`, inside `admit_announcement` |
+> | `pair_node` has zero callers | **one** — in `admit_announcement` (`crates/obc-spine/src/lib.rs`) |
 > | the `pairing` field is never read | **six** reads across `agent/edge.rs`, `spine/mod.rs`, `spine/p2p.rs` |
 > | `require_pairing` gates nothing | it selects `Admission::Admit` / `Refuse` for every inbound `NodeAnnouncement` on MQTT and P2P |
 > | `is_trusted` has zero callers | **still zero** |
@@ -296,12 +296,16 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 > `tests/pairing_admission_gate.rs` and `tests/frame_auth_wire.rs` drive both,
 > including the forged-token and wrong-node cases.
 >
-> **The gap that remains** is the one the old note named last and got backwards.
-> `src/security/trust.rs` computes a behavioural trust score and decays it on
-> misbehaviour — and `is_trusted` has no callers, so nothing ever asks. The old
-> note said trust decays but nothing establishes it; establishment is what got
-> built, and consultation is what is still missing. A score nobody reads is the
-> same shape as a gate nobody calls, one layer up.
+> **The behavioural trust score** (`crates/obc-safety/src/trust.rs`) is read on
+> every physical tool call when `[safety] dynamic_trust = true` (the shipped
+> default): an untrusted node is refused by the agent's own check, and a node on
+> probation loses auto-approval through `ApprovalManager::decide`. That second
+> tier was inert until 2026-10-13 — `main.rs` built the approval manager without
+> the scorer, so under `Full` autonomy a probation node's actions went through.
+> This note said "nothing ever asks" after both checks existed; the half that
+> was true was the probation tier, and it said the wrong half. What still has no
+> caller is the *pairing* manager's `is_trusted`
+> (`crates/obc-safety/src/pairing.rs`), which is a different question.
 
 > **Tools are not sandboxed, and there is a layer that helps.** `src/runtime/`
 > held a `native` / `docker` / `wasm` abstraction that nothing ever called —
@@ -352,7 +356,7 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 
 | Device | Transport | Capabilities |
 |---|---|---|
-| Waveshare ESP32-S3 Touch LCD 2.1 | Serial / MQTT | GPIO, Camera (OV2640), Microphone (I2S), Touch Display, Speaker |
+| Waveshare ESP32-S3 Touch LCD 2.1 | Serial / MQTT | GPIO, Microphone (I2S), Touch Display, Speaker (no camera connector — the `camera` feature is a `compile_error` for this board) |
 | Seeed XIAO ESP32S3-Sense | Serial / MQTT | Camera (OV2640), Microphone (PDM), GPIO, Wi-Fi, BLE |
 | Sipeed 6+1 Mic Array | USB (UAC1) / Serial | Far-field 6+1 MEMS microphone array |
 | ESP32-S3 (generic) | Serial / MQTT | GPIO, Camera, Microphone, Sensors |
@@ -645,7 +649,14 @@ Commands:
   skill            Manage learned skills and their Track 0 staged rollout
   mcp-serve        Run the MCP server standalone (stdio, or http for gateways
                    and the official conformance suite)
+  a2a-serve        Serve this agent over A2A: the well-known agent card and
+                   the JSON-RPC endpoint other agents call
   judge-calibrate  Measure LLM-judge calibration against a gold label set (κ)
+  eval-detector    Measure the perception detector's miss rate against a
+                   human-labeled evaluation set
+  replay-decisions Replay a conscience decision log against the current
+                   policy; flags drift, and fails only on non-determinism
+  consent-check    Decide a multi-party-consent frame against a consent ledger
   doctor           Run system diagnostics
   help             Print this message or the help of a subcommand
 
@@ -660,9 +671,12 @@ Environment: `OBC_CONFIG` (config file), `OBC_DATA_DIR` (data root),
 `OBC_VAULT_PASSWORD`, `OBC_BROWSER_CDP_URL`. Provider keys are read directly —
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`.
 
-This block is generated from `--help` output rather than remembered. It
+This block is condensed from `--help` output rather than remembered. It
 previously advertised a `setup` wizard and a `service` manager, neither of which
-has ever existed, and omitted four commands that do.
+has ever existed, and omitted four commands that do. The 2026-08 rewrite that
+said so still omitted four (`a2a-serve`, `eval-detector`, `replay-decisions`,
+`consent-check`); they were added on 2026-10-13. Check it against
+`oh-ben-claw --help` when a subcommand changes.
 
 ---
 
