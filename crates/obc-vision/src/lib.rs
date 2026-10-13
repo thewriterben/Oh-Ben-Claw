@@ -21,7 +21,11 @@
 //!
 //! [`motion`] is the frame-difference classifier measured on the camera bench
 //! (`scripts/vision/classify.py`), ported so CI holds it to the fixture.
+//! [`camera_health`] uses it to judge a camera's own state (warming, ok,
+//! lighting shift, nudged, blind, failed) as a `camera.{node}` fact. Nothing
+//! feeds it frames at runtime yet; see its module docs.
 
+pub mod camera_health;
 pub mod clawcam_actuate;
 pub mod clawcam_analytics;
 pub mod clawcam_ingest;

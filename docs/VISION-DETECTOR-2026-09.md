@@ -169,6 +169,29 @@ the scoring check. (The first draft zeroed the gradient on the whole one-pixel
 border; numpy's slicing keeps the component along the border. That draft read
 edge ~1% low and still matched every count.)
 
+## Camera health (2026-10-13)
+
+`crates/obc-vision/src/camera_health.rs` puts the classifier behind the same
+kind of verdict the power and comms suites write. Each camera gets a
+`camera.{node}` fact whose `mode` is one of `warming`, `ok`, `lighting_shift`,
+`nudged`, `blind` or `failed`. Only motion seen while `ok` is recorded as an
+event (`camera.{node}.motion`). `camera_health_rules` escalates on `blind` and
+`failed`, once per transition.
+
+- **Warm-up is two frames**, measured: in all four sets frame 000 is 35–53
+  grey levels off and frame 001 has settled. It is a frame count rather than a
+  brightness-settling test because a person moves the mean by up to 28 levels.
+  `tests/camera_health_fixture.rs` feeds every recorded sequence in unedited,
+  frame 000 included. A one-frame warm-up makes the quiet room report motion.
+- **Blind is contrast (standard deviation) below 10 for 3 frames.** It is not
+  brightness: the nudge set's darkest frame averages 29.8 and is a perfectly
+  good picture. The lowest standard deviation anywhere in the fixture is 48.5.
+  **Nothing blind has been recorded**, so this is a margin below what was seen,
+  not a measurement. Record a covered lens next time the camera is on the bench.
+
+It has **no runtime caller yet**: nothing on the host receives frames from a
+node. It is the consumer half, built against the real recordings first.
+
 ## What this means for the node
 
 The detector needs `frac` and `edge`, which means **pixel access**. The camera is

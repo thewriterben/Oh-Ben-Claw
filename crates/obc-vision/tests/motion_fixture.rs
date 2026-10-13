@@ -30,7 +30,9 @@
 
 use obc_vision::motion::{score, FrameClass, Scores, EDGE_LIGHT, EDGE_NUDGE, FRAC_HI};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+
+mod common;
+use common::{fixture, frame_files, grey};
 
 /// Decoder differences, with headroom over the measured maximum.
 const FRAC_TOL: f32 = 0.001;
@@ -38,10 +40,6 @@ const EDGE_TOL: f32 = 0.01;
 
 const SETS: [&str; 4] = ["baseline_still", "light_change", "person", "camera_nudge"];
 const CLASSES: [&str; 4] = ["quiet", "light", "motion", "nudge"];
-
-fn fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/vision-bench-2026-09-16")
-}
 
 /// One frame pair as `classify.py --scores` recorded it.
 struct Recorded {
@@ -86,46 +84,11 @@ fn expected(label: &str) -> [usize; 4] {
     }
 }
 
-/// Decode a JPEG to 8-bit greyscale exactly as Pillow's `convert("L")` does
-/// from RGB: `(R*19595 + G*38470 + B*7471 + 0x8000) >> 16`.
-fn grey(path: &Path) -> (Vec<u8>, usize, usize) {
-    use zune_core::colorspace::ColorSpace;
-    use zune_core::options::DecoderOptions;
-    use zune_jpeg::JpegDecoder;
-
-    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
-    let mut dec = JpegDecoder::new_with_options(std::io::Cursor::new(bytes), opts);
-    let rgb = dec
-        .decode()
-        .unwrap_or_else(|e| panic!("{}: {e:?}", path.display()));
-    let info = dec.info().expect("headers decoded");
-    let (w, h) = (usize::from(info.width), usize::from(info.height));
-    assert_eq!(rgb.len(), w * h * 3, "{}", path.display());
-    let luma = rgb
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .map(|&[r, g, b]| {
-            let (r, g, b) = (u32::from(r), u32::from(g), u32::from(b));
-            ((r * 19595 + g * 38470 + b * 7471 + 0x8000) >> 16) as u8
-        })
-        .collect();
-    (luma, w, h)
-}
-
 /// This side's scores for every pair in one set, keyed by the later frame's
 /// file name. Frame 000 is discarded: auto-exposure converging after the
 /// port-open reset (see `classify.py`).
 fn decoded_scores(label: &str) -> BTreeMap<String, Scores> {
-    let dir = fixture().join(label);
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
-        .collect();
-    files.sort();
-    let files = &files[1..];
+    let files = &frame_files(label)[1..];
     let frames: Vec<_> = files.iter().map(|p| grey(p)).collect();
     let dump = std::env::var_os("OBC_MOTION_DUMP").is_some();
     let mut out = BTreeMap::new();
