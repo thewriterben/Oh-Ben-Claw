@@ -5,6 +5,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — `[edge]` does something (2026-10-30)
+
+### Fixed
+
+- **`[edge]` takes effect at `start`.** The section parsed, validated, was
+  written into every generated NanoPi config, and `run_start` read none of it;
+  `validate` warned as much. Now `enabled = true` builds the ordinary agent
+  (safety gate, auditor, approval and trust intact) with
+  `max_tool_iterations` as a ceiling on `[agent]`'s and
+  `max_history_messages` as its history window. `p2p_enabled = true` joins the
+  broker-free P2P mesh beside the MQTT spine, with `[security]` pairing and
+  frame auth, and registers peer tools as peers announce rather than once at
+  boot. Failing to join stops startup. `--no-spine` skips the mesh. The
+  `[spine]` `p2p_*` keys, also read by nothing until now, configure it.
+- With `[orchestrator]` enabled (as in the NanoPi reference config) the limits
+  bound the orchestrator's inner agent, the one serving traffic.
+- Refused at load: `edge.p2p_enabled` without `edge.enabled`. `spine.kind = "p2p"` is still refused and now
+  points at `[edge]`.
+
+---
+
 ## Unreleased — Only the schemas a turn needs (2026-09-28)
 
 ### Added

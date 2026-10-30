@@ -122,6 +122,29 @@ impl Default for P2pConfig {
     }
 }
 
+impl crate::SpineConfig {
+    /// The P2P spine `[spine]` describes: each `p2p_*` key that is set, the
+    /// default for each that is not, and the spine's own `tool_timeout_secs`.
+    ///
+    /// The `p2p_*` keys parsed from the day they were added and nothing read
+    /// them, because nothing in the binary built a `P2pSpine`. This is where
+    /// they start to mean something.
+    pub fn p2p_config(&self) -> P2pConfig {
+        let d = P2pConfig::default();
+        P2pConfig {
+            node_id: self.p2p_node_id.clone().unwrap_or(d.node_id),
+            bind_host: self.p2p_bind_host.clone().unwrap_or(d.bind_host),
+            tcp_port: self.p2p_tcp_port.unwrap_or(d.tcp_port),
+            discovery_port: self.p2p_discovery_port.unwrap_or(d.discovery_port),
+            peer_timeout_secs: self.p2p_peer_timeout_secs.unwrap_or(d.peer_timeout_secs),
+            tool_timeout_secs: self.tool_timeout_secs,
+            announce_interval_secs: self
+                .p2p_announce_interval_secs
+                .unwrap_or(d.announce_interval_secs),
+        }
+    }
+}
+
 // ── Wire Types ────────────────────────────────────────────────────────────────
 
 /// UDP broadcast datagram used for peer discovery.
@@ -473,6 +496,39 @@ impl P2pSpine {
         }
         tools
     }
+
+    /// Tools of the peers not in `seen`, adding those peers to it.
+    ///
+    /// For a caller that registers tools as peers appear rather than once.
+    /// Peers announce every `announce_interval_secs` (10 s by default), so a
+    /// single `build_p2p_tools` shortly after `start` sees almost nobody. A peer
+    /// is taken once: a later change to its tool list is not picked up, and a
+    /// peer that leaves keeps its tools registered, failing as unreachable.
+    pub async fn new_peer_tools(
+        self: &Arc<Self>,
+        seen: &mut std::collections::HashSet<String>,
+    ) -> Vec<Box<dyn Tool>> {
+        let registry = self.peer_registry.read().await;
+        let mut tools: Vec<Box<dyn Tool>> = Vec::new();
+        for (node_id, peer) in registry.iter() {
+            if !seen.insert(node_id.clone()) {
+                continue;
+            }
+            for spec in &peer.announcement.tools {
+                tools.push(Box::new(P2pNodeTool {
+                    node_id: node_id.clone(),
+                    spec: spec.clone(),
+                    spine: Arc::clone(self),
+                }));
+            }
+        }
+        tools
+    }
+
+    /// How often this spine expects to hear from each peer.
+    pub fn announce_interval(&self) -> Duration {
+        Duration::from_secs(self.config.announce_interval_secs)
+    }
 }
 
 // ── TCP Framing Helpers ───────────────────────────────────────────────────────
@@ -711,5 +767,78 @@ mod tests {
         // Just verify construction succeeds — network operations are tested
         // via integration tests that require an actual network interface.
         assert_eq!(spine.config.node_id, "test-spine");
+    }
+
+    #[test]
+    fn spine_p2p_keys_reach_the_p2p_config() {
+        let set = crate::SpineConfig {
+            p2p_node_id: Some("nanopi-kitchen".to_string()),
+            p2p_bind_host: Some("192.168.1.20".to_string()),
+            p2p_tcp_port: Some(45001),
+            p2p_discovery_port: Some(45000),
+            p2p_peer_timeout_secs: Some(90),
+            p2p_announce_interval_secs: Some(5),
+            tool_timeout_secs: 12,
+            ..crate::SpineConfig::default()
+        }
+        .p2p_config();
+        assert_eq!(set.node_id, "nanopi-kitchen");
+        assert_eq!(set.bind_host, "192.168.1.20");
+        assert_eq!((set.tcp_port, set.discovery_port), (45001, 45000));
+        assert_eq!(set.peer_timeout_secs, 90);
+        assert_eq!(set.announce_interval_secs, 5);
+        assert_eq!(set.tool_timeout_secs, 12);
+
+        // Unset keys fall back to the P2P defaults, not to zero.
+        let unset = crate::SpineConfig::default().p2p_config();
+        assert_eq!((unset.tcp_port, unset.discovery_port), (44445, 44444));
+        assert!(unset.node_id.starts_with("obc-node-"), "{}", unset.node_id);
+    }
+
+    #[tokio::test]
+    async fn new_peer_tools_takes_each_peer_once() {
+        use crate::NodeToolSpec;
+        let spine = Arc::new(P2pSpine::new(P2pConfig::default()));
+        let peer = |id: &str, tools: &[&str]| P2pPeer {
+            announcement: NodeAnnouncement {
+                node_id: id.to_string(),
+                board: "nanopi-neo3".to_string(),
+                firmware_version: "0.1.0".to_string(),
+                tools: tools
+                    .iter()
+                    .map(|t| NodeToolSpec {
+                        name: t.to_string(),
+                        description: String::new(),
+                        parameters: serde_json::json!({}),
+                    })
+                    .collect(),
+                metadata: serde_json::json!({}),
+            },
+            tcp_addr: "192.168.1.10:44445".parse().unwrap(),
+            last_seen: Instant::now(),
+        };
+        let mut seen = std::collections::HashSet::new();
+
+        spine
+            .peer_registry
+            .write()
+            .await
+            .insert("a".to_string(), peer("a", &["gpio_read", "dht22"]));
+        assert_eq!(spine.new_peer_tools(&mut seen).await.len(), 2);
+        assert!(spine.new_peer_tools(&mut seen).await.is_empty());
+
+        // A peer that turns up later is registered on the next pass, alone.
+        spine
+            .peer_registry
+            .write()
+            .await
+            .insert("b".to_string(), peer("b", &["camera_capture"]));
+        let names: Vec<String> = spine
+            .new_peer_tools(&mut seen)
+            .await
+            .iter()
+            .map(|t| t.name().to_string())
+            .collect();
+        assert_eq!(names, ["camera_capture"]);
     }
 }

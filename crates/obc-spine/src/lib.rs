@@ -904,7 +904,8 @@ pub struct SpineConfig {
     /// Timeout in seconds for tool call responses from peripheral nodes.
     #[serde(default = "default_tool_timeout_secs")]
     pub tool_timeout_secs: u64,
-    // ── P2P-specific fields (used when `kind = "p2p"`) ─────────────────────
+    // ── P2P-specific fields (used when `[edge].p2p_enabled` joins the mesh) ──
+    // Read by `SpineConfig::p2p_config` (p2p.rs). `kind = "p2p"` is still refused.
     /// Unique identifier for this node in the P2P mesh.
     /// Defaults to a random UUID prefix if not set.
     #[serde(default)]

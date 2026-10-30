@@ -22,11 +22,13 @@
 //! p2p_enabled          = true
 //! ```
 //!
-//! There is no `--edge` CLI flag: `EdgeAgent` is a library type, assembled by
-//! whoever is embedding the agent on the device. `[edge].enabled` is that caller's
-//! decision — it is what makes them build an `EdgeAgent` at all.
+//! `oh-ben-claw start` does not use this type. With `[edge].enabled` it builds the
+//! ordinary agent, safety gate and auditor included, under the same limits and on
+//! the same mesh (`obc_config::edge_start`, `run_start` in `src/main.rs`). This
+//! type takes a policy and pairing and nothing else, so it is for an embedder that
+//! wants a bare agent on a device, not for the binary.
 //!
-//! Everything else in the section is honoured here. `max_history_messages` and
+//! Everything in the section is honoured here too. `max_history_messages` and
 //! `max_tool_iterations` bound the agent at construction, and `p2p_enabled` starts
 //! the mesh: [`EdgeAgentBuilder::build_and_start`] joins the local P2P spine and
 //! registers whatever peer tools it finds, or does nothing at all when the key is

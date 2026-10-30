@@ -858,6 +858,54 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         None
     };
 
+    // `[edge]`: the ordinary agent on a smaller budget, and with `p2p_enabled`
+    // on the broker-free local mesh beside the MQTT spine. Until 2026-10-30 none
+    // of this was read; `validate` warned that it did nothing.
+    //
+    // Joining is fatal when it fails. A node that asked to be meshed and quietly
+    // runs isolated is the failure this replaces, and it does not show up until
+    // someone wonders why the kitchen sensor has no tools.
+    let edge = oh_ben_claw::config::edge_start(&config);
+    let p2p_mesh = match edge.as_ref().and_then(|e| e.mesh.clone()) {
+        Some(_) if no_spine => {
+            info!("--no-spine: not joining the P2P mesh [edge].p2p_enabled asked for");
+            None
+        }
+        Some(p2p_config) => {
+            let node_id = p2p_config.node_id.clone();
+            let mesh = spine::p2p::P2pSpine::new(p2p_config)
+                // Same pairing table and frame-auth secret as the MQTT spine. P2P
+                // discovery is a UDP broadcast with no broker in front of it, so
+                // this is where they matter most.
+                .with_pairing(
+                    security_ctx.pairing.clone(),
+                    config.security.require_pairing,
+                )
+                .with_frame_auth(obc_safety::frame_auth::FrameAuth::new(
+                    config.security.pairing_secret.clone(),
+                    config.security.require_frame_auth,
+                ))
+                .start()
+                .await
+                .context("[edge].p2p_enabled: could not join the P2P mesh")?;
+            // Announced with no tools: this node's P2P listener answers every
+            // incoming call with a refusal (obc-spine p2p.rs), so a peer shown
+            // our tool list would be shown tools it cannot call.
+            mesh.announce(&spine::NodeAnnouncement {
+                node_id: node_id.clone(),
+                board: "obc-brain".to_string(),
+                firmware_version: env!("CARGO_PKG_VERSION").to_string(),
+                tools: Vec::new(),
+                metadata: serde_json::json!({ "kind": "edge-agent" }),
+            })
+            .await
+            .context("[edge].p2p_enabled: could not announce on the P2P mesh")?;
+            info!(node_id = %node_id, "Joined the P2P mesh ([edge].p2p_enabled)");
+            Some(mesh)
+        }
+        None => None,
+    };
+
     // Keep a spine handle for the Phase 18 reflex sink (peripherals consumes
     // `spine_client` below).
     let reflex_spine = spine_client.clone();
@@ -3211,12 +3259,21 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
 
     // Build the plain reasoning agent, attaching Track 0 + Phase 16 when configured.
     let mut agent = Agent::new(
-        config.agent.clone(),
+        edge.as_ref()
+            .map_or_else(|| config.agent.clone(), |e| e.agent.clone()),
         provider,
         Arc::clone(&memory),
         all_tools,
     )
     .with_policy(security_ctx.policy.clone());
+    if let Some(e) = &edge {
+        agent = agent.with_max_history(e.max_history);
+        info!(
+            max_tool_iterations = e.agent.max_tool_iterations,
+            max_history = e.max_history,
+            "Edge mode: agent bounded by [edge]"
+        );
+    }
     if let Some(gate) = &safety_gate {
         agent = agent.with_safety_gate(Arc::clone(gate));
     }
@@ -3343,7 +3400,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         // (audit 2026-07-02 — these were previously missing in orchestrator
         // mode, which silently skipped policy + autonomy enforcement).
         let orch = OrchestratorAgent::new_with_deps(
-            config.agent.clone(),
+            // The agent serving traffic in this mode, so `[edge]` bounds it too.
+            edge.as_ref()
+                .map_or_else(|| config.agent.clone(), |e| e.agent.clone()),
             config.provider.clone(),
             Arc::clone(&memory),
             config.orchestrator.clone(),
@@ -3378,6 +3437,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 forge_dir: Some(oh_ben_claw::skill_forge::SkillForge::default_dir()),
                 experience_k,
                 taint_mode,
+                max_history: edge.as_ref().map(|e| e.max_history),
             },
         )?;
         let pool = orch.pool.clone();
@@ -3402,6 +3462,28 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         );
         (handle, None)
     };
+
+    // Peer tools join the serving agent as peers are heard, not once at boot:
+    // peers announce every `announce_interval`, so a single look shortly after
+    // joining sees almost nobody.
+    if let Some(mesh) = p2p_mesh {
+        let agent = handle.agent_arc();
+        tokio::spawn(async move {
+            let mut seen = std::collections::HashSet::new();
+            loop {
+                let tools = mesh.new_peer_tools(&mut seen).await;
+                if !tools.is_empty() {
+                    info!(
+                        count = tools.len(),
+                        peers = seen.len(),
+                        "P2P peer tools registered"
+                    );
+                    agent.add_tools(tools);
+                }
+                tokio::time::sleep(mesh.announce_interval()).await;
+            }
+        });
+    }
 
     // Phase 18 System 2: spawn the slow reasoner over the live agent. Wakes
     // arrive from the reflex chain (System 1), pass the novelty gate + hourly
