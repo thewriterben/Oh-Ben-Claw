@@ -126,15 +126,45 @@ pub struct ToolCallRequest {
     /// Truncated HMAC over the request body, hex.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
+    /// Ed25519 signature by `from`'s own key, hex: on P2P, the proof of who
+    /// is calling, which `mac` under the shared mesh secret is not
+    /// (`obc_safety::node_identity`). Absent on MQTT.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
 }
 
 impl ToolCallRequest {
-    /// The bytes the tag covers: this request with `ctr` and `mac` removed.
+    /// The bytes the tag covers: this request with `ctr`, `mac` and `sig`
+    /// removed. Unchanged on MQTT, where `sig` is never set.
     pub fn signed_bytes(&self) -> Vec<u8> {
         let mut unsigned = self.clone();
         unsigned.ctr = None;
         unsigned.mac = None;
+        unsigned.sig = None;
         serde_json::to_vec(&unsigned).unwrap_or_default()
+    }
+
+    /// Sign as `from` to `to` with this node's own key. Uses the counter
+    /// [`ToolCallRequest::sign`] set, or takes the next one for `from`.
+    pub fn sign_identity(
+        &mut self,
+        identity: &obc_safety::node_identity::NodeIdentity,
+        counters: &obc_safety::frame_auth::OutboundCounters,
+        from: &str,
+        to: &str,
+    ) {
+        let Some(ctr) = self.ctr.or_else(|| counters.next(from)) else {
+            tracing::error!(node = %from, "Outbound counter exhausted; sending unsigned.");
+            return;
+        };
+        self.ctr = Some(ctr);
+        self.sig = Some(identity.sign_frame(
+            obc_safety::node_identity::FrameKind::Request,
+            from,
+            to,
+            ctr,
+            &self.signed_bytes(),
+        ));
     }
 
     /// Attach a counter and tag for `key_node`, if `frame_auth` has a secret.
@@ -193,6 +223,10 @@ pub struct ToolCallResult {
     /// Truncated HMAC over the result body, hex. See `obc_safety::frame_auth`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
+    /// Ed25519 signature by the answering node's own key, hex. P2P only; see
+    /// [`ToolCallRequest::sig`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
 }
 
 impl ToolCallResult {
@@ -206,7 +240,30 @@ impl ToolCallResult {
         let mut unsigned = self.clone();
         unsigned.ctr = None;
         unsigned.mac = None;
+        unsigned.sig = None;
         serde_json::to_vec(&unsigned).unwrap_or_default()
+    }
+
+    /// Sign as `from` answering `to`, as [`ToolCallRequest::sign_identity`].
+    pub fn sign_identity(
+        &mut self,
+        identity: &obc_safety::node_identity::NodeIdentity,
+        counters: &obc_safety::frame_auth::OutboundCounters,
+        from: &str,
+        to: &str,
+    ) {
+        let Some(ctr) = self.ctr.or_else(|| counters.next(from)) else {
+            tracing::error!(node = %from, "Outbound counter exhausted; sending unsigned.");
+            return;
+        };
+        self.ctr = Some(ctr);
+        self.sig = Some(identity.sign_frame(
+            obc_safety::node_identity::FrameKind::Result,
+            from,
+            to,
+            ctr,
+            &self.signed_bytes(),
+        ));
     }
 
     /// Attach a counter and tag for `key_node`, as [`ToolCallRequest::sign`]
@@ -579,6 +636,7 @@ impl SpineClient {
             from: None,
             ctr: None,
             mac: None,
+            sig: None,
         };
         request.sign(&self.frame_auth, &self.out_counters, node_id);
 

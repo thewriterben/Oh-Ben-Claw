@@ -38,6 +38,7 @@ pub mod audit_sign;
 pub mod authorize;
 pub mod frame_auth;
 pub mod limits;
+pub mod node_identity;
 pub mod pairing;
 pub mod policy;
 pub mod redteam;
@@ -102,11 +103,22 @@ pub struct SecurityConfig {
     /// first without the second — the second needs every node upgraded to send
     /// a tag, and the moment it is on, one that has not been goes silent.
     ///
-    /// Uses `pairing_secret` as its root secret; per-node keys are derived from
-    /// it (`obc_safety::spine_tag::derive_node_key`), so no second secret to
-    /// distribute and lose.
+    /// On MQTT this uses `pairing_secret` as its root secret, with per-node keys
+    /// derived from it (`obc_safety::spine_tag::derive_node_key`): that proves
+    /// membership, not which member. On the P2P mesh every frame is also signed
+    /// with the sender's own identity key (`obc_safety::node_identity`), pinned
+    /// when it pairs, so there it proves which node sent it.
     #[serde(default)]
     pub require_frame_auth: bool,
+
+    /// P2P identity keys pinned by the operator: node id to the hex Ed25519
+    /// public key that node logs when it joins the mesh.
+    ///
+    /// Optional. Without an entry a node's key is pinned the first time it
+    /// announces after pairing, and kept. An entry here wins over that, and is
+    /// the only way to admit a node whose key changed.
+    #[serde(default)]
+    pub peer_keys: std::collections::BTreeMap<String, String>,
 
     /// The shared secret used for HMAC-based node pairing tokens.
     /// Should be a random 32-byte hex string. If not set, pairing is disabled.

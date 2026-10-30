@@ -5,6 +5,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A P2P frame proves which node sent it (2026-10-30)
+
+### Added
+
+- **Per-node identity keys on the P2P mesh.** Each node signs its requests and
+  results with its own Ed25519 key (`obc_safety::node_identity`), over the
+  sender, the recipient, the counter and the body. A node's key travels in its
+  announcement, signed by that key, and is pinned the first time it announces
+  after pairing; `[security] peer_keys` pins it by hand and wins. A frame that
+  does not verify under the pinned key for its `from` is dropped, before it can
+  move the replay window. So `p2p:<peer>` in trust, approval and audit is now
+  proven, not claimed. The HMAC tag stays on both paths, and MQTT and the
+  firmware are unchanged: there a tag still proves membership only.
+  Keys live in the data directory (`p2p_identity.key`, `p2p_peer_keys.json`).
+  No rotation yet: a re-keyed node is refused until its pin is removed.
+  Tests: `node_a_cannot_sign_a_frame_that_verifies_as_node_b`,
+  `a_member_cannot_call_as_another_member`,
+  `an_announcement_under_another_key_does_not_take_over_an_id`.
+
+---
+
 ## Unreleased — The P2P mesh answers calls, under pairing and frame auth (2026-10-30)
 
 ### Fixed
@@ -43,8 +64,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **What the frame tag proves.** Frame keys are derived from the one
   `pairing_secret` every node shares, so a good tag proves the caller holds
   the mesh secret, not which node it is: any node can sign as any other. A
-  caller's `from` is a label for trust and audit, not proof. Per-node keys are
-  not done yet.
+  caller's `from` is a label for trust and audit, not proof. (P2P frames are
+  now also signed with per-node keys; see above.)
 - **Review of the above:**
   - A peer's call is judged as `p2p:<peer>`: trust, approval and the scorer use
     that, and the Track 0 audit record reads `p2p:<peer> -> <node>`. Its

@@ -48,6 +48,10 @@ description = "Open Body Control's communication spine: the MQTT backbone betwee
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
+# The pinned peer keys: `p2p` checks an announcement proves its key and logs
+# the key it pins. Same versions obc-safety signs with.
+ed25519-dalek = "2"
+hex = "0.4"
 obc-audio = { path = "../obc-audio" }
 obc-fleet = { path = "../obc-fleet" }
 obc-memory = { path = "../obc-memory" }

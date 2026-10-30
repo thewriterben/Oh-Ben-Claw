@@ -42,6 +42,9 @@
 
 use std::sync::Mutex;
 
+use ed25519_dalek::VerifyingKey;
+
+use crate::node_identity::{self, FrameKind};
 use crate::replay::{ReplayVerdict, ReplayWindow};
 use crate::spine_tag;
 
@@ -127,16 +130,69 @@ impl FrameAuth {
         // Only a message that proved who sent it may move the replay window.
         // Judging the counter first would let anyone advance a node's window and
         // lock it out — a denial of service handed over by the ordering alone.
+        self.admit_counter(node_id, ctr)
+    }
+
+    /// Check one inbound P2P frame from `node_id` against the key pinned for
+    /// it ([`node_identity`](crate::node_identity)), addressed to `to`.
+    ///
+    /// The P2P counterpart of [`FrameAuth::verify_inbound`]: same switch, same
+    /// replay window, but the proof is a signature only `node_id` can make,
+    /// where a tag under a derived key is one any holder of the mesh secret can
+    /// make. No pinned key means nobody to check against, which when enforcing
+    /// is a refusal.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_signed_inbound(
+        &self,
+        node_id: &str,
+        key: Option<&VerifyingKey>,
+        kind: FrameKind,
+        to: &str,
+        ctr: Option<u32>,
+        sig_hex: Option<&str>,
+        payload: &[u8],
+    ) -> FrameVerdict {
+        if !self.is_enabled() {
+            return FrameVerdict::Accept;
+        }
+        let reject = |reason: String| {
+            if self.require {
+                FrameVerdict::Reject { reason }
+            } else {
+                FrameVerdict::Accept
+            }
+        };
+        let Some(key) = key else {
+            return reject(format!("no key is pinned for {node_id:?}"));
+        };
+        let (Some(ctr), Some(sig_hex)) = (ctr, sig_hex) else {
+            return reject("message carried no ctr/sig".to_string());
+        };
+        if !node_identity::verify_frame(key, kind, node_id, to, ctr, payload, sig_hex) {
+            return reject(format!(
+                "signature does not verify as {node_id:?} for counter {ctr}"
+            ));
+        }
+        // After the signature, for the reason `verify_inbound` gives.
+        self.admit_counter(node_id, ctr)
+    }
+
+    /// Judge a counter from a sender already proven to be `node_id`.
+    fn admit_counter(&self, node_id: &str, ctr: u32) -> FrameVerdict {
         let verdict = self
             .window
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .admit(node_id, ctr);
-
-        match verdict {
-            ReplayVerdict::Fresh => FrameVerdict::Accept,
-            ReplayVerdict::Duplicate => reject(format!("counter {ctr} already seen")),
-            ReplayVerdict::TooOld => reject(format!("counter {ctr} is older than the window")),
+        let reason = match verdict {
+            ReplayVerdict::Fresh => return FrameVerdict::Accept,
+            ReplayVerdict::Duplicate => format!("counter {ctr} already seen"),
+            ReplayVerdict::TooOld => format!("counter {ctr} is older than the window"),
+        };
+        if self.require {
+            FrameVerdict::Reject { reason }
+        } else {
+            FrameVerdict::Accept
         }
     }
 
@@ -167,6 +223,94 @@ mod tests {
     fn tag_for(node: &str, ctr: u32, payload: &[u8]) -> String {
         let key = spine_tag::derive_node_key(SECRET.as_bytes(), node);
         hex::encode(spine_tag::tag(&key, 0, ctr, payload))
+    }
+
+    /// The gap this closes: with one mesh secret, node A can derive B's frame
+    /// key and its tag verifies as B. Under pinned identities the same frame,
+    /// signed by A as B, is refused, and B's own is accepted.
+    #[test]
+    fn node_a_cannot_sign_a_frame_that_verifies_as_node_b() {
+        use crate::node_identity::{parse_public, NodeIdentity};
+        const B: &str = "obc-node-b";
+        const ME: &str = "obc-brain";
+
+        // What a mesh member could always do: B's derived key, from the secret.
+        let auth = enforcing();
+        assert_eq!(
+            auth.verify_inbound(B, Some(1), Some(&tag_for(B, 1, BODY)), BODY),
+            FrameVerdict::Accept,
+            "the shared-secret tag never proved who signed"
+        );
+
+        let (a, b) = (NodeIdentity::generate(), NodeIdentity::generate());
+        let b_key = parse_public(&b.public_hex()).unwrap();
+        let auth = enforcing();
+        let forged = a.sign_frame(FrameKind::Request, B, ME, 2, BODY);
+        match auth.verify_signed_inbound(
+            B,
+            Some(&b_key),
+            FrameKind::Request,
+            ME,
+            Some(2),
+            Some(&forged),
+            BODY,
+        ) {
+            FrameVerdict::Reject { reason } => assert!(reason.contains("does not verify")),
+            FrameVerdict::Accept => panic!("A's signature verified as B"),
+        }
+        // The forgery did not move B's window: B's own frame at that counter passes.
+        let genuine = b.sign_frame(FrameKind::Request, B, ME, 2, BODY);
+        assert_eq!(
+            auth.verify_signed_inbound(
+                B,
+                Some(&b_key),
+                FrameKind::Request,
+                ME,
+                Some(2),
+                Some(&genuine),
+                BODY,
+            ),
+            FrameVerdict::Accept
+        );
+    }
+
+    #[test]
+    fn a_signed_frame_with_no_pinned_key_is_refused() {
+        let auth = enforcing();
+        assert!(matches!(
+            auth.verify_signed_inbound(
+                NODE,
+                None,
+                FrameKind::Result,
+                "me",
+                Some(1),
+                Some("00"),
+                BODY
+            ),
+            FrameVerdict::Reject { .. }
+        ));
+    }
+
+    #[test]
+    fn a_replayed_signed_frame_is_refused() {
+        use crate::node_identity::{parse_public, NodeIdentity};
+        let auth = enforcing();
+        let n = NodeIdentity::generate();
+        let key = parse_public(&n.public_hex()).unwrap();
+        let sig = n.sign_frame(FrameKind::Result, NODE, "me", 5, BODY);
+        let check = || {
+            auth.verify_signed_inbound(
+                NODE,
+                Some(&key),
+                FrameKind::Result,
+                "me",
+                Some(5),
+                Some(&sig),
+                BODY,
+            )
+        };
+        assert_eq!(check(), FrameVerdict::Accept);
+        assert!(matches!(check(), FrameVerdict::Reject { .. }));
     }
 
     #[test]

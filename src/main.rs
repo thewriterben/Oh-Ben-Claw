@@ -875,7 +875,21 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             let node_id = p2p_config.node_id.clone();
             // Admitted and pruned peers, consumed once the serving agent exists.
             let (peer_tx, peer_rx) = tokio::sync::mpsc::channel(64);
+            // This node's identity key, kept across restarts so the pin its
+            // peers hold for it stays good, and the pins it holds for them.
+            let identity = obc_safety::node_identity::NodeIdentity::load_or_create(
+                std::path::Path::new(&track0_data_path("p2p_identity.key")),
+            )
+            .context("[edge].p2p_enabled: could not load the P2P identity key")?;
+            let peer_keys =
+                obc_safety::node_identity::PeerKeys::configured(&config.security.peer_keys)
+                    .context("[security] peer_keys")?
+                    .with_store(track0_data_path("p2p_peer_keys.json"))
+                    .context("[edge].p2p_enabled: could not load the pinned P2P peer keys")?;
+            let public_key = identity.public_hex();
             let mesh = spine::p2p::P2pSpine::new(p2p_config)
+                .with_identity(identity)
+                .with_peer_keys(peer_keys)
                 .with_peer_events(peer_tx)
                 // Same pairing table and frame-auth secret as the MQTT spine. P2P
                 // discovery is a UDP broadcast with no broker in front of it, so
@@ -902,7 +916,11 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             })
             .await
             .context("[edge].p2p_enabled: could not announce on the P2P mesh")?;
-            info!(node_id = %node_id, "Joined the P2P mesh ([edge].p2p_enabled)");
+            info!(
+                node_id = %node_id,
+                %public_key,
+                "Joined the P2P mesh ([edge].p2p_enabled); pin this key as                  [security] peer_keys on other nodes to skip first-use pinning"
+            );
             Some((mesh, peer_rx))
         }
         None => None,
