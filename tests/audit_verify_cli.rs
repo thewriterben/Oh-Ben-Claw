@@ -103,3 +103,56 @@ fn a_clean_signed_log_verifies_and_both_kinds_of_tampering_fail() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_log_with_every_signature_stripped_fails() {
+    // The signature is outside the MAC'd form, so the chain still passes; only
+    // the count of signed records can show that signing was undone.
+    let dir = scratch("stripped");
+    let log = dir.join("action_audit.jsonl");
+    let cfg = config(&dir, &log);
+    let signer = AuditSigner::generate();
+    let public = signer.public_hex();
+    write_signed_log(&log, signer);
+    let stripped: String = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
+            v.as_object_mut().unwrap().remove("sig");
+            format!("{v}\n")
+        })
+        .collect();
+    std::fs::write(&log, stripped).unwrap();
+
+    let out = audit_verify(&dir, &cfg, &public);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("none of 2 record(s) is signed"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn verifying_without_a_key_mints_none() {
+    // No audit_key, no vault, no pairing secret, no key file: `start` would
+    // generate one, a verifier must not.
+    let dir = scratch("nokey");
+    let log = dir.join("action_audit.jsonl");
+    write_signed_log(&log, AuditSigner::generate());
+    let cfg = dir.join("config.toml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "[safety]\nenabled = true\naudit_log_path = \"{}\"\n",
+            log.to_str().unwrap().replace('\\', "/")
+        ),
+    )
+    .unwrap();
+
+    let out = audit_verify(&dir, &cfg, &AuditSigner::generate().public_hex());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("no audit key found"), "{stderr}");
+    assert!(!dir.join("action_audit.key").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

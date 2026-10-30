@@ -47,6 +47,14 @@ pub fn fit(reply: &Value) -> String {
     }
     // Only an absurd id or node name gets here. The id still has to travel,
     // or the host cannot tell which command this is about.
-    json!({ "type": "cmd_result", "id": id, "ok": false, "error": "reply too big for mesh" })
+    let line =
+        json!({ "type": "cmd_result", "id": id, "ok": false, "error": "reply too big for mesh" })
+            .to_string();
+    if line.len() <= MESH_LINE_MAX {
+        return line;
+    }
+    // An id this long cannot travel at all. A reply the host cannot match to
+    // its command still beats one the bridge drops without a word.
+    json!({ "type": "cmd_result", "id": null, "ok": false, "error": "reply and its id too big for mesh" })
         .to_string()
 }

@@ -177,13 +177,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Esp32Link<S> {
 
         let matcher = ReplyMatcher::new(&id);
         let read = async {
-            let mut buf = String::new();
+            // Bytes, not `read_line`: one non-UTF-8 byte (boot noise after a
+            // brownout reset) would be an InvalidData error, and the caller
+            // would take it for a lost link instead of a line to skip.
+            let mut buf = Vec::new();
             loop {
                 buf.clear();
-                if self.io.read_line(&mut buf).await? == 0 {
+                if self.io.read_until(b'\n', &mut buf).await? == 0 {
                     bail!("node closed the link while {cmd} ({id}) was outstanding");
                 }
-                if let Some(reply) = matcher.feed(&buf) {
+                if let Some(reply) = matcher.feed(&String::from_utf8_lossy(&buf)) {
                     return Ok(reply);
                 }
             }
@@ -314,6 +317,8 @@ mod tests {
             assert_eq!(req["cmd"], "camera_capture");
             let id = req["id"].as_str().unwrap().to_string();
             let jpeg = base64::engine::general_purpose::STANDARD.encode([0xFF, 0xD8, 0xFF, 0xD9]);
+            // Reset noise that is not UTF-8: a line to skip, not a lost link.
+            w.write_all(b"\xff\xfe\x00ets boot\n").await.unwrap();
             w.write_all(b"{\"type\":\"beacon\"}\n").await.unwrap();
             w.write_all(
                 format!("{{\"id\":\"{id}\",\"ok\":true,\"result\":\"{jpeg}\"}}\n").as_bytes(),

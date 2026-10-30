@@ -26,14 +26,17 @@
 //! [channels.feishu]
 //! app_id            = "cli_xxxxxxxxxxxxxx"
 //! app_secret        = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-//! verification_token = "your-verification-token"   # optional but recommended
+//! verification_token = "your-verification-token"   # required
+//! allowed_users     = ["ou_xxxxxxxx"]
 //! webhook_port      = 18790
 //! ```
+//!
+//! Leave the **Encrypt Key** empty: encrypted payloads are refused.
 //!
 //! # Message flow
 //!
 //! 1. Feishu sends a `POST /feishu/webhook` with the event payload.
-//! 2. If a `verification_token` is configured, the signature is checked.
+//! 2. The verification token is checked (top level or schema 2.0 `header`).
 //! 3. The text content is extracted and forwarded to the Oh-Ben-Claw agent.
 //! 4. The agent's reply is sent back via `POST /im/v1/messages`.
 
@@ -56,15 +59,45 @@ const FEISHU_API_BASE: &str = "https://open.feishu.cn/open-apis";
 // ── Feishu API types ──────────────────────────────────────────────────────────
 
 /// Incoming webhook event envelope.
+///
+/// Two shapes arrive on the same URL. The URL-verification handshake is flat:
+/// `token`, `challenge` and `type` at the top level. Every schema 2.0 event,
+/// which `im.message.receive_v1` always is, carries them in `header` instead.
 #[derive(Debug, Deserialize)]
 struct FeishuEvent {
     /// Challenge used for webhook URL verification.
     challenge: Option<String>,
-    /// Token for signature verification.
+    /// Verification token (handshake and schema 1.0 only).
     token: Option<String>,
     #[serde(rename = "type")]
     event_type: Option<String>,
+    /// Schema 2.0 envelope header.
+    header: Option<FeishuHeader>,
+    /// Present instead of everything else when an Encrypt Key is set.
+    encrypt: Option<String>,
     event: Option<FeishuMessageEvent>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeishuHeader {
+    token: Option<String>,
+    event_type: Option<String>,
+}
+
+impl FeishuEvent {
+    fn token(&self) -> Option<&str> {
+        self.header
+            .as_ref()
+            .and_then(|h| h.token.as_deref())
+            .or(self.token.as_deref())
+    }
+
+    fn event_type(&self) -> Option<&str> {
+        self.header
+            .as_ref()
+            .and_then(|h| h.event_type.as_deref())
+            .or(self.event_type.as_deref())
+    }
 }
 
 /// Inner message event payload for `im.message.receive_v1`.
@@ -240,9 +273,21 @@ async fn receive_event(
     State(state): State<FeishuState>,
     Json(payload): Json<FeishuEvent>,
 ) -> impl IntoResponse {
+    // 0. An encrypted body hides the token; decrypting it is not implemented.
+    if payload.encrypt.is_some() {
+        tracing::warn!(
+            "Feishu webhook: payload is encrypted, which this adapter does not support; \
+             clear the Encrypt Key in the app's Event Subscription settings"
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "encrypted payloads are not supported" })),
+        );
+    }
+
     // 1. Verify the token, on every payload. The URL-verification handshake
     // carries it too, so it is checked first rather than echoed to anyone.
-    if payload.token.as_deref() != Some(state.verification_token.as_str()) {
+    if payload.token() != Some(state.verification_token.as_str()) {
         tracing::warn!("Feishu webhook: invalid verification token");
         return (
             StatusCode::UNAUTHORIZED,
@@ -260,7 +305,7 @@ async fn receive_event(
     }
 
     // 3. Only handle im.message.receive_v1 events
-    if payload.event_type.as_deref() != Some("im.message.receive_v1") {
+    if payload.event_type() != Some("im.message.receive_v1") {
         return (StatusCode::OK, Json(serde_json::json!({})));
     }
 
@@ -424,6 +469,25 @@ mod tests {
         let raw = r#"{"text":"hello world"}"#;
         let parsed: FeishuTextContent = serde_json::from_str(raw).unwrap();
         assert_eq!(parsed.text.unwrap(), "hello world");
+    }
+
+    #[test]
+    fn schema_2_events_carry_token_and_type_in_the_header() {
+        // The shape every im.message.receive_v1 delivery has. Until this was
+        // read, the mandatory token check refused all of them.
+        let raw = r#"{"schema":"2.0","header":{"event_id":"e1","token":"tok",
+            "event_type":"im.message.receive_v1"},"event":{"sender":{"sender_id":
+            {"open_id":"ou_1"}},"message":{"message_id":"m1","chat_id":"c1",
+            "content":"{\"text\":\"hi\"}","message_type":"text"}}}"#;
+        let ev: FeishuEvent = serde_json::from_str(raw).unwrap();
+        assert_eq!(ev.token(), Some("tok"));
+        assert_eq!(ev.event_type(), Some("im.message.receive_v1"));
+        // The flat handshake still reads from the top level.
+        let hs: FeishuEvent =
+            serde_json::from_str(r#"{"challenge":"c","token":"tok","type":"url_verification"}"#)
+                .unwrap();
+        assert_eq!(hs.token(), Some("tok"));
+        assert_eq!(hs.event_type(), Some("url_verification"));
     }
 
     #[test]

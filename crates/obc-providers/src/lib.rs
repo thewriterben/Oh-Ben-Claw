@@ -82,6 +82,9 @@ mod http_client_tests {
             .unwrap_err();
         assert!(err.is_timeout(), "{err}");
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        // And it is not retried: the provider took the request and may still
+        // be working on it, so a retry would pay for it twice.
+        assert!(!retry::RetryProvider::is_transient(&err.into()));
     }
 }
 

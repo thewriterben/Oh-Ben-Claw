@@ -85,3 +85,14 @@ fn even_an_absurd_node_name_cannot_push_the_error_over() {
         "a1b2c3d4"
     );
 }
+
+#[test]
+fn an_id_too_long_to_carry_still_gets_a_line_through() {
+    let mut r = reply(&"x".repeat(500));
+    r["id"] = json!("i".repeat(300));
+    let line = mesh_reply::fit(&r);
+    assert!(bridge_forwards(&line), "{} B", line.len());
+    let v = serde_json::from_str::<Value>(&line).unwrap();
+    assert_eq!(v["ok"], false);
+    assert!(v["id"].is_null());
+}

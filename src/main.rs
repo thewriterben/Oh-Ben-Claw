@@ -513,43 +513,50 @@ fn resolve_audit_signer(
     Some(signer)
 }
 
+/// The audit MAC key, by the precedence above. With `create`, a missing vault
+/// entry or key file is generated and stored, so this always returns a key;
+/// without it (a verifier must not mint keys) a missing one is `None`.
 fn resolve_audit_key(
     explicit: Option<&str>,
     vault_enabled: bool,
     vault_path: Option<&str>,
     pairing_secret: Option<&str>,
-) -> Vec<u8> {
+    create: bool,
+) -> Option<Vec<u8>> {
     if let Some(k) = explicit {
-        return k.as_bytes().to_vec();
+        return Some(k.as_bytes().to_vec());
     }
     // Vault: only usable when the operator supplies the master password.
     if let Some(vault) = open_unlocked_vault(vault_enabled, vault_path) {
         match vault.get("OBC_TRACK0_AUDIT_KEY") {
             Ok(Some(k)) => {
                 tracing::info!("Track 0: audit key loaded from vault");
-                return k.into_bytes();
+                return Some(k.into_bytes());
             }
-            Ok(None) => {
+            Ok(None) if create => {
                 let k = track0_random_key();
                 if vault.set("OBC_TRACK0_AUDIT_KEY", &k).is_ok() {
                     tracing::info!("Track 0: generated audit key stored in vault");
-                    return k.into_bytes();
+                    return Some(k.into_bytes());
                 }
             }
-            Err(_) => {}
+            Ok(None) | Err(_) => {}
         }
     }
     if let Some(k) = pairing_secret {
         tracing::info!("Track 0: deriving audit key from the node pairing secret");
-        return k.as_bytes().to_vec();
+        return Some(k.as_bytes().to_vec());
     }
     // Persisted random key (secret + stable across restarts).
     let key_path = track0_data_path("action_audit.key");
     if let Ok(existing) = std::fs::read_to_string(&key_path) {
         let trimmed = existing.trim();
         if !trimmed.is_empty() {
-            return trimmed.as_bytes().to_vec();
+            return Some(trimmed.as_bytes().to_vec());
         }
+    }
+    if !create {
+        return None;
     }
     let k = track0_random_key();
     if let Some(parent) = std::path::Path::new(&key_path).parent() {
@@ -564,7 +571,7 @@ fn resolve_audit_key(
             tracing::warn!("Track 0: could not persist audit key ({e}); using an ephemeral key")
         }
     }
-    k.into_bytes()
+    Some(k.into_bytes())
 }
 
 async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<()> {
@@ -617,7 +624,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             config.security.vault_enabled,
             config.security.vault_path.as_deref(),
             config.security.pairing_secret.as_deref(),
-        );
+            true,
+        )
+        .expect("resolve_audit_key with create always returns a key");
         let audit_path = config
             .safety
             .audit_log_path
@@ -4141,10 +4150,6 @@ async fn run_peripheral(mut config: Config, cmd: PeripheralCommands) -> Result<(
     Ok(())
 }
 
-/// Measure the perception detector's false-negative rate against a labeled eval
-/// set and print the report. This is the residual risk the conscience gate can't
-/// cover — it can only gate labels the detector emits, so a person the detector
-/// misses entirely is never seen by the gate. See `obc_conscience::detector_eval`.
 #[cfg(feature = "hardware")]
 async fn run_camera_watch(
     config: &Config,
@@ -4228,13 +4233,32 @@ fn run_audit_verify(config: &Config, path: Option<&str>, public_key: Option<&str
     if !std::path::Path::new(&audit_path).exists() {
         bail!("no audit log at {audit_path}");
     }
-    // The same resolution `start` uses, so the key that wrote the log checks it.
+    // The same resolution `start` uses, so the key that wrote the log checks it,
+    // but read-only: a verifier that minted a key would fail the chain against
+    // the wrong one and leave it behind for the next `start`. And with the vault
+    // on, a shell without its password would fall through to another key and
+    // call an intact log tampered, so that is refused before anything is checked.
+    if config.safety.audit_key.is_none()
+        && config.security.vault_enabled
+        && std::env::var_os("OBC_VAULT_PASSWORD").is_none()
+    {
+        bail!(
+            "the vault is enabled but OBC_VAULT_PASSWORD is not set: the audit key \
+             `start` used is probably in the vault, and checking against any other \
+             key would report an intact log as tampered. Set it and run again."
+        );
+    }
     let key = resolve_audit_key(
         config.safety.audit_key.as_deref(),
         config.security.vault_enabled,
         config.security.vault_path.as_deref(),
         config.security.pairing_secret.as_deref(),
-    );
+        false,
+    )
+    .context(
+        "no audit key found (no [safety] audit_key, vault entry, pairing secret or \
+         action_audit.key): nothing to check the chain against",
+    )?;
     let chained = security::audit::verify(&audit_path, &key)
         .with_context(|| format!("HMAC chain check failed for {audit_path}"))?;
     println!("chain:      {chained} record(s) verified ({audit_path})");
@@ -4249,10 +4273,17 @@ fn run_audit_verify(config: &Config, path: Option<&str>, public_key: Option<&str
         Some(public) => {
             let signed = security::audit::verify_signatures(&audit_path, &public)
                 .with_context(|| format!("signature check failed for {audit_path}"))?;
-            println!("signatures: {signed} record(s) verified against {public}");
-            if signed == 0 {
-                println!("            (no record is signed; signing needs the vault)");
+            // A public key exists, so signing was on at some point; a log with
+            // no signed record then means every signature lapsed or was
+            // stripped, and a stripped log must not pass.
+            if signed == 0 && chained > 0 {
+                bail!(
+                    "signatures: none of {chained} record(s) is signed, but a public key \
+                     ({public}) says signing was on. Either every record was written \
+                     while the vault was unavailable, or the signatures were removed."
+                );
             }
+            println!("signatures: {signed} record(s) verified against {public}");
         }
         None => println!(
             "signatures: not checked — no --public-key and no {}",
@@ -4262,6 +4293,10 @@ fn run_audit_verify(config: &Config, path: Option<&str>, public_key: Option<&str
     Ok(())
 }
 
+/// Measure the perception detector's false-negative rate against a labeled eval
+/// set and print the report. This is the residual risk the conscience gate can't
+/// cover — it can only gate labels the detector emits, so a person the detector
+/// misses entirely is never seen by the gate. See `obc_conscience::detector_eval`.
 fn run_eval_detector(config: &Config, frames_path: &str) -> Result<()> {
     let raw = std::fs::read_to_string(frames_path)
         .with_context(|| format!("reading eval frames from {frames_path}"))?;

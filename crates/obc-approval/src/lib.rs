@@ -567,7 +567,14 @@ impl ApprovalManager {
     /// granted. Non-physical actions, a trusted node, or no scorer attached fall
     /// through to the ordinary [`needs_approval`](Self::needs_approval) rules.
     pub fn decide(&self, tool_name: &str, node_id: Option<&str>, risk: RiskClass) -> Decision {
-        match self.trust_gate(node_id, risk) {
+        self.decide_gated(tool_name, self.trust_gate(node_id, risk), risk)
+    }
+
+    /// [`decide`](Self::decide) with the trust gate already read, so a caller
+    /// that also explains the decision reads the scorer once and explains the
+    /// same verdict it got.
+    fn decide_gated(&self, tool_name: &str, gate: Option<TrustGate>, risk: RiskClass) -> Decision {
+        match gate {
             Some(TrustGate::Deny) => return Decision::Deny,
             Some(TrustGate::RequireApproval) => return Decision::NeedsApproval,
             Some(TrustGate::Allow) | None => {}
@@ -803,14 +810,15 @@ pub fn approval_authorize(
     let Some(approval) = approval else {
         return Ok(());
     };
-    match approval.decide(tool, Some(node_id), risk) {
+    // One read of the scorer: a second one could see the node's level change
+    // and explain a different verdict from the one that was made.
+    let gate = approval.trust_gate(Some(node_id), risk);
+    match approval.decide_gated(tool, gate, risk) {
         Decision::Allow => Ok(()),
         Decision::Deny => Err("denied by approval policy".to_string()),
         // Named apart, because under `Full` autonomy the other reason cannot
         // apply and an operator reading it would look in the wrong place.
-        Decision::NeedsApproval
-            if approval.trust_gate(Some(node_id), risk) == Some(TrustGate::RequireApproval) =>
-        {
+        Decision::NeedsApproval if gate == Some(TrustGate::RequireApproval) => {
             Err(format!(
                 "requires operator approval (node '{node_id}' is on trust probation after \
                  recent failures, so its physical actions lose auto-approval)"
