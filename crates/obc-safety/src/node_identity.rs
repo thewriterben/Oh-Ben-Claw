@@ -41,6 +41,12 @@
 //!   peer that pinned the old one until an operator removes the pin. That is
 //!   the safe failure: the alternative is accepting a changed key, which is the
 //!   attack.
+//! - **Replays are refused across silences and restarts, mostly.** The highest
+//!   announcement `seq` taken from each node, under its key, is kept after the
+//!   node is dropped and, with a store ([`AnnounceMarks::with_store`]), across
+//!   a restart. It is written when a peer joins and when one is dropped, not on
+//!   every announcement, so after a crash an announcement newer than the join
+//!   can still be replayed once, until the node announces again.
 //! - **Not the firmware's path.** The Heltec stations and MQTT nodes still use
 //!   the HKDF-derived HMAC keys; on MQTT the brain is the only peer and holds
 //!   every key by design. This is for nodes that call *each other*.
@@ -278,12 +284,14 @@ pub fn next_boot_epoch(path: &Path) -> u32 {
 }
 
 /// What a node keeps across restarts to stay the same peer on the mesh: its
-/// identity key, the pins it learned, and the epoch its announcements count
-/// from this start, each in its own file in one directory.
+/// identity key, the pins it learned, the epoch its announcements count from
+/// this start, and the last announcement it took from each peer, each in its
+/// own file in one directory.
 pub struct P2pState {
     pub identity: NodeIdentity,
     pub peer_keys: PeerKeys,
     pub announce_epoch: u32,
+    pub announce_marks: AnnounceMarks,
 }
 
 impl P2pState {
@@ -294,6 +302,7 @@ impl P2pState {
             identity: NodeIdentity::load_or_create(&dir.join("p2p_identity.key"))?,
             peer_keys: peer_keys.with_store(dir.join("p2p_peer_keys.json"))?,
             announce_epoch: next_boot_epoch(&dir.join("p2p_announce_epoch")),
+            announce_marks: AnnounceMarks::new().with_store(dir.join("p2p_announce_marks.json"))?,
         })
     }
 }
@@ -442,6 +451,114 @@ impl PeerKeys {
             tracing::warn!(path = %path.display(), error = %e, "Could not persist a P2P peer key pin");
         }
     }
+}
+
+/// The highest announcement sequence taken from each peer, under the key it
+/// was signed with.
+///
+/// The peer registry forgets a node once it falls silent, and with it the
+/// last sequence taken. Kept there alone, a signed announcement captured
+/// earlier could be replayed once the node went quiet, from the replayer's own
+/// address for a bind-all node, and take its calls until it came back. Marks
+/// outlive the registry entry and, with a store, a restart.
+///
+/// A mark holds only for the key it was taken under: a node re-keyed by an
+/// operator (its pin removed, a new one learned) counts from its new start,
+/// which for a board without a clock may be lower than its old one.
+#[derive(Debug, Default)]
+pub struct AnnounceMarks {
+    marks: Mutex<HashMap<String, (VerifyingKey, u64)>>,
+    /// Where marks are kept across restarts, if anywhere.
+    store: Option<PathBuf>,
+    /// Held across a write of `store`, as [`PeerKeys`] does.
+    writing: Mutex<()>,
+}
+
+impl AnnounceMarks {
+    /// No marks, nothing persisted.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Keep marks in `path` (JSON, node id → `{key, seq}`), and load the ones
+    /// already there. A file that does not parse is an error, as for
+    /// [`PeerKeys::with_store`]: starting without marks reopens replays.
+    pub fn with_store(self, path: impl Into<PathBuf>) -> anyhow::Result<Self> {
+        let path = path.into();
+        let stored: BTreeMap<String, StoredMark> = match std::fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str(&text)
+                .map_err(|e| anyhow::anyhow!("{} does not parse: {e}", path.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) => return Err(e.into()),
+        };
+        {
+            let mut marks = self.marks.lock().unwrap_or_else(|p| p.into_inner());
+            for (node, mark) in stored {
+                let key = parse_public(&mark.key).ok_or_else(|| {
+                    anyhow::anyhow!("{}: the key for {node} is malformed", path.display())
+                })?;
+                marks.insert(node, (key, mark.seq));
+            }
+        }
+        Ok(Self {
+            store: Some(path),
+            ..self
+        })
+    }
+
+    /// Take `seq` from `node_id`, proven under `key`, if it is higher than the
+    /// last one taken under that key, and remember it. `false` is a replay.
+    /// In memory only; [`AnnounceMarks::persist`] writes the store.
+    pub fn admit(&self, node_id: &str, key: VerifyingKey, seq: u64) -> bool {
+        let mut marks = self.marks.lock().unwrap_or_else(|p| p.into_inner());
+        match marks.get(node_id) {
+            Some((marked, last)) if *marked == key && seq <= *last => false,
+            _ => {
+                marks.insert(node_id.to_string(), (key, seq));
+                true
+            }
+        }
+    }
+
+    /// Write the marks to the store. Called when a peer joins or leaves rather
+    /// than on every announcement, which would be a disk write per peer every
+    /// few seconds: a mark written at join is lower than the last one taken,
+    /// so after a crash, rather than a clean leave, an announcement newer than
+    /// the join and older than the crash replays until the node announces
+    /// again. Blocking file I/O: from async code, call this on a blocking
+    /// thread.
+    pub fn persist(&self) {
+        let Some(path) = &self.store else { return };
+        let _writing = self.writing.lock().unwrap_or_else(|p| p.into_inner());
+        let snapshot: BTreeMap<String, StoredMark> = self
+            .marks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .map(|(n, (k, seq))| {
+                (
+                    n.clone(),
+                    StoredMark {
+                        key: hex::encode(k.to_bytes()),
+                        seq: *seq,
+                    },
+                )
+            })
+            .collect();
+        if let Err(e) = serde_json::to_vec_pretty(&snapshot)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| write_atomic(path, &bytes))
+        {
+            tracing::warn!(path = %path.display(), error = %e, "Could not persist P2P announce marks");
+        }
+    }
+}
+
+/// One [`AnnounceMarks`] entry on disk.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredMark {
+    key: String,
+    seq: u64,
 }
 
 #[cfg(test)]
@@ -697,5 +814,29 @@ mod tests {
                 "{leftover} left behind"
             );
         }
+    }
+
+    #[test]
+    fn announce_marks_outlive_a_restart_and_follow_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p2p_announce_marks.json");
+        let key = |id: &NodeIdentity| parse_public(&id.public_hex()).unwrap();
+        let (old, new) = (NodeIdentity::generate(), NodeIdentity::generate());
+
+        let marks = AnnounceMarks::new().with_store(&path).unwrap();
+        assert!(marks.admit("b", key(&old), 7));
+        assert!(!marks.admit("b", key(&old), 7));
+        marks.persist();
+
+        let marks = AnnounceMarks::new().with_store(&path).unwrap();
+        assert!(!marks.admit("b", key(&old), 6));
+        assert!(marks.admit("b", key(&old), 8));
+        // A re-keyed node starts over, however low it starts.
+        assert!(marks.admit("b", key(&new), 1));
+
+        std::fs::write(&path, b"{\"b\": {\"key\": \"zz\", \"seq\": 1}}").unwrap();
+        assert!(AnnounceMarks::new().with_store(&path).is_err());
+        std::fs::write(&path, b"{\"b\":").unwrap();
+        assert!(AnnounceMarks::new().with_store(&path).is_err());
     }
 }
