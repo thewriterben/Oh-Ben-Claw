@@ -59,6 +59,8 @@ pub struct EdgeStart {
     pub max_history: usize,
     /// The mesh to join (`[edge].p2p_enabled`), from `[spine]`'s `p2p_*` keys.
     pub mesh: Option<obc_spine::p2p::P2pConfig>,
+    /// Tools to serve paired peers on that mesh (`[edge].serve_tools`).
+    pub serve_tools: Vec<String>,
 }
 
 /// `None` when `[edge]` is off, which leaves `start` exactly as it was.
@@ -73,6 +75,7 @@ pub fn edge_start(config: &Config) -> Option<EdgeStart> {
         agent,
         max_history: edge.max_history_messages,
         mesh: edge.p2p_enabled.then(|| config.spine.p2p_config()),
+        serve_tools: edge.serve_tools.clone(),
     })
 }
 
@@ -2656,6 +2659,23 @@ impl Config {
                  a pairing_secret shared by every node."
             );
         }
+        // Served tools are checked against the agent's registry at `start`, the
+        // first moment it exists; what can be refused here is refused here.
+        if !self.edge.serve_tools.is_empty() && !self.edge.p2p_enabled {
+            anyhow::bail!(
+                "edge.serve_tools has no effect while edge.p2p_enabled = false: tools are \
+                 served only on the mesh. Set p2p_enabled = true, or drop serve_tools."
+            );
+        }
+        let mut seen = std::collections::HashSet::new();
+        for name in &self.edge.serve_tools {
+            if name.trim().is_empty() {
+                anyhow::bail!("edge.serve_tools has an empty tool name");
+            }
+            if !seen.insert(name) {
+                anyhow::bail!("edge.serve_tools lists {name:?} twice");
+            }
+        }
         // Explicitly set timings are checked whether or not the mesh is on: a zero
         // interval spins the announce loop and floods UDP, a zero timeout evicts
         // every peer on arrival.
@@ -3356,6 +3376,29 @@ mod tests {
 
         config.security.require_frame_auth = true;
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn serve_tools_needs_the_mesh_and_distinct_names() {
+        let mut config = Config::default();
+        config.edge.enabled = true;
+        config.edge.serve_tools = vec!["gpio_read".to_string()];
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("serve_tools"), "{err}");
+
+        config.edge.p2p_enabled = true;
+        config.spine.p2p_node_id = Some("nanopi-kitchen".to_string());
+        require_mesh_auth(&mut config);
+        config.validate().unwrap();
+        assert_eq!(
+            edge_start(&config).unwrap().serve_tools,
+            ["gpio_read".to_string()]
+        );
+
+        config.edge.serve_tools.push("gpio_read".to_string());
+        assert!(config.validate().unwrap_err().to_string().contains("twice"));
+        config.edge.serve_tools = vec![" ".to_string()];
+        assert!(config.validate().is_err());
     }
 
     #[test]

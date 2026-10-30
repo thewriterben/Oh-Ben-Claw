@@ -2415,6 +2415,11 @@ pub struct EdgeConfig {
     /// Whether to start the P2P spine and join the local mesh.
     #[serde(default)]
     pub p2p_enabled: bool,
+    /// Tools this node announces on the mesh and runs for paired peers, by
+    /// name. Empty (the default) serves nothing. Each call runs through the
+    /// agent's gated path, as a local call does.
+    #[serde(default)]
+    pub serve_tools: Vec<String>,
 }
 
 impl Default for EdgeConfig {
@@ -2424,6 +2429,7 @@ impl Default for EdgeConfig {
             max_history_messages: default_edge_max_history(),
             max_tool_iterations: default_edge_max_tool_iterations(),
             p2p_enabled: false,
+            serve_tools: Vec::new(),
         }
     }
 }

@@ -30,6 +30,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`[edge] serve_tools`**: the tools a node announces and runs for paired
+  peers, empty by default. Refused at load without `p2p_enabled`, or with a
+  name listed twice; a name the agent does not have stops `start`.
 - **A node can serve tools to paired peers** (`P2pSpine::serve`). Refused
   unless pairing and frame auth are both enforced. A call is answered only if
   its tag verifies, the caller is a paired peer in the roster and the tool is

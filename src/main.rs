@@ -891,9 +891,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 .start()
                 .await
                 .context("[edge].p2p_enabled: could not join the P2P mesh")?;
-            // Announced with no tools: this node's P2P listener answers every
-            // incoming call with a refusal (obc-spine p2p.rs), so a peer shown
-            // our tool list would be shown tools it cannot call.
+            // Announced with no tools for now: `[edge].serve_tools` are added once
+            // the agent exists (below), and until then every call is refused.
             mesh.announce(&spine::NodeAnnouncement {
                 node_id: node_id.clone(),
                 board: "obc-brain".to_string(),
@@ -3472,6 +3471,25 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // Peer tools follow the mesh: registered as peers are admitted, removed as
     // they are pruned, never two of one name and never shadowing a local tool.
     if let Some((mesh, peer_rx)) = p2p_mesh {
+        // Served before any peer tool is registered, so the specs are this
+        // node's own tools. A name the agent does not have refuses the start
+        // rather than announcing a tool every call to fails.
+        let serve_tools = edge
+            .as_ref()
+            .map(|e| e.serve_tools.clone())
+            .unwrap_or_default();
+        if !serve_tools.is_empty() {
+            let agent = handle.agent_arc();
+            let specs = oh_ben_claw::agent::edge::served_specs(&agent, &serve_tools)
+                .context("[edge].serve_tools")?;
+            mesh.serve(
+                Arc::new(oh_ben_claw::agent::edge::AgentPeerServer(agent)),
+                specs,
+            )
+            .await
+            .context("[edge].serve_tools: could not serve tools on the P2P mesh")?;
+            info!(tools = ?serve_tools, "Serving tools to paired P2P peers ([edge].serve_tools)");
+        }
         tokio::spawn(oh_ben_claw::agent::edge::serve_peer_events(
             handle.agent_arc(),
             mesh,
