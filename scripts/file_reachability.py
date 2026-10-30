@@ -515,8 +515,7 @@ DOC_ALIASES = {
     # four that merely moved are repointed at where they went.
     #
     # Repointed 2026-08-18, having been unmatched since each crate was extracted:
-    "crates/obc-memory/src/heartbeat.rs": ("HEARTBEAT",),
-    "crates/obc-memory/src/journal.rs": ("journal",),
+    # (heartbeat.rs and journal.rs were here too; both were deleted 2026-10-30.)
     "crates/obc-safety/src/pairing.rs": ("pairing",),
     "crates/obc-audio/src/lib.rs": ("audio pipeline", "Audio pipeline", "audio_pipeline"),
 }

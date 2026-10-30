@@ -4,13 +4,6 @@
 //! at `~/.oh-ben-claw/memory.db`. Each conversation is identified by a
 //! `session_id`, allowing multiple parallel sessions to coexist.
 //!
-//! ## Additional memory backends (Phase 11 — Pycoclaw/Mimiclaw parity)
-//!
-//! | Module | Description |
-//! |--------|-------------|
-//! | [`heartbeat`] | HEARTBEAT.md proactive task dispatch |
-//! | [`journal`] | YYYY-MM-DD.md daily journal notes |
-//!
 //! ## Additional memory backends (Phase 12 — OpenClaw 3.13 parity)
 //!
 //! | Module | Description |
@@ -19,16 +12,12 @@
 
 pub mod embed;
 pub mod expiry;
-pub mod heartbeat;
-pub mod journal;
 pub mod liveness;
 pub mod mushroom;
 pub mod notes;
 pub mod trajectory;
 pub mod world;
 
-pub use heartbeat::HeartbeatStore;
-pub use journal::DailyJournal;
 #[allow(unused_imports)]
 pub use trajectory::{Episode, EpisodeStep, Outcome, TrajectoryStore};
 #[allow(unused_imports)]

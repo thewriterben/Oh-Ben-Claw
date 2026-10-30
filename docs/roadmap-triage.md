@@ -62,3 +62,26 @@ Most of the 39 rows come down to six decisions:
 4. **Image memory store** (320–322): drop, or rebuild as M.
 5. **Vision hardening** (407, 408): two S code changes in `crates/obc-tools/src/builtin/vision.rs`. These are the only rows where the missing code leaves a real gap.
 6. **The rest** (133 TUI, 145 RAG, 323, 410): drop.
+
+## Second pass: the 8 rows for code that nothing calls
+
+Checked against origin/main on 2026-10-30, after PR #202. These eight `[~]` rows were not part of 8dbe031. Their code exists, or did, but nothing calls it. Line numbers are from the current `ROADMAP.md`.
+
+| Row (ROADMAP line) | Verdict | Existing code it relates to | Size | Note |
+|---|---|---|---|---|
+| 207 `HeartbeatStore` (reads `HEARTBEAT.md`, builds a prompt) | drop, delete `crates/obc-memory/src/heartbeat.rs` | `crates/obc-agent/src/scheduled.rs`: scheduled tasks already run agent prompts on cron or interval | S | Proactive tasks already exist through the scheduler, and `HEARTBEAT.md` would be a second task list beside it. If you want the file anyway, an interval task whose prompt comes from `build_prompt()` would be M (where it runs and what it may do are the design questions). |
+| 208 `append_task()` | drop | same | S | Goes with 207. |
+| 209 `build_prompt()` | drop | same | S | Goes with 207. |
+| 234 `DailyJournal` (dated notes files) | drop, delete `crates/obc-memory/src/journal.rs` | `crates/obc-memory/src/notes.rs` (`MEMORY.md`, which the agent writes and is put into the prompt); `trajectory.rs` (the episode store) | S | Two memory stores are already live. A journal would need a rule for what is worth writing down, which nobody has decided. Wiring it would be M. |
+| 235 `read_recent(days)` | drop | same | S | Goes with 234. |
+| 236 `list_dates()` | drop | same | S | Goes with 234. |
+| 258 `ProxyConfig::apply_to_env()` (no callers) | rebuild: wire it | `crates/obc-config/src/lib.rs:658` `apply_to_env`, `url()` :640, validation :2560; reqwest picks up `HTTP(S)_PROXY` by default (13 files construct a `reqwest::Client`) | M | The only row where a setting looks like it works and doesn't: `[proxy]` validates and is then ignored. A proper wiring needs four things. (1) Call it at startup, before the runtime starts any threads (`set_var` is `unsafe` under edition 2024). (2) Add loopback to `NO_PROXY` so Ollama and the gateway's own calls stay direct. (3) Stop logging the URL with credentials in it. (4) Either turn on reqwest's `socks` feature or reject `kind = "socks5"` in validation, since no `Cargo.toml` enables it. The other choice is to drop `[proxy]` entirely (S). |
+| 421 `A2AClient` | drop | `crates/obc-a2a/src/lib.rs:355`: a comment records the client deleted on 2026-08-21 (complete, but nothing ever constructed it); the server half is live in `src/main.rs` | S | Like the first-pass rows, the code isn't in the tree anymore. Reword the row as "removed 2026-08-21: OBC can be called by another agent but never calls one". |
+
+**Totals:** 7 drop (two deleting a source file each), 1 wire.
+
+### Decisions
+
+1. **Heartbeat and journal** (207–209, 234–236): drop the six rows and delete the two unused files, or keep them as `[~]`.
+2. **Proxy** (258): wire it (M), or drop `[proxy]` (S).
+3. **A2AClient** (421): drop the row. This is a doc-only change.
