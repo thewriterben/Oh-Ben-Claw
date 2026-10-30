@@ -166,36 +166,68 @@ pub struct P2pAnnounce {
     /// member can redirect calls meant for this node to itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sig: Option<String>,
+    /// Higher in every announcement a node sends (`epoch << 32 | count`, the
+    /// epoch from [`obc_safety::node_identity::next_boot_epoch`]), and under
+    /// `sig`. A peer takes an announcement only if it is newer than the last
+    /// one it took for that id, so a signed datagram replayed from another
+    /// address cannot move the node there.
+    #[serde(default)]
+    pub seq: u64,
 }
 
 impl P2pAnnounce {
-    /// The bytes `sig` covers: this datagram without it.
-    fn signed_bytes(&self) -> Vec<u8> {
-        let mut unsigned = self.clone();
-        unsigned.sig = None;
-        serde_json::to_vec(&unsigned).unwrap_or_default()
-    }
-
-    /// Stamp `identity`'s public key into the announcement and sign the whole.
-    fn seal(mut self, identity: &obc_safety::node_identity::NodeIdentity) -> Self {
+    /// Stamp `identity`'s public key into the announcement and sign the whole:
+    /// the datagram to send, as a JSON value, since that is what is signed.
+    fn seal(mut self, identity: &obc_safety::node_identity::NodeIdentity) -> Value {
         if !self.announcement.metadata.is_object() {
             self.announcement.metadata = serde_json::json!({});
         }
         self.announcement.metadata["p2p_pubkey"] = Value::String(identity.public_hex());
-        self.sig = Some(identity.sign_announcement(&self.signed_bytes()));
-        self
+        self.sig = None;
+        let mut datagram = serde_json::to_value(&self).unwrap_or_default();
+        let sig = identity.sign_announcement(&announce_body(&datagram));
+        datagram["sig"] = Value::String(sig);
+        datagram
     }
 
     /// The key this announcement asks to be pinned, if it carries one and its
-    /// signature verifies under it.
-    fn proven_key(&self) -> Option<ed25519_dalek::VerifyingKey> {
+    /// signature verifies under it over `body` (see [`announce_body`]).
+    fn proven_key(&self, body: &[u8]) -> Option<ed25519_dalek::VerifyingKey> {
         let public = self.announcement.metadata.get("p2p_pubkey")?.as_str()?;
         let sig = self.sig.as_deref()?;
-        if !obc_safety::node_identity::verify_announcement(public, &self.signed_bytes(), sig) {
+        if !obc_safety::node_identity::verify_announcement(public, body, sig) {
             return None;
         }
         obc_safety::node_identity::parse_public(public)
     }
+}
+
+/// The bytes an announcement's `sig` covers: the datagram as it arrived, less
+/// `sig`, re-encoded. Signed over the JSON rather than [`P2pAnnounce`], so the
+/// fields a newer peer adds are covered here too instead of being dropped by
+/// the parse and breaking its signature.
+fn announce_body(datagram: &Value) -> Vec<u8> {
+    let body: serde_json::Map<String, Value> = datagram
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(field, _)| field.as_str() != "sig")
+        .map(|(field, value)| (field.clone(), value.clone()))
+        .collect();
+    serde_json::to_vec(&body).unwrap_or_default()
+}
+
+/// The first announcement sequence of a start under `epoch`.
+fn epoch_seq(epoch: u32) -> u64 {
+    u64::from(epoch) << 32
+}
+
+/// The clock's seconds, as an announce epoch for a node given none.
+fn unix_epoch() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u32::try_from(d.as_secs()).unwrap_or(u32::MAX))
+        .unwrap_or_default()
 }
 
 // ── Peer Registry ─────────────────────────────────────────────────────────────
@@ -209,6 +241,8 @@ pub struct P2pPeer {
     pub tcp_addr: SocketAddr,
     /// Timestamp of the last received announcement (for TTL expiry).
     pub last_seen: Instant,
+    /// The `seq` of that announcement: an older or equal one is refused.
+    pub announce_seq: u64,
 }
 
 /// A change in who is on the mesh, pushed as it happens to a caller that keeps
@@ -291,6 +325,8 @@ pub struct P2pSpine {
     identity: obc_safety::node_identity::NodeIdentity,
     /// Peers' keys, pinned when they pair: what their frames verify against.
     peer_keys: Arc<obc_safety::node_identity::PeerKeys>,
+    /// The `seq` of our last announcement; each one sent is one higher.
+    announce_seq: std::sync::atomic::AtomicU64,
     /// Where admitted and pruned peers are reported, when someone listens.
     peer_events: Option<mpsc::Sender<PeerEvent>>,
     /// Incoming calls are answered only once [`P2pSpine::serve`] sets this;
@@ -318,6 +354,7 @@ impl P2pSpine {
             out_counters: Arc::new(obc_safety::frame_auth::OutboundCounters::new()),
             identity: obc_safety::node_identity::NodeIdentity::generate(),
             peer_keys: Arc::new(obc_safety::node_identity::PeerKeys::new()),
+            announce_seq: std::sync::atomic::AtomicU64::new(epoch_seq(unix_epoch())),
             peer_events: None,
             served: RwLock::new(None),
             instance: uuid::Uuid::new_v4().to_string(),
@@ -352,6 +389,16 @@ impl P2pSpine {
     /// learned before a restart.
     pub fn with_peer_keys(mut self, peer_keys: obc_safety::node_identity::PeerKeys) -> Self {
         self.peer_keys = Arc::new(peer_keys);
+        self
+    }
+
+    /// The epoch this start announces under, from
+    /// [`obc_safety::node_identity::next_boot_epoch`]. Without it the clock is
+    /// used, and a board whose clock resets is ignored by peers that remember
+    /// a higher sequence from it until they forget it (`peer_timeout_secs`).
+    pub fn with_announce_epoch(self, epoch: u32) -> Self {
+        self.announce_seq
+            .store(epoch_seq(epoch), std::sync::atomic::Ordering::Relaxed);
         self
     }
 
@@ -435,8 +482,8 @@ impl P2pSpine {
             loop {
                 match tokio::time::timeout(sweep, udp_rx.recv_from(&mut buf)).await {
                     Ok(Ok((len, src))) => {
-                        if let Ok(announce) = serde_json::from_slice::<P2pAnnounce>(&buf[..len]) {
-                            discovery.on_announce(announce, src).await;
+                        if let Ok(datagram) = serde_json::from_slice::<Value>(&buf[..len]) {
+                            discovery.on_announce(datagram, src).await;
                         }
                     }
                     Ok(Err(e)) => tracing::warn!(error = %e, "UDP receive error"),
@@ -463,7 +510,11 @@ impl P2pSpine {
 
     /// Admit (or refuse) one discovery datagram, and report the peer when it is
     /// new or its tool list changed.
-    async fn on_announce(&self, announce: P2pAnnounce, src: SocketAddr) {
+    async fn on_announce(&self, datagram: Value, src: SocketAddr) {
+        let body = announce_body(&datagram);
+        let Ok(announce) = serde_json::from_value::<P2pAnnounce>(datagram) else {
+            return;
+        };
         let node_id = announce.announcement.node_id.clone();
         // Broadcast comes back to the sender; this node is not its own peer.
         // Our id with another instance is a second board configured with it.
@@ -501,7 +552,10 @@ impl P2pSpine {
             );
             return;
         }
-        if let Err(reason) = self.admit_identity(&node_id, &announce) {
+        let identified = self
+            .admit_identity(&node_id, announce.proven_key(&body))
+            .await;
+        if let Err(reason) = &identified {
             if self.frame_auth.is_enforcing() {
                 tracing::warn!(
                     node_id = %node_id,
@@ -531,27 +585,74 @@ impl P2pSpine {
         };
         tracing::debug!(node_id = %node_id, tcp_addr = %tcp_addr, "Discovered P2P peer via UDP");
         let tools = announce.announcement.tools.clone();
-        let previous = self.peer_registry.write().await.insert(
+        let mut registry = self.peer_registry.write().await;
+        // Only a signature makes `seq` the node's own; an announcement with
+        // none is taken on trust anyway, which only frame auth off allows.
+        let stale = registry
+            .get(&node_id)
+            .is_some_and(|peer| announce.seq <= peer.announce_seq);
+        if identified.is_ok() && stale {
+            tracing::debug!(
+                node_id = %node_id,
+                src = %src,
+                seq = announce.seq,
+                "Ignored a P2P announcement no newer than the last one taken: a replay"
+            );
+            return;
+        }
+        let previous = registry.insert(
             node_id.clone(),
             P2pPeer {
                 announcement: announce.announcement,
                 tcp_addr,
                 last_seen: Instant::now(),
+                announce_seq: announce.seq,
             },
         );
+        drop(registry);
         if previous.is_none_or(|p| p.announcement.tools != tools) {
             self.emit(PeerEvent::Joined { node_id, tools }).await;
         }
     }
 
     /// Pin the key a paired announcement proves, or say why it cannot be.
-    /// Called only once pairing admitted the node: membership is what makes a
-    /// first key worth pinning.
-    fn admit_identity(&self, node_id: &str, announce: &P2pAnnounce) -> Result<(), String> {
-        let Some(key) = announce.proven_key() else {
+    /// Membership is what makes a first key worth pinning, so a node that is
+    /// admitted only because `require_pairing` is off has its key checked
+    /// against a pin but never pinned.
+    async fn admit_identity(
+        &self,
+        node_id: &str,
+        proven: Option<ed25519_dalek::VerifyingKey>,
+    ) -> Result<(), String> {
+        let Some(key) = proven else {
             return Err("its announcement carries no key it signed with".to_string());
         };
-        match self.peer_keys.pin(node_id, key) {
+        let mismatch = || {
+            format!(
+                "it announces a key other than the one pinned for {node_id:?}: another node \
+                 claiming its id, or a re-keyed node whose old pin an operator has to remove"
+            )
+        };
+        match self.peer_keys.key_for(node_id) {
+            Some(pinned) if pinned == key => return Ok(()),
+            Some(_) => return Err(mismatch()),
+            None => {}
+        }
+        if !matches!(
+            self.pairing.status(node_id),
+            obc_safety::PairingStatus::Paired
+        ) {
+            return Err(format!(
+                "{node_id:?} is not paired, so its key is not pinned"
+            ));
+        }
+        // Pinning writes the pin file, which is no work for an async worker.
+        let keys = Arc::clone(&self.peer_keys);
+        let id = node_id.to_string();
+        let verdict = tokio::task::spawn_blocking(move || keys.pin(&id, key))
+            .await
+            .map_err(|e| format!("pinning its key failed: {e}"))?;
+        match verdict {
             obc_safety::node_identity::PinVerdict::Known => Ok(()),
             obc_safety::node_identity::PinVerdict::Pinned => {
                 tracing::info!(
@@ -561,10 +662,7 @@ impl P2pSpine {
                 );
                 Ok(())
             }
-            obc_safety::node_identity::PinVerdict::Mismatch => Err(format!(
-                "it announces a key other than the one pinned for {node_id:?}: another node \
-                 claiming its id, or a re-keyed node whose old pin an operator has to remove"
-            )),
+            obc_safety::node_identity::PinVerdict::Mismatch => Err(mismatch()),
         }
     }
 
@@ -651,6 +749,10 @@ impl P2pSpine {
             tcp_host: self.config.bind_host.clone(),
             tcp_port: self.config.tcp_port,
             sig: None,
+            seq: self
+                .announce_seq
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1,
         }
         .seal(&self.identity);
 
@@ -697,15 +799,13 @@ impl P2pSpine {
         };
         // The tag under the shared secret proves membership; the signature, by
         // our own key and bound to `node_id`, proves the call is ours.
-        request.sign(&self.frame_auth, &self.out_counters, &self.config.node_id);
-        if self.frame_auth.is_enabled() {
-            request.sign_identity(
-                &self.identity,
-                &self.out_counters,
-                &self.config.node_id,
-                node_id,
-            );
-        }
+        request.sign_p2p(
+            &self.frame_auth,
+            &self.identity,
+            &self.out_counters,
+            &self.config.node_id,
+            node_id,
+        );
 
         let payload = serde_json::to_vec(&request)?;
 
@@ -735,17 +835,20 @@ impl P2pSpine {
         if result.call_id != call_id {
             bail!("P2P peer {node_id} answered a different call");
         }
-        // The peer signs as itself, under the key it paired with; an answer
-        // that does not verify there is not its answer.
+        // The peer tags as a member and signs as itself, under the key it
+        // paired with; an answer that does not verify both ways is not its.
         if let obc_safety::frame_auth::FrameVerdict::Reject { reason } =
-            self.frame_auth.verify_signed_inbound(
-                node_id,
+            self.frame_auth.verify_p2p_inbound(
                 self.peer_keys.key_for(node_id).as_ref(),
-                obc_safety::node_identity::FrameKind::Result,
-                &self.config.node_id,
-                result.ctr,
-                result.sig.as_deref(),
-                &result.signed_bytes(),
+                &obc_safety::frame_auth::P2pFrame {
+                    kind: obc_safety::node_identity::FrameKind::Result,
+                    from: node_id,
+                    to: &self.config.node_id,
+                    ctr: result.ctr,
+                    mac: result.mac.as_deref(),
+                    sig: result.sig.as_deref(),
+                    payload: &result.signed_bytes(),
+                },
             )
         {
             bail!("Refused a P2P result from {node_id} ([security] require_frame_auth): {reason}");
@@ -793,19 +896,59 @@ impl P2pSpine {
     /// The answer to one incoming call, or `None` to drop it unanswered (its
     /// frame did not verify, so there is nobody to answer).
     async fn answer(&self, request: ToolCallRequest) -> Option<ToolCallResult> {
-        // `from` says which pinned key to check, and a good signature says the
-        // caller is `from`. No `from`, or no key pinned for it, means nothing to
-        // verify against, which when enforcing is a refusal rather than a shrug.
+        // `from` says which pinned key to check, the tag says the caller is a
+        // member, and a good signature says it is `from`. No `from`, or no key
+        // pinned for it, means nothing to verify against, which when enforcing
+        // is a refusal rather than a shrug.
         let caller = request.from.clone().unwrap_or_default();
-        if let obc_safety::frame_auth::FrameVerdict::Reject { reason } =
-            self.frame_auth.verify_signed_inbound(
-                &caller,
-                self.peer_keys.key_for(&caller).as_ref(),
-                obc_safety::node_identity::FrameKind::Request,
+        let key = self.peer_keys.key_for(&caller);
+        let payload = request.signed_bytes();
+        // A member whose announcement has not reached us yet: say so, signed,
+        // rather than leave it waiting out its timeout. Nothing runs, and the
+        // tag check moves no counter.
+        if key.is_none()
+            && self.frame_auth.is_enforcing()
+            && self
+                .frame_auth
+                .tag_verifies(&caller, request.ctr, request.mac.as_deref(), &payload)
+        {
+            tracing::info!(
+                call_id = %request.call_id,
+                from = %caller,
+                "Refused a P2P tool call from a member whose key is not pinned yet"
+            );
+            let mut refusal = ToolCallResult {
+                call_id: request.call_id,
+                ok: false,
+                output: None,
+                error: Some(format!(
+                    "no key is pinned for {caller:?} on this node yet; announce first"
+                )),
+                ctr: None,
+                mac: None,
+                sig: None,
+            };
+            refusal.sign_p2p(
+                &self.frame_auth,
+                &self.identity,
+                &self.out_counters,
                 &self.config.node_id,
-                request.ctr,
-                request.sig.as_deref(),
-                &request.signed_bytes(),
+                &caller,
+            );
+            return Some(refusal);
+        }
+        if let obc_safety::frame_auth::FrameVerdict::Reject { reason } =
+            self.frame_auth.verify_p2p_inbound(
+                key.as_ref(),
+                &obc_safety::frame_auth::P2pFrame {
+                    kind: obc_safety::node_identity::FrameKind::Request,
+                    from: &caller,
+                    to: &self.config.node_id,
+                    ctr: request.ctr,
+                    mac: request.mac.as_deref(),
+                    sig: request.sig.as_deref(),
+                    payload: &payload,
+                },
             )
         {
             tracing::warn!(
@@ -849,15 +992,13 @@ impl P2pSpine {
         };
         // Signed as this node, refusals included: the caller drops an answer it
         // cannot verify, and a refusal it cannot see is a timeout.
-        result.sign(&self.frame_auth, &self.out_counters, &self.config.node_id);
-        if self.frame_auth.is_enabled() {
-            result.sign_identity(
-                &self.identity,
-                &self.out_counters,
-                &self.config.node_id,
-                &caller,
-            );
-        }
+        result.sign_p2p(
+            &self.frame_auth,
+            &self.identity,
+            &self.out_counters,
+            &self.config.node_id,
+            &caller,
+        );
         Some(result)
     }
 
@@ -1117,12 +1258,14 @@ mod tests {
             tcp_host: "192.168.1.10".to_string(),
             tcp_port: 44445,
             sig: None,
+            seq: 7,
         };
 
         let json = serde_json::to_string(&announce).unwrap();
         let back: P2pAnnounce = serde_json::from_str(&json).unwrap();
         assert_eq!(back.announcement.node_id, "nanopi-kitchen");
         assert_eq!(back.tcp_port, 44445);
+        assert_eq!(back.seq, 7);
     }
 
     #[test]
@@ -1210,7 +1353,7 @@ mod tests {
 
     /// The datagram `node_id` sends, pairing token and key included, as
     /// `broadcast_presence` stamps it.
-    fn datagram(node_id: &str, tools: &[&str], tcp_port: u16) -> P2pAnnounce {
+    fn datagram(node_id: &str, tools: &[&str], tcp_port: u16) -> Value {
         datagram_signed_by(node_id, tools, tcp_port, &identity_of(node_id))
     }
 
@@ -1221,7 +1364,13 @@ mod tests {
         tools: &[&str],
         tcp_port: u16,
         identity: &obc_safety::node_identity::NodeIdentity,
-    ) -> P2pAnnounce {
+    ) -> Value {
+        unsealed(node_id, tools, tcp_port).seal(identity)
+    }
+
+    /// As [`datagram`] before it is signed, each one a step later than the last.
+    fn unsealed(node_id: &str, tools: &[&str], tcp_port: u16) -> P2pAnnounce {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let mut announcement = announcement(node_id, tools);
         let token = obc_safety::NodePairingManager::new(Some(SECRET.to_string()))
             .token_for(node_id)
@@ -1232,8 +1381,8 @@ mod tests {
             tcp_host: "127.0.0.1".to_string(),
             tcp_port,
             sig: None,
+            seq: SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
-        .seal(identity)
     }
 
     fn src() -> SocketAddr {
@@ -1305,8 +1454,7 @@ mod tests {
             sig: None,
         };
         let auth = obc_safety::frame_auth::FrameAuth::new(Some(SECRET.to_string()), true);
-        request.sign(&auth, counters, from);
-        request.sign_identity(&identity_of(from), counters, from, "brain");
+        request.sign_p2p(&auth, &identity_of(from), counters, from, "brain");
         request
     }
 
@@ -1347,8 +1495,11 @@ mod tests {
             tcp_host: "127.0.0.1".to_string(),
             tcp_port: 44445,
             sig: None,
+            seq: 1,
         };
-        spine.on_announce(rogue, src()).await;
+        spine
+            .on_announce(serde_json::to_value(rogue).unwrap(), src())
+            .await;
         assert!(rx.try_recv().is_err());
         assert_eq!(spine.known_nodes().await.keys().collect::<Vec<_>>(), ["a"]);
 
@@ -1458,14 +1609,26 @@ mod tests {
         let mut bare = signed_call("a", "gpio_read", &counters);
         (bare.ctr, bare.mac) = (None, None);
         assert!(brain.answer(bare).await.is_none());
+        // A good signature does not stand in for the tag: membership is
+        // checked as well as identity.
+        let mut untagged = signed_call("a", "gpio_read", &counters);
+        untagged.mac = None;
+        assert!(brain.answer(untagged).await.is_none());
 
-        // A well-signed call from a node that never paired with this one.
+        // A member that has not announced to this node yet: no key is pinned
+        // for it, so nothing runs, but it is told why instead of timing out.
         let stranger_counters = obc_safety::frame_auth::OutboundCounters::new();
         let stranger = brain
             .answer(signed_call("b", "gpio_read", &stranger_counters))
-            .await;
-        // It never announced, so no key is pinned for it: dropped unanswered.
-        assert!(stranger.is_none());
+            .await
+            .expect("a member with no pin yet is answered");
+        assert!(!stranger.ok);
+        assert!(stranger.error.unwrap().contains("announce first"));
+        assert!(stranger.sig.is_some());
+        // Someone outside the mesh gets nothing.
+        let mut outsider = signed_call("c", "gpio_read", &stranger_counters);
+        outsider.mac = Some("00".repeat(32));
+        assert!(brain.answer(outsider).await.is_none());
 
         assert_eq!(
             *echo.calls.lock().unwrap(),
@@ -1499,8 +1662,7 @@ mod tests {
             sig: None,
         };
         let auth = obc_safety::frame_auth::FrameAuth::new(Some(SECRET.to_string()), true);
-        forged.sign(&auth, &counters, "b");
-        forged.sign_identity(&identity_of("a"), &counters, "b", "brain");
+        forged.sign_p2p(&auth, &identity_of("a"), &counters, "b", "brain");
         assert_eq!(
             auth.verify_inbound(
                 "b",
@@ -1550,13 +1712,83 @@ mod tests {
             .await;
         // `a` replays `b`'s own announcement with its address swapped in.
         let mut redirected = datagram("b", &["gpio_read"], 44446);
-        redirected.tcp_port = 50000;
+        redirected["tcp_port"] = 50000.into();
         brain.on_announce(redirected, src()).await;
 
         let registry = brain.peer_registry.read().await;
         let b = registry.get("b").unwrap();
         assert_eq!(b.tcp_addr.port(), 44446);
         assert!(b.announcement.tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_replayed_bind_all_announcement_does_not_move_the_node() {
+        let brain = secured("brain");
+        let b_at = |ip: &str| SocketAddr::from(([10, 0, 0, ip.parse().unwrap()], 9));
+        let mut bind_all = unsealed("b", &[], 44446);
+        bind_all.tcp_host = "0.0.0.0".to_string();
+        let genuine = bind_all.seal(&identity_of("b"));
+        brain.on_announce(genuine.clone(), b_at("2")).await;
+
+        // `a` resends `b`'s datagram, signature intact, from its own address:
+        // with a bind-all host, the address dialled is the one it came from.
+        brain.on_announce(genuine, b_at("66")).await;
+        async fn tcp_addr(brain: &P2pSpine) -> SocketAddr {
+            brain.peer_registry.read().await.get("b").unwrap().tcp_addr
+        }
+        assert_eq!(tcp_addr(&brain).await, "10.0.0.2:44446".parse().unwrap());
+
+        // `b`'s next announcement, from wherever it now is, is taken.
+        let mut moved = unsealed("b", &[], 44446);
+        moved.tcp_host = "0.0.0.0".to_string();
+        brain
+            .on_announce(moved.seal(&identity_of("b")), b_at("3"))
+            .await;
+        assert_eq!(tcp_addr(&brain).await, "10.0.0.3:44446".parse().unwrap());
+    }
+
+    #[tokio::test]
+    async fn an_announcement_with_fields_this_version_lacks_still_verifies() {
+        let brain = secured("brain");
+        let identity = identity_of("a");
+        let mut newer = unsealed("a", &["gpio_read"], 44445);
+        newer.announcement.metadata["p2p_pubkey"] = Value::String(identity.public_hex());
+        let mut datagram = serde_json::to_value(&newer).unwrap();
+        datagram["hop_limit"] = 3.into();
+        datagram["announcement"]["region"] = "kitchen".into();
+        datagram["sig"] = identity.sign_announcement(&announce_body(&datagram)).into();
+
+        brain.on_announce(datagram, src()).await;
+        assert!(brain.peer_registry.read().await.contains_key("a"));
+        assert!(brain.peer_keys.key_for("a").is_some());
+    }
+
+    #[tokio::test]
+    async fn only_a_paired_node_has_its_key_pinned() {
+        // Pairing evaluated but not required, frame auth off: an unpaired node
+        // is admitted, as before, but its key is not pinned.
+        let spine = P2pSpine::new(P2pConfig {
+            node_id: "brain".to_string(),
+            ..P2pConfig::default()
+        })
+        .with_pairing(
+            obc_safety::NodePairingManager::new(Some(SECRET.to_string())),
+            false,
+        );
+        let unpaired = P2pAnnounce {
+            announcement: announcement("c", &["gpio_read"]),
+            tcp_host: "127.0.0.1".to_string(),
+            tcp_port: 44447,
+            sig: None,
+            seq: 1,
+        }
+        .seal(&identity_of("c"));
+        spine.on_announce(unpaired, src()).await;
+        assert!(spine.peer_registry.read().await.contains_key("c"));
+        assert!(spine.peer_keys.key_for("c").is_none());
+
+        spine.on_announce(datagram("a", &[], 44445), src()).await;
+        assert!(spine.peer_keys.key_for("a").is_some());
     }
 
     #[tokio::test]
@@ -1643,7 +1875,7 @@ mod tests {
     async fn a_second_board_with_our_id_is_reported_and_not_admitted() {
         let spine = secured("brain");
         let mut own = datagram("brain", &["shell"], 44445);
-        own.announcement.metadata["p2p_instance"] = Value::String(spine.instance.clone());
+        own["announcement"]["metadata"]["p2p_instance"] = Value::String(spine.instance.clone());
         spine.on_announce(own, src()).await;
         assert!(spine.duplicates_seen.lock().unwrap().is_empty());
 

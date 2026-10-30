@@ -86,8 +86,8 @@ pub struct EdgeAgent {
     frame_auth_secret: Option<String>,
     frame_auth_required: bool,
     /// This node's identity key and the keys it has pinned for its peers, taken
-    /// by `start_p2p`. `None` means a fresh key each start, which peers that
-    /// pinned the last one will refuse.
+    /// by `start_p2p`. `None` means the ones kept in the data dir
+    /// ([`obc_safety::node_identity::P2pState`]), created on first start.
     identity: Option<(
         obc_safety::node_identity::NodeIdentity,
         obc_safety::node_identity::PeerKeys,
@@ -154,9 +154,9 @@ impl EdgeAgent {
     }
 
     /// The identity key this node signs P2P frames with, and the peer keys it
-    /// checks theirs against. Keep the key across restarts
-    /// (`NodeIdentity::load_or_create`), or every peer that pinned it refuses
-    /// this node until its pin is removed.
+    /// checks theirs against, in place of the ones kept in the data dir. Keep
+    /// the key across restarts (`NodeIdentity::load_or_create`), or every peer
+    /// that pinned it refuses this node until its pin is removed.
     pub fn with_p2p_identity(
         mut self,
         identity: obc_safety::node_identity::NodeIdentity,
@@ -183,9 +183,20 @@ impl EdgeAgent {
         announcement: NodeAnnouncement,
     ) -> Result<()> {
         let mut spine = P2pSpine::new(p2p_config);
-        if let Some((identity, peer_keys)) = self.identity.take() {
-            spine = spine.with_identity(identity).with_peer_keys(peer_keys);
-        }
+        spine = match self.identity.take() {
+            Some((identity, peer_keys)) => spine.with_identity(identity).with_peer_keys(peer_keys),
+            None => {
+                let state = obc_safety::node_identity::P2pState::load(
+                    &obc_paths::data_dir(),
+                    obc_safety::node_identity::PeerKeys::new(),
+                )
+                .map_err(|e| anyhow::anyhow!("could not load this node's P2P identity: {e:#}"))?;
+                spine
+                    .with_identity(state.identity)
+                    .with_peer_keys(state.peer_keys)
+                    .with_announce_epoch(state.announce_epoch)
+            }
+        };
         let spine = spine
             .with_pairing(self.pairing.0.clone(), self.pairing.1)
             .with_frame_auth(obc_safety::frame_auth::FrameAuth::new(

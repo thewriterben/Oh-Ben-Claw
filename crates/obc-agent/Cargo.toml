@@ -53,6 +53,7 @@ obc-cost = { path = "../obc-cost" }
 obc-memory = { path = "../obc-memory" }
 obc-movement = { path = "../obc-movement" }
 obc-observability = { path = "../obc-observability" }
+obc-paths = { path = "../obc-paths" }
 obc-providers = { path = "../obc-providers" }
 obc-scheduler = { path = "../obc-scheduler" }
 obc-reflex = { path = "../obc-reflex" }

@@ -144,27 +144,25 @@ impl ToolCallRequest {
         serde_json::to_vec(&unsigned).unwrap_or_default()
     }
 
-    /// Sign as `from` to `to` with this node's own key. Uses the counter
-    /// [`ToolCallRequest::sign`] set, or takes the next one for `from`.
-    pub fn sign_identity(
+    /// Sign a P2P call from `from` to `to`: the tag [`ToolCallRequest::sign`]
+    /// attaches, then `identity`'s signature over the same counter. Nothing,
+    /// like `sign`, when `frame_auth` has no secret.
+    pub fn sign_p2p(
         &mut self,
+        frame_auth: &obc_safety::frame_auth::FrameAuth,
         identity: &obc_safety::node_identity::NodeIdentity,
         counters: &obc_safety::frame_auth::OutboundCounters,
         from: &str,
         to: &str,
     ) {
-        let Some(ctr) = self.ctr.or_else(|| counters.next(from)) else {
-            tracing::error!(node = %from, "Outbound counter exhausted; sending unsigned.");
-            return;
-        };
-        self.ctr = Some(ctr);
-        self.sig = Some(identity.sign_frame(
+        self.sign(frame_auth, counters, from);
+        self.sig = p2p_signature(
+            identity,
             obc_safety::node_identity::FrameKind::Request,
-            from,
-            to,
-            ctr,
+            (from, to),
+            self.ctr,
             &self.signed_bytes(),
-        ));
+        );
     }
 
     /// Attach a counter and tag for `key_node`, if `frame_auth` has a secret.
@@ -244,26 +242,23 @@ impl ToolCallResult {
         serde_json::to_vec(&unsigned).unwrap_or_default()
     }
 
-    /// Sign as `from` answering `to`, as [`ToolCallRequest::sign_identity`].
-    pub fn sign_identity(
+    /// Sign `from`'s answer to `to`, as [`ToolCallRequest::sign_p2p`] does.
+    pub fn sign_p2p(
         &mut self,
+        frame_auth: &obc_safety::frame_auth::FrameAuth,
         identity: &obc_safety::node_identity::NodeIdentity,
         counters: &obc_safety::frame_auth::OutboundCounters,
         from: &str,
         to: &str,
     ) {
-        let Some(ctr) = self.ctr.or_else(|| counters.next(from)) else {
-            tracing::error!(node = %from, "Outbound counter exhausted; sending unsigned.");
-            return;
-        };
-        self.ctr = Some(ctr);
-        self.sig = Some(identity.sign_frame(
+        self.sign(frame_auth, counters, from);
+        self.sig = p2p_signature(
+            identity,
             obc_safety::node_identity::FrameKind::Result,
-            from,
-            to,
-            ctr,
+            (from, to),
+            self.ctr,
             &self.signed_bytes(),
-        ));
+        );
     }
 
     /// Attach a counter and tag for `key_node`, as [`ToolCallRequest::sign`]
@@ -287,6 +282,18 @@ impl ToolCallResult {
         self.ctr = Some(ctr);
         self.mac = frame_auth.tag_outbound(key_node, ctr, &self.signed_bytes());
     }
+}
+
+/// `identity`'s signature over a P2P frame `sign` gave counter `ctr`; none
+/// when it gave none (no secret, or the counter ran out).
+fn p2p_signature(
+    identity: &obc_safety::node_identity::NodeIdentity,
+    kind: obc_safety::node_identity::FrameKind,
+    (from, to): (&str, &str),
+    ctr: Option<u32>,
+    payload: &[u8],
+) -> Option<String> {
+    ctr.map(|ctr| identity.sign_frame(kind, from, to, ctr, payload))
 }
 
 // ── Pending Call Registry ────────────────────────────────────────────────────

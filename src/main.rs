@@ -877,19 +877,17 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             let (peer_tx, peer_rx) = tokio::sync::mpsc::channel(64);
             // This node's identity key, kept across restarts so the pin its
             // peers hold for it stays good, and the pins it holds for them.
-            let identity = obc_safety::node_identity::NodeIdentity::load_or_create(
-                std::path::Path::new(&track0_data_path("p2p_identity.key")),
-            )
-            .context("[edge].p2p_enabled: could not load the P2P identity key")?;
-            let peer_keys =
+            let state = obc_safety::node_identity::P2pState::load(
+                &oh_ben_claw::config::paths::data_dir(),
                 obc_safety::node_identity::PeerKeys::configured(&config.security.peer_keys)
-                    .context("[security] peer_keys")?
-                    .with_store(track0_data_path("p2p_peer_keys.json"))
-                    .context("[edge].p2p_enabled: could not load the pinned P2P peer keys")?;
-            let public_key = identity.public_hex();
+                    .context("[security] peer_keys")?,
+            )
+            .context("[edge].p2p_enabled: could not load the P2P identity or pinned peer keys")?;
+            let public_key = state.identity.public_hex();
             let mesh = spine::p2p::P2pSpine::new(p2p_config)
-                .with_identity(identity)
-                .with_peer_keys(peer_keys)
+                .with_identity(state.identity)
+                .with_peer_keys(state.peer_keys)
+                .with_announce_epoch(state.announce_epoch)
                 .with_peer_events(peer_tx)
                 // Same pairing table and frame-auth secret as the MQTT spine. P2P
                 // discovery is a UDP broadcast with no broker in front of it, so
@@ -919,7 +917,8 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             info!(
                 node_id = %node_id,
                 %public_key,
-                "Joined the P2P mesh ([edge].p2p_enabled); pin this key as                  [security] peer_keys on other nodes to skip first-use pinning"
+                "Joined the P2P mesh ([edge].p2p_enabled); pin this key as \
+                 [security] peer_keys on other nodes to skip first-use pinning"
             );
             Some((mesh, peer_rx))
         }

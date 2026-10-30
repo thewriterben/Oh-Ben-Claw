@@ -194,7 +194,7 @@ impl NodeIdentity {
                 if let Some(dir) = path.parent() {
                     std::fs::create_dir_all(dir)?;
                 }
-                write_private(path, identity.secret_hex().as_bytes())?;
+                write_atomic(path, identity.secret_hex().as_bytes())?;
                 Ok(identity)
             }
             Err(e) => Err(e.into()),
@@ -223,26 +223,79 @@ impl NodeIdentity {
     }
 }
 
-#[cfg(unix)]
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Write `bytes` to `path` so that a crash leaves either the old file or the
+/// new one, never half of either: a sibling temp file (owner-only on Unix),
+/// flushed to disk, renamed into place. A torn key or pin file would stop the
+/// node starting, since both refuse to load what does not parse.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)?
-        .write_all(bytes)
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".tmp");
+    let tmp = path.with_file_name(tmp_name);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&tmp, path)?;
+    // The rename itself is durable once the directory is.
+    #[cfg(unix)]
+    if let Some(dir) = path.parent().and_then(|d| std::fs::File::open(d).ok()) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
 }
 
-#[cfg(not(unix))]
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?
-        .write_all(bytes)
+/// The epoch this start announces under: one more than the last start's, or
+/// the clock's seconds if those are ahead. A node's announcement sequence is
+/// `epoch << 32 | count`, and peers accept only a sequence higher than the
+/// last one they took from it, so a node without a clock must still go up
+/// across restarts. Written back before it is returned; if the file cannot be
+/// written the clock alone is used.
+pub fn next_boot_epoch(path: &Path) -> u32 {
+    let clock = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u32::try_from(d.as_secs()).unwrap_or(u32::MAX))
+        .unwrap_or_default();
+    let last = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok());
+    let epoch = last.map_or(clock, |last| clock.max(last.saturating_add(1)));
+    let written = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| write_atomic(path, epoch.to_string().as_bytes()));
+    if let Err(e) = written {
+        tracing::warn!(path = %path.display(), error = %e, "Could not record the P2P announce epoch");
+    }
+    epoch
+}
+
+/// What a node keeps across restarts to stay the same peer on the mesh: its
+/// identity key, the pins it learned, and the epoch its announcements count
+/// from this start, each in its own file in one directory.
+pub struct P2pState {
+    pub identity: NodeIdentity,
+    pub peer_keys: PeerKeys,
+    pub announce_epoch: u32,
+}
+
+impl P2pState {
+    /// The state kept in `dir`, created where missing, with `peer_keys` (the
+    /// configured pins) on top of the pins learned there.
+    pub fn load(dir: &Path, peer_keys: PeerKeys) -> anyhow::Result<Self> {
+        Ok(Self {
+            identity: NodeIdentity::load_or_create(&dir.join("p2p_identity.key"))?,
+            peer_keys: peer_keys.with_store(dir.join("p2p_peer_keys.json"))?,
+            announce_epoch: next_boot_epoch(&dir.join("p2p_announce_epoch")),
+        })
+    }
 }
 
 /// What pinning an announced key decided.
@@ -259,9 +312,16 @@ pub enum PinVerdict {
 /// The public keys this node accepts for each peer.
 #[derive(Debug, Default)]
 pub struct PeerKeys {
-    pins: Mutex<HashMap<String, VerifyingKey>>,
+    /// From `[security] peer_keys`. They win, and are never written out: the
+    /// config is where they live, so removing one there unpins the node.
+    configured: HashMap<String, VerifyingKey>,
+    /// Pinned on first announcement, and kept in `store`.
+    learned: Mutex<HashMap<String, VerifyingKey>>,
     /// Where learned pins are kept across restarts, if anywhere.
     store: Option<PathBuf>,
+    /// Held across a write of `store`, and the snapshot taken under it, so the
+    /// last write to land is the one with every pin in it.
+    writing: Mutex<()>,
 }
 
 impl PeerKeys {
@@ -275,23 +335,25 @@ impl PeerKeys {
     /// operator wrote and the node ignored would leave that id open to the
     /// first claimant.
     pub fn configured(keys: &BTreeMap<String, String>) -> anyhow::Result<Self> {
-        let mut pins = HashMap::new();
+        let mut configured = HashMap::new();
         for (node, hex) in keys {
             let key = parse_public(hex).ok_or_else(|| {
                 anyhow::anyhow!("[security] peer_keys.{node} is not an ed25519 public key (64 hex)")
             })?;
-            pins.insert(node.clone(), key);
+            configured.insert(node.clone(), key);
         }
         Ok(Self {
-            pins: Mutex::new(pins),
-            store: None,
+            configured,
+            ..Self::default()
         })
     }
 
     /// Keep learned pins in `path` (JSON, node id → public key hex), and load
-    /// the ones already there. A pin already held — configured — wins over the
-    /// file. A file that does not parse is an error: starting with no pins
-    /// would hand every id back to whoever announces it first.
+    /// the ones already there. A configured pin wins over the file, and the
+    /// file's entry for that node is dropped at the next write, so it cannot
+    /// come back if the configured one is removed. A file that does not parse
+    /// is an error: starting with no pins would hand every id back to whoever
+    /// announces it first.
     pub fn with_store(self, path: impl Into<PathBuf>) -> anyhow::Result<Self> {
         let path = path.into();
         let stored: BTreeMap<String, String> = match std::fs::read_to_string(&path) {
@@ -301,12 +363,14 @@ impl PeerKeys {
             Err(e) => return Err(e.into()),
         };
         {
-            let mut pins = self.pins.lock().unwrap_or_else(|p| p.into_inner());
+            let mut learned = self.learned.lock().unwrap_or_else(|p| p.into_inner());
             for (node, hex) in stored {
                 let key = parse_public(&hex).ok_or_else(|| {
                     anyhow::anyhow!("{}: the key for {node} is malformed", path.display())
                 })?;
-                pins.entry(node).or_insert(key);
+                if !self.configured.contains_key(&node) {
+                    learned.entry(node).or_insert(key);
+                }
             }
         }
         Ok(Self {
@@ -317,39 +381,65 @@ impl PeerKeys {
 
     /// The key pinned for `node_id`.
     pub fn key_for(&self, node_id: &str) -> Option<VerifyingKey> {
-        self.pins
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(node_id)
-            .copied()
+        self.configured.get(node_id).copied().or_else(|| {
+            self.learned
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get(node_id)
+                .copied()
+        })
     }
 
     /// Pin `key` for `node_id` unless another key already is. Call only for an
-    /// announcement that passed pairing and whose signature verifies under
-    /// `key`: pinning is how mesh membership becomes an identity.
+    /// announcement from a paired node whose signature verifies under `key`:
+    /// pinning is how mesh membership becomes an identity.
+    ///
+    /// A new pin is written to the store, which is blocking file I/O: from
+    /// async code, call this on a blocking thread.
     pub fn pin(&self, node_id: &str, key: VerifyingKey) -> PinVerdict {
-        let mut pins = self.pins.lock().unwrap_or_else(|p| p.into_inner());
-        match pins.get(node_id) {
-            Some(pinned) if *pinned == key => PinVerdict::Known,
-            Some(_) => PinVerdict::Mismatch,
-            None => {
-                pins.insert(node_id.to_string(), key);
-                if let Some(path) = &self.store {
-                    let all: BTreeMap<&String, String> = pins
-                        .iter()
-                        .map(|(n, k)| (n, hex::encode(k.to_bytes())))
-                        .collect();
-                    // Held in memory either way; a failed write only means the
-                    // pin is learned again after a restart.
-                    if let Err(e) = serde_json::to_vec_pretty(&all)
-                        .map_err(std::io::Error::other)
-                        .and_then(|bytes| std::fs::write(path, bytes))
-                    {
-                        tracing::warn!(path = %path.display(), error = %e, "Could not persist a P2P peer key pin");
-                    }
+        let held = self
+            .configured
+            .get(node_id)
+            .copied()
+            .map(|pinned| pinned == key);
+        if let Some(same) = held {
+            return if same {
+                PinVerdict::Known
+            } else {
+                PinVerdict::Mismatch
+            };
+        }
+        {
+            let mut learned = self.learned.lock().unwrap_or_else(|p| p.into_inner());
+            match learned.get(node_id) {
+                Some(pinned) if *pinned == key => return PinVerdict::Known,
+                Some(_) => return PinVerdict::Mismatch,
+                None => {
+                    learned.insert(node_id.to_string(), key);
                 }
-                PinVerdict::Pinned
             }
+        }
+        self.persist();
+        PinVerdict::Pinned
+    }
+
+    /// Write the learned pins to the store. Held in memory either way; a
+    /// failed write only means a pin is learned again after a restart.
+    fn persist(&self) {
+        let Some(path) = &self.store else { return };
+        let _writing = self.writing.lock().unwrap_or_else(|p| p.into_inner());
+        let snapshot: BTreeMap<String, String> = self
+            .learned
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .map(|(n, k)| (n.clone(), hex::encode(k.to_bytes())))
+            .collect();
+        if let Err(e) = serde_json::to_vec_pretty(&snapshot)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| write_atomic(path, &bytes))
+        {
+            tracing::warn!(path = %path.display(), error = %e, "Could not persist a P2P peer key pin");
         }
     }
 }
@@ -513,5 +603,99 @@ mod tests {
         let first = NodeIdentity::load_or_create(&path).unwrap();
         let again = NodeIdentity::load_or_create(&path).unwrap();
         assert_eq!(first.public_hex(), again.public_hex());
+    }
+
+    #[test]
+    fn a_configured_pin_removed_from_the_config_is_not_kept_by_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("peers.json");
+        let (a, b) = (NodeIdentity::generate(), NodeIdentity::generate());
+        let configured = BTreeMap::from([(A.to_string(), a.public_hex())]);
+        let keys = PeerKeys::configured(&configured)
+            .unwrap()
+            .with_store(&path)
+            .unwrap();
+        // A learned pin is what triggers a write; A's configured one is not in it.
+        assert_eq!(keys.pin(B, key(&b)), PinVerdict::Pinned);
+        let stored: BTreeMap<String, String> =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(stored.keys().collect::<Vec<_>>(), [B]);
+
+        // The operator removes A's entry: A is unpinned, B still is.
+        let reloaded = PeerKeys::new().with_store(&path).unwrap();
+        assert_eq!(reloaded.key_for(A), None);
+        assert_eq!(reloaded.key_for(B), Some(key(&b)));
+    }
+
+    #[test]
+    fn a_learned_pin_overridden_by_the_config_is_dropped_from_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("peers.json");
+        let (old, new, c) = (
+            NodeIdentity::generate(),
+            NodeIdentity::generate(),
+            NodeIdentity::generate(),
+        );
+        let keys = PeerKeys::new().with_store(&path).unwrap();
+        assert_eq!(keys.pin(A, key(&old)), PinVerdict::Pinned);
+        // A re-keyed; the operator pins the new key by hand.
+        let keys = PeerKeys::configured(&BTreeMap::from([(A.to_string(), new.public_hex())]))
+            .unwrap()
+            .with_store(&path)
+            .unwrap();
+        assert_eq!(keys.key_for(A), Some(key(&new)));
+        assert_eq!(keys.pin(C, key(&c)), PinVerdict::Pinned);
+        // With the entry gone again, the stale key does not come back.
+        let reloaded = PeerKeys::new().with_store(&path).unwrap();
+        assert_eq!(reloaded.key_for(A), None);
+    }
+
+    #[test]
+    fn a_restarted_node_is_the_same_peer() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = P2pState::load(dir.path(), PeerKeys::new()).unwrap();
+        let b = NodeIdentity::generate();
+        assert_eq!(first.peer_keys.pin(B, key(&b)), PinVerdict::Pinned);
+
+        let again = P2pState::load(dir.path(), PeerKeys::new()).unwrap();
+        assert_eq!(again.identity.public_hex(), first.identity.public_hex());
+        assert_eq!(again.peer_keys.key_for(B), Some(key(&b)));
+        assert!(again.announce_epoch > first.announce_epoch);
+    }
+
+    #[test]
+    fn the_boot_epoch_goes_up_even_when_the_clock_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p2p_announce_epoch");
+        // A previous start far ahead of this clock, as on a board whose clock reset.
+        std::fs::write(&path, (u32::MAX - 5).to_string()).unwrap();
+        assert_eq!(next_boot_epoch(&path), u32::MAX - 4);
+        assert_eq!(next_boot_epoch(&path), u32::MAX - 3);
+    }
+
+    #[test]
+    fn files_are_replaced_whole_and_a_stale_temp_file_is_harmless() {
+        let dir = tempfile::tempdir().unwrap();
+        let (id_path, pins_path) = (dir.path().join("id.key"), dir.path().join("peers.json"));
+        // What a crash mid-write used to leave, now only ever in the temp file.
+        std::fs::write(dir.path().join("id.key.tmp"), "0123").unwrap();
+        std::fs::write(dir.path().join("peers.json.tmp"), "{\"obc-no").unwrap();
+
+        let identity = NodeIdentity::load_or_create(&id_path).unwrap();
+        let keys = PeerKeys::new().with_store(&pins_path).unwrap();
+        assert_eq!(keys.pin(A, key(&identity)), PinVerdict::Pinned);
+
+        assert_eq!(
+            NodeIdentity::load_or_create(&id_path).unwrap().public_hex(),
+            identity.public_hex()
+        );
+        let reloaded = PeerKeys::new().with_store(&pins_path).unwrap();
+        assert_eq!(reloaded.key_for(A), Some(key(&identity)));
+        for leftover in ["id.key.tmp", "peers.json.tmp"] {
+            assert!(
+                !dir.path().join(leftover).exists(),
+                "{leftover} left behind"
+            );
+        }
     }
 }
