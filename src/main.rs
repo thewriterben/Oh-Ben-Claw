@@ -882,12 +882,13 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 obc_safety::node_identity::PeerKeys::configured(&config.security.peer_keys)
                     .context("[security] peer_keys")?,
             )
-            .context("[edge].p2p_enabled: could not load the P2P identity or pinned peer keys")?;
+            .context("[edge].p2p_enabled: could not load the P2P identity, pinned peer keys or announce marks")?;
             let public_key = state.identity.public_hex();
             let mesh = spine::p2p::P2pSpine::new(p2p_config)
                 .with_identity(state.identity)
                 .with_peer_keys(state.peer_keys)
                 .with_announce_epoch(state.announce_epoch)
+                .with_announce_marks(state.announce_marks)
                 .with_peer_events(peer_tx)
                 // Same pairing table and frame-auth secret as the MQTT spine. P2P
                 // discovery is a UDP broadcast with no broker in front of it, so

@@ -195,6 +195,7 @@ impl EdgeAgent {
                     .with_identity(state.identity)
                     .with_peer_keys(state.peer_keys)
                     .with_announce_epoch(state.announce_epoch)
+                    .with_announce_marks(state.announce_marks)
             }
         };
         let spine = spine

@@ -92,6 +92,7 @@ uuid = { version = "1", features = ["v4"] }
 # through three attempts in a few milliseconds of real time.
 [dev-dependencies]
 tokio = { version = "1.42", features = ["test-util"] }
+tempfile = "3.14"
 
 # The two serial transports are behind the same flag they were behind in the
 # tree, and the flag came with them: four `#[cfg(feature = "hardware")]` blocks

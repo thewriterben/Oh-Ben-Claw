@@ -241,8 +241,6 @@ pub struct P2pPeer {
     pub tcp_addr: SocketAddr,
     /// Timestamp of the last received announcement (for TTL expiry).
     pub last_seen: Instant,
-    /// The `seq` of that announcement: an older or equal one is refused.
-    pub announce_seq: u64,
 }
 
 /// A change in who is on the mesh, pushed as it happens to a caller that keeps
@@ -327,6 +325,9 @@ pub struct P2pSpine {
     peer_keys: Arc<obc_safety::node_identity::PeerKeys>,
     /// The `seq` of our last announcement; each one sent is one higher.
     announce_seq: std::sync::atomic::AtomicU64,
+    /// The highest `seq` taken from each peer: an older or equal one is a
+    /// replay. Kept past a peer's eviction, and across restarts with a store.
+    announce_marks: Arc<obc_safety::node_identity::AnnounceMarks>,
     /// Where admitted and pruned peers are reported, when someone listens.
     peer_events: Option<mpsc::Sender<PeerEvent>>,
     /// Incoming calls are answered only once [`P2pSpine::serve`] sets this;
@@ -355,6 +356,7 @@ impl P2pSpine {
             identity: obc_safety::node_identity::NodeIdentity::generate(),
             peer_keys: Arc::new(obc_safety::node_identity::PeerKeys::new()),
             announce_seq: std::sync::atomic::AtomicU64::new(epoch_seq(unix_epoch())),
+            announce_marks: Arc::new(obc_safety::node_identity::AnnounceMarks::new()),
             peer_events: None,
             served: RwLock::new(None),
             instance: uuid::Uuid::new_v4().to_string(),
@@ -392,10 +394,20 @@ impl P2pSpine {
         self
     }
 
+    /// The announce marks to start from: the ones kept before a restart
+    /// (`P2pState::load`). Without them a peer's announcements from before the
+    /// restart can be replayed until it next announces.
+    pub fn with_announce_marks(mut self, marks: obc_safety::node_identity::AnnounceMarks) -> Self {
+        self.announce_marks = Arc::new(marks);
+        self
+    }
+
     /// The epoch this start announces under, from
     /// [`obc_safety::node_identity::next_boot_epoch`]. Without it the clock is
     /// used, and a board whose clock resets is ignored by peers that remember
-    /// a higher sequence from it until they forget it (`peer_timeout_secs`).
+    /// a higher sequence from it, which they do across its silences and their
+    /// own restarts: until its clock passes the old one, or an operator removes
+    /// its entry from their `p2p_announce_marks.json`.
     pub fn with_announce_epoch(self, epoch: u32) -> Self {
         self.announce_seq
             .store(epoch_seq(epoch), std::sync::atomic::Ordering::Relaxed);
@@ -552,9 +564,8 @@ impl P2pSpine {
             );
             return;
         }
-        let identified = self
-            .admit_identity(&node_id, announce.proven_key(&body))
-            .await;
+        let proven = announce.proven_key(&body);
+        let identified = self.admit_identity(&node_id, proven).await;
         if let Err(reason) = &identified {
             if self.frame_auth.is_enforcing() {
                 tracing::warn!(
@@ -588,10 +599,13 @@ impl P2pSpine {
         let mut registry = self.peer_registry.write().await;
         // Only a signature makes `seq` the node's own; an announcement with
         // none is taken on trust anyway, which only frame auth off allows.
-        let stale = registry
-            .get(&node_id)
-            .is_some_and(|peer| announce.seq <= peer.announce_seq);
-        if identified.is_ok() && stale {
+        // Checked under the registry lock, so two copies of one announcement
+        // cannot both pass.
+        let fresh = match (&identified, proven) {
+            (Ok(()), Some(key)) => self.announce_marks.admit(&node_id, key, announce.seq),
+            _ => true,
+        };
+        if !fresh {
             tracing::debug!(
                 node_id = %node_id,
                 src = %src,
@@ -606,10 +620,12 @@ impl P2pSpine {
                 announcement: announce.announcement,
                 tcp_addr,
                 last_seen: Instant::now(),
-                announce_seq: announce.seq,
             },
         );
         drop(registry);
+        if previous.is_none() {
+            self.persist_announce_marks().await;
+        }
         if previous.is_none_or(|p| p.announcement.tools != tools) {
             self.emit(PeerEvent::Joined { node_id, tools }).await;
         }
@@ -678,11 +694,22 @@ impl P2pSpine {
             }
             alive
         });
+        if !gone.is_empty() {
+            self.persist_announce_marks().await;
+        }
         for node_id in gone {
             self.emit(PeerEvent::Left { node_id }).await;
         }
         if self.resync.load(std::sync::atomic::Ordering::Acquire) {
             self.flush_resync().await;
+        }
+    }
+
+    /// Write the announce marks to their store, on a blocking thread.
+    async fn persist_announce_marks(&self) {
+        let marks = Arc::clone(&self.announce_marks);
+        if let Err(e) = tokio::task::spawn_blocking(move || marks.persist()).await {
+            tracing::warn!(error = %e, "Could not persist P2P announce marks");
         }
     }
 
@@ -1745,6 +1772,53 @@ mod tests {
             .on_announce(moved.seal(&identity_of("b")), b_at("3"))
             .await;
         assert_eq!(tcp_addr(&brain).await, "10.0.0.3:44446".parse().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_replay_after_the_node_is_evicted_does_not_bring_it_back() {
+        let mut brain = secured("brain");
+        let b_at = |last: u8| SocketAddr::from(([10, 0, 0, last], 9));
+        let mut bind_all = unsealed("b", &["gpio_read"], 44446);
+        bind_all.tcp_host = "0.0.0.0".to_string();
+        let captured = bind_all.seal(&identity_of("b"));
+        brain.on_announce(captured.clone(), b_at(2)).await;
+
+        // `b` falls silent and is dropped; its old announcement, resent from
+        // `a`'s address, is still one already taken.
+        brain.config.peer_timeout_secs = 0;
+        brain.evict_stale().await;
+        assert!(brain.peer_registry.read().await.is_empty());
+        brain.on_announce(captured, b_at(66)).await;
+        assert!(brain.peer_registry.read().await.is_empty());
+
+        // `b` itself, announcing again, is taken.
+        brain
+            .on_announce(datagram("b", &["gpio_read"], 44446), b_at(2))
+            .await;
+        assert!(brain.peer_registry.read().await.contains_key("b"));
+    }
+
+    #[tokio::test]
+    async fn a_replay_after_a_restart_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("p2p_announce_marks.json");
+        let marks = || {
+            obc_safety::node_identity::AnnounceMarks::new()
+                .with_store(&store)
+                .unwrap()
+        };
+        let captured = datagram("b", &["gpio_read"], 44446);
+        let before = secured("brain").with_announce_marks(marks());
+        before.on_announce(captured.clone(), src()).await;
+        drop(before);
+
+        let after = secured("brain").with_announce_marks(marks());
+        after.on_announce(captured, src()).await;
+        assert!(after.peer_registry.read().await.is_empty());
+        after
+            .on_announce(datagram("b", &["gpio_read"], 44446), src())
+            .await;
+        assert!(after.peer_registry.read().await.contains_key("b"));
     }
 
     #[tokio::test]

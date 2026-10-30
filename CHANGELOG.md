@@ -37,6 +37,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   last one it accepted. A bind-all (`0.0.0.0`) announcement replayed from
   another address no longer moves the node there. Test:
   `a_replayed_bind_all_announcement_does_not_move_the_node`.
+- **A peer remembers the last `seq` it took from a node after the node goes
+  quiet, and across its own restart** (`p2p_announce_marks.json`, the node's
+  key with its `seq`). Before, the mark went with the registry entry, so once a
+  node was dropped for silence an old announcement of its could be replayed,
+  and for a bind-all node, take its calls at the replayer's address. Marks are
+  written when a peer joins or leaves, not per announcement; after a crash an
+  announcement newer than the join replays until the node next announces. A
+  re-keyed node starts over. A node announcing from a clock that went back,
+  without its epoch file, is ignored until it passes its old `seq` or its
+  entry is removed. Tests:
+  `a_replay_after_the_node_is_evicted_does_not_bring_it_back`,
+  `a_replay_after_a_restart_is_refused`,
+  `announce_marks_outlive_a_restart_and_follow_the_key`.
 - **The announcement is signed over its JSON, not the struct.** A newer peer's
   extra fields are covered and still verify here. Test:
   `an_announcement_with_fields_this_version_lacks_still_verifies`.
