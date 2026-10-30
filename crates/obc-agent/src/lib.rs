@@ -628,6 +628,24 @@ impl Agent {
         reg.extend(tools.into_iter().map(Arc::<dyn Tool>::from));
     }
 
+    /// The registry minus synced skills, shared (`Arc` clones): what another
+    /// agent needs to serve the same tools. Skills are left out because every
+    /// agent syncs its own forge, and a copied skill would shadow it.
+    pub fn base_tool_arcs(&self) -> Vec<Arc<dyn Tool>> {
+        let skills = self.skill_names.lock().unwrap_or_else(|p| p.into_inner());
+        let reg = self.tools.read().unwrap_or_else(|p| p.into_inner());
+        reg.iter()
+            .filter(|t| !skills.contains(t.name()))
+            .cloned()
+            .collect()
+    }
+
+    /// Add already-shared tools to the registry (see [`Agent::base_tool_arcs`]).
+    pub fn add_tool_arcs(&self, tools: Vec<Arc<dyn Tool>>) {
+        let mut reg = self.tools.write().unwrap_or_else(|p| p.into_inner());
+        reg.extend(tools);
+    }
+
     /// The tools the model sees this turn: a point-in-time snapshot of the
     /// registry (each element an `Arc` clone — cheap, and keeps the tool alive
     /// if the registry changes mid-run), split by `[agent.tools]` into full
