@@ -873,7 +873,10 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         }
         Some(p2p_config) => {
             let node_id = p2p_config.node_id.clone();
+            // Admitted and pruned peers, consumed once the serving agent exists.
+            let (peer_tx, peer_rx) = tokio::sync::mpsc::channel(64);
             let mesh = spine::p2p::P2pSpine::new(p2p_config)
+                .with_peer_events(peer_tx)
                 // Same pairing table and frame-auth secret as the MQTT spine. P2P
                 // discovery is a UDP broadcast with no broker in front of it, so
                 // this is where they matter most.
@@ -901,7 +904,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             .await
             .context("[edge].p2p_enabled: could not announce on the P2P mesh")?;
             info!(node_id = %node_id, "Joined the P2P mesh ([edge].p2p_enabled)");
-            Some(mesh)
+            Some((mesh, peer_rx))
         }
         None => None,
     };
@@ -3466,26 +3469,14 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         (handle, None)
     };
 
-    // Peer tools join the serving agent as peers are heard, not once at boot:
-    // peers announce every `announce_interval`, so a single look shortly after
-    // joining sees almost nobody.
-    if let Some(mesh) = p2p_mesh {
-        let agent = handle.agent_arc();
-        tokio::spawn(async move {
-            let mut seen = std::collections::HashSet::new();
-            loop {
-                let tools = mesh.new_peer_tools(&mut seen).await;
-                if !tools.is_empty() {
-                    info!(
-                        count = tools.len(),
-                        peers = seen.len(),
-                        "P2P peer tools registered"
-                    );
-                    agent.add_tools(tools);
-                }
-                tokio::time::sleep(mesh.announce_interval()).await;
-            }
-        });
+    // Peer tools follow the mesh: registered as peers are admitted, removed as
+    // they are pruned, never two of one name and never shadowing a local tool.
+    if let Some((mesh, peer_rx)) = p2p_mesh {
+        tokio::spawn(oh_ben_claw::agent::edge::serve_peer_events(
+            handle.agent_arc(),
+            mesh,
+            peer_rx,
+        ));
     }
 
     // Phase 18 System 2: spawn the slow reasoner over the live agent. Wakes

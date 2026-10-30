@@ -3393,7 +3393,10 @@ mod tests {
         config.edge.p2p_enabled = true;
         require_mesh_auth(&mut config);
         let warnings = config.validate().unwrap();
-        assert!(warnings.iter().any(|w| w.contains("p2p_node_id")), "{warnings:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("p2p_node_id")),
+            "{warnings:?}"
+        );
     }
 
     #[test]
@@ -3421,7 +3424,10 @@ mod tests {
         assert!(config.validate().is_err());
         require_mesh_auth(&mut config);
         let warnings = config.validate().unwrap();
-        assert!(!warnings.iter().any(|w| w.contains("p2p_node_id")), "{warnings:?}");
+        assert!(
+            !warnings.iter().any(|w| w.contains("p2p_node_id")),
+            "{warnings:?}"
+        );
         let mesh = edge_start(&config).unwrap().mesh.unwrap();
         assert_eq!(mesh.node_id, "nanopi-neo3-reference-deployment");
     }

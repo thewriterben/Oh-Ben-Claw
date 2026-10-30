@@ -35,19 +35,20 @@
 //! connections in a VPN (Tailscale, WireGuard) or enable the TLS tunnel
 //! (`src/tunnel/`).
 
-use crate::{NodeAnnouncement, ToolCallRequest, ToolCallResult};
+use crate::{NodeAnnouncement, NodeToolSpec, ToolCallRequest, ToolCallResult};
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 use obc_tool_api::{Tool, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::{oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, RwLock};
 
 /// Maximum permitted size of a single P2P TCP message frame (1 MiB).
 const MAX_FRAME_SIZE: usize = 1024 * 1024;
@@ -174,8 +175,36 @@ pub struct P2pPeer {
     pub last_seen: Instant,
 }
 
+/// A change in who is on the mesh, pushed as it happens to a caller that keeps
+/// peer tools registered (see [`P2pSpine::with_peer_events`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PeerEvent {
+    /// A peer was admitted, or re-announced a different tool list. Its tools
+    /// replace whatever it offered before.
+    Joined {
+        node_id: String,
+        tools: Vec<NodeToolSpec>,
+    },
+    /// A peer went silent past `peer_timeout_secs` and was pruned.
+    Left { node_id: String },
+}
+
 type PeerRegistry = Arc<RwLock<HashMap<String, P2pPeer>>>;
-type PendingCalls = Arc<Mutex<HashMap<String, oneshot::Sender<ToolCallResult>>>>;
+
+/// Runs a tool a paired peer asked this node for. The agent implements it over
+/// its own gated path (policy, Track 0, trust, approval, audit), so a call from
+/// a peer is held to everything a local one is.
+#[async_trait]
+pub trait PeerToolServer: Send + Sync {
+    /// Run `tool` with `args` on behalf of `peer`.
+    async fn call(&self, peer: &str, tool: &str, args: Value) -> Result<ToolResult>;
+}
+
+/// What this node answers for: the handler, and the names it announced.
+struct Served {
+    handler: Arc<dyn PeerToolServer>,
+    tools: HashSet<String>,
+}
 
 // ── P2pSpine ──────────────────────────────────────────────────────────────────
 
@@ -187,7 +216,6 @@ type PendingCalls = Arc<Mutex<HashMap<String, oneshot::Sender<ToolCallResult>>>>
 pub struct P2pSpine {
     config: P2pConfig,
     peer_registry: PeerRegistry,
-    pending_calls: PendingCalls,
     /// Our own announcement — set once we call `start()`.
     local_announcement: RwLock<Option<NodeAnnouncement>>,
     /// Node pairing, and whether an unpaired peer is refused or merely noted.
@@ -202,6 +230,11 @@ pub struct P2pSpine {
     /// can be signed here and verified there today.
     frame_auth: Arc<obc_safety::frame_auth::FrameAuth>,
     out_counters: Arc<obc_safety::frame_auth::OutboundCounters>,
+    /// Where admitted and pruned peers are reported, when someone listens.
+    peer_events: Option<mpsc::Sender<PeerEvent>>,
+    /// Incoming calls are answered only once [`P2pSpine::serve`] sets this;
+    /// until then every one is refused.
+    served: RwLock<Option<Served>>,
 }
 
 impl P2pSpine {
@@ -210,13 +243,21 @@ impl P2pSpine {
         Self {
             config,
             peer_registry: Arc::new(RwLock::new(HashMap::new())),
-            pending_calls: Arc::new(Mutex::new(HashMap::new())),
             local_announcement: RwLock::new(None),
             pairing: obc_safety::NodePairingManager::new(None),
             require_pairing: false,
             frame_auth: Arc::new(obc_safety::frame_auth::FrameAuth::new(None, false)),
             out_counters: Arc::new(obc_safety::frame_auth::OutboundCounters::new()),
+            peer_events: None,
+            served: RwLock::new(None),
         }
+    }
+
+    /// Report admitted and pruned peers on `tx` as discovery sees them, so the
+    /// caller can add and remove their tools instead of polling the registry.
+    pub fn with_peer_events(mut self, tx: mpsc::Sender<PeerEvent>) -> Self {
+        self.peer_events = Some(tx);
+        self
     }
 
     /// Authenticate P2P tool calls in both directions
@@ -249,17 +290,15 @@ impl P2pSpine {
         let listener = TcpListener::bind(&tcp_addr).await?;
         tracing::info!(addr = %tcp_addr, "P2P spine TCP server listening");
 
-        let pending_calls = Arc::clone(&arc.pending_calls);
-        let tcp_frame_auth = Arc::clone(&arc.frame_auth);
+        let server = Arc::clone(&arc);
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((stream, peer)) => {
                         tracing::debug!(peer = %peer, "Incoming P2P TCP connection");
-                        let pending = Arc::clone(&pending_calls);
-                        let fa = Arc::clone(&tcp_frame_auth);
+                        let spine = Arc::clone(&server);
                         tokio::spawn(async move {
-                            if let Err(e) = handle_tcp_connection(stream, pending, fa).await {
+                            if let Err(e) = handle_tcp_connection(stream, spine).await {
                                 tracing::warn!(error = %e, "P2P TCP handler error");
                             }
                         });
@@ -280,84 +319,22 @@ impl P2pSpine {
             "P2P discovery UDP socket bound"
         );
 
-        let peer_registry = Arc::clone(&arc.peer_registry);
-        let peer_timeout = arc.config.peer_timeout_secs;
-        let pairing = arc.pairing.clone();
-        let require_pairing = arc.require_pairing;
+        let discovery = Arc::clone(&arc);
         tokio::spawn(async move {
+            // Bounded waits, so a quiet network still has its stale peers pruned.
+            let sweep = Duration::from_secs(discovery.config.announce_interval_secs.max(1));
             let mut buf = [0u8; 4096];
             loop {
-                match udp_rx.recv_from(&mut buf).await {
-                    Ok((len, src)) => {
+                match tokio::time::timeout(sweep, udp_rx.recv_from(&mut buf)).await {
+                    Ok(Ok((len, src))) => {
                         if let Ok(announce) = serde_json::from_slice::<P2pAnnounce>(&buf[..len]) {
-                            let node_id = announce.announcement.node_id.clone();
-
-                            if let super::Admission::Refuse { reason } = super::admit_announcement(
-                                &pairing,
-                                require_pairing,
-                                &node_id,
-                                &announce.announcement.metadata,
-                            ) {
-                                tracing::warn!(
-                                    node_id = %node_id,
-                                    src = %src,
-                                    tool_count = announce.announcement.tools.len(),
-                                    %reason,
-                                    "Refused a P2P peer: its tools are NOT registered \
-                                     ([security] require_pairing is on)"
-                                );
-                                continue;
-                            }
-
-                            // If the sender broadcast "0.0.0.0" (bind-all), use the
-                            // actual UDP source IP so we can dial back to the peer.
-                            let tcp_host = if announce.tcp_host == "0.0.0.0" {
-                                src.ip().to_string()
-                            } else {
-                                announce.tcp_host.clone()
-                            };
-                            let tcp_addr_str = format!("{}:{}", tcp_host, announce.tcp_port);
-                            match tcp_addr_str.parse::<SocketAddr>() {
-                                Ok(tcp_addr) => {
-                                    tracing::debug!(
-                                        node_id = %node_id,
-                                        tcp_addr = %tcp_addr,
-                                        "Discovered P2P peer via UDP"
-                                    );
-                                    let mut registry = peer_registry.write().await;
-                                    registry.insert(
-                                        node_id,
-                                        P2pPeer {
-                                            announcement: announce.announcement,
-                                            tcp_addr,
-                                            last_seen: Instant::now(),
-                                        },
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        src = %src,
-                                        error = %e,
-                                        "Invalid TCP address in P2P announcement"
-                                    );
-                                }
-                            }
+                            discovery.on_announce(announce, src).await;
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "UDP receive error");
-                    }
+                    Ok(Err(e)) => tracing::warn!(error = %e, "UDP receive error"),
+                    Err(_) => {}
                 }
-
-                // Evict stale peers
-                let mut registry = peer_registry.write().await;
-                registry.retain(|id, peer| {
-                    let alive = peer.last_seen.elapsed().as_secs() < peer_timeout;
-                    if !alive {
-                        tracing::info!(node_id = %id, "Evicting stale P2P peer");
-                    }
-                    alive
-                });
+                discovery.evict_stale().await;
             }
         });
 
@@ -376,6 +353,84 @@ impl P2pSpine {
         Ok(arc)
     }
 
+    /// Admit (or refuse) one discovery datagram, and report the peer when it is
+    /// new or its tool list changed.
+    async fn on_announce(&self, announce: P2pAnnounce, src: SocketAddr) {
+        let node_id = announce.announcement.node_id.clone();
+        // Broadcast comes back to the sender; this node is not its own peer.
+        if node_id == self.config.node_id {
+            return;
+        }
+        if let super::Admission::Refuse { reason } = super::admit_announcement(
+            &self.pairing,
+            self.require_pairing,
+            &node_id,
+            &announce.announcement.metadata,
+        ) {
+            tracing::warn!(
+                node_id = %node_id,
+                src = %src,
+                tool_count = announce.announcement.tools.len(),
+                %reason,
+                "Refused a P2P peer: its tools are NOT registered \
+                 ([security] require_pairing is on)"
+            );
+            return;
+        }
+
+        // If the sender broadcast "0.0.0.0" (bind-all), use the actual UDP
+        // source IP so we can dial back to the peer.
+        let tcp_host = if announce.tcp_host == "0.0.0.0" {
+            src.ip().to_string()
+        } else {
+            announce.tcp_host.clone()
+        };
+        let tcp_addr = match format!("{}:{}", tcp_host, announce.tcp_port).parse::<SocketAddr>() {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!(src = %src, error = %e, "Invalid TCP address in P2P announcement");
+                return;
+            }
+        };
+        tracing::debug!(node_id = %node_id, tcp_addr = %tcp_addr, "Discovered P2P peer via UDP");
+        let tools = announce.announcement.tools.clone();
+        let previous = self.peer_registry.write().await.insert(
+            node_id.clone(),
+            P2pPeer {
+                announcement: announce.announcement,
+                tcp_addr,
+                last_seen: Instant::now(),
+            },
+        );
+        if previous.is_none_or(|p| p.announcement.tools != tools) {
+            self.emit(PeerEvent::Joined { node_id, tools }).await;
+        }
+    }
+
+    /// Drop peers silent past `peer_timeout_secs`, and report each one.
+    async fn evict_stale(&self) {
+        let timeout = self.config.peer_timeout_secs;
+        let mut gone = Vec::new();
+        self.peer_registry.write().await.retain(|id, peer| {
+            let alive = peer.last_seen.elapsed().as_secs() < timeout;
+            if !alive {
+                tracing::info!(node_id = %id, "Evicting stale P2P peer");
+                gone.push(id.clone());
+            }
+            alive
+        });
+        for node_id in gone {
+            self.emit(PeerEvent::Left { node_id }).await;
+        }
+    }
+
+    async fn emit(&self, event: PeerEvent) {
+        if let Some(tx) = &self.peer_events {
+            // A closed receiver means nobody registers peer tools any more.
+            let _ = tx.send(event).await;
+        }
+    }
+
     /// Publish our node announcement to the local network via UDP broadcast.
     pub async fn announce(&self, announcement: &NodeAnnouncement) -> Result<()> {
         *self.local_announcement.write().await = Some(announcement.clone());
@@ -385,10 +440,18 @@ impl P2pSpine {
     /// Broadcast the stored local announcement via UDP.
     async fn broadcast_presence(&self) -> Result<()> {
         let announcement = self.local_announcement.read().await.clone();
-        let announcement = match announcement {
+        let mut announcement = match announcement {
             Some(a) => a,
             None => return Ok(()), // not yet announced
         };
+        // Peers that require pairing admit only a fresh token; one stamped at
+        // `announce` time would expire while we keep announcing.
+        if let Some(token) = self.pairing.token_for(&announcement.node_id) {
+            if !announcement.metadata.is_object() {
+                announcement.metadata = serde_json::json!({});
+            }
+            announcement.metadata["pairing_token"] = serde_json::to_value(token)?;
+        }
 
         let payload = P2pAnnounce {
             announcement,
@@ -440,9 +503,6 @@ impl P2pSpine {
         // checks against that node's key, so a caller must sign as itself.
         request.sign(&self.frame_auth, &self.out_counters, &self.config.node_id);
 
-        let (tx, rx) = oneshot::channel();
-        self.pending_calls.lock().await.insert(call_id.clone(), tx);
-
         let payload = serde_json::to_vec(&request)?;
 
         // Connect and send
@@ -454,20 +514,171 @@ impl P2pSpine {
 
         write_framed(&mut stream, &payload).await?;
 
-        // Wait for the result to come back via the TCP server
+        // The answer comes back on this stream. (It used to be awaited from the
+        // listener instead, where nothing ever sent it, so no call returned.)
         let timeout = Duration::from_secs(self.config.tool_timeout_secs);
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(_)) => bail!("P2P call channel dropped for call_id={}", call_id),
-            Err(_) => {
-                self.pending_calls.lock().await.remove(&call_id);
-                bail!(
-                    "P2P tool call timed out after {}s (node={}, tool={})",
-                    self.config.tool_timeout_secs,
-                    node_id,
-                    tool_name
-                )
+        let reply = match tokio::time::timeout(timeout, read_framed(&mut stream)).await {
+            Ok(reply) => reply?,
+            Err(_) => bail!(
+                "P2P tool call timed out after {}s (node={}, tool={})",
+                self.config.tool_timeout_secs,
+                node_id,
+                tool_name
+            ),
+        };
+        let result: ToolCallResult = serde_json::from_slice(&reply)?;
+        if result.call_id != call_id {
+            bail!("P2P peer {node_id} answered a different call");
+        }
+        // The peer signs as itself; an unverified answer is not its answer.
+        if let obc_safety::frame_auth::FrameVerdict::Reject { reason } =
+            self.frame_auth.verify_inbound(
+                node_id,
+                result.ctr,
+                result.mac.as_deref(),
+                &result.signed_bytes(),
+            )
+        {
+            bail!("Refused a P2P result from {node_id} ([security] require_frame_auth): {reason}");
+        }
+        Ok(result)
+    }
+
+    /// Answer paired peers' calls to `tools` through `handler`, and announce
+    /// them. Refused unless pairing and frame auth are both enforced: the tag
+    /// is what proves who is calling, and pairing is whether we deal with them.
+    pub async fn serve(
+        &self,
+        handler: Arc<dyn PeerToolServer>,
+        tools: Vec<NodeToolSpec>,
+    ) -> Result<()> {
+        let announcement = self.start_serving(handler, tools).await?;
+        self.announce(&announcement).await
+    }
+
+    /// [`P2pSpine::serve`] short of broadcasting: the announcement to send.
+    async fn start_serving(
+        &self,
+        handler: Arc<dyn PeerToolServer>,
+        tools: Vec<NodeToolSpec>,
+    ) -> Result<NodeAnnouncement> {
+        if !(self.require_pairing && self.pairing.is_enabled() && self.frame_auth.is_enforcing()) {
+            bail!(
+                "serving P2P tool calls needs [security] require_pairing, a pairing_secret \
+                 and require_frame_auth"
+            );
+        }
+        let Some(mut announcement) = self.local_announcement.read().await.clone() else {
+            bail!("announce on the mesh before serving tools on it");
+        };
+        *self.served.write().await = Some(Served {
+            handler,
+            tools: tools.iter().map(|t| t.name.clone()).collect(),
+        });
+        announcement.tools = tools;
+        Ok(announcement)
+    }
+
+    /// The answer to one incoming call, or `None` to drop it unanswered (its
+    /// frame did not verify, so there is nobody to answer).
+    async fn answer(&self, request: ToolCallRequest) -> Option<ToolCallResult> {
+        // `from` says which key to check; the tag is what makes the claim mean
+        // anything. No `from` means nothing to verify against, which when
+        // enforcing is a refusal rather than a shrug.
+        let caller = request.from.clone().unwrap_or_default();
+        if let obc_safety::frame_auth::FrameVerdict::Reject { reason } =
+            self.frame_auth.verify_inbound(
+                &caller,
+                request.ctr,
+                request.mac.as_deref(),
+                &request.signed_bytes(),
+            )
+        {
+            tracing::warn!(
+                call_id = %request.call_id,
+                tool = %request.tool_name,
+                from = %if caller.is_empty() { "<unstated>" } else { &caller },
+                %reason,
+                "Refused a P2P tool call ([security] require_frame_auth is on)"
+            );
+            return None;
+        }
+
+        let mut result = match self.run_for_peer(&caller, &request).await {
+            Ok(r) => ToolCallResult {
+                call_id: request.call_id,
+                ok: r.success,
+                output: Some(r.output),
+                error: r.error,
+                ctr: None,
+                mac: None,
+            },
+            Err(why) => {
+                tracing::warn!(
+                    call_id = %request.call_id,
+                    tool = %request.tool_name,
+                    from = %caller,
+                    %why,
+                    "Refused a P2P tool call"
+                );
+                ToolCallResult {
+                    call_id: request.call_id,
+                    ok: false,
+                    output: None,
+                    error: Some(why.to_string()),
+                    ctr: None,
+                    mac: None,
+                }
             }
+        };
+        // Signed as this node, refusals included: the caller drops an answer it
+        // cannot verify, and a refusal it cannot see is a timeout.
+        result.sign(&self.frame_auth, &self.out_counters, &self.config.node_id);
+        Some(result)
+    }
+
+    /// Run a verified request, if this node serves it to this caller.
+    async fn run_for_peer(&self, caller: &str, request: &ToolCallRequest) -> Result<ToolResult> {
+        let handler = {
+            let served = self.served.read().await;
+            let Some(served) = served.as_ref() else {
+                bail!("this node serves no tools over P2P");
+            };
+            // `serve` checked this; it is the premise of believing `caller`.
+            if !self.frame_auth.is_enforcing() {
+                bail!("this node serves P2P calls only with frame auth enforced");
+            }
+            let paired = matches!(
+                self.pairing.status(caller),
+                obc_safety::PairingStatus::Paired
+            );
+            if !paired || !self.peer_registry.read().await.contains_key(caller) {
+                bail!("{caller:?} is not a paired peer of this node");
+            }
+            if !served.tools.contains(&request.tool_name) {
+                bail!("tool {:?} is not served over P2P", request.tool_name);
+            }
+            Arc::clone(&served.handler)
+        };
+        tracing::info!(
+            call_id = %request.call_id,
+            tool = %request.tool_name,
+            from = %caller,
+            "Serving a P2P tool call"
+        );
+        let timeout = Duration::from_secs(self.config.tool_timeout_secs);
+        match tokio::time::timeout(
+            timeout,
+            handler.call(caller, &request.tool_name, request.args.clone()),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => bail!(
+                "tool {:?} timed out after {}s",
+                request.tool_name,
+                timeout.as_secs()
+            ),
         }
     }
 
@@ -497,37 +708,23 @@ impl P2pSpine {
         tools
     }
 
-    /// Tools of the peers not in `seen`, adding those peers to it.
-    ///
-    /// For a caller that registers tools as peers appear rather than once.
-    /// Peers announce every `announce_interval_secs` (10 s by default), so a
-    /// single `build_p2p_tools` shortly after `start` sees almost nobody. A peer
-    /// is taken once: a later change to its tool list is not picked up, and a
-    /// peer that leaves keeps its tools registered, failing as unreachable.
-    pub async fn new_peer_tools(
+    /// The tools `node_id` offers, as tools this agent can call (one per spec,
+    /// under the spec's own name). For a [`PeerEvent::Joined`].
+    pub fn peer_tools(
         self: &Arc<Self>,
-        seen: &mut std::collections::HashSet<String>,
+        node_id: &str,
+        specs: &[NodeToolSpec],
     ) -> Vec<Box<dyn Tool>> {
-        let registry = self.peer_registry.read().await;
-        let mut tools: Vec<Box<dyn Tool>> = Vec::new();
-        for (node_id, peer) in registry.iter() {
-            if !seen.insert(node_id.clone()) {
-                continue;
-            }
-            for spec in &peer.announcement.tools {
-                tools.push(Box::new(P2pNodeTool {
-                    node_id: node_id.clone(),
+        specs
+            .iter()
+            .map(|spec| {
+                Box::new(P2pNodeTool {
+                    node_id: node_id.to_string(),
                     spec: spec.clone(),
                     spine: Arc::clone(self),
-                }));
-            }
-        }
-        tools
-    }
-
-    /// How often this spine expects to hear from each peer.
-    pub fn announce_interval(&self) -> Duration {
-        Duration::from_secs(self.config.announce_interval_secs)
+                }) as Box<dyn Tool>
+            })
+            .collect()
     }
 }
 
@@ -556,82 +753,22 @@ async fn read_framed(stream: &mut TcpStream) -> Result<Vec<u8>> {
 
 // ── TCP Connection Handler ────────────────────────────────────────────────────
 
-/// Handle a single incoming TCP connection: read a `ToolCallRequest`, resolve
-/// it against pending_calls, and write back the `ToolCallResult`.
-///
-/// In a full implementation the node would execute the tool locally and send
-/// the result.  Here we route the result back to any local waiter (i.e. the
-/// caller that originally invoked `invoke_tool()`).  For cross-node calls the
-/// responding node writes a `ToolCallResult` frame back over the same
-/// connection.
-async fn handle_tcp_connection(
-    mut stream: TcpStream,
-    pending_calls: PendingCalls,
-    frame_auth: Arc<obc_safety::frame_auth::FrameAuth>,
-) -> Result<()> {
+/// Handle a single incoming TCP connection: read one `ToolCallRequest` and
+/// write its answer back on the same connection.
+async fn handle_tcp_connection(mut stream: TcpStream, spine: Arc<P2pSpine>) -> Result<()> {
     let payload = read_framed(&mut stream).await?;
-
-    // Try to interpret as a ToolCallResult (response from a remote node)
-    if let Ok(result) = serde_json::from_slice::<ToolCallResult>(&payload) {
-        let call_id = result.call_id.clone();
-        if let Some(sender) = pending_calls.lock().await.remove(&call_id) {
-            let _ = sender.send(result);
-        }
+    let Ok(request) = serde_json::from_slice::<ToolCallRequest>(&payload) else {
+        tracing::warn!("Received unrecognised P2P TCP message; ignoring");
         return Ok(());
+    };
+    tracing::debug!(
+        call_id = %request.call_id,
+        tool = %request.tool_name,
+        "Received P2P tool call request"
+    );
+    if let Some(result) = spine.answer(request).await {
+        write_framed(&mut stream, &serde_json::to_vec(&result)?).await?;
     }
-
-    // Try to interpret as a ToolCallRequest (incoming call from a remote node)
-    if let Ok(request) = serde_json::from_slice::<ToolCallRequest>(&payload) {
-        // Both ends of a P2P call are this codebase, so unlike MQTT — where the
-        // far end is firmware — a request can be verified here today. `from`
-        // says which key to check; the tag is what makes the claim mean
-        // anything. No `from` means nothing to verify against, which when
-        // enforcing is a refusal rather than a shrug.
-        let caller = request.from.clone().unwrap_or_default();
-        if let obc_safety::frame_auth::FrameVerdict::Reject { reason } = frame_auth.verify_inbound(
-            &caller,
-            request.ctr,
-            request.mac.as_deref(),
-            &request.signed_bytes(),
-        ) {
-            tracing::warn!(
-                call_id = %request.call_id,
-                tool = %request.tool_name,
-                from = %if caller.is_empty() { "<unstated>" } else { &caller },
-                %reason,
-                "Refused a P2P tool call ([security] require_frame_auth is on)"
-            );
-            return Ok(());
-        }
-
-        tracing::debug!(
-            call_id = %request.call_id,
-            tool = %request.tool_name,
-            "Received P2P tool call request"
-        );
-        // Callers that registered a pending call locally will not be waiting
-        // here, so we send an "unknown tool" error back to the remote caller.
-        let result = ToolCallResult {
-            call_id: request.call_id,
-            ok: false,
-            output: None,
-            error: Some(format!(
-                "Tool '{}' is not directly handled by this P2P listener; \
-                 route through the agent loop",
-                request.tool_name
-            )),
-            // Unsigned: this is a local refusal to the caller who just dialled
-            // us, not a result travelling on behalf of a node. Signing it would
-            // claim an identity this listener is not speaking for.
-            ctr: None,
-            mac: None,
-        };
-        let resp_payload = serde_json::to_vec(&result)?;
-        write_framed(&mut stream, &resp_payload).await?;
-        return Ok(());
-    }
-
-    tracing::warn!("Received unrecognised P2P TCP message; ignoring");
     Ok(())
 }
 
@@ -795,50 +932,306 @@ mod tests {
         assert!(unset.node_id.starts_with("obc-node-"), "{}", unset.node_id);
     }
 
-    #[tokio::test]
-    async fn new_peer_tools_takes_each_peer_once() {
-        use crate::NodeToolSpec;
-        let spine = Arc::new(P2pSpine::new(P2pConfig::default()));
-        let peer = |id: &str, tools: &[&str]| P2pPeer {
-            announcement: NodeAnnouncement {
-                node_id: id.to_string(),
-                board: "nanopi-neo3".to_string(),
-                firmware_version: "0.1.0".to_string(),
-                tools: tools
-                    .iter()
-                    .map(|t| NodeToolSpec {
-                        name: t.to_string(),
-                        description: String::new(),
-                        parameters: serde_json::json!({}),
-                    })
-                    .collect(),
-                metadata: serde_json::json!({}),
-            },
-            tcp_addr: "192.168.1.10:44445".parse().unwrap(),
-            last_seen: Instant::now(),
+    // ── Discovery events and serving ──────────────────────────────────────────
+
+    const SECRET: &str = "5f3c9a1e7b2d4c6f8a0e1b3d5c7f9a2e4b6d8f0a1c3e5b7d9f2a4c6e8b0d1f3a";
+
+    fn spec(name: &str) -> NodeToolSpec {
+        NodeToolSpec {
+            name: name.to_string(),
+            description: String::new(),
+            parameters: serde_json::json!({}),
+        }
+    }
+
+    fn announcement(node_id: &str, tools: &[&str]) -> NodeAnnouncement {
+        NodeAnnouncement {
+            node_id: node_id.to_string(),
+            board: "nanopi-neo3".to_string(),
+            firmware_version: "0.1.0".to_string(),
+            tools: tools.iter().map(|t| spec(t)).collect(),
+            metadata: serde_json::json!({}),
+        }
+    }
+
+    /// The datagram `node_id` sends, pairing token included, as
+    /// `broadcast_presence` stamps it.
+    fn datagram(node_id: &str, tools: &[&str], tcp_port: u16) -> P2pAnnounce {
+        let mut announcement = announcement(node_id, tools);
+        let token = obc_safety::NodePairingManager::new(Some(SECRET.to_string()))
+            .token_for(node_id)
+            .unwrap();
+        announcement.metadata["pairing_token"] = serde_json::to_value(token).unwrap();
+        P2pAnnounce {
+            announcement,
+            tcp_host: "127.0.0.1".to_string(),
+            tcp_port,
+        }
+    }
+
+    fn src() -> SocketAddr {
+        "127.0.0.1:9".parse().unwrap()
+    }
+
+    fn free_ports() -> (u16, u16) {
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let udp = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        (
+            tcp.local_addr().unwrap().port(),
+            udp.local_addr().unwrap().port(),
+        )
+    }
+
+    /// A node that requires pairing and frame auth, as `[edge] p2p_enabled`
+    /// now insists.
+    fn secured(node_id: &str) -> P2pSpine {
+        let (tcp_port, discovery_port) = free_ports();
+        P2pSpine::new(P2pConfig {
+            node_id: node_id.to_string(),
+            bind_host: "127.0.0.1".to_string(),
+            tcp_port,
+            discovery_port,
+            tool_timeout_secs: 5,
+            ..P2pConfig::default()
+        })
+        .with_pairing(
+            obc_safety::NodePairingManager::new(Some(SECRET.to_string())),
+            true,
+        )
+        .with_frame_auth(obc_safety::frame_auth::FrameAuth::new(
+            Some(SECRET.to_string()),
+            true,
+        ))
+    }
+
+    /// Answers with who asked for what, and remembers each call.
+    #[derive(Default)]
+    struct Echo {
+        calls: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait]
+    impl PeerToolServer for Echo {
+        async fn call(&self, peer: &str, tool: &str, _args: Value) -> Result<ToolResult> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((peer.to_string(), tool.to_string()));
+            Ok(ToolResult::ok(format!("{tool} for {peer}")))
+        }
+    }
+
+    /// A call from `from`, signed with `from`'s key.
+    fn signed_call(
+        from: &str,
+        tool: &str,
+        counters: &obc_safety::frame_auth::OutboundCounters,
+    ) -> ToolCallRequest {
+        let mut request = ToolCallRequest {
+            call_id: uuid::Uuid::new_v4().to_string(),
+            tool_name: tool.to_string(),
+            args: serde_json::json!({ "pin": 3 }),
+            from: Some(from.to_string()),
+            ctr: None,
+            mac: None,
         };
-        let mut seen = std::collections::HashSet::new();
+        let auth = obc_safety::frame_auth::FrameAuth::new(Some(SECRET.to_string()), true);
+        request.sign(&auth, counters, from);
+        request
+    }
 
+    #[tokio::test]
+    async fn discovery_reports_joins_changes_and_departures() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let spine = Arc::new(secured("brain").with_peer_events(tx));
+
+        spine
+            .on_announce(datagram("a", &["gpio_read"], 44445), src())
+            .await;
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            PeerEvent::Joined {
+                node_id: "a".to_string(),
+                tools: vec![spec("gpio_read")],
+            }
+        );
+        // Every interval repeats the announcement; only a change is news.
+        spine
+            .on_announce(datagram("a", &["gpio_read"], 44445), src())
+            .await;
+        assert!(rx.try_recv().is_err());
+        spine
+            .on_announce(datagram("a", &["gpio_read", "dht22"], 44445), src())
+            .await;
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            PeerEvent::Joined { tools, .. } if tools.len() == 2
+        ));
+
+        // Its own broadcast, and a peer with no pairing token, are not peers.
+        spine
+            .on_announce(datagram("brain", &["shell"], 44445), src())
+            .await;
+        let rogue = P2pAnnounce {
+            announcement: announcement("rogue", &["shell"]),
+            tcp_host: "127.0.0.1".to_string(),
+            tcp_port: 44445,
+        };
+        spine.on_announce(rogue, src()).await;
+        assert!(rx.try_recv().is_err());
+        assert_eq!(spine.known_nodes().await.keys().collect::<Vec<_>>(), ["a"]);
+
+        // Silent past the timeout: pruned, and reported so its tools go too.
         spine
             .peer_registry
             .write()
             .await
-            .insert("a".to_string(), peer("a", &["gpio_read", "dht22"]));
-        assert_eq!(spine.new_peer_tools(&mut seen).await.len(), 2);
-        assert!(spine.new_peer_tools(&mut seen).await.is_empty());
+            .get_mut("a")
+            .unwrap()
+            .last_seen = Instant::now() - Duration::from_secs(61);
+        spine.evict_stale().await;
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            PeerEvent::Left {
+                node_id: "a".to_string()
+            }
+        );
+        assert!(spine.known_nodes().await.is_empty());
+    }
 
-        // A peer that turns up later is registered on the next pass, alone.
-        spine
-            .peer_registry
-            .write()
+    #[tokio::test]
+    async fn serving_needs_pairing_frame_auth_and_an_announcement() {
+        let echo: Arc<dyn PeerToolServer> = Arc::new(Echo::default());
+        let tools = || vec![spec("gpio_read")];
+
+        let open = P2pSpine::new(P2pConfig::default());
+        *open.local_announcement.write().await = Some(announcement("open", &[]));
+        assert!(open
+            .start_serving(Arc::clone(&echo), tools())
             .await
-            .insert("b".to_string(), peer("b", &["camera_capture"]));
-        let names: Vec<String> = spine
-            .new_peer_tools(&mut seen)
+            .is_err());
+
+        // Pairing without enforced frame auth: `from` would be taken on trust.
+        let unsigned = secured("brain").with_frame_auth(obc_safety::frame_auth::FrameAuth::new(
+            Some(SECRET.to_string()),
+            false,
+        ));
+        *unsigned.local_announcement.write().await = Some(announcement("brain", &[]));
+        assert!(unsigned
+            .start_serving(Arc::clone(&echo), tools())
             .await
-            .iter()
-            .map(|t| t.name().to_string())
-            .collect();
-        assert_eq!(names, ["camera_capture"]);
+            .is_err());
+
+        let quiet = secured("brain");
+        assert!(quiet
+            .start_serving(Arc::clone(&echo), tools())
+            .await
+            .is_err());
+
+        let brain = secured("brain");
+        *brain.local_announcement.write().await = Some(announcement("brain", &[]));
+        let announced = brain.start_serving(echo, tools()).await.unwrap();
+        assert_eq!(announced.tools, tools());
+    }
+
+    #[tokio::test]
+    async fn incoming_calls_need_a_tag_a_paired_caller_and_a_served_tool() {
+        let echo = Arc::new(Echo::default());
+        let brain = secured("brain");
+        *brain.local_announcement.write().await = Some(announcement("brain", &[]));
+        brain.on_announce(datagram("a", &[], 44445), src()).await;
+        let counters = obc_safety::frame_auth::OutboundCounters::new();
+
+        // Nothing served yet: refused, and the refusal is signed.
+        let refused = brain
+            .answer(signed_call("a", "gpio_read", &counters))
+            .await
+            .unwrap();
+        assert!(!refused.ok);
+        assert!(refused.mac.is_some());
+
+        brain
+            .start_serving(echo.clone(), vec![spec("gpio_read")])
+            .await
+            .unwrap();
+
+        let served = brain
+            .answer(signed_call("a", "gpio_read", &counters))
+            .await
+            .unwrap();
+        assert!(served.ok, "{:?}", served.error);
+        assert_eq!(served.output.as_deref(), Some("gpio_read for a"));
+        // The caller can check it came from the brain.
+        let caller = obc_safety::frame_auth::FrameAuth::new(Some(SECRET.to_string()), true);
+        assert_eq!(
+            caller.verify_inbound(
+                "brain",
+                served.ctr,
+                served.mac.as_deref(),
+                &served.signed_bytes()
+            ),
+            obc_safety::frame_auth::FrameVerdict::Accept
+        );
+
+        let unserved = brain
+            .answer(signed_call("a", "shell", &counters))
+            .await
+            .unwrap();
+        assert!(!unserved.ok);
+        assert!(unserved.error.unwrap().contains("not served"));
+
+        // A tag that does not cover the body, or no tag: dropped unanswered.
+        let mut tampered = signed_call("a", "gpio_read", &counters);
+        tampered.args = serde_json::json!({ "pin": 4 });
+        assert!(brain.answer(tampered).await.is_none());
+        let mut bare = signed_call("a", "gpio_read", &counters);
+        (bare.ctr, bare.mac) = (None, None);
+        assert!(brain.answer(bare).await.is_none());
+
+        // A well-signed call from a node that never paired with this one.
+        let stranger_counters = obc_safety::frame_auth::OutboundCounters::new();
+        let stranger = brain
+            .answer(signed_call("b", "gpio_read", &stranger_counters))
+            .await
+            .unwrap();
+        assert!(!stranger.ok);
+        assert!(stranger.error.unwrap().contains("not a paired peer"));
+
+        assert_eq!(
+            *echo.calls.lock().unwrap(),
+            [("a".to_string(), "gpio_read".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_call_round_trips_between_two_nodes() {
+        let echo = Arc::new(Echo::default());
+        let brain = secured("brain").start().await.unwrap();
+        let brain_port = brain.config.tcp_port;
+        *brain.local_announcement.write().await = Some(announcement("brain", &[]));
+        brain
+            .start_serving(echo.clone(), vec![spec("gpio_read")])
+            .await
+            .unwrap();
+
+        let edge = Arc::new(secured("a"));
+        brain.on_announce(datagram("a", &[], 44445), src()).await;
+        edge.on_announce(datagram("brain", &["gpio_read"], brain_port), src())
+            .await;
+
+        let result = edge
+            .invoke_tool("brain", "gpio_read", serde_json::json!({ "pin": 3 }))
+            .await
+            .unwrap();
+        assert!(result.ok, "{:?}", result.error);
+        assert_eq!(result.output.as_deref(), Some("gpio_read for a"));
+
+        // A refusal comes back as a refusal, not as a timeout.
+        let refused = edge
+            .invoke_tool("brain", "shell", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(!refused.ok);
+        assert_eq!(echo.calls.lock().unwrap().len(), 1);
     }
 }

@@ -5,6 +5,41 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The P2P mesh answers calls, under pairing and frame auth (2026-10-30)
+
+### Fixed
+
+- **No P2P call ever returned.** The caller waited for the answer on its own
+  listener, where nothing sent it; the peer wrote it back on the call's
+  stream, which nobody read. The caller now reads it there and refuses an
+  answer whose frame tag does not verify. The listener's old way of resolving
+  answers is gone, and with it the hole it was: any unsolicited result on the
+  listener was taken as an answer. Test: `a_call_round_trips_between_two_nodes`.
+- **OBC nodes refused each other under `require_pairing`.** No node put a
+  pairing token in its own announcement. Each broadcast now carries a fresh
+  one.
+- **Peer tools** (review of the `[edge]` change): a name already registered,
+  locally or by another peer, is skipped instead of registered twice; a pruned
+  peer's tools are removed; peer tools are capped at `MAX_PEER_TOOLS` (256);
+  discovery reports joins and departures on a channel instead of being polled.
+- **`[edge] p2p_enabled` is refused without `[security] require_pairing` and
+  `require_frame_auth`**, and the `p2p_*` timings are checked (no zero, no
+  absurd values, a peer timeout at least twice the announce interval). The
+  planner pins a stable `p2p_node_id` for edge hosts and emits the mesh off,
+  with what it needs to turn on.
+
+### Added
+
+- **A node can serve tools to paired peers** (`P2pSpine::serve`). Refused
+  unless pairing and frame auth are both enforced. A call is answered only if
+  its tag verifies, the caller is a paired peer in the roster and the tool is
+  one this node announced; the answer is signed, refusals included. On the
+  agent, `AgentPeerServer` runs it through `execute_tool_direct`, so policy,
+  the Track 0 gate and audit, trust and approval apply as to a local call.
+  Test: `a_peer_call_is_gated_and_audited_like_a_local_one`.
+
+---
+
 ## Unreleased — Orchestrator mode serves the plain agent's tools (2026-10-30)
 
 ### Fixed

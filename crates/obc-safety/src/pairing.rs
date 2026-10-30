@@ -155,6 +155,14 @@ impl NodePairingManager {
         self.secret.is_some()
     }
 
+    /// A fresh token for `node_id` to present in its own announcement, when
+    /// pairing is enabled. Tokens expire, so a node that announces repeatedly
+    /// stamps a new one each time.
+    pub fn token_for(&self, node_id: &str) -> Option<PairingToken> {
+        let secret = self.secret.as_deref()?;
+        PairingToken::generate(secret, node_id).ok()
+    }
+
     /// Attempt to pair a node using the token embedded in its announcement metadata.
     ///
     /// Returns the resulting `PairingStatus`.

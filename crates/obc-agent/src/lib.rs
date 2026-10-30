@@ -130,6 +130,11 @@ pub const MAX_HISTORY_MESSAGES: usize = 50;
 
 // ── Agent ─────────────────────────────────────────────────────────────────────
 
+/// Most tools all P2P peers together may register on one agent. A mesh is a
+/// handful of boards; past this a peer is misconfigured or hostile, and each
+/// tool is a schema in every prompt.
+pub const MAX_PEER_TOOLS: usize = 256;
+
 /// The core Oh-Ben-Claw agent.
 /// Capacity of the agent event broadcast channel. A slow subscriber lags
 /// (and is told so) rather than stalling the loop.
@@ -149,6 +154,9 @@ pub struct Agent {
     /// Names of tools that came from the skill forge (managed by
     /// [`Agent::sync_skills`]); disjoint from built-in tool names.
     skill_names: Mutex<HashSet<String>>,
+    /// Per P2P peer, the names of the tools it serves here (managed by
+    /// [`Agent::set_peer_tools`]); disjoint from every other tool name.
+    peer_tools: Mutex<HashMap<String, Vec<String>>>,
     /// Per session, the shelved tools the model has pulled into the prompt
     /// with `load_tools` (`[agent.tools]`, 2026-09-28). In memory only: a
     /// restart starts every session from the configured `full` list again.
@@ -298,6 +306,7 @@ impl Agent {
             memory,
             tools: RwLock::new(tools.into_iter().map(Arc::from).collect()),
             skill_names: Mutex::new(HashSet::new()),
+            peer_tools: Mutex::new(HashMap::new()),
             loaded_tools: Mutex::new(HashMap::new()),
             tools_warned: std::sync::atomic::AtomicBool::new(false),
             policy: None,
@@ -644,6 +653,52 @@ impl Agent {
     pub fn add_tool_arcs(&self, tools: Vec<Arc<dyn Tool>>) {
         let mut reg = self.tools.write().unwrap_or_else(|p| p.into_inner());
         reg.extend(tools);
+    }
+
+    /// Replace the tools P2P `peer` serves here. A name already registered, by
+    /// a local tool or another peer, is skipped (as `sync_skills` skips a skill
+    /// that would shadow a built-in), so the provider is never sent two tools of
+    /// one name and a call never lands on the wrong one. So is anything past
+    /// [`MAX_PEER_TOOLS`] across all peers. Returns `(added, skipped)`.
+    pub fn set_peer_tools(&self, peer: &str, tools: Vec<Box<dyn Tool>>) -> (usize, usize) {
+        let mut peers = self.peer_tools.lock().unwrap_or_else(|p| p.into_inner());
+        let mut reg = self.tools.write().unwrap_or_else(|p| p.into_inner());
+        if let Some(old) = peers.remove(peer) {
+            reg.retain(|t| !old.iter().any(|n| n == t.name()));
+        }
+        let mut total: usize = peers.values().map(Vec::len).sum();
+        let mut names = Vec::new();
+        let mut skipped = 0;
+        for tool in tools {
+            let name = tool.name().to_string();
+            if reg.iter().any(|t| t.name() == name) {
+                tracing::warn!(%peer, tool = %name, "P2P peer tool would shadow a registered tool; skipped");
+                skipped += 1;
+            } else if total >= MAX_PEER_TOOLS {
+                tracing::warn!(%peer, tool = %name, cap = MAX_PEER_TOOLS, "P2P peer tool over the cap; skipped");
+                skipped += 1;
+            } else {
+                reg.push(Arc::from(tool));
+                names.push(name);
+                total += 1;
+            }
+        }
+        let added = names.len();
+        if !names.is_empty() {
+            peers.insert(peer.to_string(), names);
+        }
+        (added, skipped)
+    }
+
+    /// Unregister every tool P2P `peer` serves here. Returns how many went.
+    pub fn remove_peer_tools(&self, peer: &str) -> usize {
+        let mut peers = self.peer_tools.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(old) = peers.remove(peer) else {
+            return 0;
+        };
+        let mut reg = self.tools.write().unwrap_or_else(|p| p.into_inner());
+        reg.retain(|t| !old.iter().any(|n| n == t.name()));
+        old.len()
     }
 
     /// The tools the model sees this turn: a point-in-time snapshot of the

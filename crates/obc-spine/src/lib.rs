@@ -80,7 +80,7 @@ pub fn topic_broadcast() -> String {
 // ── Node Announcement ────────────────────────────────────────────────────────
 
 /// A description of a single tool exposed by a peripheral node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeToolSpec {
     pub name: String,
     pub description: String,
@@ -207,6 +207,28 @@ impl ToolCallResult {
         unsigned.ctr = None;
         unsigned.mac = None;
         serde_json::to_vec(&unsigned).unwrap_or_default()
+    }
+
+    /// Attach a counter and tag for `key_node`, as [`ToolCallRequest::sign`]
+    /// does. A P2P node answering a call signs as itself.
+    pub fn sign(
+        &mut self,
+        frame_auth: &obc_safety::frame_auth::FrameAuth,
+        counters: &obc_safety::frame_auth::OutboundCounters,
+        key_node: &str,
+    ) {
+        if !frame_auth.is_enabled() {
+            return;
+        }
+        let Some(ctr) = counters.next(key_node) else {
+            tracing::error!(
+                node = %key_node,
+                "Outbound counter exhausted; sending unsigned. Re-provision this node's key."
+            );
+            return;
+        };
+        self.ctr = Some(ctr);
+        self.mac = frame_auth.tag_outbound(key_node, ctr, &self.signed_bytes());
     }
 }
 
