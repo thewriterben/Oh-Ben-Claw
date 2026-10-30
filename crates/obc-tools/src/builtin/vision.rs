@@ -54,9 +54,57 @@ impl EncodedImage {
     }
 }
 
-/// Encode a local image file to base64.
-pub fn encode_local_image(path: &str) -> anyhow::Result<EncodedImage> {
+/// The image types the vision APIs accept. A remote URL whose `Content-Type`
+/// is anything else is refused rather than base64'd into a prompt.
+pub const ALLOWED_IMAGE_MIME_TYPES: &[&str] = &[
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/bmp",
+];
+
+/// Default byte cap on one image, local or remote (OpenAI's per-image limit).
+/// Override with `OBC_VISION_MAX_BYTES` or [`VisionTool::with_max_image_bytes`].
+pub const DEFAULT_MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+
+/// Refuse a MIME type that is not on [`ALLOWED_IMAGE_MIME_TYPES`].
+pub fn validate_mime_type(mime: &str) -> anyhow::Result<()> {
+    if ALLOWED_IMAGE_MIME_TYPES.contains(&mime) {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "unsupported image type '{mime}' (allowed: {})",
+            ALLOWED_IMAGE_MIME_TYPES.join(", ")
+        )
+    }
+}
+
+/// Refuse an image larger than `max_bytes`.
+pub fn validate_image_size(len: usize, max_bytes: usize) -> anyhow::Result<()> {
+    if len > max_bytes {
+        anyhow::bail!("image is {len} bytes, over the {max_bytes}-byte limit")
+    }
+    Ok(())
+}
+
+/// Name the image type from its first bytes, for a server that sends no
+/// `Content-Type` or a generic `application/octet-stream`.
+fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    match bytes {
+        [0xFF, 0xD8, 0xFF, ..] => Some("image/jpeg"),
+        [0x89, b'P', b'N', b'G', ..] => Some("image/png"),
+        [b'G', b'I', b'F', b'8', ..] => Some("image/gif"),
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => Some("image/webp"),
+        [b'B', b'M', ..] => Some("image/bmp"),
+        _ => None,
+    }
+}
+
+/// Encode a local image file to base64, refusing one over `max_bytes`.
+pub fn encode_local_image(path: &str, max_bytes: usize) -> anyhow::Result<EncodedImage> {
     let path = Path::new(path);
+    validate_image_size(std::fs::metadata(path)?.len() as usize, max_bytes)?;
     let mime_type = match path
         .extension()
         .and_then(|e| e.to_str())
@@ -83,22 +131,45 @@ pub fn encode_local_image(path: &str) -> anyhow::Result<EncodedImage> {
 }
 
 /// Fetch and encode a remote image URL to base64.
-pub async fn encode_remote_image(url: &str) -> anyhow::Result<EncodedImage> {
-    let response = reqwest::get(url).await?;
-    let content_type = response
+///
+/// The server's `Content-Type` must be on [`ALLOWED_IMAGE_MIME_TYPES`]; when it
+/// is missing or `application/octet-stream` the type is sniffed from the first
+/// bytes instead. The body is read in chunks and abandoned as soon as it passes
+/// `max_bytes`, so a lying or absent `Content-Length` cannot fill memory.
+pub async fn encode_remote_image(url: &str, max_bytes: usize) -> anyhow::Result<EncodedImage> {
+    let mut response = reqwest::get(url).await?.error_for_status()?;
+    let header_mime = response
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("image/jpeg")
-        .split(';')
-        .next()
-        .unwrap_or("image/jpeg")
-        .to_string();
-    let bytes = response.bytes().await?;
+        .and_then(|v| v.split(';').next())
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty() && v != "application/octet-stream");
+    if let Some(mime) = &header_mime {
+        validate_mime_type(mime)?;
+    }
+    if let Some(len) = response.content_length() {
+        validate_image_size(len as usize, max_bytes)?;
+    }
+
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        validate_image_size(bytes.len() + chunk.len(), max_bytes)?;
+        bytes.extend_from_slice(&chunk);
+    }
+
+    let mime_type = match header_mime {
+        Some(mime) => mime,
+        None => sniff_image_mime(&bytes)
+            .ok_or_else(|| {
+                anyhow::anyhow!("no image Content-Type and the bytes are not a known image")
+            })?
+            .to_string(),
+    };
     let data = B64.encode(&bytes);
 
     Ok(EncodedImage {
-        mime_type: content_type,
+        mime_type,
         data,
         source: url.to_string(),
     })
@@ -116,6 +187,7 @@ pub struct VisionTool {
     api_key: String,
     model: String,
     base_url: String,
+    max_image_bytes: usize,
 }
 
 impl VisionTool {
@@ -129,12 +201,22 @@ impl VisionTool {
         let base_url = std::env::var("OBC_VISION_API_BASE")
             .map(|b| format!("{}/chat/completions", b.trim_end_matches('/')))
             .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string());
+        let max_image_bytes = std::env::var("OBC_VISION_MAX_BYTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_MAX_IMAGE_BYTES);
         Self {
             client: reqwest::Client::new(),
             api_key: api_key.into(),
             model,
             base_url,
+            max_image_bytes,
         }
+    }
+
+    pub fn with_max_image_bytes(mut self, max_bytes: usize) -> Self {
+        self.max_image_bytes = max_bytes;
+        self
     }
 
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
@@ -194,12 +276,12 @@ impl Tool for VisionTool {
         // Encode the image
         let encoded = if input.source.starts_with("http://") || input.source.starts_with("https://")
         {
-            match encode_remote_image(&input.source).await {
+            match encode_remote_image(&input.source, self.max_image_bytes).await {
                 Ok(e) => e,
                 Err(e) => return Ok(ToolResult::err(format!("Failed to fetch image: {e}"))),
             }
         } else {
-            match encode_local_image(&input.source) {
+            match encode_local_image(&input.source, self.max_image_bytes) {
                 Ok(e) => e,
                 Err(e) => return Ok(ToolResult::err(format!("Failed to read image: {e}"))),
             }
@@ -560,6 +642,98 @@ mod tests {
         assert_eq!(source["type"], "base64");
         assert_eq!(source["media_type"], "image/png");
         assert_eq!(source["data"], "xyz");
+    }
+
+    #[test]
+    fn mime_whitelist_accepts_images_and_refuses_the_rest() {
+        for mime in ALLOWED_IMAGE_MIME_TYPES {
+            assert!(validate_mime_type(mime).is_ok(), "{mime}");
+        }
+        for mime in ["text/html", "image/svg+xml", "application/pdf", ""] {
+            assert!(validate_mime_type(mime).is_err(), "{mime}");
+        }
+    }
+
+    #[test]
+    fn size_cap_is_inclusive() {
+        assert!(validate_image_size(100, 100).is_ok());
+        assert!(validate_image_size(101, 100).is_err());
+    }
+
+    #[test]
+    fn sniffs_known_image_magic() {
+        assert_eq!(
+            sniff_image_mime(&[0xFF, 0xD8, 0xFF, 0xE0]),
+            Some("image/jpeg")
+        );
+        assert_eq!(sniff_image_mime(b"\x89PNG\r\n"), Some("image/png"));
+        assert_eq!(sniff_image_mime(b"GIF89a"), Some("image/gif"));
+        assert_eq!(
+            sniff_image_mime(b"RIFF\0\0\0\0WEBPVP8 "),
+            Some("image/webp")
+        );
+        assert_eq!(sniff_image_mime(b"<html>"), None);
+    }
+
+    #[test]
+    fn local_image_over_cap_is_refused_before_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.png");
+        std::fs::write(&path, vec![0u8; 64]).unwrap();
+        let path = path.to_str().unwrap();
+        assert!(encode_local_image(path, 63).is_err());
+        let ok = encode_local_image(path, 64).unwrap();
+        assert_eq!(ok.mime_type, "image/png");
+    }
+
+    /// Serve one canned HTTP response on a loopback port; return its URL.
+    async fn serve_once(head: &'static str, body: Vec<u8>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock.write_all(head.as_bytes()).await;
+            let _ = sock.write_all(&body).await;
+            let _ = sock.shutdown().await;
+        });
+        format!("http://{addr}/img")
+    }
+
+    #[tokio::test]
+    async fn remote_image_with_disallowed_content_type_is_refused() {
+        let url = serve_once(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 6\r\nConnection: close\r\n\r\n",
+            b"<html>".to_vec(),
+        )
+        .await;
+        let err = encode_remote_image(&url, 1024).await.unwrap_err();
+        assert!(err.to_string().contains("unsupported image type"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn remote_image_over_cap_is_refused_without_content_length() {
+        // No Content-Length: the chunked read must stop at the cap.
+        let url = serve_once(
+            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nConnection: close\r\n\r\n",
+            vec![0u8; 4096],
+        )
+        .await;
+        let err = encode_remote_image(&url, 1024).await.unwrap_err();
+        assert!(err.to_string().contains("limit"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn remote_image_without_content_type_is_sniffed() {
+        let url = serve_once(
+            "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n",
+            b"\x89PNG\r\n\x1a\n".to_vec(),
+        )
+        .await;
+        let img = encode_remote_image(&url, 1024).await.unwrap();
+        assert_eq!(img.mime_type, "image/png");
     }
 
     #[test]

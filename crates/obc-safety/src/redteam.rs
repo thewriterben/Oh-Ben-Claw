@@ -20,8 +20,10 @@
 //!   privileged action.
 //! - **ASI02 Tool Misuse** — the same, at the actuator boundary, backstopped
 //!   by the deterministic [`crate::limits::SafetyGate`].
-//! - **ASI04 Supply Chain (skills)** — `skill_forge::install_policy` +
-//!   `skill_forge::improve` red-team tests (checksum/consent/staged rollout).
+//! - **ASI04 Supply Chain (skills)** — `skill_forge::improve`: synthesized
+//!   skills are quarantined and installed disabled for staged operator
+//!   promotion. There is no third-party install path (the ClawHub rows were
+//!   dropped from ROADMAP.md on 2026-10-30), so there is no install policy.
 //! - **ASI06 Memory/Trajectory Poisoning** — Phase 16 P3 red-team evals
 //!   (quarantine + staged rollout gate synthesized skills).
 

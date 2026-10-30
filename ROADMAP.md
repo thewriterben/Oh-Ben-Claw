@@ -124,27 +124,29 @@ Enable peripheral nodes to run the full Oh-Ben-Claw agent locally, without a hos
 
 ---
 
-## Phase 8: Advanced Capabilities 🔄 Partly removed
+## Phase 8: Advanced Capabilities ✅ Complete *(TUI row dropped 2026-10-30)*
 
 - [x] Vision pipeline (camera capture → LLM vision → action) (`src/vision/mod.rs`)
 - [x] Audio pipeline (microphone → speech-to-text → agent → text-to-speech) (`src/audio/mod.rs`)
-- [~] Sensor fusion (combine readings from multiple sensors) (`src/peripherals/fusion.rs`) — **not in the tree (checked 2026-10-13)**: no `src/peripherals/`, and `FusionRegistry` matches nothing in `src/` or `crates/`. The nearest real code is `crates/obc-telemetry/src/sensing.rs` (`SensingController`, per-quantity classification) and `crates/obc-navigation/src/pose_fusion.rs` (pose only)
+- [x] Sensor fusion — per-quantity quality classification of sensor readings (`crates/obc-telemetry/src/sensing.rs`, `SensingController`) and pose fusion (`crates/obc-navigation/src/pose_fusion.rs`). *(Re-pointed 2026-10-30 from `src/peripherals/fusion.rs` / `FusionRegistry`, never in the tree; there is no general cross-sensor combiner.)*
 - [x] Scheduled tasks and cron jobs (`src/scheduler/mod.rs`)
-- [~] Terminal telemetry dashboard — real-time TUI with agent status, nodes, tool log, system metrics (`src/dashboard/mod.rs`) — **not in the tree (checked 2026-10-13)**: no `src/dashboard/`, no `ratatui` in any `Cargo.toml`, and nothing in the tree draws a TUI
 - [x] Skill forge (automatic discovery and integration of new skills) (`src/skill_forge/mod.rs`)
 
-## Phase 9: ZeroClaw Parity 🔄 Partly removed
+> Dropped 2026-10-30, never in the tree (see `docs/roadmap-triage.md`): the terminal TUI dashboard (`src/dashboard/`). The gateway web UI (`crates/obc-gateway/src/assets/`) covers it.
+
+## Phase 9: ZeroClaw Parity ✅ Complete *(RAG row dropped 2026-10-30)*
 
 Implements key features from the upstream ZeroClaw project to ensure Oh-Ben-Claw is as robust and advanced.
 
 - [x] Human-in-the-loop approval workflow for supervised mode (`src/approval/mod.rs`)
 - [x] Token cost tracking and budget enforcement (`src/cost/`)
 - [x] System diagnostics CLI command (`oh-ben-claw doctor`) (`src/doctor/mod.rs`)
-- [~] Event lifecycle hooks for extensibility (`src/hooks/`) — **not in the tree (checked 2026-10-13)**: no `src/hooks/`; no hook registry or hook event type exists anywhere in `src/` or `crates/`
-- [~] Enhanced multimodal message handling with image markers (`src/multimodal.rs`) — **not in the tree (checked 2026-10-13)**: no `src/multimodal.rs` and no image-marker parsing anywhere
-- [~] RAG pipeline for hardware datasheet retrieval (`src/rag/mod.rs`) — **not in the tree (checked 2026-10-13)**: no `src/rag/`; nothing retrieves datasheets
-- [~] Sandboxed tool execution runtime (native + Docker) (`src/runtime/`) — **not in the tree (checked 2026-10-13)**: no `src/runtime/`. README records it removed on 2026-07-30 rather than wired; tools are not sandboxed
-- [~] New config sections: `[autonomy]`, `[cost]`, `[runtime]`, `[multimodal]` — **not in the tree (checked 2026-10-13)**: `[autonomy]` and `[cost]` are real (`Config.autonomy`, `Config.cost` in `crates/obc-config/src/lib.rs`); `RuntimeConfig` and `MultimodalConfig` match nothing and `Config` has no `runtime` or `multimodal` field
+- [x] Agent lifecycle events — the `AgentEvent` broadcast (Started / Thinking / Token / ToolCall …) in `crates/obc-agent/src/handle.rs`. *(Re-pointed 2026-10-30 from `src/hooks/`, never in the tree; the events observe a run and cannot veto or rewrite a call.)*
+- [x] Multimodal images via the `vision_analyze` tool — local paths and URLs encoded for OpenAI and Anthropic (`crates/obc-tools/src/builtin/vision.rs`). *(Re-pointed 2026-10-30 from `src/multimodal.rs`; chat messages stay text-only and nothing parses image markers.)*
+- [x] Sandboxed shell execution — `[shell] backend = "docker"` runs the `shell` tool in one long-lived container, no network unless asked (`crates/obc-tools/src/builtin/shell.rs`, `ShellConfig` in `crates/obc-config/src/lib.rs`); hardware tools go through the Track 0 gate instead. *(Re-pointed 2026-10-30 from `src/runtime/`, removed 2026-07-30.)*
+- [x] New config sections: `[autonomy]`, `[cost]`, `[shell]` (`crates/obc-config/src/lib.rs`). *(2026-10-30: `[runtime]` is `[shell]`; `[multimodal]` was never in the tree and is dropped.)*
+
+> Dropped 2026-10-30, never in the tree (see `docs/roadmap-triage.md`): the RAG pipeline for hardware datasheets (`src/rag/`). The nearest real code is the embedding store behind experience retrieval (`crates/obc-memory/src/embed.rs`, `trajectory.rs`).
 
 ---
 
@@ -181,7 +183,7 @@ the most valuable features into Oh-Ben-Claw.
 
 ---
 
-## Phase 11: Pycoclaw + MimiClaw Parity 🔄 Partly removed
+## Phase 11: Pycoclaw + MimiClaw Parity ✅ Complete
 
 Analyses [PycoClaw](https://github.com/jetpax/pycoclaw) (MicroPython AI agents on
 ESP32-S3/P4) and [MimiClaw](https://github.com/memovai/mimiclaw) (pure-C AI agent
@@ -193,8 +195,8 @@ MimiClaw stores the agent's personality and user profile as editable plain-text
 Markdown files rather than hardcoding them in a config file.  Oh-Ben-Claw adopts
 the same pattern.
 
-- [~] **`PersonalityStore`** — reads `SOUL.md` (agent personality) and `USER.md` (user profile) from `~/.oh-ben-claw/`; either file overrides the `system_prompt` in `config.toml` (`src/memory/personality.rs`) — **not in the tree (checked 2026-10-13)**: no `src/memory/personality.rs`; `PersonalityStore` survives only in a comment in `src/lib.rs` explaining that it was documented but never called
-- [~] `build_system_prompt()` helper merges SOUL.md + USER.md into a single system prompt, with a fallback to the config value when the file is absent — **not in the tree (checked 2026-10-13)**: `build_system_prompt` matches nothing
+- [x] **Personality from Markdown** — `USER.md` (operator profile) and `MEMORY.md` live in `crates/obc-memory/src/notes.rs` and are appended to the configured `system_prompt`. *(Re-pointed 2026-10-30 from `PersonalityStore` / `src/memory/personality.rs`, never in the tree. There is no `SOUL.md`: the agent's personality is `system_prompt` in `config.toml`.)*
+- [x] System-prompt assembly — `crates/obc-agent/src/lib.rs` appends the notes block to `config.system_prompt`, and uses the config value alone when there are no notes. *(Re-pointed 2026-10-30 from `build_system_prompt()`, never in the tree.)*
 
 ### Proactive Task System (inspired by MimiClaw's HEARTBEAT.md)
 
@@ -272,12 +274,12 @@ webhook-based Feishu channel adapter.
 ### Configuration
 
 - [x] `ChannelsConfig` gains `feishu: FeishuConfig` field
-- [~] `Config` gains `proxy: ProxyConfig` and `personality: PersonalityConfig` fields — **not in the tree (checked 2026-10-13)**: `proxy` is real; `Config` has no `personality` field
-- [~] `FeishuConfig`, `ProxyConfig`, `PersonalityConfig` structs in `src/config/mod.rs` — **not in the tree (checked 2026-10-13)**: `FeishuConfig` and `ProxyConfig` are real (now in `crates/obc-config/src/lib.rs`); `PersonalityConfig` matches nothing
+- [x] `Config` gains `proxy: ProxyConfig` (`crates/obc-config/src/lib.rs`). *(2026-10-30: the `personality: PersonalityConfig` half was never in the tree and is dropped.)*
+- [x] `FeishuConfig` and `ProxyConfig` structs (`crates/obc-config/src/lib.rs`). *(2026-10-30: `PersonalityConfig` was never in the tree and is dropped.)*
 
 ---
 
-## Phase 12: OpenClaw 3.13 Parity 🔄 Partly removed
+## Phase 12: OpenClaw 3.13 Parity ✅ Complete *(ClawHub and image memory dropped 2026-10-30)*
 
 Analyses the [OpenClaw 3.13](https://github.com/openclaw/openclaw/releases/tag/v2026.3.13)
 release (March 2026) and brings the most impactful new features into Oh-Ben-Claw.
@@ -300,27 +302,9 @@ architecture.
 - [x] `all_browser_tools()` convenience constructor shares a single `BrowserSession` across all seven tools; CDP URL configurable via `OBC_BROWSER_CDP_URL` env var
 - [x] HTML helpers: `extract_title()` (no-dependency `<title>` extractor) and `strip_html()` (script/style-aware tag stripper with 8 000-char limit)
 
-### ClawHub Skill Registry (inspired by OpenClaw's community skill marketplace)
+### ClawHub Skill Registry and Image Memory — dropped 2026-10-30
 
-OpenClaw popularised the concept of a public skill registry ("ClawHub") where
-the community shares pre-built automation scripts.  Oh-Ben-Claw now has a
-first-class client for this registry.
-
-- [~] **`ClawHubEntry`** — typed representation of a registry entry: name, version, description, author, download count, star rating, tags, verified status, and manifest URL (`src/skill_forge/registry.rs`) — **not in the tree (checked 2026-10-13)**: no `src/skill_forge/`, no `registry.rs` in `crates/obc-skill-forge/src/`; `ClawHubEntry` matches nothing
-- [~] **`SkillRegistryIndex`** — locally cached index with `search(query)` (name + description + tags), `find(name)`, `len()`, and `is_empty()` helpers — **not in the tree (checked 2026-10-13)**: `SkillRegistryIndex` matches nothing
-- [~] **`ClawHubClient`** — async HTTP client for a ClawHub REST API (`GET /api/v1/skills`, `GET /api/v1/skills/{name}`, `GET /api/v1/skills/{name}/{version}/manifest`); local index cache avoids redundant network round-trips; `install()` downloads and writes a `.skill.json` to the configured skills directory — **not in the tree (checked 2026-10-13)**: `ClawHubClient` matches nothing; there is no ClawHub client and no `install()`
-- [~] `pub mod registry` added to `src/skill_forge/mod.rs` — **not in the tree (checked 2026-10-13)**: there is no `registry` module
-
-### Image Memory (inspired by OpenClaw 3.13's multimodal image memory)
-
-OpenClaw 3.13 introduced persistent image memory so agents can store and
-retrieve visual context across sessions.  Oh-Ben-Claw now provides the same
-capability via a SQLite-backed store.
-
-- [~] **`ImageEntry`** — stored image with UUID, MIME type, base64 data, description, tags, session ID, timestamp, and file name; `decode_bytes()`, `estimated_bytes()`, and `has_any_tag()` helpers (`src/memory/image.rs`) — **not in the tree (checked 2026-10-13)**: no `src/memory/image.rs` and no `image.rs` in `crates/obc-memory/src/`; `ImageEntry` matches nothing
-- [~] **`ImageMemoryStore`** — SQLite WAL-mode store with `store()`, `get()`, `delete()`, `search()` (case-insensitive LIKE on description + tags), `list_by_session()`, and `count()` operations; `open_in_memory()` for tests — **not in the tree (checked 2026-10-13)**: `ImageMemoryStore` matches nothing
-- [~] `pub mod image` + `pub use image::ImageMemoryStore` added to `src/memory/mod.rs` — **not in the tree (checked 2026-10-13)**: no `image` module exists to export
-- [~] Pre-existing `src/memory/vector.rs` `Tool::execute` return-type bug fixed (`ToolResult` → `anyhow::Result<ToolResult>`) so the vector module can be compiled and exported (`pub mod vector` added to `src/memory/mod.rs`) — **not in the tree (checked 2026-10-13)**: no `vector.rs` and no `mod vector` anywhere in `src/` or `crates/`; README records the vector store as deleted
+Both were ticked here but never in the tree: the ClawHub registry client (`ClawHubEntry`, `SkillRegistryIndex`, `ClawHubClient`, `pub mod registry`) and the SQLite image store (`ImageEntry`, `ImageMemoryStore`, `pub mod image`), plus a fix to `src/memory/vector.rs`, which was deleted on 2026-09-12. Skills are synthesized locally by `crates/obc-skill-forge`; camera output reaches `WorldMemory` as facts (`crates/obc-vision`), not stored images. See `docs/roadmap-triage.md`.
 
 ### Browser Automation in `default_tools()`
 
@@ -330,8 +314,7 @@ capability via a SQLite-backed store.
 ### Configuration
 
 - [x] **`BrowserConfig`** — `[browser]` TOML section: `enabled`, `cdp_url`, `profile` (`"headless"` / `"user"`), `timeout_secs` (`src/config/mod.rs`)
-- [~] **`ClawHubConfig`** — `[clawhub]` TOML section: `enabled`, `registry_url`, `auto_update`, `skills_dir` (`src/config/mod.rs`) — **not in the tree (checked 2026-10-13)**: `ClawHubConfig` matches nothing and `Config` has no `clawhub` field
-- [~] `Config` gains `browser: BrowserConfig` and `clawhub: ClawHubConfig` fields — **not in the tree (checked 2026-10-13)**: `BrowserConfig` is real (`crates/obc-config/src/lib.rs`); the `clawhub` half is not
+- [x] `Config` gains `browser: BrowserConfig` (`crates/obc-config/src/lib.rs`). *(2026-10-30: the `clawhub: ClawHubConfig` half was dropped with ClawHub.)*
 
 ---
 
@@ -383,7 +366,7 @@ Three new boards and two new accessories are added to the registry:
 
 ---
 
-## Phase 14: Cutting-Edge Capabilities 🔄 Partly removed
+## Phase 14: Cutting-Edge Capabilities ✅ Complete *(WASM runtime and batch images dropped 2026-10-30)*
 
 Analyses cutting-edge developments in the AI agent ecosystem and pushes
 Oh-Ben-Claw beyond parity with all related projects. Implements
@@ -403,22 +386,21 @@ and enhanced reliability.
 
 ### Enhanced Multimodal Support (completes Phase 9 multimodal)
 
-- [~] **Image source resolution** — `resolve_image_source()` distinguishes local file paths from remote URLs (`src/multimodal.rs`) — **not in the tree (checked 2026-10-13)**: no `src/multimodal.rs`; `resolve_image_source` matches nothing
-- [~] **MIME type validation** — `validate_mime_type()` checks against the `ALLOWED_IMAGE_MIME_TYPES` whitelist — **not in the tree (checked 2026-10-13)**: `validate_mime_type` matches nothing
-- [~] **Image size validation** — `validate_image_size()` enforces configurable byte-size limits — **not in the tree (checked 2026-10-13)**: `validate_image_size` matches nothing
-- [~] **Local image fetching** — `fetch_local_image()` reads, validates, and base64-encodes local image files — **not in the tree (checked 2026-10-13)**: `fetch_local_image` matches nothing
-- [~] **Batch image preparation** — `prepare_images()` resolves, fetches, and validates multiple image references with count limits — **not in the tree (checked 2026-10-13)**: `prepare_images` matches nothing
+- [x] **Image source resolution** — `vision_analyze` sends `http(s)://` sources to `encode_remote_image()` and everything else to `encode_local_image()` (`crates/obc-tools/src/builtin/vision.rs`). *(Re-pointed 2026-10-30 from `resolve_image_source()` in `src/multimodal.rs`, never in the tree.)*
+- [x] **MIME type validation** — `validate_mime_type()` checks remote images against `ALLOWED_IMAGE_MIME_TYPES`; a missing or `application/octet-stream` type is sniffed from the magic bytes (`crates/obc-tools/src/builtin/vision.rs`, 2026-10-30)
+- [x] **Image size validation** — `validate_image_size()` caps local and remote images at `OBC_VISION_MAX_BYTES` (default 20 MiB; `VisionTool::with_max_image_bytes`); a remote body is read in chunks and abandoned at the cap, whatever `Content-Length` says (`crates/obc-tools/src/builtin/vision.rs`, 2026-10-30)
+- [x] **Local image fetching** — `encode_local_image()` checks the size, then reads and base64-encodes a local file (`crates/obc-tools/src/builtin/vision.rs`). *(Re-pointed 2026-10-30 from `fetch_local_image()`.)*
+
+> Dropped 2026-10-30, never in the tree (see `docs/roadmap-triage.md`): batch `prepare_images()`. Nothing sends more than one image.
 
 ### Mattermost Thread Support (completes Phase 10 channel)
 
 - [x] **Thread replies** — Mattermost adapter now tracks `root_id` and replies in-thread; new messages start a thread, follow-ups continue it (`src/channels/mattermost.rs`)
 - [x] Updated `MmPost` and `MmCreatePost` structs with `root_id` field
 
-### WASM Sandbox Runtime (new runtime adapter)
+### WASM Sandbox Runtime — dropped 2026-10-30
 
-- [~] **`WasmRuntime`** — new runtime adapter for WebAssembly sandboxed execution with configurable memory pages, execution fuel, and WASI directory access (`src/runtime/wasm.rs`) — **not in the tree (checked 2026-10-13)**: no `src/runtime/`; `WasmRuntime` matches nothing (removed with the runtime on 2026-07-30, per README)
-- [~] **`WasmConfig`** added to `RuntimeConfig` with `enabled`, `max_memory_pages`, `max_fuel`, `allowed_dirs` fields — **not in the tree (checked 2026-10-13)**: `WasmConfig` and `RuntimeConfig` match nothing
-- [~] Framework-ready for wasmtime integration when the dependency is added — **not in the tree (checked 2026-10-13)**: there is no framework to be ready, and no `wasmtime` in any `Cargo.toml`
+`WasmRuntime`, `WasmConfig` / `RuntimeConfig` and the "framework-ready for wasmtime" row were ticked but never in the tree, and no `Cargo.toml` names `wasmtime`. The shell sandbox is the Docker backend (Phase 9). See `docs/roadmap-triage.md`.
 
 ### Structured Output / JSON Mode (new provider capability)
 
@@ -430,9 +412,7 @@ and enhanced reliability.
 
 ### Streaming Tool Calls (new agent capability)
 
-- [~] **`StreamingToolCallAccumulator`** — collects partial tool-call deltas from streaming LLM responses and assembles them into complete `ToolCall` objects (`src/agent/streaming.rs`) — **not in the tree (checked 2026-10-13)**: no `src/agent/streaming.rs`; a comment in `crates/obc-agent/src/lib.rs` records both types removed on 2026-08-21 for never having been connected. Providers have streamed text deltas since 2026-09-11 by a different path
-- [~] **`StreamingResponseBuilder`** — incrementally builds a `StreamingResponse` from interleaved text and tool-call chunks — **not in the tree (checked 2026-10-13)**: removed 2026-08-21 with the accumulator
-- [~] Integrates with existing `ToolCall` type from `crate::providers` — **not in the tree (checked 2026-10-13)**: nothing left to integrate
+- [x] **Streaming tool calls** — the Anthropic provider accumulates `input_json_delta` chunks into complete tool-call arguments (`crates/obc-providers/src/anthropic.rs`); `StreamDelta` and `chat_completion_streaming` carry text deltas to the caller (`crates/obc-providers/src/lib.rs`), and other providers deliver the whole message once. *(Re-pointed 2026-10-30 from `StreamingToolCallAccumulator`, removed 2026-08-21; also covers the former `StreamingResponseBuilder` and `ToolCall`-integration rows.)*
 
 ### A2A Protocol Support (new interoperability layer)
 
@@ -472,7 +452,7 @@ and enhanced reliability.
 - [x] All Clippy warnings resolved
 - [x] All code formatted with `rustfmt`
 
-## Phase 15: Production Hardening 🔄 Partly removed *(the July 28 MCP default-mode flip landed 2026-07-30)*
+## Phase 15: Production Hardening ✅ Complete *(skill-install rows dropped 2026-10-30; the July 28 MCP default-mode flip landed 2026-07-30)*
 
 Executed in lockstep with **ClawCam Phase 13**. The shared contract — approval
 scopes, plan-mode argument bounds, tool-catalog SSOT, protocol modes — is written
@@ -483,17 +463,9 @@ phases trustworthy — supply-chain security, protocol conformance against the
 specs as they actually shipped, and the evaluation/observability layer the 2026
 agentic-AI ecosystem treats as table stakes. Target window: June 8 – July 31, 2026.
 
-### Skill-Install Security (ClawHub client) — time-sensitive
+### Skill-Install Security (ClawHub client) — dropped 2026-10-30
 
-Driven by the 2026 ClawHub supply-chain compromise (~1 in 12 registry skills
-malicious; `SKILL.md` external-URL payloads defeat static scanning).
-
-- [~] Operator approval required for every skill install/update (no silent installs) — `InstallConsent` gate in `ClawHubClient::install()` — **not in the tree (checked 2026-10-13)**: there is no `ClawHubClient` and no `InstallConsent`; `skill_forge::install_policy` survives only as a name in a doc comment in `crates/obc-safety/src/redteam.rs`
-- [~] Checksum verification of skill packages (SHA-256 vs. catalogue `sha256`; `require_checksum` mode) — full signature verification deferred until the registry publishes signing keys — **not in the tree (checked 2026-10-13)**: no install path exists to verify; no `install_policy` module
-- [~] Version pinning in config (`[clawhub.install_policy.pinned_versions]`) — **not in the tree (checked 2026-10-13)**: no `[clawhub]` section, so no `install_policy.pinned_versions`
-- [~] Static flagging of external-URL fetch instructions, shell execution, and download language, surfaced in the approval prompt (`InstallInspection`) — **not in the tree (checked 2026-10-13)**: `InstallInspection` matches nothing
-- [~] Optional local vetted mirror (`allowlist`) — **not in the tree (checked 2026-10-13)**: no install policy, so no allowlist
-- [~] Install audit log (JSONL, manifest hash + decision + flags) — verified: 17 unit tests, 55/55 module tests passing on Windows — **not in the tree (checked 2026-10-13)**: no install audit log in `src/` or `crates/`; whatever the 17 tests were, they are not in this tree
+Six rows (install consent, checksum verification, version pinning, `InstallInspection`, a vetted mirror, an install audit log) were ticked but never in the tree, and there is no third-party skill install path for them to guard: skills are synthesized locally and installed disabled for staged promotion (`crates/obc-skill-forge/src/improve.rs`). If a registry client is ever added, these come back with it, through `crates/obc-approval`. See `docs/roadmap-triage.md`.
 
 ### MCP 2026-07-28 Readiness — deadline July 28, 2026
 
@@ -633,7 +605,7 @@ Design: `docs/PHASE17-PLAN.md`. Implementation: `src/harness/`.
 - [x] **Resume smoke test** — on restart, re-establish context cheaply (current device states, outstanding objectives) before acting — *compact resume-context block (tally + statuses + world facts) prefixes every worker prompt*
 - [x] Long-horizon eval: an unattended fleet completes a defined multi-hour routine across an induced crash/reboot with correct resume and no duplicated physical actions — *`tests/harness_long_horizon.rs`: fresh harness per "boot", crash induced mid-objective, actuator fires exactly once across the whole mission; fail-closed and reopen-then-complete scenarios pinned*
 
-## Phase 18: Dual-System Perception-Action + World Memory 🔄 Partly removed *(host-side; on-MCU reflex mirror + as-of-transaction-time queries remain firmware/follow-up items)*
+## Phase 18: Dual-System Perception-Action + World Memory ✅ Complete *(host-side; on-MCU reflex mirror + as-of-transaction-time queries remain firmware/follow-up items)*
 
 Adopt the architecture every 2026 robotics stack converged on — slow reasoner +
 fast reflex — backed by a persistent, temporally-aware model of the physical
@@ -643,7 +615,7 @@ environment. The most architecturally novel, most embodied-native phase. Builds 
 - [x] **System 1 (fast reflex loop)** — host-side `ReflexEngine` (`src/agent/reflex.rs`): conditions (sensor/gpio/and/or), actions (gpio_write/publish/escalate), debounce + rate limit, serde wire format for pushing to nodes; 8 tests. (On-MCU mirror of the evaluator: firmware follow-up.)
 - [x] **System 2 (slow reasoner)** — `src/agent/system2.rs` (2026-07-11): the escalation wake that was previously only a spine publish + operator notification now actually invokes the LLM. `System2Sink` tops the reflex sink chain (`try_send` onto a bounded queue — System 1 never blocks); `NoveltyGate` fingerprints reasons (numeric tokens stripped: `offline 120s` ≡ `offline 240s`, but `node-3` ≢ `node-4`) so repeats within the novelty window are suppressed, with a hard hourly wake budget on top; `System2Reasoner` builds a compact world-memory context and runs one agent turn on a dedicated `system2` session, recording the outcome to `system2.last_wake` + counters (`system2_wakes_total` / `system2_suppressed_*`). `[system2]` config (opt-in; `novelty_window_ms` 10 min, `max_wakes_per_hour` 6 defaults). 7 unit tests
 - [x] **Bitemporal world memory** — persistent, queryable model of rooms/devices/states over time with validity intervals (valid time + transaction time), so stale facts are invalidated rather than lost; `src/memory/world.rs` (`observe`/`current`/`at`/`history`/`entities`), non-destructive, 5 tests. (Full as-of-transaction-time queries: follow-up.)
-- [~] **Perception→memory→action wiring** — sensor-fusion outputs update world memory (`FusionRegistry::observe_into` → `sensor.{quantity}` facts); planning queries via the `world_memory` tool. (Vision→world-memory lands with the ClawCam vision suite.) — **not in the tree (checked 2026-10-13)**: `FusionRegistry::observe_into` matches nothing. The wiring that does exist is `SensingController::ingest` in `crates/obc-telemetry/src/sensing.rs`, which writes `sensor.{quantity}` facts into `WorldMemory`; read this row as that
+- [x] **Perception→memory→action wiring** — `SensingController::ingest` (`crates/obc-telemetry/src/sensing.rs`) writes `sensor.{quantity}` facts with a quality flag into world memory; planning queries via the `world_memory` tool. (Vision→world-memory lands with the ClawCam vision suite.) *(Re-pointed 2026-10-30 from `FusionRegistry::observe_into`, never in the tree.)*
 - [x] **Escalation policy + budget** — `EscalationBudget` (sliding-window, `[reflex].max_escalations_per_min`) caps System 1 → System 2 hand-offs; reflex actions dispatch via `SpineActionSink` (GPIO over the spine, bounded by node Track 0) or the dry-run logging sink. (On-MCU reflex mirror: firmware follow-up.)
 - [x] Eval: System 1 reflex latency budget met offline; System 2 invoked only on novelty; world-memory queries return temporally-correct device state — `tests/system2_eval.rs` (2026-07-11): 1000 evaluations of 64 rules complete in <100 ms with no LLM/network in the path; an 11-escalation storm through the real chain (dispatch → `System2Sink` → `System2Reasoner`) produces exactly 2 LLM wakes for 2 novel situations (plus a budget-cap check); device-state `at()` queries answer correctly across lock/pump state transitions, boundaries included
 
