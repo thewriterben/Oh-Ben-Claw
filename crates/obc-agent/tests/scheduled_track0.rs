@@ -88,6 +88,12 @@ struct Bench {
     runs: Arc<Mutex<Vec<(Value, usize)>>>,
 }
 
+impl Drop for Bench {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.audit_path);
+    }
+}
+
 /// An agent whose only tool is the spy, bounded to pin 17, values 0..=1, on
 /// the local node, with a tamper-evident audit log in a fresh file.
 fn bench() -> Bench {
