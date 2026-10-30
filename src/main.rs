@@ -3438,6 +3438,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 experience_k,
                 taint_mode,
                 max_history: edge.as_ref().map(|e| e.max_history),
+                // Until 2026-10-30 the inner agent rebuilt the default set,
+                // without MQTT, peripherals, scheduler or the tool fences.
+                tools: Some(agent.base_tool_arcs()),
             },
         )?;
         let pool = orch.pool.clone();

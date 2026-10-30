@@ -5,6 +5,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Orchestrator mode serves the plain agent's tools (2026-10-30)
+
+### Fixed
+
+- **The orchestrator's inner agent rebuilt the default tool set** and served
+  that, so with `[orchestrator] enabled` the agent answering requests had no
+  MQTT node tools, peripherals, scheduler or other tools `start` registers,
+  and none of the operator's `[browser]`/`[shell]`/`[file]` fences: a
+  disabled browser or a Docker-only shell came back. It now takes the plain
+  agent's registry (`InnerAgentDeps::tools`, `Agent::base_tool_arcs`) plus
+  delegation; skills are still synced per agent. Test:
+  `inner_agent_serves_the_plain_agents_tools`.
+
+---
+
 ## Unreleased — `[edge]` does something (2026-10-30)
 
 ### Fixed

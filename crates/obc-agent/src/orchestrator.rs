@@ -73,6 +73,10 @@ pub struct InnerAgentDeps {
     pub taint_mode: obc_safety::taint::TaintMode,
     /// History window (`[edge].max_history_messages` in edge mode; None = default).
     pub max_history: Option<usize>,
+    /// The tools the plain agent would serve (`Agent::base_tool_arcs`): MQTT,
+    /// peripherals, the operator's `[browser]`/`[shell]`/`[file]` fences and the
+    /// rest. None = the default tool set. Delegation tools are added either way.
+    pub tools: Option<Vec<Arc<dyn obc_tools::Tool>>>,
 }
 
 // ── Routing Strategy ──────────────────────────────────────────────────────────
@@ -226,12 +230,18 @@ impl OrchestratorAgent {
         // Build the orchestrator's inner tool registry: default tools (egress
         // reach-gated + audited + credential-injecting when conscience is on) +
         // delegation tools — the inner agent has the plain agent's full posture.
-        let mut tools = default_tools_with_reach(
-            deps.reach.clone(),
-            deps.auditor.clone(),
-            deps.resolver.clone(),
-        );
-        tools.extend(delegation_tools(pool.clone(), Arc::clone(&session_arc)));
+        // With `deps.tools` the base set is the plain agent's instead, so the
+        // inner agent serves what plain mode would, fences included.
+        let base = deps.tools.unwrap_or_else(|| {
+            default_tools_with_reach(
+                deps.reach.clone(),
+                deps.auditor.clone(),
+                deps.resolver.clone(),
+            )
+            .into_iter()
+            .map(Arc::from)
+            .collect()
+        });
 
         // Extend the system prompt with orchestrator instructions
         let mut config = agent_config;
@@ -243,7 +253,9 @@ impl OrchestratorAgent {
         let provider = obc_providers::from_config(&provider_config)?;
 
         // Attach every provided subsystem before sealing the inner agent.
-        let mut inner = Agent::new(config, provider, Arc::clone(&memory), tools);
+        let mut inner = Agent::new(config, provider, Arc::clone(&memory), Vec::new());
+        inner.add_tool_arcs(base);
+        inner.add_tools(delegation_tools(pool.clone(), Arc::clone(&session_arc)));
         if let Some(n) = deps.max_history {
             inner = inner.with_max_history(n);
         }
@@ -449,6 +461,35 @@ mod tests {
             .any(|n| n.contains("shell") || n.contains("file")));
         // Plus all 4 delegation tools
         assert!(orch.handle.tool_count() >= 4);
+    }
+
+    /// Given the plain agent's tools, the inner agent serves exactly those plus
+    /// delegation: a tool the operator fenced out stays out, rather than coming
+    /// back with a rebuilt default set.
+    #[test]
+    fn inner_agent_serves_the_plain_agents_tools() {
+        let mut base: Vec<Arc<dyn obc_tools::Tool>> = obc_tools::default_tools()
+            .into_iter()
+            .map(Arc::from)
+            .collect();
+        let fenced = base.remove(0).name().to_string();
+        let base_len = base.len();
+        let orch = OrchestratorAgent::new_with_deps(
+            AgentConfig::default(),
+            ProviderConfig::default(),
+            Arc::new(MemoryStore::open_in_memory().unwrap()),
+            OrchestratorConfig::default(),
+            "test-session".to_string(),
+            InnerAgentDeps {
+                tools: Some(base),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let names = orch.handle.tool_names();
+        assert!(!names.contains(&fenced), "{fenced} came back: {names:?}");
+        assert!(names.iter().any(|n| n == "spawn_agent"));
+        assert_eq!(names.len(), base_len + 4, "{names:?}");
     }
 
     #[test]
