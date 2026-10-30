@@ -772,9 +772,8 @@ frames sit near 240 bytes everything above needs rethinking.*
   2026-09-13, along with host-side verification of each LoRa frame
   (`obc_spine::lora_gateway::LoraAuth`, `tests/lora_gateway_live.rs`: 9
   verified, 0 refused under the stations' root).
-- [ ] Step 6, publishing it: re-synced firmware and the new `SAFETY.md` §4 text
-  are in OBC-Prime's open sync PR, not yet on its `main` — see *Migration*
-  below.
+- [x] Step 6, publishing it: re-synced firmware and the new `SAFETY.md` §4 text
+  reached OBC-Prime's `main` on 2026-10-30 — see *Migration* below.
 
 ---
 
@@ -946,12 +945,12 @@ both now share one parser.
   are the binary's own wiring, used by `main.rs` and the integration tests.
   The exception is `deployment/saga.rs` (257 LOC, no crate imports), and it is
   deliberately unwired — see *The three unwired files* below.
-- [ ] **OBC-Prime is behind upstream.** Its sync PR
+- [x] OBC-Prime's sync PR
   ([thewriterben/OBC-Prime#74](https://github.com/thewriterben/OBC-Prime/pull/74),
-  47 commits, CI green) has been open since 2026-09-12, and upstream has
-  merged roughly thirty PRs since. Until it merges, OBC-Prime's `SAFETY.md`
-  still lacks the spine-authentication text (step 6). Merge it, then cut a
-  fresh sync.
+  47 commits) sat open from 2026-09-12 and merged 2026-10-30. Its `SAFETY.md`
+  now carries the spine-authentication text (step 6).
+- [ ] **OBC-Prime is still behind upstream.** #74 was a snapshot of
+  2026-09-16, and upstream has merged 33 PRs since. Cut a fresh sync.
 
 ## Ecosystem Integration 📋 Planned *(standing track)*
 
