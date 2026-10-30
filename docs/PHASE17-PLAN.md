@@ -10,7 +10,7 @@ What already exists and what the harness adds on top:
 |---|---|---|
 | `src/mission` | Reactive step sequencer (navigate/speak/wait/record/await) with guard preemption; `tick()`-driven | In-memory only — no persistence, no resume, no LLM, completion is step-mechanical, not verified |
 | `src/scheduler` | Cron-style task scheduling | Triggers work; doesn't track multi-step progress |
-| `src/memory/heartbeat.rs` | Markdown task list → agent prompt | Unstructured; no status machine, no verification |
+| `src/memory/heartbeat.rs` (deleted 2026-10-30, never called) | Markdown task list → agent prompt | Unstructured; no status machine, no verification |
 | `src/memory/world.rs` | Bitemporal world memory | The *evidence source* for verification — not a progress record |
 | `src/agent` | The full chokepointed reasoning loop | Stateless across process restarts |
 

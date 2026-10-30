@@ -31,7 +31,6 @@
 - [Supported Hardware](#supported-hardware)
 - [Getting Started](#getting-started)
 - [Configuration](#configuration)
-- [Heartbeat File](#heartbeat-file)
 - [Browser Automation](#browser-automation)
 - [Deployment Scheme Generator](#deployment-scheme-generator)
 - [CLI Reference](#cli-reference)
@@ -342,11 +341,10 @@ The capabilities that the embodied stack rides on — orchestration, I/O, provid
 > were already duplicated in the live `trajectory.rs`, so nothing moved, and
 > `reqwest`/`base64` left the crate with it.
 
-> `HEARTBEAT.md` task dispatch and the daily journal were listed here and are
-> **not wired**: `HeartbeatStore`'s `has_tasks`, `actionable_tasks`,
-> `build_prompt` and `append_task` have no callers outside their own file, and
-> `DailyJournal`'s only external reference is its own re-export. Both are found
-> by `scripts/file_reachability.py`, along with twelve more like them.
+> `HEARTBEAT.md` task dispatch and the daily journal were listed here. Nothing
+> ever called either, and both files were deleted on 2026-10-30: scheduled agent
+> prompts run from `crates/obc-agent/src/scheduled.rs`, and what the agent should
+> remember goes in `MEMORY.md` and `USER.md` (`crates/obc-memory/src/notes.rs`).
 
 ---
 
@@ -562,28 +560,6 @@ enabled = true
 ```
 
 Channels, browser, ClawHub, cost, runtime, multimodal, and proxy sections are unchanged — see [`examples/config-multi-device.toml`](examples/config-multi-device.toml).
-
----
-
-## Heartbeat File
-
-> **Not wired.** `HEARTBEAT.md` was described here as "a plain Markdown task list;
-> uncompleted items trigger the agent on a schedule". `HeartbeatStore` reads the
-> file and `has_tasks`, `actionable_tasks`, `build_prompt` and `append_task` have
-> no callers, so nothing is triggered and no schedule consults it. Writing the file
-> has no effect today. Kept as a section because the shape is right and the wiring
-> is a small job; see `scripts/file_reachability.py`.
-
-Say what the agent is for in `[agent].system_prompt` — see `config.example.toml`.
-You do not need to describe the world there: current beliefs, with provenance
-and age, are supplied to the model on every turn.
-```markdown
-# My Tasks
-
-- [ ] Send the weekly status report to the team
-- [x] Order replacement fan for the server room   ← completed, agent skips this
-- [ ] Book dentist appointment
-```
 
 ---
 

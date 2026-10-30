@@ -198,64 +198,24 @@ the same pattern.
 - [x] **Personality from Markdown** — `USER.md` (operator profile) and `MEMORY.md` live in `crates/obc-memory/src/notes.rs` and are appended to the configured `system_prompt`. *(Re-pointed 2026-10-30 from `PersonalityStore` / `src/memory/personality.rs`, never in the tree. There is no `SOUL.md`: the agent's personality is `system_prompt` in `config.toml`.)*
 - [x] System-prompt assembly — `crates/obc-agent/src/lib.rs` appends the notes block to `config.system_prompt`, and uses the config value alone when there are no notes. *(Re-pointed 2026-10-30 from `build_system_prompt()`, never in the tree.)*
 
-### Proactive Task System (inspired by MimiClaw's HEARTBEAT.md)
+### Proactive Task System and Daily Journal — dropped 2026-10-30
 
-MimiClaw periodically checks a Markdown task file and triggers the agent when
-uncompleted items are found.  Oh-Ben-Claw adopts the same pattern on top of the
-existing `Scheduler`.
-
-- [~] **`HeartbeatStore`** — reads `~/.oh-ben-claw/HEARTBEAT.md`, detects uncompleted tasks (skips headers, empty lines, and `- [x]` completed checkboxes), and generates a prompt for the agent (`src/memory/heartbeat.rs`)
-- [~] `append_task()` convenience method appends a new `- [ ] …` line to the file
-- [~] `build_prompt()` returns the heartbeat prompt when actionable tasks exist
-
-> **Built and tested, and nothing constructs it** (2026-08-18). `HeartbeatStore`
-> lives in `crates/obc-memory/src/heartbeat.rs` with its own unit tests, and every
-> reference to the type in this workspace is inside that file or the `pub use`
-> that re-exports it. Nothing reads `HEARTBEAT.md`, so no prompt is ever built and
-> no task is ever triggered. The "Proactive Task System" heading above describes a
-> capability this software does not have.
->
-> Marked `[~]` rather than unticked because the code is real and passes its tests;
-> what is missing is a caller. Wiring it means deciding where in the agent loop a
-> heartbeat prompt gets injected, which is a design question and not a line of
-> plumbing — see the same distinction drawn for `saga.rs`.
->
-> Found by `scripts/file_reachability.py` on the first run after it was widened
-> past `src/`. It could not see this file for as long as the file lived in a
-> crate, which is most of the time it has existed.
-
-<!-- unwired: crates/obc-memory/src/heartbeat.rs -->
-
-### Daily Journal (inspired by MimiClaw's memory_append_today)
-
-MimiClaw writes per-day Markdown notes as `YYYY-MM-DD.md` files to complement
-its SQLite conversation history.  Oh-Ben-Claw adopts the same pattern.
-
-- [~] **`DailyJournal`** — appends timestamped notes to `~/.oh-ben-claw/journal/YYYY-MM-DD.md`; creates file with date header on first write (`src/memory/journal.rs`)
-- [~] `read_recent(days)` reads the last N days of notes, sections separated by `---`
-- [~] `list_dates()` returns all journal dates in descending order
-
-> **Built and tested, and nothing constructs it** (2026-08-18). Same shape as
-> `HeartbeatStore` above, found in the same run and for the same reason.
-> `DailyJournal` lives in `crates/obc-memory/src/journal.rs`; every reference to
-> it is inside that file or the `pub use` re-exporting it. No note is ever
-> appended, so no journal file is ever written, so `read_recent` and `list_dates`
-> would read an empty directory if anything called them.
->
-> This one has a smaller design question than the heartbeat: journalling needs a
-> decision about *what* is worth writing down, not about where in the loop to put
-> it. Left unwired rather than guessed at.
-
-<!-- unwired: crates/obc-memory/src/journal.rs -->
+`HeartbeatStore` (a `HEARTBEAT.md` task list turned into an agent prompt) and
+`DailyJournal` (per-day `YYYY-MM-DD.md` notes) were built and tested, and from
+2026-08-18 marked `[~]` because nothing in the workspace constructed either.
+Both files are deleted. Scheduled agent prompts already run from
+`crates/obc-agent/src/scheduled.rs`, and durable notes live in `MEMORY.md` and
+`USER.md` (`crates/obc-memory/src/notes.rs`) and the trajectory store. See
+`docs/roadmap-triage.md`.
 
 ### HTTP Proxy Support (inspired by MimiClaw's proxy system)
 
 MimiClaw supports HTTP CONNECT tunnels for devices behind corporate firewalls.
 Oh-Ben-Claw now exposes the same feature through its TOML configuration.
 
-- [x] **`ProxyConfig`** — `[proxy]` TOML section with `host`, `port`, `kind` (`http`/`socks5`), and optional credentials (`src/config/mod.rs`)
+- [x] **`ProxyConfig`** — `[proxy]` TOML section with `host`, `port`, `kind` (`http`; `socks5` rejected since 2026-10-30), and optional credentials (`src/config/mod.rs`)
 - [x] `ProxyConfig::url()` builds the proxy URL string
-- [~] `ProxyConfig::apply_to_env()` sets `HTTP_PROXY` / `HTTPS_PROXY` for all downstream HTTP clients — **it has no callers** (found 2026-10-13): `[proxy]` parses and validates, and outbound traffic does not use it. Wiring it is not one line: it would also send a local Ollama and the gateway's own calls through the proxy unless `NO_PROXY` is set alongside, and it logs the URL with credentials in it
+- [x] `ProxyConfig::apply_to_env()` sets `HTTP_PROXY` / `HTTPS_PROXY` at startup (`src/main.rs`, right after the config loads), adds loopback to `NO_PROXY` so a local Ollama and the gateway's own calls stay direct, and logs the URL with the password removed (`crates/obc-config/src/lib.rs`, 2026-10-30). `kind = "socks5"` is rejected by validation: no `reqwest` in the workspace is built with SOCKS support
 - [x] `Config::validate()` extended to reject proxy configs missing `host` or `port`
 
 ### Feishu/Lark Channel (inspired by MimiClaw's Feishu integration)
@@ -418,18 +378,15 @@ and enhanced reliability.
 
 - [x] **Agent-to-Agent (A2A) protocol** — implementation of Google's open protocol for inter-agent communication (`src/a2a/mod.rs`)
 - [x] Core types: `AgentCard`, `A2ASkill`, `TaskRequest`, `TaskResponse`, `TaskStatus`, `Artifact`
-- [~] **`A2AClient`** — async HTTP client with `discover()`, `send_task()`, `get_task_status()` methods
+- **`A2AClient`** — removed 2026-08-21, never constructed: OBC can be called by another agent and does not call one
 - [x] **`A2AServer`** — handles discovery and task requests for exposing Oh-Ben-Claw as an A2A endpoint
 - [x] **`A2AConfig`** added to root `Config` with `enabled`, `agent_name`, `agent_description`, `agent_url`, `skills` fields
 
-> **The client half is built and constructed nowhere** (2026-08-18). README.md
-> has said so for some time — "`A2AClient` is still constructed **nowhere**:
-> this agent can be called, and cannot call out" — and this line went on ticking
-> it as delivered. Two documents disagreeing about the same type, with nothing
-> comparing them.
->
-> The server half is real and reachable; A2A interop is one-directional, and the
-> section heading should be read that way.
+> **The client half was never constructed** (found 2026-08-18) and was deleted on
+> 2026-08-21 (`crates/obc-a2a/src/lib.rs` records it). The server half is real and
+> reachable from `src/main.rs`; A2A interop is one-directional, and the section
+> heading should be read that way. Dropped rather than rebuilt on 2026-10-30
+> (`docs/roadmap-triage.md`).
 >
 > Found by `scripts/file_reachability.py` once its doc cross-reference went from
 > whole files down to individual items. `A2AClient` sits in
@@ -594,9 +551,9 @@ Design: `docs/PHASE17-PLAN.md`. Implementation: `src/harness/`.
 
 > **Corrected 2026-08-18.** This line read "Builds on `scheduler`, `heartbeat`,
 > `agent`, `memory`, and `runtime`". `runtime` was cut by gate 3 and no longer
-> exists, and `heartbeat` is built but constructed by nothing (see the Proactive
-> Task System section above), so the harness cannot be building on either. Both
-> were listed as foundations of a phase marked complete.
+> exists, and `heartbeat` was built but constructed by nothing (deleted
+> 2026-10-30), so the harness cannot be building on either. Both were listed as
+> foundations of a phase marked complete.
 
 - [x] **Durable execution** — checkpoint agent/task state to persistent storage; resume cleanly after crash/reboot without re-running completed physical actions (model "non-persistable regions" around side-effecting tool calls) — *atomic tmp+rename checkpoints at every transition; objectives marked `InFlight` **before** the agent acts; resume never blindly re-runs — verification evidence decides; check-less in-flight objectives fail closed*
 - [x] **Initializer + worker split** — initializer establishes environment and an externalized world-state/objective record; worker advances one objective at a time — *`Harness::initialize` (load-or-create + env snapshot + in-flight quarantine) / `run_once` (one transition per pass, verification backlog first)*

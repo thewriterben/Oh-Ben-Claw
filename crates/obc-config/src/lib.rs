@@ -603,7 +603,7 @@ pub use obc_cost::config::CostConfig;
 /// [proxy]
 /// host     = "10.0.0.1"
 /// port     = 7897
-/// kind     = "http"      # "http" (default) or "socks5"
+/// kind     = "http"      # only "http"; "socks5" is rejected (no SOCKS build of reqwest)
 /// username = "user"      # optional
 /// password = "pass"      # optional
 /// ```
@@ -618,7 +618,8 @@ pub struct ProxyConfig {
     /// Proxy server port.
     #[serde(default)]
     pub port: Option<u16>,
-    /// Proxy protocol: `"http"` (default) or `"socks5"`.
+    /// Proxy protocol. Only `"http"` is applied; `"socks5"` fails validation
+    /// because no `reqwest` in the workspace is built with its `socks` feature.
     #[serde(default = "default_proxy_kind")]
     pub kind: String,
     /// Optional proxy username for authenticated proxies.
@@ -651,15 +652,70 @@ impl ProxyConfig {
         Some(format!("{}://{}{}:{}", self.kind, creds, host, port))
     }
 
+    /// The proxy URL with the password replaced by `***`, for logs.
+    pub fn redacted_url(&self) -> Option<String> {
+        let shown = ProxyConfig {
+            password: self.password.as_ref().map(|_| "***".to_string()),
+            ..self.clone()
+        };
+        shown.url()
+    }
+
+    /// The environment this proxy needs, given the `NO_PROXY` already set.
+    ///
+    /// `None` when the proxy is off, incomplete, or not `http`. Loopback is
+    /// added to `NO_PROXY` so a local Ollama and the gateway's calls to itself
+    /// stay direct.
+    pub fn env_vars(&self, existing_no_proxy: Option<&str>) -> Option<Vec<(&'static str, String)>> {
+        if self.kind != "http" {
+            return None;
+        }
+        let url = self.url()?;
+        let mut no_proxy: Vec<String> = existing_no_proxy
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+            .map(String::from)
+            .collect();
+        for local in ["localhost", "127.0.0.1", "::1"] {
+            if !no_proxy.iter().any(|e| e.eq_ignore_ascii_case(local)) {
+                no_proxy.push(local.to_string());
+            }
+        }
+        Some(vec![
+            ("HTTP_PROXY", url.clone()),
+            ("HTTPS_PROXY", url),
+            ("NO_PROXY", no_proxy.join(",")),
+        ])
+    }
+
     /// Apply this proxy configuration to the current process environment.
     ///
-    /// Sets `HTTP_PROXY` and `HTTPS_PROXY` environment variables so that all
-    /// HTTP clients that respect them (including `reqwest`) pick them up.
+    /// Sets `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (see [`Self::env_vars`])
+    /// so every `reqwest` client built afterwards picks them up. Call it once at
+    /// startup, before any client exists.
     pub fn apply_to_env(&self) {
-        if let Some(url) = self.url() {
-            std::env::set_var("HTTP_PROXY", &url);
-            std::env::set_var("HTTPS_PROXY", &url);
-            tracing::info!(proxy = %url, "Outbound HTTP proxy configured");
+        if !self.enabled {
+            return;
+        }
+        let existing = std::env::var("NO_PROXY")
+            .or_else(|_| std::env::var("no_proxy"))
+            .ok();
+        match self.env_vars(existing.as_deref()) {
+            Some(vars) => {
+                for (k, v) in vars {
+                    std::env::set_var(k, v);
+                }
+                tracing::info!(
+                    proxy = %self.redacted_url().unwrap_or_default(),
+                    "Outbound HTTP proxy configured"
+                );
+            }
+            None => tracing::warn!(
+                kind = %self.kind,
+                "[proxy] is enabled but not applied: it needs host, port and kind = \"http\""
+            ),
         }
     }
 }
@@ -2569,9 +2625,14 @@ impl Config {
             if self.proxy.port.is_none() {
                 anyhow::bail!("proxy is enabled but proxy.port is not set");
             }
-            if !["http", "socks5"].contains(&self.proxy.kind.as_str()) {
+            if self.proxy.kind == "socks5" {
+                anyhow::bail!(
+                    "proxy.kind 'socks5' is not supported: no reqwest in this build has SOCKS;                      use an http proxy"
+                );
+            }
+            if self.proxy.kind != "http" {
                 warnings.push(format!(
-                    "proxy.kind '{}' is not recognised; supported values are 'http' and 'socks5'",
+                    "proxy.kind '{}' is not recognised and the proxy will not be applied;                      the supported value is 'http'",
                     self.proxy.kind
                 ));
             }
@@ -3191,6 +3252,63 @@ mod tests {
         config.proxy.kind = "ftp".to_string();
         let warnings = config.validate().unwrap();
         assert!(warnings.iter().any(|w| w.contains("'ftp'")));
+    }
+
+    #[test]
+    fn validate_rejects_socks5_proxy() {
+        let mut config = Config::default();
+        config.proxy.enabled = true;
+        config.proxy.host = Some("10.0.0.1".to_string());
+        config.proxy.port = Some(1080);
+        config.proxy.kind = "socks5".to_string();
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("socks5"), "{err}");
+    }
+
+    fn http_proxy() -> ProxyConfig {
+        ProxyConfig {
+            enabled: true,
+            host: Some("proxy.corp.com".to_string()),
+            port: Some(3128),
+            kind: "http".to_string(),
+            username: Some("alice".to_string()),
+            password: Some("s3cr3t".to_string()),
+        }
+    }
+
+    #[test]
+    fn proxy_env_vars_keep_loopback_direct() {
+        let vars = http_proxy().env_vars(None).unwrap();
+        let get = |k: &str| vars.iter().find(|(n, _)| *n == k).unwrap().1.clone();
+        assert_eq!(get("HTTP_PROXY"), "http://alice:s3cr3t@proxy.corp.com:3128");
+        assert_eq!(get("HTTPS_PROXY"), get("HTTP_PROXY"));
+        assert_eq!(get("NO_PROXY"), "localhost,127.0.0.1,::1");
+    }
+
+    #[test]
+    fn proxy_env_vars_merge_an_existing_no_proxy() {
+        let vars = http_proxy()
+            .env_vars(Some(" .corp.local , LOCALHOST,"))
+            .unwrap();
+        let no_proxy = &vars.iter().find(|(n, _)| *n == "NO_PROXY").unwrap().1;
+        assert_eq!(no_proxy, ".corp.local,LOCALHOST,127.0.0.1,::1");
+    }
+
+    #[test]
+    fn proxy_env_vars_skip_non_http_and_disabled() {
+        let mut socks = http_proxy();
+        socks.kind = "socks5".to_string();
+        assert!(socks.env_vars(None).is_none());
+        let mut off = http_proxy();
+        off.enabled = false;
+        assert!(off.env_vars(None).is_none());
+    }
+
+    #[test]
+    fn proxy_redacted_url_hides_the_password() {
+        let shown = http_proxy().redacted_url().unwrap();
+        assert_eq!(shown, "http://alice:***@proxy.corp.com:3128");
+        assert!(!shown.contains("s3cr3t"));
     }
 
     #[test]

@@ -355,6 +355,9 @@ async fn main() -> Result<()> {
         std::env::set_var("OBC_CONFIG", path);
     }
     let mut config = Config::load()?;
+    // Before any HTTP client is built: reqwest reads the proxy from the
+    // environment when a client is constructed, not per request.
+    config.proxy.apply_to_env();
 
     match cli.command {
         Commands::Start {
