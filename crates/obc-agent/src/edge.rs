@@ -440,7 +440,8 @@ impl EdgeAgentBuilder {
 /// [`P2pSpine::with_peer_events`] reports: a joined peer's tools replace what it
 /// offered before, a pruned peer's tools go. When a peer leaves, peers that had
 /// tools skipped for a name it held get another try, so a node that rebooted
-/// under a new id gets its tools back once the old id is pruned.
+/// under a new id gets its tools back once the old id is pruned. A snapshot,
+/// sent after discovery had to drop events, is taken as the whole mesh.
 ///
 /// Returns when the spine drops its sender.
 pub async fn serve_peer_events(
@@ -459,20 +460,39 @@ pub async fn serve_peer_events(
             short.remove(node_id);
         }
     };
+    let leave = |node_id: &str,
+                 offered: &mut HashMap<String, Vec<NodeToolSpec>>,
+                 short: &mut HashSet<String>| {
+        let removed = agent.remove_peer_tools(node_id);
+        tracing::info!(peer = %node_id, removed, "P2P peer pruned; its tools removed");
+        offered.remove(node_id);
+        short.remove(node_id);
+        for peer in short.clone() {
+            if let Some(specs) = offered.get(&peer) {
+                register(&peer, specs, short);
+            }
+        }
+    };
     while let Some(event) = events.recv().await {
         match event {
             PeerEvent::Joined { node_id, tools } => {
                 register(&node_id, &tools, &mut short);
                 offered.insert(node_id, tools);
             }
-            PeerEvent::Left { node_id } => {
-                let removed = agent.remove_peer_tools(&node_id);
-                tracing::info!(peer = %node_id, removed, "P2P peer pruned; its tools removed");
-                offered.remove(&node_id);
-                short.remove(&node_id);
-                for peer in short.clone() {
-                    if let Some(specs) = offered.get(&peer) {
-                        register(&peer, specs, &mut short);
+            PeerEvent::Left { node_id } => leave(&node_id, &mut offered, &mut short),
+            PeerEvent::Snapshot { peers } => {
+                let gone: Vec<String> = offered
+                    .keys()
+                    .filter(|id| !peers.contains_key(*id))
+                    .cloned()
+                    .collect();
+                for node_id in gone {
+                    leave(&node_id, &mut offered, &mut short);
+                }
+                for (node_id, tools) in peers {
+                    if offered.get(&node_id) != Some(&tools) {
+                        register(&node_id, &tools, &mut short);
+                        offered.insert(node_id, tools);
                     }
                 }
             }
@@ -481,8 +501,9 @@ pub async fn serve_peer_events(
 }
 
 /// Answers paired peers' P2P calls with the agent's own gated path
-/// ([`Agent::execute_tool_direct`]): policy, the Track 0 gate and its audit
-/// record, trust and approval hold for a peer's call exactly as for a local one.
+/// ([`Agent::execute_tool_for_peer`]): policy, the Track 0 gate and its audit
+/// record, trust, approval and taint tracking hold for a peer's call as for a
+/// local one, judged as `p2p:<peer>` rather than as this node.
 pub struct AgentPeerServer(pub Arc<Agent>);
 
 #[async_trait::async_trait]
@@ -494,7 +515,7 @@ impl PeerToolServer for AgentPeerServer {
         args: serde_json::Value,
     ) -> Result<obc_tool_api::ToolResult> {
         tracing::info!(%peer, %tool, "Running a P2P peer's tool call");
-        self.0.execute_tool_direct(tool, args).await
+        self.0.execute_tool_for_peer(peer, tool, args).await
     }
 }
 
@@ -525,6 +546,7 @@ pub fn served_specs(agent: &Agent, names: &[String]) -> Result<Vec<NodeToolSpec>
 mod tests {
     use super::*;
     use crate::EdgeConfig;
+    use obc_approval::ApprovalManager;
     use obc_memory::MemoryStore;
 
     #[test]
@@ -697,19 +719,40 @@ mod tests {
         assert_eq!(agent.remove_peer_tools("b"), 0);
     }
 
+    fn names(prefix: &str, n: usize) -> Vec<&'static str> {
+        (0..n)
+            .map(|i| &*Box::leak(format!("{prefix}{i}").into_boxed_str()))
+            .collect()
+    }
+
     #[test]
     fn peer_tools_are_capped_across_all_peers() {
         let agent = agent(Vec::new());
-        let names: Vec<&'static str> = (0..crate::MAX_PEER_TOOLS + 10)
-            .map(|i| &*Box::leak(format!("t{i}").into_boxed_str()))
-            .collect();
-        let (first, rest) = names.split_at(crate::MAX_PEER_TOOLS - 5);
-        assert_eq!(agent.set_peer_tools("a", peer(first)), (first.len(), 0));
-        assert_eq!(agent.set_peer_tools("b", peer(rest)), (5, rest.len() - 5));
+        let per = crate::MAX_TOOLS_PER_PEER;
+        let peers = crate::MAX_PEER_TOOLS / per;
+        for p in 0..peers {
+            let id = format!("p{p}");
+            let mine = names(&format!("{id}_t"), per);
+            assert_eq!(agent.set_peer_tools(&id, peer(&mine)), (per, 0));
+        }
         assert_eq!(agent.tool_count(), crate::MAX_PEER_TOOLS);
+        let late = names("late_t", 3);
+        assert_eq!(agent.set_peer_tools("late", peer(&late)), (0, 3));
         // Room made by a departure is room for the next announcement.
-        agent.remove_peer_tools("a");
-        assert_eq!(agent.set_peer_tools("b", peer(rest)), (rest.len(), 0));
+        agent.remove_peer_tools("p0");
+        assert_eq!(agent.set_peer_tools("late", peer(&late)), (3, 0));
+    }
+
+    #[test]
+    fn one_peer_cannot_take_more_than_its_share() {
+        let agent = agent(Vec::new());
+        let greedy = names("g", crate::MAX_TOOLS_PER_PEER + 8);
+        assert_eq!(
+            agent.set_peer_tools("greedy", peer(&greedy)),
+            (crate::MAX_TOOLS_PER_PEER, 8)
+        );
+        // The rest of the mesh still has room.
+        assert_eq!(agent.set_peer_tools("b", peer(&["dht22"])), (1, 0));
     }
 
     #[tokio::test]
@@ -741,6 +784,31 @@ mod tests {
         assert_eq!(count(&agent, "dht22"), 1);
         assert_eq!(agent.remove_peer_tools("new"), 2);
         assert_eq!(agent.tool_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_is_taken_as_the_whole_mesh() {
+        let agent = Arc::new(agent(Vec::new()));
+        let mesh = Arc::new(P2pSpine::new(P2pConfig::default()));
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let serving = tokio::spawn(serve_peer_events(Arc::clone(&agent), mesh, rx));
+
+        tx.send(PeerEvent::Joined {
+            node_id: "old".to_string(),
+            tools: specs(&["gpio_read"]),
+        })
+        .await
+        .unwrap();
+        // The events in between were dropped: "old" left, "new" joined.
+        let peers = HashMap::from([("new".to_string(), specs(&["gpio_read", "dht22"]))]);
+        tx.send(PeerEvent::Snapshot { peers }).await.unwrap();
+        drop(tx);
+        serving.await.unwrap();
+
+        assert_eq!(count(&agent, "gpio_read"), 1);
+        assert_eq!(count(&agent, "dht22"), 1);
+        assert_eq!(agent.remove_peer_tools("old"), 0);
+        assert_eq!(agent.remove_peer_tools("new"), 2);
     }
 
     /// Drives a lock; counts how often it actually fired.
@@ -813,7 +881,83 @@ mod tests {
 
         assert_eq!(fired.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(obc_safety::audit::verify(&log, &key).unwrap(), 2);
+        // Both records name the peer that asked, and the node it acted on.
+        let records = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(records.matches("p2p:a -> local").count(), 2, "{records}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Trust is judged on the peer that asks, whatever node its args name.
+    #[tokio::test]
+    async fn a_peer_is_trusted_as_itself_not_as_the_node_it_names() {
+        let fired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let trust = Arc::new(obc_safety::trust::TrustScorer::default());
+        for _ in 0..3 {
+            trust.record("p2p:a", 10.0, false);
+        }
+        let agent =
+            Arc::new(agent(vec![Box::new(Lock(fired.clone()))]).with_trust(Arc::clone(&trust)));
+        let server = AgentPeerServer(Arc::clone(&agent));
+        let local = serde_json::json!({ "node_id": "local", "pin": 17 });
+
+        let denied = server.call("a", "gpio_write", local.clone()).await.unwrap();
+        assert!(!denied.success);
+        assert!(denied.error.unwrap().contains("'p2p:a' is untrusted"));
+        // Another peer, and the node itself, are not held to a's record.
+        assert!(
+            server
+                .call("b", "gpio_write", local.clone())
+                .await
+                .unwrap()
+                .success
+        );
+        assert!(
+            agent
+                .execute_tool_direct("gpio_write", local)
+                .await
+                .unwrap()
+                .success
+        );
+        assert_eq!(fired.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// Under taint tracking a peer's arguments are external content.
+    #[tokio::test]
+    async fn a_peer_call_needs_an_operator_grant_under_taint_enforce() {
+        use obc_safety::taint::TaintMode;
+        let fired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let args = serde_json::json!({ "pin": 17 });
+        let with = |mode, grant: bool| {
+            let mut a = agent(vec![Box::new(Lock(fired.clone()))]).with_taint_mode(mode);
+            if grant {
+                let autonomy = obc_approval::AutonomyConfig {
+                    auto_approve: vec!["gpio_write".to_string()],
+                    ..Default::default()
+                };
+                a = a.with_approval(Arc::new(ApprovalManager::from_config(&autonomy)));
+            }
+            AgentPeerServer(Arc::new(a))
+        };
+
+        let refused = with(TaintMode::Enforce, false)
+            .call("a", "gpio_write", args.clone())
+            .await
+            .unwrap();
+        assert!(!refused.success);
+        assert!(refused.error.unwrap().contains("Track 0 taint"));
+        assert_eq!(fired.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let advised = with(TaintMode::Warn, false);
+        assert!(
+            advised
+                .call("a", "gpio_write", args.clone())
+                .await
+                .unwrap()
+                .success
+        );
+        let granted = with(TaintMode::Enforce, true);
+        assert!(granted.call("a", "gpio_write", args).await.unwrap().success);
+        assert_eq!(fired.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[test]

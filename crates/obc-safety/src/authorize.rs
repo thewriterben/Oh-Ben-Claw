@@ -53,6 +53,21 @@ pub fn track0_authorize(
     risk: RiskClass,
     args: &Value,
 ) -> Result<(), String> {
+    track0_authorize_as(safety, auditor, tool, risk, args, None)
+}
+
+/// [`track0_authorize`] for a call made on someone else's behalf (a P2P peer,
+/// as `p2p:<peer>`). The limits checked are still the target node's, since
+/// they describe the hardware, but the audit record names the caller too:
+/// `"<caller> -> <node>"`.
+pub fn track0_authorize_as(
+    safety: Option<&SafetyGate>,
+    auditor: Option<&Mutex<ActionAuditor>>,
+    tool: &str,
+    risk: RiskClass,
+    args: &Value,
+    caller: Option<&str>,
+) -> Result<(), String> {
     if !risk.physical {
         return Ok(());
     }
@@ -61,6 +76,10 @@ pub fn track0_authorize(
         .get("node_id")
         .and_then(|v| v.as_str())
         .unwrap_or("local");
+    let recorded = match caller {
+        Some(caller) => format!("{caller} -> {node_id}"),
+        None => node_id.to_string(),
+    };
     let pin = args.get("pin").and_then(|v| v.as_i64()).unwrap_or(0);
     let value = args.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
     let now = now_ms();
@@ -91,7 +110,7 @@ pub fn track0_authorize(
 
     if let Some(auditor) = auditor {
         let mut a = auditor.lock().unwrap_or_else(|e| e.into_inner());
-        if let Err(e) = a.record(now, node_id, tool, args, risk, decision.clone()) {
+        if let Err(e) = a.record(now, &recorded, tool, args, risk, decision.clone()) {
             tracing::warn!(error = %e, "Track 0 action audit write failed");
         }
     }
@@ -201,6 +220,32 @@ mod tests {
             &json!({"node_id": "local", "pin": 17, "value": 1}),
         );
         assert_eq!(d, Decision::Allowed, "a bounded action records as Allowed");
+    }
+
+    /// A call made for someone else is checked against the target node's
+    /// limits and recorded under both names.
+    #[test]
+    fn a_call_on_a_peers_behalf_names_the_peer_and_keeps_the_nodes_limits() {
+        let gate = one_rule();
+        let dir = tempfile::tempdir().expect("a temp dir for the audit log");
+        let path = dir.path().join("audit.jsonl");
+        let auditor = Mutex::new(ActionAuditor::open(b"k".to_vec(), path.clone()).unwrap());
+        let risk = RiskClass::physical(false, BlastRadius::High);
+        let args = json!({"pin": 17, "value": 1});
+        let ok = track0_authorize_as(
+            Some(&gate),
+            Some(&auditor),
+            "gpio_write",
+            risk,
+            &args,
+            Some("p2p:a"),
+        );
+        assert!(ok.is_ok(), "{ok:?}");
+        let text = std::fs::read_to_string(&path).expect("an audit file");
+        let rec: crate::audit::ActionRecord =
+            serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(rec.node_id, "p2p:a -> local");
+        assert_eq!(rec.decision, Decision::Allowed);
     }
 
     #[test]

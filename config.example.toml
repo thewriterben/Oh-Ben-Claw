@@ -348,8 +348,11 @@ max_chars = 2400
 # by UDP broadcast, so anything on the LAN can announce itself).
 # serve_tools names the tools this node announces and runs for paired peers;
 # empty serves none. Each call goes through the agent's gated path (policy,
-# Track 0 gate and audit, trust, approval). A name the agent does not have
-# stops startup; serve_tools without p2p_enabled is refused at load.
+# Track 0 gate and audit, trust, approval, taint), judged as p2p:<peer>. A name
+# the agent does not have stops startup; serve_tools without p2p_enabled is
+# refused at load. Frame auth admits any holder of the shared pairing_secret
+# and cannot tell one such node from another: serve only what you would let
+# every node on the mesh call. Give each board its own [spine] p2p_node_id.
 #
 # [edge]
 # enabled = true

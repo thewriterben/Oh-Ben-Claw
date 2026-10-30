@@ -187,13 +187,33 @@ pub enum PeerEvent {
     },
     /// A peer went silent past `peer_timeout_secs` and was pruned.
     Left { node_id: String },
+    /// Every admitted peer and its tools, sent after events were dropped
+    /// because the receiver lagged: anyone not in it has left.
+    Snapshot {
+        peers: HashMap<String, Vec<NodeToolSpec>>,
+    },
 }
+
+/// Grace the caller gives a call past the server's own `tool_timeout_secs`, so
+/// a call the server finished is not reported here as timed out (and retried).
+const CALL_MARGIN_SECS: u64 = 5;
+
+/// How long an incoming connection may take to send its request.
+const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Incoming connections handled at once; past this, new ones are closed.
+const MAX_INBOUND_CONNECTIONS: usize = 32;
 
 type PeerRegistry = Arc<RwLock<HashMap<String, P2pPeer>>>;
 
 /// Runs a tool a paired peer asked this node for. The agent implements it over
 /// its own gated path (policy, Track 0, trust, approval, audit), so a call from
 /// a peer is held to everything a local one is.
+///
+/// `peer` is the `from` the caller signed with. Frame keys are derived from
+/// the one `pairing_secret` every node shares, so a valid tag proves the caller
+/// holds that secret, not that it is `peer`: any node of the mesh can sign as
+/// any other. Treat `peer` as a label for trust and audit, not as proof.
 #[async_trait]
 pub trait PeerToolServer: Send + Sync {
     /// Run `tool` with `args` on behalf of `peer`.
@@ -235,6 +255,13 @@ pub struct P2pSpine {
     /// Incoming calls are answered only once [`P2pSpine::serve`] sets this;
     /// until then every one is refused.
     served: RwLock<Option<Served>>,
+    /// Random per process, sent in every announcement: our own broadcast
+    /// carries it, another board configured with our node id does not.
+    instance: String,
+    /// Sources already reported as using our node id, so it is said once each.
+    duplicates_seen: std::sync::Mutex<HashSet<SocketAddr>>,
+    /// Set when a peer event was dropped; a [`PeerEvent::Snapshot`] follows.
+    resync: std::sync::atomic::AtomicBool,
 }
 
 impl P2pSpine {
@@ -250,6 +277,9 @@ impl P2pSpine {
             out_counters: Arc::new(obc_safety::frame_auth::OutboundCounters::new()),
             peer_events: None,
             served: RwLock::new(None),
+            instance: uuid::Uuid::new_v4().to_string(),
+            duplicates_seen: std::sync::Mutex::new(HashSet::new()),
+            resync: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -291,16 +321,30 @@ impl P2pSpine {
         tracing::info!(addr = %tcp_addr, "P2P spine TCP server listening");
 
         let server = Arc::clone(&arc);
+        // Requests are read before anything authenticates them, so the number
+        // in flight is capped and each must arrive in REQUEST_READ_TIMEOUT.
+        let slots = Arc::new(tokio::sync::Semaphore::new(MAX_INBOUND_CONNECTIONS));
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((stream, peer)) => {
+                        let Ok(slot) = Arc::clone(&slots).try_acquire_owned() else {
+                            tracing::warn!(
+                                peer = %peer,
+                                cap = MAX_INBOUND_CONNECTIONS,
+                                "P2P connection refused: too many in flight"
+                            );
+                            continue;
+                        };
                         tracing::debug!(peer = %peer, "Incoming P2P TCP connection");
                         let spine = Arc::clone(&server);
                         tokio::spawn(async move {
-                            if let Err(e) = handle_tcp_connection(stream, spine).await {
+                            if let Err(e) =
+                                handle_tcp_connection(stream, spine, REQUEST_READ_TIMEOUT).await
+                            {
                                 tracing::warn!(error = %e, "P2P TCP handler error");
                             }
+                            drop(slot);
                         });
                     }
                     Err(e) => {
@@ -358,7 +402,23 @@ impl P2pSpine {
     async fn on_announce(&self, announce: P2pAnnounce, src: SocketAddr) {
         let node_id = announce.announcement.node_id.clone();
         // Broadcast comes back to the sender; this node is not its own peer.
+        // Our id with another instance is a second board configured with it.
         if node_id == self.config.node_id {
+            let instance = announce.announcement.metadata.get("p2p_instance");
+            if instance.and_then(Value::as_str) != Some(self.instance.as_str()) {
+                let mut seen = self
+                    .duplicates_seen
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                if seen.insert(src) {
+                    tracing::error!(
+                        node_id = %node_id,
+                        src = %src,
+                        "Another node on the mesh announces this node's p2p_node_id: \
+                         give each board its own, or peers will see only one of them"
+                    );
+                }
+            }
             return;
         }
         if let super::Admission::Refuse { reason } = super::admit_announcement(
@@ -422,12 +482,43 @@ impl P2pSpine {
         for node_id in gone {
             self.emit(PeerEvent::Left { node_id }).await;
         }
+        if self.resync.load(std::sync::atomic::Ordering::Acquire) {
+            self.flush_resync().await;
+        }
     }
 
+    /// Send the pending [`PeerEvent::Snapshot`], if the receiver has room.
+    async fn flush_resync(&self) {
+        use std::sync::atomic::Ordering;
+        let Some(tx) = &self.peer_events else { return };
+        let peers = self
+            .peer_registry
+            .read()
+            .await
+            .iter()
+            .map(|(id, p)| (id.clone(), p.announcement.tools.clone()))
+            .collect();
+        if tx.try_send(PeerEvent::Snapshot { peers }).is_ok() {
+            self.resync.store(false, Ordering::Release);
+        }
+    }
+
+    /// Report `event` without waiting on the receiver: discovery (eviction
+    /// included) must not stall behind it. A dropped event is made good by a
+    /// [`PeerEvent::Snapshot`] once the receiver has room.
     async fn emit(&self, event: PeerEvent) {
-        if let Some(tx) = &self.peer_events {
-            // A closed receiver means nobody registers peer tools any more.
-            let _ = tx.send(event).await;
+        use std::sync::atomic::Ordering;
+        let Some(tx) = &self.peer_events else { return };
+        if self.resync.load(Ordering::Acquire) {
+            // The snapshot holds this event's effect, sent now or later.
+            self.flush_resync().await;
+            return;
+        }
+        // A closed receiver means nobody registers peer tools any more.
+        if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(event) {
+            if !self.resync.swap(true, Ordering::AcqRel) {
+                tracing::warn!("P2P peer events are backing up; a snapshot will follow");
+            }
         }
     }
 
@@ -446,12 +537,13 @@ impl P2pSpine {
         };
         // Peers that require pairing admit only a fresh token; one stamped at
         // `announce` time would expire while we keep announcing.
+        if !announcement.metadata.is_object() {
+            announcement.metadata = serde_json::json!({});
+        }
         if let Some(token) = self.pairing.token_for(&announcement.node_id) {
-            if !announcement.metadata.is_object() {
-                announcement.metadata = serde_json::json!({});
-            }
             announcement.metadata["pairing_token"] = serde_json::to_value(token)?;
         }
+        announcement.metadata["p2p_instance"] = Value::String(self.instance.clone());
 
         let payload = P2pAnnounce {
             announcement,
@@ -499,8 +591,9 @@ impl P2pSpine {
             ctr: None,
             mac: None,
         };
-        // Our own key, not the peer's: on P2P the receiver looks `from` up and
-        // checks against that node's key, so a caller must sign as itself.
+        // Signed under our own id: the receiver derives the key for `from`.
+        // (Every node derives every key from the shared secret, so this says
+        // which key, not who; see [`PeerToolServer`].)
         request.sign(&self.frame_auth, &self.out_counters, &self.config.node_id);
 
         let payload = serde_json::to_vec(&request)?;
@@ -516,16 +609,17 @@ impl P2pSpine {
 
         // The answer comes back on this stream. (It used to be awaited from the
         // listener instead, where nothing ever sent it, so no call returned.)
-        let timeout = Duration::from_secs(self.config.tool_timeout_secs);
-        let reply = match tokio::time::timeout(timeout, read_framed(&mut stream)).await {
-            Ok(reply) => reply?,
-            Err(_) => bail!(
-                "P2P tool call timed out after {}s (node={}, tool={})",
-                self.config.tool_timeout_secs,
-                node_id,
-                tool_name
-            ),
-        };
+        // The peer gives the tool `tool_timeout_secs` and then answers either
+        // way, so wait a margin past that before calling the outcome unknown.
+        let wait = self.config.tool_timeout_secs + CALL_MARGIN_SECS;
+        let reply =
+            match tokio::time::timeout(Duration::from_secs(wait), read_framed(&mut stream)).await {
+                Ok(reply) => reply?,
+                Err(_) => bail!(
+                    "P2P tool call got no answer in {wait}s (node={node_id}, tool={tool_name}): \
+                 it may still have run there, so check before retrying it"
+                ),
+            };
         let result: ToolCallResult = serde_json::from_slice(&reply)?;
         if result.call_id != call_id {
             bail!("P2P peer {node_id} answered a different call");
@@ -545,8 +639,9 @@ impl P2pSpine {
     }
 
     /// Answer paired peers' calls to `tools` through `handler`, and announce
-    /// them. Refused unless pairing and frame auth are both enforced: the tag
-    /// is what proves who is calling, and pairing is whether we deal with them.
+    /// them. Refused unless pairing and frame auth are both enforced: together
+    /// they admit only callers holding the mesh's shared secret. Neither tells
+    /// one such caller from another (see [`PeerToolServer`]).
     pub async fn serve(
         &self,
         handler: Arc<dyn PeerToolServer>,
@@ -582,9 +677,9 @@ impl P2pSpine {
     /// The answer to one incoming call, or `None` to drop it unanswered (its
     /// frame did not verify, so there is nobody to answer).
     async fn answer(&self, request: ToolCallRequest) -> Option<ToolCallResult> {
-        // `from` says which key to check; the tag is what makes the claim mean
-        // anything. No `from` means nothing to verify against, which when
-        // enforcing is a refusal rather than a shrug.
+        // `from` says which key to check, and a good tag says the caller holds
+        // the mesh secret, not that it is `from`. No `from` means nothing to
+        // verify against, which when enforcing is a refusal rather than a shrug.
         let caller = request.from.clone().unwrap_or_default();
         if let obc_safety::frame_auth::FrameVerdict::Reject { reason } =
             self.frame_auth.verify_inbound(
@@ -644,7 +739,7 @@ impl P2pSpine {
             let Some(served) = served.as_ref() else {
                 bail!("this node serves no tools over P2P");
             };
-            // `serve` checked this; it is the premise of believing `caller`.
+            // `serve` checked this; without it, anyone on the LAN could call.
             if !self.frame_auth.is_enforcing() {
                 bail!("this node serves P2P calls only with frame auth enforced");
             }
@@ -666,19 +761,36 @@ impl P2pSpine {
             from = %caller,
             "Serving a P2P tool call"
         );
+        // Run on its own task: a slow tool is never cancelled part-way through
+        // an action (its audit record already written). Past the timeout the
+        // caller is told the outcome is unknown, and the run finishes alone.
         let timeout = Duration::from_secs(self.config.tool_timeout_secs);
-        match tokio::time::timeout(
-            timeout,
-            handler.call(caller, &request.tool_name, request.args.clone()),
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(_) => bail!(
-                "tool {:?} timed out after {}s",
-                request.tool_name,
-                timeout.as_secs()
-            ),
+        let (peer, tool, args) = (
+            caller.to_string(),
+            request.tool_name.clone(),
+            request.args.clone(),
+        );
+        let mut run = tokio::spawn(async move {
+            let result = handler.call(&peer, &tool, args).await;
+            (peer, tool, result)
+        });
+        match tokio::time::timeout(timeout, &mut run).await {
+            Ok(Ok((_, _, result))) => result,
+            Ok(Err(e)) => bail!("tool {:?} failed to run: {e}", request.tool_name),
+            Err(_) => {
+                tokio::spawn(async move {
+                    if let Ok((peer, tool, result)) = run.await {
+                        let ok = result.as_ref().is_ok_and(|r| r.success);
+                        tracing::warn!(%peer, %tool, ok, "P2P tool call finished after its caller was answered");
+                    }
+                });
+                bail!(
+                    "tool {:?} still running after {}s; it was not stopped, and its \
+                     outcome will not be reported, so check before retrying it",
+                    request.tool_name,
+                    timeout.as_secs()
+                )
+            }
         }
     }
 
@@ -755,8 +867,14 @@ async fn read_framed(stream: &mut TcpStream) -> Result<Vec<u8>> {
 
 /// Handle a single incoming TCP connection: read one `ToolCallRequest` and
 /// write its answer back on the same connection.
-async fn handle_tcp_connection(mut stream: TcpStream, spine: Arc<P2pSpine>) -> Result<()> {
-    let payload = read_framed(&mut stream).await?;
+async fn handle_tcp_connection(
+    mut stream: TcpStream,
+    spine: Arc<P2pSpine>,
+    read_timeout: Duration,
+) -> Result<()> {
+    let payload = tokio::time::timeout(read_timeout, read_framed(&mut stream))
+        .await
+        .map_err(|_| anyhow::anyhow!("P2P request not received in {read_timeout:?}"))??;
     let Ok(request) = serde_json::from_slice::<ToolCallRequest>(&payload) else {
         tracing::warn!("Received unrecognised P2P TCP message; ignoring");
         return Ok(());
@@ -1233,5 +1351,133 @@ mod tests {
             .unwrap();
         assert!(!refused.ok);
         assert_eq!(echo.calls.lock().unwrap().len(), 1);
+    }
+
+    /// Takes longer than the server's timeout, then says it finished.
+    struct Slow(mpsc::Sender<()>);
+
+    #[async_trait]
+    impl PeerToolServer for Slow {
+        async fn call(&self, _peer: &str, _tool: &str, _args: Value) -> Result<ToolResult> {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            self.0.send(()).await.ok();
+            Ok(ToolResult::ok("done"))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_slow_tool_is_answered_for_and_never_cancelled() {
+        let (done_tx, mut done) = mpsc::channel(1);
+        let mut brain = secured("brain");
+        brain.config.tool_timeout_secs = 1;
+        let brain = brain.start().await.unwrap();
+        let brain_port = brain.config.tcp_port;
+        *brain.local_announcement.write().await = Some(announcement("brain", &[]));
+        brain
+            .start_serving(Arc::new(Slow(done_tx)), vec![spec("gpio_write")])
+            .await
+            .unwrap();
+        // The caller has the same timeout: it must still hear the server out.
+        let mut edge = secured("a");
+        edge.config.tool_timeout_secs = 1;
+        brain.on_announce(datagram("a", &[], 44445), src()).await;
+        edge.on_announce(datagram("brain", &["gpio_write"], brain_port), src())
+            .await;
+
+        let result = edge
+            .invoke_tool("brain", "gpio_write", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(!result.ok);
+        assert!(
+            result.error.as_deref().unwrap().contains("still running"),
+            "{:?}",
+            result.error
+        );
+        // And the tool ran to the end rather than being dropped mid-action.
+        tokio::time::timeout(Duration::from_secs(5), done.recv())
+            .await
+            .expect("the tool was cancelled")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_second_board_with_our_id_is_reported_and_not_admitted() {
+        let spine = secured("brain");
+        let mut own = datagram("brain", &["shell"], 44445);
+        own.announcement.metadata["p2p_instance"] = Value::String(spine.instance.clone());
+        spine.on_announce(own, src()).await;
+        assert!(spine.duplicates_seen.lock().unwrap().is_empty());
+
+        // Same id, another process: a second board configured with it.
+        spine
+            .on_announce(datagram("brain", &["shell"], 44445), src())
+            .await;
+        assert!(spine.duplicates_seen.lock().unwrap().contains(&src()));
+        assert!(spine.known_nodes().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_full_event_channel_never_blocks_discovery() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let spine = secured("brain").with_peer_events(tx);
+        // Nobody is reading: the second join cannot be queued, and must not wait.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            spine
+                .on_announce(datagram("a", &["gpio_read"], 44445), src())
+                .await;
+            spine
+                .on_announce(datagram("b", &["dht22"], 44445), src())
+                .await;
+            spine.evict_stale().await;
+        })
+        .await
+        .expect("discovery blocked on the channel");
+        assert!(matches!(rx.recv().await, Some(PeerEvent::Joined { .. })));
+
+        // With room again, the next pass sends the whole mesh.
+        spine.evict_stale().await;
+        let Some(PeerEvent::Snapshot { peers }) = rx.recv().await else {
+            panic!("expected a snapshot");
+        };
+        assert_eq!(peers.len(), 2);
+        assert_eq!(peers["b"], vec![spec("dht22")]);
+        spine.evict_stale().await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_connection_must_send_its_request_in_time() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _idle = TcpStream::connect(addr).await.unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let err = handle_tcp_connection(
+            stream,
+            Arc::new(secured("brain")),
+            Duration::from_millis(100),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("not received"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn incoming_connections_are_capped() {
+        let brain = secured("brain").start().await.unwrap();
+        let addr = format!("127.0.0.1:{}", brain.config.tcp_port);
+        let mut idle = Vec::new();
+        for _ in 0..MAX_INBOUND_CONNECTIONS {
+            idle.push(TcpStream::connect(&addr).await.unwrap());
+        }
+        // One past the cap is closed at once instead of waiting for a request.
+        let mut over = TcpStream::connect(&addr).await.unwrap();
+        let mut byte = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(3), over.read(&mut byte)).await;
+        assert!(
+            matches!(read, Ok(Ok(0)) | Ok(Err(_))),
+            "the connection over the cap was held open"
+        );
+        drop(idle);
     }
 }

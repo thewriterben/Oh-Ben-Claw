@@ -319,8 +319,8 @@ impl DeploymentPlanner {
         // [agent]
         out.push_str("[agent]\n");
         out.push_str(&format!(
-            "name = \"{}\"\n",
-            Self::slug(&inventory.scenario_name)
+            "name = {}\n",
+            Self::toml_string(&Self::slug(&inventory.scenario_name))
         ));
         out.push_str(
             "system_prompt = \"\"\"\n\
@@ -413,9 +413,12 @@ impl DeploymentPlanner {
             out.push_str("port = 1883\n");
             out.push_str("tool_timeout_secs = 30\n");
             if edge_host {
+                // The scenario names the deployment, not the board, so two
+                // boards given this file would share an id on the mesh.
+                out.push_str("# One id per board: give each board that runs this its own.\n");
                 out.push_str(&format!(
-                    "p2p_node_id = \"{}\"\n",
-                    Self::slug(&inventory.scenario_name)
+                    "p2p_node_id = {}\n",
+                    Self::toml_string(&Self::slug(&inventory.scenario_name))
                 ));
             }
             out.push('\n');
@@ -503,6 +506,23 @@ impl DeploymentPlanner {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join("-")
+    }
+
+    /// `s` as a TOML basic string, quotes included. A scenario name is free
+    /// text, and a `"` or `\\` left bare in it would end the file's TOML there.
+    fn toml_string(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() + 2);
+        out.push('"');
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
     }
 
     // The role description is emitted whole. The TypeScript port used to take
