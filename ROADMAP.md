@@ -767,9 +767,13 @@ frames sit near 240 bytes everything above needs rethinking.*
     identical consecutive calls do not look like a replay of each other, and
     signing without a secret leaves the request byte-identical to what a
     deployment has always sent.
-- [ ] Steps 3 and 4 in `SPINE-AUTH.md`, and the LoRa half of everything above
-  (NVS counter — designed, unbuilt; wire format v2; re-sync firmware + update
-  `SAFETY.md` §4.3). Step 4 should carry the correlation-id change with it.
+- [x] Steps 3 and 4 in `SPINE-AUTH.md`, and the LoRa half of everything above
+  (NVS counter, wire format v2, the shorter correlation id) — done by
+  2026-09-13, along with host-side verification of each LoRa frame
+  (`obc_spine::lora_gateway::LoraAuth`, `tests/lora_gateway_live.rs`: 9
+  verified, 0 refused under the stations' root).
+- [x] Step 6, publishing it: re-synced firmware and the new `SAFETY.md` §4 text
+  reached OBC-Prime's `main` on 2026-10-30 — see *Migration* below.
 
 ---
 
@@ -848,6 +852,22 @@ LOC and test counts measured 2026-08-01. `obc-memory` is 5,148 rather than the
 5,878 quoted when it moved — `image.rs` was cut upstream on 2026-07-30 as
 documented-but-never-run.
 
+**Where it stands, 2026-10-30.** The five rows above are the first week. By
+2026-08-22 there were 34 crates under `crates/`, and the table stopped being
+kept. Measured today, counting every line in each crate's `.rs` files with its
+tests included (not the method used above, so the two are not comparable):
+
+| | crates | LOC |
+|---|---:|---:|
+| vendored in OBC-Prime | 28 | 72,477 |
+| extracted, deliberately not vendored — `obc-agent`, `obc-channels`, `obc-config`, `obc-gateway`, `obc-peripherals`, `obc-skill-forge` | 6 | 31,298 |
+| still in `src/` | — | 8,048 |
+
+The list of crates OBC-Prime vendors is `VENDORED_TREES` in its
+`scripts/sync_upstream.py`, and the reasons the six are kept back are written
+next to the list. That file is the record, not this table. `src/` is now
+`main.rs` (5,019) plus the four modules below.
+
 ### The queue is derived now, not guessed
 
 The first four were picked by hand, reading imports. That worked and hid the
@@ -908,12 +928,29 @@ both now share one parser.
   host side of it. Honest limit: the reflex *engine* is in `agent/` behind
   thirteen blocking edges and cannot follow, so this backs the
   perceive-and-classify half, not the whole sentence.
-- [ ] **Pick piece six** the same way: which claim is currently unbacked.
-- [ ] **`navigation` (3,714 LOC) is the largest single unlock**, and it is one
-  edge behind `movement` (741 LOC), which is one edge behind `spine`. Three
-  small moves in order, not one large one.
-- [ ] Spine authentication remains the gate on migrating anything that touches
-  the transport — see `docs/SPINE-AUTH.md` in OBC-Prime and Phase B below.
+- [x] **Piece six onward** (2026-08-02 → 2026-08-22): 29 more crates, ending
+  with `obc-body` as the twenty-eighth vendored one.
+- [x] **`navigation`, `movement`, `spine`** — all three moved on 2026-08-11 and
+  2026-08-13, in that order of edges.
+- [x] Spine authentication, the gate on the transport — steps 1–5 of
+  `SPINE-AUTH.md` landed upstream by 2026-09-13; see Phase B.
+- [x] **The four modules left in `src/` stay** (settled 2026-10-30).
+  `extractability.py` reports all four with zero blocking edges —
+  `perception_polls`, `harness`, `deployment`, `doctor`, 2,328 LOC — but its
+  edges count modules still in this tree, and every crate is now outside it.
+  Each one leans on a crate kept back from OBC-Prime: `harness` and
+  `deployment::swarm` on `obc-agent`, `doctor` on `obc-config` and
+  `obc-peripherals`, `perception_polls` on `obc-config`. A crate made out of
+  any of them could not be vendored, so it would back no public claim. They
+  are the binary's own wiring, used by `main.rs` and the integration tests.
+  The exception is `deployment/saga.rs` (257 LOC, no crate imports), and it is
+  deliberately unwired — see *The three unwired files* below.
+- [x] OBC-Prime's sync PR
+  ([thewriterben/OBC-Prime#74](https://github.com/thewriterben/OBC-Prime/pull/74),
+  47 commits) sat open from 2026-09-12 and merged 2026-10-30. Its `SAFETY.md`
+  now carries the spine-authentication text (step 6).
+- [ ] **OBC-Prime is still behind upstream.** #74 was a snapshot of
+  2026-09-16, and upstream has merged 33 PRs since. Cut a fresh sync.
 
 ## Ecosystem Integration 📋 Planned *(standing track)*
 
