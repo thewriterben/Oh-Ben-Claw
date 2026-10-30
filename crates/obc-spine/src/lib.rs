@@ -126,15 +126,43 @@ pub struct ToolCallRequest {
     /// Truncated HMAC over the request body, hex.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
+    /// Ed25519 signature by `from`'s own key, hex: on P2P, the proof of who
+    /// is calling, which `mac` under the shared mesh secret is not
+    /// (`obc_safety::node_identity`). Absent on MQTT.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
 }
 
 impl ToolCallRequest {
-    /// The bytes the tag covers: this request with `ctr` and `mac` removed.
+    /// The bytes the tag covers: this request with `ctr`, `mac` and `sig`
+    /// removed. Unchanged on MQTT, where `sig` is never set.
     pub fn signed_bytes(&self) -> Vec<u8> {
         let mut unsigned = self.clone();
         unsigned.ctr = None;
         unsigned.mac = None;
+        unsigned.sig = None;
         serde_json::to_vec(&unsigned).unwrap_or_default()
+    }
+
+    /// Sign a P2P call from `from` to `to`: the tag [`ToolCallRequest::sign`]
+    /// attaches, then `identity`'s signature over the same counter. Nothing,
+    /// like `sign`, when `frame_auth` has no secret.
+    pub fn sign_p2p(
+        &mut self,
+        frame_auth: &obc_safety::frame_auth::FrameAuth,
+        identity: &obc_safety::node_identity::NodeIdentity,
+        counters: &obc_safety::frame_auth::OutboundCounters,
+        from: &str,
+        to: &str,
+    ) {
+        self.sign(frame_auth, counters, from);
+        self.sig = p2p_signature(
+            identity,
+            obc_safety::node_identity::FrameKind::Request,
+            (from, to),
+            self.ctr,
+            &self.signed_bytes(),
+        );
     }
 
     /// Attach a counter and tag for `key_node`, if `frame_auth` has a secret.
@@ -193,6 +221,10 @@ pub struct ToolCallResult {
     /// Truncated HMAC over the result body, hex. See `obc_safety::frame_auth`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
+    /// Ed25519 signature by the answering node's own key, hex. P2P only; see
+    /// [`ToolCallRequest::sig`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
 }
 
 impl ToolCallResult {
@@ -206,7 +238,27 @@ impl ToolCallResult {
         let mut unsigned = self.clone();
         unsigned.ctr = None;
         unsigned.mac = None;
+        unsigned.sig = None;
         serde_json::to_vec(&unsigned).unwrap_or_default()
+    }
+
+    /// Sign `from`'s answer to `to`, as [`ToolCallRequest::sign_p2p`] does.
+    pub fn sign_p2p(
+        &mut self,
+        frame_auth: &obc_safety::frame_auth::FrameAuth,
+        identity: &obc_safety::node_identity::NodeIdentity,
+        counters: &obc_safety::frame_auth::OutboundCounters,
+        from: &str,
+        to: &str,
+    ) {
+        self.sign(frame_auth, counters, from);
+        self.sig = p2p_signature(
+            identity,
+            obc_safety::node_identity::FrameKind::Result,
+            (from, to),
+            self.ctr,
+            &self.signed_bytes(),
+        );
     }
 
     /// Attach a counter and tag for `key_node`, as [`ToolCallRequest::sign`]
@@ -230,6 +282,18 @@ impl ToolCallResult {
         self.ctr = Some(ctr);
         self.mac = frame_auth.tag_outbound(key_node, ctr, &self.signed_bytes());
     }
+}
+
+/// `identity`'s signature over a P2P frame `sign` gave counter `ctr`; none
+/// when it gave none (no secret, or the counter ran out).
+fn p2p_signature(
+    identity: &obc_safety::node_identity::NodeIdentity,
+    kind: obc_safety::node_identity::FrameKind,
+    (from, to): (&str, &str),
+    ctr: Option<u32>,
+    payload: &[u8],
+) -> Option<String> {
+    ctr.map(|ctr| identity.sign_frame(kind, from, to, ctr, payload))
 }
 
 // ── Pending Call Registry ────────────────────────────────────────────────────
@@ -579,6 +643,7 @@ impl SpineClient {
             from: None,
             ctr: None,
             mac: None,
+            sig: None,
         };
         request.sign(&self.frame_auth, &self.out_counters, node_id);
 

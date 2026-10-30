@@ -2057,7 +2057,8 @@ impl Agent {
     }
 
     /// [`Agent::execute_tool_direct`] for a call P2P `peer` made. Trust,
-    /// approval and the audit record name `p2p:<peer>`, and under taint
+    /// approval and the audit record name `p2p:<peer>` (proven by the peer's
+    /// pinned identity key once the P2P spine has checked it), and under taint
     /// tracking every argument counts as external content, so a privileged
     /// tool needs an explicit operator grant in `Enforce`.
     pub async fn execute_tool_for_peer(

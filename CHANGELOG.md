@@ -5,6 +5,49 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — A P2P frame proves which node sent it (2026-10-30)
+
+### Added
+
+- **Per-node identity keys on the P2P mesh.** Each node signs its requests and
+  results with its own Ed25519 key (`obc_safety::node_identity`), over the
+  sender, the recipient, the counter and the body. A node's key travels in its
+  announcement, signed by that key, and is pinned the first time it announces
+  after pairing; `[security] peer_keys` pins it by hand and wins. A frame that
+  does not verify under the pinned key for its `from` is dropped, before it can
+  move the replay window. So `p2p:<peer>` in trust, approval and audit is now
+  proven, not claimed. The HMAC tag stays on both paths, and MQTT and the
+  firmware are unchanged: there a tag still proves membership only.
+  Keys live in the data directory (`p2p_identity.key`, `p2p_peer_keys.json`),
+  for `main.rs` and for an embedded `EdgeAgent` alike; `with_p2p_identity`
+  overrides them. No rotation yet: a re-keyed node is refused until its pin is
+  removed.
+  Tests: `node_a_cannot_sign_a_frame_that_verifies_as_node_b`,
+  `a_member_cannot_call_as_another_member`,
+  `an_announcement_under_another_key_does_not_take_over_an_id`.
+- **A P2P frame needs both proofs.** The tag (membership) and the signature
+  (identity) are each checked, on calls and on answers, before the counter is
+  taken. Test: `a_p2p_frame_needs_the_tag_as_well_as_the_signature`.
+- **Only a paired node's key is pinned.** With `require_pairing` off an unpaired
+  node is still admitted, but its key is not pinned. Test:
+  `only_a_paired_node_has_its_key_pinned`.
+- **Announcements carry a signed, rising `seq`.** It is `epoch << 32 | count`,
+  where the epoch goes up every start (`p2p_announce_epoch`, so it rises even on
+  a board without a clock). A peer refuses an announcement no newer than the
+  last one it accepted. A bind-all (`0.0.0.0`) announcement replayed from
+  another address no longer moves the node there. Test:
+  `a_replayed_bind_all_announcement_does_not_move_the_node`.
+- **The announcement is signed over its JSON, not the struct.** A newer peer's
+  extra fields are covered and still verify here. Test:
+  `an_announcement_with_fields_this_version_lacks_still_verifies`.
+- **A member with no pin yet gets a signed refusal** ("announce first"), not a
+  timeout.
+- **Key and pin files are replaced whole** (temp file, fsync, rename). Only
+  learned pins are written; pins from `[security] peer_keys` stay in config.
+  Pinning runs off the async workers, and the lock is not held while writing.
+
+---
+
 ## Unreleased — The P2P mesh answers calls, under pairing and frame auth (2026-10-30)
 
 ### Fixed
@@ -43,8 +86,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **What the frame tag proves.** Frame keys are derived from the one
   `pairing_secret` every node shares, so a good tag proves the caller holds
   the mesh secret, not which node it is: any node can sign as any other. A
-  caller's `from` is a label for trust and audit, not proof. Per-node keys are
-  not done yet.
+  caller's `from` is a label for trust and audit, not proof. (P2P frames are
+  now also signed with per-node keys; see above.)
 - **Review of the above:**
   - A peer's call is judged as `p2p:<peer>`: trust, approval and the scorer use
     that, and the Track 0 audit record reads `p2p:<peer> -> <node>`. Its

@@ -81,9 +81,17 @@ pub struct EdgeAgent {
     /// unless it opts in.
     pairing: (obc_safety::NodePairingManager, bool),
     /// Root secret and enforcement flag for per-message tags on P2P calls.
-    /// Same secret as pairing; per-node keys are derived from it.
+    /// Same secret as pairing; it switches the checks on, and the identity key
+    /// below is what says which node a call came from.
     frame_auth_secret: Option<String>,
     frame_auth_required: bool,
+    /// This node's identity key and the keys it has pinned for its peers, taken
+    /// by `start_p2p`. `None` means the ones kept in the data dir
+    /// ([`obc_safety::node_identity::P2pState`]), created on first start.
+    identity: Option<(
+        obc_safety::node_identity::NodeIdentity,
+        obc_safety::node_identity::PeerKeys,
+    )>,
 }
 
 impl EdgeAgent {
@@ -119,6 +127,7 @@ impl EdgeAgent {
             pairing: (obc_safety::NodePairingManager::new(None), false),
             frame_auth_secret: None,
             frame_auth_required: false,
+            identity: None,
         })
     }
 
@@ -144,6 +153,19 @@ impl EdgeAgent {
         self
     }
 
+    /// The identity key this node signs P2P frames with, and the peer keys it
+    /// checks theirs against, in place of the ones kept in the data dir. Keep
+    /// the key across restarts (`NodeIdentity::load_or_create`), or every peer
+    /// that pinned it refuses this node until its pin is removed.
+    pub fn with_p2p_identity(
+        mut self,
+        identity: obc_safety::node_identity::NodeIdentity,
+        peer_keys: obc_safety::node_identity::PeerKeys,
+    ) -> Self {
+        self.identity = Some((identity, peer_keys));
+        self
+    }
+
     /// Attach a policy engine.
     pub fn with_policy(mut self, policy: PolicyEngine) -> Self {
         self.inner = self.inner.with_policy(policy);
@@ -160,7 +182,22 @@ impl EdgeAgent {
         p2p_config: P2pConfig,
         announcement: NodeAnnouncement,
     ) -> Result<()> {
-        let spine = P2pSpine::new(p2p_config)
+        let mut spine = P2pSpine::new(p2p_config);
+        spine = match self.identity.take() {
+            Some((identity, peer_keys)) => spine.with_identity(identity).with_peer_keys(peer_keys),
+            None => {
+                let state = obc_safety::node_identity::P2pState::load(
+                    &obc_paths::data_dir(),
+                    obc_safety::node_identity::PeerKeys::new(),
+                )
+                .map_err(|e| anyhow::anyhow!("could not load this node's P2P identity: {e:#}"))?;
+                spine
+                    .with_identity(state.identity)
+                    .with_peer_keys(state.peer_keys)
+                    .with_announce_epoch(state.announce_epoch)
+            }
+        };
+        let spine = spine
             .with_pairing(self.pairing.0.clone(), self.pairing.1)
             .with_frame_auth(obc_safety::frame_auth::FrameAuth::new(
                 self.frame_auth_secret.clone(),

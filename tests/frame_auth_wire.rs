@@ -29,6 +29,7 @@ fn result(output: &str) -> ToolCallResult {
         error: None,
         ctr: None,
         mac: None,
+        sig: None,
     }
 }
 
@@ -173,6 +174,7 @@ fn request(tool: &str) -> ToolCallRequest {
         from: None,
         ctr: None,
         mac: None,
+        sig: None,
     }
 }
 

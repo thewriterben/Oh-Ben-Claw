@@ -42,6 +42,9 @@
 
 use std::sync::Mutex;
 
+use ed25519_dalek::VerifyingKey;
+
+use crate::node_identity::{self, FrameKind};
 use crate::replay::{ReplayVerdict, ReplayWindow};
 use crate::spine_tag;
 
@@ -52,6 +55,22 @@ pub enum FrameVerdict {
     Accept,
     /// Refused. The reason is for an operator reading a log, not for the sender.
     Reject { reason: String },
+}
+
+/// One inbound P2P frame as [`FrameAuth::verify_p2p_inbound`] checks it.
+#[derive(Debug, Clone, Copy)]
+pub struct P2pFrame<'a> {
+    /// Request or result.
+    pub kind: FrameKind,
+    /// The node the frame says sent it: whose tag key and pinned key apply.
+    pub from: &'a str,
+    /// This node, the recipient the signature has to name.
+    pub to: &'a str,
+    pub ctr: Option<u32>,
+    pub mac: Option<&'a str>,
+    pub sig: Option<&'a str>,
+    /// The bytes the tag and the signature cover.
+    pub payload: &'a [u8],
 }
 
 /// Authenticates inbound messages against per-node keys and a replay window.
@@ -99,45 +118,111 @@ impl FrameAuth {
         mac_hex: Option<&str>,
         payload: &[u8],
     ) -> FrameVerdict {
-        let Some(secret) = self.root_secret.as_deref() else {
+        if !self.is_enabled() {
             return FrameVerdict::Accept;
-        };
-
-        let reject = |reason: String| {
-            if self.require {
-                FrameVerdict::Reject { reason }
-            } else {
-                FrameVerdict::Accept
-            }
-        };
-
-        let (Some(ctr), Some(mac_hex)) = (ctr, mac_hex) else {
-            return reject("message carried no ctr/mac".to_string());
-        };
-
-        let Ok(mac) = hex::decode(mac_hex) else {
-            return reject("mac is not hex".to_string());
-        };
-
-        let key = spine_tag::derive_node_key(secret.as_bytes(), node_id);
-        if !spine_tag::verify(&key, 0, ctr, payload, &mac) {
-            return reject(format!("mac does not verify for counter {ctr}"));
         }
-
+        if let Some(reason) = self.tag_fault(node_id, ctr, mac_hex, payload) {
+            return self.reject(reason);
+        }
         // Only a message that proved who sent it may move the replay window.
         // Judging the counter first would let anyone advance a node's window and
         // lock it out — a denial of service handed over by the ordering alone.
+        self.admit_counter(node_id, ctr.unwrap_or_default())
+    }
+
+    /// Whether `mac_hex` is a good tag for `node_id` over `payload`, without
+    /// judging or moving the replay window. Proves the sender holds the mesh
+    /// secret: enough to be worth an answer, not enough to be served.
+    pub fn tag_verifies(
+        &self,
+        node_id: &str,
+        ctr: Option<u32>,
+        mac_hex: Option<&str>,
+        payload: &[u8],
+    ) -> bool {
+        self.is_enabled() && self.tag_fault(node_id, ctr, mac_hex, payload).is_none()
+    }
+
+    /// Check one inbound P2P frame against both proofs it carries: the tag,
+    /// which says the sender holds the mesh secret, and the signature under the
+    /// key pinned for `frame.from` ([`node_identity`](crate::node_identity)),
+    /// which says the sender is that node.
+    ///
+    /// Same switch and replay window as [`FrameAuth::verify_inbound`], judged
+    /// once both proofs pass. No pinned key means nobody to check against,
+    /// which when enforcing is a refusal.
+    pub fn verify_p2p_inbound(
+        &self,
+        key: Option<&VerifyingKey>,
+        frame: &P2pFrame<'_>,
+    ) -> FrameVerdict {
+        if !self.is_enabled() {
+            return FrameVerdict::Accept;
+        }
+        let from = frame.from;
+        if let Some(reason) = self.tag_fault(from, frame.ctr, frame.mac, frame.payload) {
+            return self.reject(reason);
+        }
+        let Some(key) = key else {
+            return self.reject(format!("no key is pinned for {from:?}"));
+        };
+        let (Some(ctr), Some(sig)) = (frame.ctr, frame.sig) else {
+            return self.reject("message carried no ctr/sig".to_string());
+        };
+        if !node_identity::verify_frame(key, frame.kind, from, frame.to, ctr, frame.payload, sig) {
+            return self.reject(format!(
+                "signature does not verify as {from:?} for counter {ctr}"
+            ));
+        }
+        // After both proofs, for the reason `verify_inbound` gives.
+        self.admit_counter(from, ctr)
+    }
+
+    /// Why `mac_hex` is not a good tag for `node_id`, if it is not. Assumes a
+    /// root secret.
+    fn tag_fault(
+        &self,
+        node_id: &str,
+        ctr: Option<u32>,
+        mac_hex: Option<&str>,
+        payload: &[u8],
+    ) -> Option<String> {
+        let secret = self.root_secret.as_deref()?;
+        let (Some(ctr), Some(mac_hex)) = (ctr, mac_hex) else {
+            return Some("message carried no ctr/mac".to_string());
+        };
+        let Ok(mac) = hex::decode(mac_hex) else {
+            return Some("mac is not hex".to_string());
+        };
+        let key = spine_tag::derive_node_key(secret.as_bytes(), node_id);
+        if !spine_tag::verify(&key, 0, ctr, payload, &mac) {
+            return Some(format!("mac does not verify for counter {ctr}"));
+        }
+        None
+    }
+
+    /// A refusal, or under dry run the acceptance it would have been.
+    fn reject(&self, reason: String) -> FrameVerdict {
+        if self.require {
+            FrameVerdict::Reject { reason }
+        } else {
+            FrameVerdict::Accept
+        }
+    }
+
+    /// Judge a counter from a sender already proven to be `node_id`.
+    fn admit_counter(&self, node_id: &str, ctr: u32) -> FrameVerdict {
         let verdict = self
             .window
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .admit(node_id, ctr);
-
-        match verdict {
-            ReplayVerdict::Fresh => FrameVerdict::Accept,
-            ReplayVerdict::Duplicate => reject(format!("counter {ctr} already seen")),
-            ReplayVerdict::TooOld => reject(format!("counter {ctr} is older than the window")),
-        }
+        let reason = match verdict {
+            ReplayVerdict::Fresh => return FrameVerdict::Accept,
+            ReplayVerdict::Duplicate => format!("counter {ctr} already seen"),
+            ReplayVerdict::TooOld => format!("counter {ctr} is older than the window"),
+        };
+        self.reject(reason)
     }
 
     /// Tag an outbound message with the next counter for this node.
@@ -167,6 +252,124 @@ mod tests {
     fn tag_for(node: &str, ctr: u32, payload: &[u8]) -> String {
         let key = spine_tag::derive_node_key(SECRET.as_bytes(), node);
         hex::encode(spine_tag::tag(&key, 0, ctr, payload))
+    }
+
+    /// The gap this closes: with one mesh secret, node A can derive B's frame
+    /// key and its tag verifies as B. Under pinned identities the same frame,
+    /// signed by A as B, is refused, and B's own is accepted.
+    #[test]
+    fn node_a_cannot_sign_a_frame_that_verifies_as_node_b() {
+        use crate::node_identity::{parse_public, NodeIdentity};
+        const B: &str = "obc-node-b";
+        const ME: &str = "obc-brain";
+        // A frame from B at counter 2, tag and all: only the signature varies.
+        fn frame<'a>(tag: &'a str, sig: &'a str) -> P2pFrame<'a> {
+            P2pFrame {
+                kind: FrameKind::Request,
+                from: B,
+                to: ME,
+                ctr: Some(2),
+                mac: Some(tag),
+                sig: Some(sig),
+                payload: BODY,
+            }
+        }
+        let tag = tag_for(B, 2, BODY);
+
+        // What a mesh member could always do: B's derived key, from the secret.
+        let auth = enforcing();
+        assert_eq!(
+            auth.verify_inbound(B, Some(1), Some(&tag_for(B, 1, BODY)), BODY),
+            FrameVerdict::Accept,
+            "the shared-secret tag never proved who signed"
+        );
+
+        let (a, b) = (NodeIdentity::generate(), NodeIdentity::generate());
+        let b_key = parse_public(&b.public_hex()).unwrap();
+        let auth = enforcing();
+        let forged = a.sign_frame(FrameKind::Request, B, ME, 2, BODY);
+        match auth.verify_p2p_inbound(Some(&b_key), &frame(&tag, &forged)) {
+            FrameVerdict::Reject { reason } => assert!(reason.contains("does not verify")),
+            FrameVerdict::Accept => panic!("A's signature verified as B"),
+        }
+        // The forgery did not move B's window: B's own frame at that counter passes.
+        let genuine = b.sign_frame(FrameKind::Request, B, ME, 2, BODY);
+        assert_eq!(
+            auth.verify_p2p_inbound(Some(&b_key), &frame(&tag, &genuine)),
+            FrameVerdict::Accept
+        );
+    }
+
+    #[test]
+    fn a_p2p_frame_needs_the_tag_as_well_as_the_signature() {
+        use crate::node_identity::{parse_public, NodeIdentity};
+        let auth = enforcing();
+        let n = NodeIdentity::generate();
+        let key = parse_public(&n.public_hex()).unwrap();
+        let sig = n.sign_frame(FrameKind::Result, NODE, "me", 3, BODY);
+        let mut frame = P2pFrame {
+            kind: FrameKind::Result,
+            from: NODE,
+            to: "me",
+            ctr: Some(3),
+            mac: None,
+            sig: Some(&sig),
+            payload: BODY,
+        };
+        // A node's own key, but no proof it holds the mesh secret: refused, and
+        // the window is untouched.
+        match auth.verify_p2p_inbound(Some(&key), &frame) {
+            FrameVerdict::Reject { reason } => assert!(reason.contains("ctr/mac")),
+            FrameVerdict::Accept => panic!("a P2P frame passed without its tag"),
+        }
+        let tag = tag_for(NODE, 3, BODY);
+        frame.mac = Some(&tag);
+        assert_eq!(
+            auth.verify_p2p_inbound(Some(&key), &frame),
+            FrameVerdict::Accept
+        );
+    }
+
+    #[test]
+    fn a_signed_frame_with_no_pinned_key_is_refused() {
+        let auth = enforcing();
+        let tag = tag_for(NODE, 1, BODY);
+        let frame = P2pFrame {
+            kind: FrameKind::Result,
+            from: NODE,
+            to: "me",
+            ctr: Some(1),
+            mac: Some(&tag),
+            sig: Some("00"),
+            payload: BODY,
+        };
+        assert!(auth.tag_verifies(NODE, Some(1), Some(&tag), BODY));
+        assert!(matches!(
+            auth.verify_p2p_inbound(None, &frame),
+            FrameVerdict::Reject { .. }
+        ));
+    }
+
+    #[test]
+    fn a_replayed_signed_frame_is_refused() {
+        use crate::node_identity::{parse_public, NodeIdentity};
+        let auth = enforcing();
+        let n = NodeIdentity::generate();
+        let key = parse_public(&n.public_hex()).unwrap();
+        let sig = n.sign_frame(FrameKind::Result, NODE, "me", 5, BODY);
+        let tag = tag_for(NODE, 5, BODY);
+        let frame = P2pFrame {
+            kind: FrameKind::Result,
+            from: NODE,
+            to: "me",
+            ctr: Some(5),
+            mac: Some(&tag),
+            sig: Some(&sig),
+            payload: BODY,
+        };
+        let check = || auth.verify_p2p_inbound(Some(&key), &frame);
+        assert_eq!(check(), FrameVerdict::Accept);
+        assert!(matches!(check(), FrameVerdict::Reject { .. }));
     }
 
     #[test]
