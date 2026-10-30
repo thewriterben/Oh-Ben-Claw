@@ -629,6 +629,9 @@ mod tests {
         fn description(&self) -> &str {
             "test"
         }
+        fn risk_class(&self) -> obc_tool_api::RiskClass {
+            obc_tool_api::RiskClass::safe()
+        }
         fn parameters_schema(&self) -> serde_json::Value {
             serde_json::json!({ "type": "object" })
         }
