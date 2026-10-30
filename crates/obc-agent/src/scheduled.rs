@@ -56,6 +56,25 @@ pub fn turn_message(task_name: &str, prompt: &str, tool_report: Option<&str>) ->
 }
 
 /// Run one dispatch to completion: tool, then prompt, then delivery.
+///
+/// The tool goes through [`AgentHandle::execute_tool_direct`], the same
+/// chokepoint as every other call, so policy, Track 0 limits and audit, trust
+/// and approval all apply to it. `tests/scheduled_track0.rs` drives the real
+/// scheduler loop into this function to hold that in place: give the scheduler
+/// its own way to run a tool and those tests fail.
+///
+/// **Taint (decided 2026-10-30).** The call runs with no taint pool, and that is
+/// deliberate. `tool_args` were written by the model in an earlier turn that may
+/// have read external content, but that turn already checked them: `schedule`
+/// is irreversible, so `taint::gated` holds for it, and `taint::scan_args`
+/// walks into the nested `tool_args` (and `prompt`). With `[safety].taint_mode
+/// = "enforce"` a `schedule` call whose arguments echo pooled external content
+/// is refused before anything is stored. Carrying the pool into the stored task
+/// would add a column and a migration to re-run a check that has already run,
+/// against content that cannot have changed. Two gaps remain, recorded in
+/// ROADMAP Track 0: an explicit grant for `schedule` waives the check for
+/// whatever tool it stores, and the `prompt` turn starts a fresh pool, so an
+/// instruction paraphrased from a web page loses its provenance at fire time.
 pub async fn run_scheduled(
     handle: &AgentHandle,
     d: TaskDispatch,

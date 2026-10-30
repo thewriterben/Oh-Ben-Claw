@@ -2046,7 +2046,9 @@ impl Agent {
     /// Bypasses the agent loop — useful for direct tool invocation via the
     /// gateway's `POST /api/v1/tools/{name}` endpoint.
     /// Security policy is still evaluated. No taint pool: a standalone call has
-    /// no prior in-run external content to be tainted by.
+    /// no prior in-run external content to be tainted by. A scheduled task's
+    /// tool also runs here; its arguments were checked against the pool of the
+    /// turn that scheduled it (see `scheduled::run_scheduled`).
     pub async fn execute_tool_direct(
         &self,
         name: &str,
