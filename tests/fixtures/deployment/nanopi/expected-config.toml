@@ -72,12 +72,16 @@ kind = "mqtt"
 host = "localhost"
 port = 1883
 tool_timeout_secs = 30
+p2p_node_id = "nanopi-neo3-reference-deployment"
 
 [edge]
 enabled = true
 max_history_messages = 20
 max_tool_iterations = 5
-p2p_enabled = true
+# The P2P mesh needs [security] require_pairing = true,
+# require_frame_auth = true and a pairing_secret every node shares
+# (openssl rand -hex 32). Set those, then turn this on.
+p2p_enabled = false
 
 [fleet]
 enabled = true

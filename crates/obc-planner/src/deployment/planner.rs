@@ -401,22 +401,41 @@ impl DeploymentPlanner {
             }
         }
 
-        // [spine] — only when something is not on the host itself.
+        let edge_host = host_board == "nanopi-neo3" || host_board.starts_with("raspberry-pi");
+
+        // [spine] — only when something is not on the host itself. An edge host
+        // gets a fixed mesh id, so peers that pair with it still know it after a
+        // reboot (left unset, the id is random every boot).
         if inventory.items.iter().any(|i| i.transport != "native") {
             out.push_str("[spine]\n");
             out.push_str("kind = \"mqtt\"\n");
             out.push_str("host = \"localhost\"\n");
             out.push_str("port = 1883\n");
-            out.push_str("tool_timeout_secs = 30\n\n");
+            out.push_str("tool_timeout_secs = 30\n");
+            if edge_host {
+                out.push_str(&format!(
+                    "p2p_node_id = \"{}\"\n",
+                    Self::slug(&inventory.scenario_name)
+                ));
+            }
+            out.push('\n');
         }
 
-        // [edge] — small single-board hosts get the reduced limits.
-        if host_board == "nanopi-neo3" || host_board.starts_with("raspberry-pi") {
+        // [edge] — small single-board hosts get the reduced limits. The P2P mesh
+        // is left off: it is found by UDP broadcast, so the config refuses it
+        // without pairing and frame auth, and the planner cannot invent the
+        // secret those share.
+        if edge_host {
             out.push_str("[edge]\n");
             out.push_str("enabled = true\n");
             out.push_str("max_history_messages = 20\n");
             out.push_str("max_tool_iterations = 5\n");
-            out.push_str("p2p_enabled = true\n\n");
+            out.push_str(
+                "# The P2P mesh needs [security] require_pairing = true,\n\
+                 # require_frame_auth = true and a pairing_secret every node shares\n\
+                 # (openssl rand -hex 32). Set those, then turn this on.\n",
+            );
+            out.push_str("p2p_enabled = false\n\n");
         }
 
         // [fleet] — LoRa mesh coordination, when the inventory can actually carry it.

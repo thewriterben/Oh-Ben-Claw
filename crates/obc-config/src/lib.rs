@@ -2644,6 +2644,56 @@ impl Config {
                  mesh is joined only in edge mode. Set enabled = true, or drop p2p_enabled."
             );
         }
+        // The mesh is found by UDP broadcast, so anything on the LAN can announce
+        // itself. Pairing is what keeps a stranger out of the registry, and frame
+        // auth is what stops a stranger from speaking as a paired node's id.
+        if self.edge.p2p_enabled
+            && !(self.security.require_pairing && self.security.require_frame_auth)
+        {
+            anyhow::bail!(
+                "edge.p2p_enabled = true joins a mesh any host on the LAN can announce to; \
+                 it needs [security] require_pairing = true, require_frame_auth = true and \
+                 a pairing_secret shared by every node."
+            );
+        }
+        // Explicitly set timings are checked whether or not the mesh is on: a zero
+        // interval spins the announce loop and floods UDP, a zero timeout evicts
+        // every peer on arrival.
+        if let Some(secs) = self.spine.p2p_announce_interval_secs {
+            if !(1..=3600).contains(&secs) {
+                anyhow::bail!("spine.p2p_announce_interval_secs = {secs}; it must be 1 to 3600");
+            }
+        }
+        if let Some(secs) = self.spine.p2p_peer_timeout_secs {
+            if !(1..=86_400).contains(&secs) {
+                anyhow::bail!("spine.p2p_peer_timeout_secs = {secs}; it must be 1 to 86400");
+            }
+        }
+        if self.edge.p2p_enabled {
+            let mesh = self.spine.p2p_config();
+            // Less than two announce periods and one dropped datagram evicts a peer.
+            if mesh.peer_timeout_secs < 2 * mesh.announce_interval_secs {
+                anyhow::bail!(
+                    "spine.p2p_peer_timeout_secs ({}) must be at least twice \
+                     p2p_announce_interval_secs ({}), or peers drop out between announcements",
+                    mesh.peer_timeout_secs,
+                    mesh.announce_interval_secs
+                );
+            }
+            if mesh.node_id.trim().is_empty() {
+                anyhow::bail!("spine.p2p_node_id is empty");
+            }
+            if mesh.tcp_port == 0 || mesh.discovery_port == 0 {
+                anyhow::bail!("spine.p2p_tcp_port and p2p_discovery_port must be set and non-zero");
+            }
+            if self.spine.p2p_node_id.is_none() {
+                warnings.push(
+                    "spine.p2p_node_id is not set: this node takes a random mesh id every boot, \
+                     so peers cannot pair with it for good. Set a stable one."
+                        .to_string(),
+                );
+            }
+        }
 
         // ── Channel allowlists ─────────────────────────────────────────────────
         // An empty `allowed_users` refuses everyone (fail closed), so a channel
@@ -3257,6 +3307,7 @@ mod tests {
         config.edge.max_tool_iterations = 4;
         config.edge.max_history_messages = 12;
         config.edge.p2p_enabled = true;
+        require_mesh_auth(&mut config);
         config.spine.p2p_node_id = Some("nanopi-kitchen".to_string());
         config.spine.p2p_tcp_port = Some(45001);
         let warnings = config.validate().unwrap();
@@ -3280,6 +3331,71 @@ mod tests {
         assert!(edge.mesh.is_none());
     }
 
+    fn require_mesh_auth(config: &mut Config) {
+        config.security.require_pairing = true;
+        config.security.require_frame_auth = true;
+        config.security.pairing_secret =
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string());
+    }
+
+    /// The mesh is found by UDP broadcast; without pairing and frame auth any
+    /// host on the LAN is a peer.
+    #[test]
+    fn validate_refuses_the_mesh_without_pairing_and_frame_auth() {
+        let mut config = Config::default();
+        config.edge.enabled = true;
+        config.edge.p2p_enabled = true;
+        config.spine.p2p_node_id = Some("nanopi-kitchen".to_string());
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("require_pairing"), "{err}");
+
+        require_mesh_auth(&mut config);
+        config.security.require_frame_auth = false;
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("require_frame_auth"), "{err}");
+
+        config.security.require_frame_auth = true;
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn validate_refuses_p2p_timings_that_spin_or_evict() {
+        let mut config = Config::default();
+        config.spine.p2p_announce_interval_secs = Some(0);
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("p2p_announce_interval_secs"), "{err}");
+
+        config.spine.p2p_announce_interval_secs = Some(10);
+        config.spine.p2p_peer_timeout_secs = Some(0);
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("p2p_peer_timeout_secs"), "{err}");
+
+        config.spine.p2p_peer_timeout_secs = Some(u64::MAX);
+        assert!(config.validate().is_err());
+
+        // With the mesh on, a timeout inside two announce periods evicts live peers.
+        config.edge.enabled = true;
+        config.edge.p2p_enabled = true;
+        require_mesh_auth(&mut config);
+        config.spine.p2p_node_id = Some("nanopi-kitchen".to_string());
+        config.spine.p2p_peer_timeout_secs = Some(15);
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("at least twice"), "{err}");
+
+        config.spine.p2p_peer_timeout_secs = Some(20);
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn validate_warns_a_mesh_node_without_a_stable_id() {
+        let mut config = Config::default();
+        config.edge.enabled = true;
+        config.edge.p2p_enabled = true;
+        require_mesh_auth(&mut config);
+        let warnings = config.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("p2p_node_id")), "{warnings:?}");
+    }
+
     #[test]
     fn validate_refuses_p2p_outside_edge_mode() {
         let mut config = Config::default();
@@ -3289,15 +3405,25 @@ mod tests {
     }
 
     /// The NanoPi reference deployment, as the planner writes it, has to load and
-    /// mean what it says: edge mode, the mesh, and the orchestrator together.
+    /// mean what it says: edge mode and the orchestrator together, with the mesh
+    /// off until a pairing secret is set, and a mesh id that survives a reboot.
     #[test]
     fn the_nanopi_reference_config_loads_in_edge_mode() {
         let toml = include_str!("../../../tests/fixtures/deployment/nanopi/expected-config.toml");
-        let config: Config = toml::from_str(toml).unwrap();
+        let mut config: Config = toml::from_str(toml).unwrap();
         config.validate().unwrap();
         let edge = edge_start(&config).expect("the NanoPi deployment is edge mode");
-        assert!(edge.mesh.is_some(), "and it asks for the mesh");
+        assert!(edge.mesh.is_none(), "no mesh without pairing");
         assert!(config.orchestrator.enabled);
+
+        // What its comment says to do is enough to join.
+        config.edge.p2p_enabled = true;
+        assert!(config.validate().is_err());
+        require_mesh_auth(&mut config);
+        let warnings = config.validate().unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("p2p_node_id")), "{warnings:?}");
+        let mesh = edge_start(&config).unwrap().mesh.unwrap();
+        assert_eq!(mesh.node_id, "nanopi-neo3-reference-deployment");
     }
 
     #[test]

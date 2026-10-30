@@ -343,7 +343,9 @@ max_chars = 2400
 # max_history_messages. p2p_enabled joins the broker-free local mesh beside the
 # MQTT spine, using [spine]'s p2p_* keys, and registers peer tools as peers are
 # heard; failing to join stops startup. With [orchestrator] enabled the limits
-# bound its inner agent. Refused at load: p2p_enabled without enabled.
+# bound its inner agent. Refused at load: p2p_enabled without enabled, or
+# without [security] require_pairing and require_frame_auth (the mesh is found
+# by UDP broadcast, so anything on the LAN can announce itself).
 #
 # [edge]
 # enabled = true
