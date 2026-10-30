@@ -44,6 +44,38 @@ pub fn inline_secret_providers(config: &Config) -> Vec<String> {
     out
 }
 
+/// What `[edge]` changes about the agent `start` builds.
+///
+/// Edge mode is the ordinary agent with its safety gate, auditor, approval and
+/// trust intact, held to a smaller budget and optionally on the local mesh. It is
+/// not an `EdgeAgent`: that type takes a policy and pairing and nothing else, so
+/// swapping it in would have dropped Track 0 on exactly the devices that drive
+/// hardware.
+#[derive(Debug, Clone)]
+pub struct EdgeStart {
+    /// `[agent]`, with `[edge].max_tool_iterations` as a ceiling on it.
+    pub agent: AgentConfig,
+    /// History window replayed into context (`[edge].max_history_messages`).
+    pub max_history: usize,
+    /// The mesh to join (`[edge].p2p_enabled`), from `[spine]`'s `p2p_*` keys.
+    pub mesh: Option<obc_spine::p2p::P2pConfig>,
+}
+
+/// `None` when `[edge]` is off, which leaves `start` exactly as it was.
+pub fn edge_start(config: &Config) -> Option<EdgeStart> {
+    let edge = &config.edge;
+    if !edge.enabled {
+        return None;
+    }
+    let mut agent = config.agent.clone();
+    agent.max_tool_iterations = agent.max_tool_iterations.min(edge.max_tool_iterations);
+    Some(EdgeStart {
+        agent,
+        max_history: edge.max_history_messages,
+        mesh: edge.p2p_enabled.then(|| config.spine.p2p_config()),
+    })
+}
+
 // ── Provider Configuration ───────────────────────────────────────────────────
 
 /// The LLM provider's own configuration block, which lives with the providers.
@@ -2585,19 +2617,17 @@ impl Config {
             }
         }
 
-        // ── P2P spine: not wired ───────────────────────────────────────────────
-        // `run_start` connects a spine only for `kind = "mqtt"`. Any other kind
-        // started no spine at all, in silence: no peripheral tools, and the P2P
-        // frame-auth and pairing gates in obc-spine/p2p.rs unreachable. The
-        // `P2pSpine` itself works (EdgeAgent::start_p2p drives it) but nothing
-        // in the binary constructs either. Found 2026-10-13. Wiring it means a
-        // TCP listener and a UDP discovery socket on the brain, which wants its
-        // own change and its own test; until then, refuse rather than pretend.
+        // ── P2P spine: not a `kind` ────────────────────────────────────────────
+        // `run_start` connects a `kind` spine only for `kind = "mqtt"`. Any other
+        // kind started no spine at all, in silence (found 2026-10-13). The P2P
+        // mesh is reached through `[edge].p2p_enabled`, which `start` does honour,
+        // alongside the MQTT spine rather than instead of it; `kind = "p2p"` as a
+        // replacement for MQTT is still unwired, so it is refused.
         if self.spine.kind == "p2p" {
             anyhow::bail!(
                 "spine.kind = \"p2p\" is not wired into `start`: it would run with no \
-                 spine and no peripheral tools. Use kind = \"mqtt\" until the P2P spine \
-                 is connected (see crates/obc-spine/src/p2p.rs)."
+                 spine and no peripheral tools. To join the P2P mesh set \
+                 [edge] enabled = true and p2p_enabled = true, and keep kind = \"mqtt\"."
             );
         }
         if self.spine.kind != "mqtt" {
@@ -2606,14 +2636,12 @@ impl Config {
                 self.spine.kind
             ));
         }
-        // Same gap, one layer up: nothing constructs an EdgeAgent, so `[edge]`
-        // changes nothing. A warning, not a refusal, because the NanoPi
-        // reference deployment sets it.
-        if self.edge.enabled {
-            warnings.push(
-                "edge.enabled = true has no effect: the edge agent loop is not wired \
-                 into `start` (nothing constructs an EdgeAgent)"
-                    .to_string(),
+        // `[edge]` is honoured by `start` (see `edge_start`). The one setting in
+        // it that still could not take effect is refused rather than ignored.
+        if self.edge.p2p_enabled && !self.edge.enabled {
+            anyhow::bail!(
+                "edge.p2p_enabled = true has no effect while edge.enabled = false: the \
+                 mesh is joined only in edge mode. Set enabled = true, or drop p2p_enabled."
             );
         }
 
@@ -3213,14 +3241,63 @@ mod tests {
     }
 
     #[test]
-    fn validate_warns_that_edge_mode_does_nothing() {
+    fn edge_off_changes_nothing_at_start() {
+        let config = Config::default();
+        assert!(!config.edge.enabled);
+        assert!(edge_start(&config).is_none());
+    }
+
+    /// The regression this exists for: `[edge]` parsed, validated, was written into
+    /// every generated NanoPi config, and `start` read none of it. `validate` said so
+    /// in a warning, which is honest and is not the same as working.
+    #[test]
+    fn edge_on_bounds_the_agent_and_joins_the_mesh() {
         let mut config = Config::default();
         config.edge.enabled = true;
+        config.edge.max_tool_iterations = 4;
+        config.edge.max_history_messages = 12;
+        config.edge.p2p_enabled = true;
+        config.spine.p2p_node_id = Some("nanopi-kitchen".to_string());
+        config.spine.p2p_tcp_port = Some(45001);
         let warnings = config.validate().unwrap();
         assert!(
-            warnings.iter().any(|w| w.contains("edge.enabled")),
+            !warnings.iter().any(|w| w.contains("no effect")),
             "{warnings:?}"
         );
+
+        let edge = edge_start(&config).expect("edge mode is on");
+        assert_eq!(edge.agent.max_tool_iterations, 4);
+        assert_eq!(edge.max_history, 12);
+        let mesh = edge.mesh.expect("p2p_enabled asked for the mesh");
+        assert_eq!(mesh.node_id, "nanopi-kitchen");
+        assert_eq!(mesh.tcp_port, 45001);
+
+        // A ceiling, not a replacement: a tighter `[agent]` limit stays tighter.
+        config.agent.max_tool_iterations = 2;
+        config.edge.p2p_enabled = false;
+        let edge = edge_start(&config).unwrap();
+        assert_eq!(edge.agent.max_tool_iterations, 2);
+        assert!(edge.mesh.is_none());
+    }
+
+    #[test]
+    fn validate_refuses_p2p_outside_edge_mode() {
+        let mut config = Config::default();
+        config.edge.p2p_enabled = true;
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("edge.p2p_enabled"), "{err}");
+    }
+
+    /// The NanoPi reference deployment, as the planner writes it, has to load and
+    /// mean what it says: edge mode, the mesh, and the orchestrator together.
+    #[test]
+    fn the_nanopi_reference_config_loads_in_edge_mode() {
+        let toml = include_str!("../../../tests/fixtures/deployment/nanopi/expected-config.toml");
+        let config: Config = toml::from_str(toml).unwrap();
+        config.validate().unwrap();
+        let edge = edge_start(&config).expect("the NanoPi deployment is edge mode");
+        assert!(edge.mesh.is_some(), "and it asks for the mesh");
+        assert!(config.orchestrator.enabled);
     }
 
     #[test]

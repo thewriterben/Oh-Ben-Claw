@@ -337,11 +337,13 @@ max_chars = 2400
 # For a small single-board host (NanoPi, Pi) running the brain on the device.
 # The deployment planner emits this section for those boards.
 #
-# Every key here does something, which was not true until 2026-07-28:
-# max_history_messages and max_tool_iterations bound the agent at construction,
-# and p2p_enabled makes it join the broker-free local mesh and register whatever
-# peer tools it finds. `enabled` is the caller's decision — it is what makes them
-# build an edge agent at all rather than the ordinary one.
+# `oh-ben-claw start` honours this section since 2026-10-30 (before, it was
+# parsed and ignored). With enabled = true the ordinary agent runs, safety gate
+# and all, held to max_tool_iterations (a ceiling on [agent]'s) and
+# max_history_messages. p2p_enabled joins the broker-free local mesh beside the
+# MQTT spine, using [spine]'s p2p_* keys, and registers peer tools as peers are
+# heard; failing to join stops startup. With [orchestrator] enabled the limits
+# bound its inner agent. Refused at load: p2p_enabled without enabled.
 #
 # [edge]
 # enabled = true

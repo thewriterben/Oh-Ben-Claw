@@ -667,6 +667,7 @@ Make on-device inference first-class so the fleet is private, low-latency, and
 resilient offline — deepening the embodied moat. Builds on `agent/edge`,
 `providers`. Enables Phase 18's System 1 and Phase 19's graceful degradation.
 
+- [x] **`[edge]` takes effect at `start`** — the section was parsed, validated, emitted by the deployment planner, and read by nothing in the binary (Phase 7's NanoPi row below described a library type no command built). Now `[edge].enabled` bounds the agent serving traffic, plain or the orchestrator's inner one (`max_tool_iterations` as a ceiling, `max_history_messages`) and `p2p_enabled` joins the P2P mesh beside MQTT, registering peer tools as peers are heard (`obc_config::edge_start`, `run_start`). Settings that cannot take effect are refused at load. Not done: the brain's P2P listener still refuses incoming calls, so it announces no tools
 - [ ] **Small-model reflex tier** — first-class support for small local models powering System 1 (llama.cpp/Ollama on Pi/Jetson; TinyML on MCUs where viable)
 - [ ] **On-device wake-word + STT/TTS** — local audio front-end so devices respond without round-tripping to the cloud
 - [ ] **Policy-driven cloud fallback** — deterministic rules for escalating local → cloud (capability, confidence, connectivity), honoring cost and privacy config

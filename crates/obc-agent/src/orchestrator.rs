@@ -71,6 +71,8 @@ pub struct InnerAgentDeps {
     pub experience_k: Option<usize>,
     /// Track 0 taint-tracking mode.
     pub taint_mode: obc_safety::taint::TaintMode,
+    /// History window (`[edge].max_history_messages` in edge mode; None = default).
+    pub max_history: Option<usize>,
 }
 
 // ── Routing Strategy ──────────────────────────────────────────────────────────
@@ -242,6 +244,9 @@ impl OrchestratorAgent {
 
         // Attach every provided subsystem before sealing the inner agent.
         let mut inner = Agent::new(config, provider, Arc::clone(&memory), tools);
+        if let Some(n) = deps.max_history {
+            inner = inner.with_max_history(n);
+        }
         if let Some(policy) = deps.policy {
             inner = inner.with_policy(policy);
         }
