@@ -5,6 +5,71 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — The P2P mesh answers calls, under pairing and frame auth (2026-10-30)
+
+### Fixed
+
+- **No P2P call ever returned.** The caller waited for the answer on its own
+  listener, where nothing sent it; the peer wrote it back on the call's
+  stream, which nobody read. The caller now reads it there and refuses an
+  answer whose frame tag does not verify. The listener's old way of resolving
+  answers is gone, and with it the hole it was: any unsolicited result on the
+  listener was taken as an answer. Test: `a_call_round_trips_between_two_nodes`.
+- **OBC nodes refused each other under `require_pairing`.** No node put a
+  pairing token in its own announcement. Each broadcast now carries a fresh
+  one.
+- **Peer tools** (review of the `[edge]` change): a name already registered,
+  locally or by another peer, is skipped instead of registered twice; a pruned
+  peer's tools are removed; peer tools are capped at `MAX_PEER_TOOLS` (256);
+  discovery reports joins and departures on a channel instead of being polled.
+- **`[edge] p2p_enabled` is refused without `[security] require_pairing` and
+  `require_frame_auth`**, and the `p2p_*` timings are checked (no zero, no
+  absurd values, a peer timeout at least twice the announce interval). The
+  planner pins a stable `p2p_node_id` for edge hosts and emits the mesh off,
+  with what it needs to turn on.
+
+### Added
+
+- **`[edge] serve_tools`**: the tools a node announces and runs for paired
+  peers, empty by default. Refused at load without `p2p_enabled`, or with a
+  name listed twice; a name the agent does not have stops `start`.
+- **A node can serve tools to paired peers** (`P2pSpine::serve`). Refused
+  unless pairing and frame auth are both enforced. A call is answered only if
+  its tag verifies, the caller is a paired peer in the roster and the tool is
+  one this node announced; the answer is signed, refusals included. On the
+  agent, `AgentPeerServer` runs it through `execute_tool_for_peer`, so policy,
+  the Track 0 gate and audit, trust and approval apply as to a local call.
+  Test: `a_peer_call_is_gated_and_audited_like_a_local_one`.
+- **What the frame tag proves.** Frame keys are derived from the one
+  `pairing_secret` every node shares, so a good tag proves the caller holds
+  the mesh secret, not which node it is: any node can sign as any other. A
+  caller's `from` is a label for trust and audit, not proof. Per-node keys are
+  not done yet.
+- **Review of the above:**
+  - A peer's call is judged as `p2p:<peer>`: trust, approval and the scorer use
+    that, and the Track 0 audit record reads `p2p:<peer> -> <node>`. Its
+    `node_id` argument still picks the hardware (and the safety limits), never
+    who is asking, and never defaults to `local`.
+  - Under taint tracking every argument a peer sends is external content, so a
+    taint-gated tool needs an explicit operator grant in `Enforce`, and
+    `Warn` logs it.
+  - A served tool that outlives `tool_timeout_secs` is not cancelled: the
+    caller hears the outcome is unknown, and the run finishes and is logged.
+    The caller waits 5 s past the server's timeout, and its timeout error says
+    the call may have run.
+  - Incoming connections are capped at 32 at once, and each must send its
+    request within 10 s.
+  - Each announcement carries a per-process `p2p_instance`, so another board
+    announcing this node's `p2p_node_id` is logged as an error (once per
+    address) instead of dropped silently. The planner's `p2p_node_id` comes
+    with a comment to set one per board, and its strings are TOML-escaped.
+  - Peer events are sent without waiting, so discovery and eviction never stall
+    behind a slow receiver; a dropped event is followed by
+    `PeerEvent::Snapshot`, which the agent reconciles against.
+  - One peer may register at most `MAX_TOOLS_PER_PEER` (32) tools.
+
+---
+
 ## Unreleased — Orchestrator mode serves the plain agent's tools (2026-10-30)
 
 ### Fixed

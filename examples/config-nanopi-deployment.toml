@@ -51,6 +51,7 @@ kind              = "mqtt"
 host              = "localhost"    # Mosquitto running on the NanoPi
 port              = 1883
 tool_timeout_secs = 30
+p2p_node_id       = "nanopi-neo3"   # stable, so paired peers know it after a reboot
 
 # ── Edge-Native Mode ──────────────────────────────────────────────────────────
 # Enables the lightweight on-device agent loop on the NanoPi Neo3.
@@ -59,7 +60,9 @@ tool_timeout_secs = 30
 enabled               = true
 max_history_messages  = 20
 max_tool_iterations   = 5
-p2p_enabled           = true   # Join the P2P mesh for sub-agent discovery
+# The P2P mesh needs [security] require_pairing, require_frame_auth and a
+# shared pairing_secret; the config refuses it otherwise.
+p2p_enabled           = false
 
 # ── Peripherals ───────────────────────────────────────────────────────────────
 

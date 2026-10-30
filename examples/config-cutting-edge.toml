@@ -217,6 +217,9 @@ require_pairing = true
 #
 # Replace this placeholder. `openssl rand -hex 32`.
 pairing_secret  = "replace-me-openssl-rand-hex-32-0123456789abcdef"
+# The P2P mesh ([edge] p2p_enabled) is refused without frame auth: a node id
+# on a broadcast LAN is only as good as the MAC on its frames.
+require_frame_auth = true
 vault_enabled   = true
 # vault_path    = "~/.oh-ben-claw/vault.db"
 

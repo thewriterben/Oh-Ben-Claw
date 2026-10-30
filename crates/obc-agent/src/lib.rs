@@ -130,6 +130,15 @@ pub const MAX_HISTORY_MESSAGES: usize = 50;
 
 // ── Agent ─────────────────────────────────────────────────────────────────────
 
+/// Most tools all P2P peers together may register on one agent. A mesh is a
+/// handful of boards; past this a peer is misconfigured or hostile, and each
+/// tool is a schema in every prompt.
+pub const MAX_PEER_TOOLS: usize = 256;
+
+/// Most tools one P2P peer may register, so a single peer cannot fill
+/// [`MAX_PEER_TOOLS`] and leave no room for the rest of the mesh.
+pub const MAX_TOOLS_PER_PEER: usize = 32;
+
 /// The core Oh-Ben-Claw agent.
 /// Capacity of the agent event broadcast channel. A slow subscriber lags
 /// (and is told so) rather than stalling the loop.
@@ -149,6 +158,9 @@ pub struct Agent {
     /// Names of tools that came from the skill forge (managed by
     /// [`Agent::sync_skills`]); disjoint from built-in tool names.
     skill_names: Mutex<HashSet<String>>,
+    /// Per P2P peer, the names of the tools it serves here (managed by
+    /// [`Agent::set_peer_tools`]); disjoint from every other tool name.
+    peer_tools: Mutex<HashMap<String, Vec<String>>>,
     /// Per session, the shelved tools the model has pulled into the prompt
     /// with `load_tools` (`[agent.tools]`, 2026-09-28). In memory only: a
     /// restart starts every session from the configured `full` list again.
@@ -298,6 +310,7 @@ impl Agent {
             memory,
             tools: RwLock::new(tools.into_iter().map(Arc::from).collect()),
             skill_names: Mutex::new(HashSet::new()),
+            peer_tools: Mutex::new(HashMap::new()),
             loaded_tools: Mutex::new(HashMap::new()),
             tools_warned: std::sync::atomic::AtomicBool::new(false),
             policy: None,
@@ -644,6 +657,56 @@ impl Agent {
     pub fn add_tool_arcs(&self, tools: Vec<Arc<dyn Tool>>) {
         let mut reg = self.tools.write().unwrap_or_else(|p| p.into_inner());
         reg.extend(tools);
+    }
+
+    /// Replace the tools P2P `peer` serves here. A name already registered, by
+    /// a local tool or another peer, is skipped (as `sync_skills` skips a skill
+    /// that would shadow a built-in), so the provider is never sent two tools of
+    /// one name and a call never lands on the wrong one. So is anything past
+    /// [`MAX_TOOLS_PER_PEER`] for this peer, or [`MAX_PEER_TOOLS`] across all
+    /// peers. Returns `(added, skipped)`.
+    pub fn set_peer_tools(&self, peer: &str, tools: Vec<Box<dyn Tool>>) -> (usize, usize) {
+        let mut peers = self.peer_tools.lock().unwrap_or_else(|p| p.into_inner());
+        let mut reg = self.tools.write().unwrap_or_else(|p| p.into_inner());
+        if let Some(old) = peers.remove(peer) {
+            reg.retain(|t| !old.iter().any(|n| n == t.name()));
+        }
+        let mut total: usize = peers.values().map(Vec::len).sum();
+        let mut names = Vec::new();
+        let mut skipped = 0;
+        for tool in tools {
+            let name = tool.name().to_string();
+            if reg.iter().any(|t| t.name() == name) {
+                tracing::warn!(%peer, tool = %name, "P2P peer tool would shadow a registered tool; skipped");
+                skipped += 1;
+            } else if names.len() >= MAX_TOOLS_PER_PEER {
+                tracing::warn!(%peer, tool = %name, cap = MAX_TOOLS_PER_PEER, "P2P peer tool over the per-peer cap; skipped");
+                skipped += 1;
+            } else if total >= MAX_PEER_TOOLS {
+                tracing::warn!(%peer, tool = %name, cap = MAX_PEER_TOOLS, "P2P peer tool over the cap; skipped");
+                skipped += 1;
+            } else {
+                reg.push(Arc::from(tool));
+                names.push(name);
+                total += 1;
+            }
+        }
+        let added = names.len();
+        if !names.is_empty() {
+            peers.insert(peer.to_string(), names);
+        }
+        (added, skipped)
+    }
+
+    /// Unregister every tool P2P `peer` serves here. Returns how many went.
+    pub fn remove_peer_tools(&self, peer: &str) -> usize {
+        let mut peers = self.peer_tools.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(old) = peers.remove(peer) else {
+            return 0;
+        };
+        let mut reg = self.tools.write().unwrap_or_else(|p| p.into_inner());
+        reg.retain(|t| !old.iter().any(|n| n == t.name()));
+        old.len()
     }
 
     /// The tools the model sees this turn: a point-in-time snapshot of the
@@ -1645,19 +1708,23 @@ impl Agent {
         args_str: &str,
         taint: Option<&obc_safety::taint::TaintPool>,
     ) -> Result<obc_tool_api::ToolResult> {
-        self.execute_tool_inner(name, args_str, false, taint).await
+        self.execute_tool_inner(name, args_str, false, taint, None)
+            .await
     }
 
     /// The execution chokepoint. `in_sequence` marks a call made on behalf of
     /// a Sequence-skill step, so nested sequences are refused (bounded depth).
     /// `taint` is the per-run untrusted-content pool (Track 0 taint tracking);
-    /// `None` disables pooling/scanning for this call.
+    /// `None` disables pooling/scanning for this call. `peer` is the P2P node
+    /// the call came from, when it came from one: trust, approval and the audit
+    /// record then name it, never `args.node_id` or `"local"`.
     async fn execute_tool_inner(
         &self,
         name: &str,
         args_str: &str,
         in_sequence: bool,
         taint: Option<&obc_safety::taint::TaintPool>,
+        peer: Option<&str>,
     ) -> Result<obc_tool_api::ToolResult> {
         let mut name = name.to_string();
         let mut args_str = args_str.to_string();
@@ -1779,7 +1846,8 @@ impl Agent {
             for (i, (step_tool, template)) in steps.iter().enumerate() {
                 let step_args = obc_skill_forge::substitute_args(template, &args).to_string();
                 let result =
-                    Box::pin(self.execute_tool_inner(step_tool, &step_args, true, taint)).await;
+                    Box::pin(self.execute_tool_inner(step_tool, &step_args, true, taint, peer))
+                        .await;
                 match result {
                     Ok(r) if r.success => {
                         outputs.push(format!("[step {} {}] {}", i + 1, step_tool, r.output));
@@ -1813,12 +1881,14 @@ impl Agent {
         // Track 0: for physical actions, enforce deterministic safety limits and
         // record a tamper-evident audit entry BEFORE the tool runs. Refused
         // actions never reach the hardware.
-        if let Err(reason) = track0_authorize(
+        let caller = peer.map(|p| format!("p2p:{p}"));
+        if let Err(reason) = obc_safety::authorize::track0_authorize_as(
             self.safety.as_deref(),
             self.auditor.as_deref(),
             name,
             tool.risk_class(),
             &args,
+            caller.as_deref(),
         ) {
             tracing::warn!(
                 tool = %name,
@@ -1833,12 +1903,15 @@ impl Agent {
 
         // Track 0 dynamic trust: quarantine physical actions from an untrusted
         // node, then feed the per-node behavioral score from this round-trip.
+        // A peer's call is judged as that peer: what it puts in `node_id` is an
+        // argument (some tools route by it), not who is asking.
         let risk = tool.risk_class();
-        let node_id = args
-            .get("node_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("local")
-            .to_string();
+        let node_id = caller.clone().unwrap_or_else(|| {
+            args.get("node_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("local")
+                .to_string()
+        });
         if risk.physical {
             if let Some(scorer) = &self.trust {
                 if matches!(trust::gate(scorer.level(&node_id), risk), TrustGate::Deny) {
@@ -1873,36 +1946,42 @@ impl Agent {
         // text must not steer a physical/irreversible action.
         use obc_safety::taint::{self, TaintMode};
         if self.taint_mode != TaintMode::Off && taint::gated(risk) {
-            if let Some(pool) = taint {
-                if let Some(hit) = taint::scan_args(&args, pool) {
-                    let granted = self
-                        .approval
-                        .as_ref()
-                        .is_some_and(|a| a.explicitly_granted(name));
+            // Every argument a peer sends is external content: the whole call
+            // is the echo, so there is nothing to scan for.
+            let peer_hit = caller.as_ref().map(|c| taint::TaintHit {
+                arg_path: "*".to_string(),
+                value: "<every argument>".to_string(),
+                source: c.clone(),
+            });
+            let hit = peer_hit.or_else(|| taint.and_then(|pool| taint::scan_args(&args, pool)));
+            if let Some(hit) = hit {
+                let granted = self
+                    .approval
+                    .as_ref()
+                    .is_some_and(|a| a.explicitly_granted(name));
+                if let Some(obs) = &self.obs {
+                    obs.metrics.counter("taint_hits_total").inc();
+                }
+                if self.taint_mode == TaintMode::Enforce && !granted {
                     if let Some(obs) = &self.obs {
-                        obs.metrics.counter("taint_hits_total").inc();
+                        obs.metrics.counter("taint_refusals_total").inc();
                     }
-                    if self.taint_mode == TaintMode::Enforce && !granted {
-                        if let Some(obs) = &self.obs {
-                            obs.metrics.counter("taint_refusals_total").inc();
-                        }
-                        tracing::warn!(
-                            tool = %name, arg = %hit.arg_path, source = %hit.source,
-                            "privileged call refused: argument derives from untrusted content (Track 0 taint)"
-                        );
-                        return Ok(obc_tool_api::ToolResult::err(format!(
-                            "Tool '{}' refused (Track 0 taint): argument '{}' (={:?}) echoes \
+                    tracing::warn!(
+                        tool = %name, arg = %hit.arg_path, source = %hit.source,
+                        "privileged call refused: argument derives from untrusted content (Track 0 taint)"
+                    );
+                    return Ok(obc_tool_api::ToolResult::err(format!(
+                        "Tool '{}' refused (Track 0 taint): argument '{}' (={:?}) echoes \
                              untrusted content from '{}'. A value derived from external content \
                              may not parameterize a privileged action without an explicit \
                              operator grant.",
-                            name, hit.arg_path, hit.value, hit.source
-                        )));
-                    }
-                    tracing::warn!(
-                        tool = %name, arg = %hit.arg_path, source = %hit.source, granted,
-                        "privileged call has an argument derived from untrusted content (Track 0 taint, advisory)"
-                    );
+                        name, hit.arg_path, hit.value, hit.source
+                    )));
                 }
+                tracing::warn!(
+                    tool = %name, arg = %hit.arg_path, source = %hit.source, granted,
+                    "privileged call has an argument derived from untrusted content (Track 0 taint, advisory)"
+                );
             }
         }
 
@@ -1975,6 +2054,21 @@ impl Agent {
     ) -> Result<obc_tool_api::ToolResult> {
         let args_str = args.to_string();
         self.execute_tool(name, &args_str, None).await
+    }
+
+    /// [`Agent::execute_tool_direct`] for a call P2P `peer` made. Trust,
+    /// approval and the audit record name `p2p:<peer>`, and under taint
+    /// tracking every argument counts as external content, so a privileged
+    /// tool needs an explicit operator grant in `Enforce`.
+    pub async fn execute_tool_for_peer(
+        &self,
+        peer: &str,
+        name: &str,
+        args: serde_json::Value,
+    ) -> Result<obc_tool_api::ToolResult> {
+        let args_str = args.to_string();
+        self.execute_tool_inner(name, &args_str, false, None, Some(peer))
+            .await
     }
 
     /// Return the names of all registered tools.
@@ -2360,6 +2454,11 @@ pub struct EdgeConfig {
     /// Whether to start the P2P spine and join the local mesh.
     #[serde(default)]
     pub p2p_enabled: bool,
+    /// Tools this node announces on the mesh and runs for paired peers, by
+    /// name. Empty (the default) serves nothing. Each call runs through the
+    /// agent's gated path, as a local call does.
+    #[serde(default)]
+    pub serve_tools: Vec<String>,
 }
 
 impl Default for EdgeConfig {
@@ -2369,6 +2468,7 @@ impl Default for EdgeConfig {
             max_history_messages: default_edge_max_history(),
             max_tool_iterations: default_edge_max_tool_iterations(),
             p2p_enabled: false,
+            serve_tools: Vec::new(),
         }
     }
 }

@@ -343,13 +343,23 @@ max_chars = 2400
 # max_history_messages. p2p_enabled joins the broker-free local mesh beside the
 # MQTT spine, using [spine]'s p2p_* keys, and registers peer tools as peers are
 # heard; failing to join stops startup. With [orchestrator] enabled the limits
-# bound its inner agent. Refused at load: p2p_enabled without enabled.
+# bound its inner agent. Refused at load: p2p_enabled without enabled, or
+# without [security] require_pairing and require_frame_auth (the mesh is found
+# by UDP broadcast, so anything on the LAN can announce itself).
+# serve_tools names the tools this node announces and runs for paired peers;
+# empty serves none. Each call goes through the agent's gated path (policy,
+# Track 0 gate and audit, trust, approval, taint), judged as p2p:<peer>. A name
+# the agent does not have stops startup; serve_tools without p2p_enabled is
+# refused at load. Frame auth admits any holder of the shared pairing_secret
+# and cannot tell one such node from another: serve only what you would let
+# every node on the mesh call. Give each board its own [spine] p2p_node_id.
 #
 # [edge]
 # enabled = true
 # max_history_messages = 20      # bounds RAM on a device that has little
 # max_tool_iterations = 5
 # p2p_enabled = true             # join the local mesh; no broker needed
+# serve_tools = ["gpio_read"]    # what paired peers may call here
 
 # ── Reflexes ─────────────────────────────────────────────────────────────────
 # System 1: fast local rules over world state that act without waking the model.
