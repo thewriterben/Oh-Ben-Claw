@@ -141,8 +141,63 @@ whole thing exists for. **Verified to fail:** raising `FRAC_HI` to 0.99 blinds
 the detector and the check reports 2 regressions and exits 1. A guard nobody has
 seen fail is not a guard.
 
-Not wired into CI yet. It needs `numpy` and `Pillow`, which the host test job
-does not currently install.
+**In CI since 2026-10-13, as a Rust port.** `crates/obc-vision/src/motion.rs`
+is the same rule with the same thresholds, taking greyscale buffers and nothing
+else, so the node can include the file the CI tests.
+`crates/obc-vision/tests/motion_fixture.rs` holds it to this fixture with no
+numpy or Pillow, in two parts:
+
+- **The rule.** `classify.py --scores` writes the Python's per-pair scores to
+  `tests/fixtures/vision-bench-2026-09-16/scores.txt`. Run through the Rust
+  rule, they must reproduce every recorded class and the `EXPECTED` counts
+  exactly.
+- **The scoring.** Rust decodes each JPEG, converts it to grey the way Pillow
+  does, and scores it. Every pair must land within 0.001 (`frac`) and 0.01
+  (`edge`) of the Python's scores. On Pillow's own pixels the two agree to 1e-6.
+
+It is two parts because porting turned up a fragile frame.
+`camera_nudge/024.jpg` scores edge **4.199912** under Pillow's libjpeg, 0.00009
+inside `light`, and **4.200503** under zune-jpeg, inside `motion`. The recorded
+counts depend on the JPEG decoder at the fourth decimal place. A count check
+after a different decoder would fail on the decoder rather than the classifier.
+The test pins that frame as the only one allowed to disagree, so a second such
+frame gets noticed rather than absorbed.
+
+**Verified to fail:** lowering `EDGE_LIGHT` to 4.19 fails the rule check on
+`person/014.jpg` (edge 4.1925). Reverting a border detail of the gradient fails
+the scoring check. (The first draft zeroed the gradient on the whole one-pixel
+border; numpy's slicing keeps the component along the border. That draft read
+edge ~1% low and still matched every count.)
+
+## Camera health (2026-10-13)
+
+`crates/obc-vision/src/camera_health.rs` puts the classifier behind the same
+kind of verdict the power and comms suites write. Each camera gets a
+`camera.{node}` fact whose `mode` is one of `warming`, `ok`, `lighting_shift`,
+`nudged`, `blind` or `failed`. Only motion seen while `ok` is recorded as an
+event (`camera.{node}.motion`). `camera_health_rules` escalates on `blind` and
+`failed`, once per transition.
+
+- **Warm-up is two frames**, measured: in all four sets frame 000 is 35–53
+  grey levels off and frame 001 has settled. It is a frame count rather than a
+  brightness-settling test because a person moves the mean by up to 28 levels.
+  `tests/camera_health_fixture.rs` feeds every recorded sequence in unedited,
+  frame 000 included. A one-frame warm-up makes the quiet room report motion.
+- **Blind is contrast (standard deviation) below 10 for 3 frames.** It is not
+  brightness: the nudge set's darkest frame averages 29.8 and is a perfectly
+  good picture. The lowest standard deviation anywhere in the fixture is 48.5.
+  **Nothing blind has been recorded**, so this is a margin below what was seen,
+  not a measurement. Record a covered lens next time the camera is on the bench.
+
+**What feeds it:** `oh-ben-claw camera-watch --port <dev> --node <name>`. It
+holds a USB link to the node open; opening the port reboots an ESP32-S3, so it
+waits 3.5 s and drains the boot chatter first, as `capture_set.py` does. It
+captures on an interval and records `camera.<name>` into the agent's world
+memory. `[reflex] safing_cameras = ["<name>"]` makes a running agent escalate
+on `blind` or `failed`. `tests/camera_watch_e2e.rs` drives the whole path over
+an in-memory node that speaks the firmware's protocol and serves this fixture.
+**It has not run against a board.** The open-reset, real USB timing and a
+filling ring are what one bench run has to confirm.
 
 ## What this means for the node
 

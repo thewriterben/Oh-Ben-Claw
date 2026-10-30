@@ -49,3 +49,8 @@ tokio = { version = "1.42", default-features = false, features = [
 # month whose dependency list came from `cargo check -p` rather than an import
 # survey -- the smallest count of the thirteen, and still not zero.
 tracing = { version = "0.1", default-features = false }
+# JPEG to grey (`jpeg.rs`), for frames off a camera node and for the bench
+# fixture. Pure Rust; `motion.rs` itself still takes buffers and decodes
+# nothing, so the node can include it.
+zune-core = "0.5"
+zune-jpeg = "0.5"

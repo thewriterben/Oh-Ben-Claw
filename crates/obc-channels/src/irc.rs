@@ -22,6 +22,7 @@
 //! channels   = ["#ai-bots"]
 //! ```
 
+use crate::utils::sender_allowed;
 use anyhow::{Context, Result};
 use obc_agent::Agent;
 use obc_config::{IrcConfig, ProviderConfig};
@@ -265,6 +266,10 @@ impl IrcChannel {
                     let sender_nick = prefix.map(nick_from_prefix).unwrap_or("unknown");
                     let target = params.first().copied().unwrap_or("");
                     let text = params.last().copied().unwrap_or("").trim();
+
+                    if !sender_allowed("irc", &self.config.allowed_users, sender_nick) {
+                        continue;
+                    }
 
                     // Skip CTCP messages (begin with \x01)
                     if text.starts_with('\x01') {

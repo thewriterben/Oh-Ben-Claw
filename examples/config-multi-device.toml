@@ -82,18 +82,22 @@ node_id = "rpi-living-room"
 
 [channels.discord]
 # token = "your-discord-bot-token"
+# allowed_users = ["your-discord-user-id"]   # required: empty refuses everyone
 
 # ── IRC (Phase 10 — OpenClaw Parity) ─────────────────────────────────────────
 [channels.irc]
 # Connect to an IRC server and join channels.
 # host     = "irc.libera.chat"
 # port     = 6697
-# use_tls  = true
+# use_tls  = true   # not implemented yet: validation refuses this; see irc.rs
 # nickname = "oh-ben-claw"
 # channels = ["#ai-bots", "#myserver"]
 # Optional SASL authentication:
 # sasl_username = "oh-ben-claw"
 # sasl_password = "your-nickserv-password"
+# Nicks allowed to talk to the agent. Required (empty refuses everyone), and
+# only an identity on a network that enforces nick registration:
+# allowed_users = ["your-registered-nick"]
 
 # ── Signal (Phase 10 — OpenClaw Parity) ──────────────────────────────────────
 [channels.signal]
@@ -108,6 +112,7 @@ node_id = "rpi-living-room"
 [channels.mattermost]
 # server_url = "https://mattermost.example.com"
 # token      = "your-personal-access-token"
+# allowed_users = ["your-26-char-user-id"]   # required: empty refuses everyone
 
 # ── Typing indicators (Phase 10 — OpenClaw Parity) ───────────────────────────
 # Send "typing…" status to Telegram, Discord, and Slack while the agent

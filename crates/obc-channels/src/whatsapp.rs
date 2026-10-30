@@ -13,6 +13,11 @@
 //! 5. Configure a webhook in the Meta developer dashboard pointing to
 //!    `https://<your-host>/whatsapp/webhook` and set `channels.whatsapp.verify_token`
 //!    to the same value you used in the dashboard (or `WHATSAPP_VERIFY_TOKEN`).
+//! 6. Set `channels.whatsapp.app_secret` (or `WHATSAPP_APP_SECRET`) to the app
+//!    secret. Required: the listener is on `0.0.0.0`, and the only thing that
+//!    tells Meta's POSTs apart from anyone else's is `X-Hub-Signature-256`.
+//!    Until 2026-10-13 nothing checked it, so any client that could reach the
+//!    port could talk to the agent as any phone number.
 //!
 //! # Message flow
 //! ```text
@@ -26,15 +31,18 @@
 use crate::utils::chunk_text;
 use anyhow::{Context, Result};
 use axum::{
+    body::Bytes,
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::get,
-    Json, Router,
+    Router,
 };
+use hmac::{Hmac, Mac};
 use obc_agent::Agent;
 use obc_config::{ProviderConfig, WhatsAppConfig};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -101,6 +109,7 @@ struct WaState {
     agent: Arc<Agent>,
     provider_config: ProviderConfig,
     verify_token: String,
+    app_secret: String,
     access_token: String,
     phone_number_id: String,
     http: reqwest::Client,
@@ -131,6 +140,19 @@ impl WhatsAppChannel {
             .phone_number_id
             .clone()
             .or_else(|| std::env::var("WHATSAPP_PHONE_NUMBER_ID").ok())?;
+        let Some(app_secret) = config
+            .app_secret
+            .clone()
+            .or_else(|| std::env::var("WHATSAPP_APP_SECRET").ok())
+            .filter(|s| !s.is_empty())
+        else {
+            tracing::error!(
+                "WhatsApp is configured but channels.whatsapp.app_secret (or \
+                 WHATSAPP_APP_SECRET) is not set; the channel is not started, \
+                 because without it the webhook cannot tell Meta from anyone else"
+            );
+            return None;
+        };
         let verify_token = config
             .verify_token
             .clone()
@@ -142,6 +164,7 @@ impl WhatsAppChannel {
                 agent,
                 provider_config,
                 verify_token,
+                app_secret,
                 access_token,
                 phone_number_id,
                 http: reqwest::Client::new(),
@@ -202,10 +225,26 @@ async fn verify_webhook(
 }
 
 /// POST /whatsapp/webhook — incoming message events from Meta.
+///
+/// The body is taken raw, because the signature covers the bytes as sent and
+/// re-serialising parsed JSON would not reproduce them.
 async fn receive_webhook(
     State(state): State<WaState>,
-    Json(payload): Json<WebhookPayload>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> StatusCode {
+    let signature = headers
+        .get("x-hub-signature-256")
+        .and_then(|v| v.to_str().ok());
+    if !signature_valid(state.app_secret.as_bytes(), &body, signature) {
+        tracing::warn!("WhatsApp webhook POST refused: missing or bad X-Hub-Signature-256");
+        return StatusCode::UNAUTHORIZED;
+    }
+    let payload: WebhookPayload = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+
     // Only handle whatsapp_business_account objects.
     if payload.object.as_deref() != Some("whatsapp_business_account") {
         return StatusCode::OK;
@@ -227,6 +266,22 @@ async fn receive_webhook(
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+/// Check Meta's `X-Hub-Signature-256: sha256=<hex>` against an HMAC-SHA256 of
+/// `body` under the app secret. Constant-time compare (`verify_slice`).
+fn signature_valid(app_secret: &[u8], body: &[u8], header: Option<&str>) -> bool {
+    let Some(sig) = header.and_then(|h| h.strip_prefix("sha256=")) else {
+        return false;
+    };
+    let Ok(sig) = hex::decode(sig) else {
+        return false;
+    };
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(app_secret) else {
+        return false;
+    };
+    mac.update(body);
+    mac.verify_slice(&sig).is_ok()
+}
 
 async fn handle_message(state: &WaState, msg: WaMessage) -> Result<()> {
     // Only process text messages.
@@ -299,6 +354,22 @@ async fn send_text(state: &WaState, to: &str, text: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::signature_valid;
+
+    #[test]
+    fn webhook_signature_accepts_meta_and_refuses_everything_else() {
+        let body = br#"{"object":"whatsapp_business_account"}"#;
+        // Computed outside this code: printf '%s' "$body" | openssl dgst -sha256 -hmac s3cret
+        let good = "sha256=911fd0aa272ad28e30ab013c69b6fd0dcf41e3fbb4cca5a48a4bf3be4544ff57";
+        assert!(signature_valid(b"s3cret", body, Some(good)));
+        // The case that used to pass: no header at all.
+        assert!(!signature_valid(b"s3cret", body, None));
+        // Wrong secret, altered body, missing prefix, not hex.
+        assert!(!signature_valid(b"other", body, Some(good)));
+        assert!(!signature_valid(b"s3cret", b"{}", Some(good)));
+        assert!(!signature_valid(b"s3cret", body, Some(&good[7..])));
+        assert!(!signature_valid(b"s3cret", body, Some("sha256=zz")));
+    }
 
     #[test]
     fn whatsapp_config_missing_tokens_returns_none() {
@@ -310,6 +381,7 @@ mod tests {
             phone_number_id: None,
             verify_token: None,
             webhook_port: None,
+            app_secret: None,
         };
         // We cannot construct a real Agent without heavy setup, but we can
         // verify the early-return None branch by checking None is returned

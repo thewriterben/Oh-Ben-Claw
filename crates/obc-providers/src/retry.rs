@@ -72,7 +72,18 @@ impl RetryProvider {
 
     /// Return `true` if the error string looks like a transient failure worth
     /// retrying (rate-limits, network issues, temporary server errors).
-    fn is_transient(err: &anyhow::Error) -> bool {
+    pub(crate) fn is_transient(err: &anyhow::Error) -> bool {
+        // A provider that went silent past `IDLE_TIMEOUT` after taking the
+        // request may still be working on it; re-sending would pay for the
+        // same long answer again and stall the same way. Not reaching the
+        // host at all is still worth another try.
+        if err
+            .chain()
+            .filter_map(|e| e.downcast_ref::<reqwest::Error>())
+            .any(|e| e.is_timeout() && !e.is_connect())
+        {
+            return false;
+        }
         let msg = err.to_string().to_lowercase();
         msg.contains("429")
             || msg.contains("rate limit")

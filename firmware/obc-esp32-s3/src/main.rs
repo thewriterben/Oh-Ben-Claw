@@ -143,6 +143,12 @@ mod identity_map;
 /// against the BME280 datasheet's own double-precision algorithm.
 mod sensor_math;
 
+/// Sizes a mesh reply to the bridge's 228-byte line, or replaces it with a
+/// short error under the same id. No ESP dependencies, so
+/// `tests/firmware_mesh_reply.rs` runs it on the host against the bridge's own
+/// framer.
+mod mesh_reply;
+
 /// Real I2C sensor drivers (MAX17048 fuel gauge, MPU6050 IMU).
 // Under `--features camera` the I2C bus is disabled, so the sensor
 // constructor/probe paths are intentionally unused in that build. NOT because of
@@ -1042,7 +1048,12 @@ fn main() -> anyhow::Result<()> {
                                                     serde_json::json!(identity::node_id()),
                                                 );
                                             }
-                                            let out = v.to_string();
+                                            // The bridge discards a line over 228 B
+                                            // and tells only its own console; an
+                                            // oversized reply became silence, and the
+                                            // host blamed range. Send one that fits,
+                                            // or say why it cannot (2026-10-13).
+                                            let out = mesh_reply::fit(&v);
                                             let _ = u.write(out.as_bytes());
                                             let _ = u.write(b"\n");
                                         }

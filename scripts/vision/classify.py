@@ -3,6 +3,7 @@
 
     python scripts/vision/classify.py              # report
     python scripts/vision/classify.py --check      # exit 1 if the numbers moved
+    python scripts/vision/classify.py --scores     # per-pair scores, for the Rust port
 
 Runs against `tests/fixtures/vision-bench-2026-09-16/`, 148 frames captured from
 node `obc-esp32-s3-4b95f8` (LILYGO T-CameraPlus-S3 V1.1, OV5640) on 2026-09-16.
@@ -80,6 +81,24 @@ Known misclassifications, kept in the expected counts rather than smoothed away:
     camera, in which case they are true motion and the SET LABEL is what is
     wrong. Not provable from these numbers, so it is recorded as an open
     question rather than excused.
+  * `camera_nudge/024.jpg` scores edge 4.199912 against EDGE_LIGHT = 4.20:
+    0.00009 inside `light`. Decoded by zune-jpeg instead of Pillow's libjpeg
+    it scores 4.200503 and lands in `motion`. One of the counts above
+    therefore depends on the JPEG library at the fourth decimal (found
+    2026-10-13 porting this to Rust). The threshold sits in the noise of the
+    decoder for at least one recorded frame; a node classifying sensor
+    greyscale will have its own noise, which is one more reason its
+    thresholds need their own measurement.
+
+# The Rust port
+
+`crates/obc-vision/src/motion.rs`, held to this fixture in CI by
+`crates/obc-vision/tests/motion_fixture.rs`. Because of the decoder point
+above, CI does not compare counts after decoding: `--scores` writes this
+script's per-pair scores to `scores.txt` in the fixture, the Rust rule must
+reproduce EXPECTED from those exactly, and Rust's own decode-and-score must
+land within a small tolerance of them. Regenerate `scores.txt` only with an
+explanation, as for EXPECTED.
 """
 
 import os
@@ -147,11 +166,25 @@ def counts_for(label):
     return counts
 
 
+def scores():
+    """One line per frame pair: `label file class frac edge`."""
+    for label in EXPECTED:
+        d = os.path.join(ROOT, label)
+        files = sorted(f for f in os.listdir(d) if f.endswith(".jpg"))[1:]
+        frames = [load(os.path.join(d, f)) for f in files]
+        for name, p, c in zip(files[1:], frames, frames[1:]):
+            cls, frac, edge = classify(p, c)
+            print(f"{label} {name} {cls} {frac:.6f} {edge:.6f}")
+
+
 def main():
     check = "--check" in sys.argv
     if not os.path.isdir(ROOT):
         print(f"fixture not found: {ROOT}")
         return 2
+    if "--scores" in sys.argv:
+        scores()
+        return 0
 
     print(f"  FRAC_HI={FRAC_HI}  EDGE_LIGHT={EDGE_LIGHT}  EDGE_NUDGE={EDGE_NUDGE}\n")
     print("  " + "set".ljust(16) + "".join(c.rjust(9) for c in CLASSES))

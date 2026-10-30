@@ -24,9 +24,46 @@ pub(super) fn chunk_text(text: &str, max: usize) -> Vec<&str> {
     chunks
 }
 
+/// Whether `sender` may talk to the agent through `channel`. An empty list
+/// refuses everyone (fail closed); refusals are logged so an operator who
+/// forgot to fill the list can see why the bot is silent.
+pub(super) fn sender_allowed(channel: &str, allowed: &[String], sender: &str) -> bool {
+    if allowed.iter().any(|a| a == sender) {
+        return true;
+    }
+    if allowed.is_empty() {
+        tracing::warn!(
+            channel,
+            sender,
+            "message ignored: channels.{channel}.allowed_users is empty, which refuses everyone"
+        );
+    } else {
+        tracing::info!(
+            channel,
+            sender,
+            "message ignored: sender not in allowed_users"
+        );
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_allowlist_refuses_everyone() {
+        assert!(!sender_allowed("discord", &[], "123"));
+        assert!(!sender_allowed("discord", &[], ""));
+    }
+
+    #[test]
+    fn allowlist_admits_exact_matches_only() {
+        let allowed = vec!["@ben:matrix.org".to_string()];
+        assert!(sender_allowed("matrix", &allowed, "@ben:matrix.org"));
+        assert!(!sender_allowed("matrix", &allowed, "@ben:evil.org"));
+        assert!(!sender_allowed("matrix", &allowed, "@BEN:matrix.org"));
+    }
 
     #[test]
     fn chunk_text_short_string() {

@@ -315,8 +315,12 @@ pub fn verify(path: impl AsRef<Path>, key: &[u8]) -> anyhow::Result<usize> {
 /// Verify the **Ed25519 detached signatures** in an audit log against `public_hex`
 /// — asymmetric verification that needs only the public key, not the HMAC secret.
 /// Returns the number of signed records verified. Errors on the first invalid
-/// signature; unsigned legacy records are skipped (they remain covered by the HMAC
-/// chain via [`verify`]).
+/// signature. Unsigned records *before* the first signed one are legacy and are
+/// skipped (they remain covered by the HMAC chain via [`verify`]); an unsigned
+/// record *after* it is an error. The signature is not inside the MAC'd
+/// canonical form, so to a verifier holding only the public key, a record whose
+/// `sig` was stripped and whose content was then edited looks exactly like a
+/// record written while signing had lapsed. Both have to be reported.
 pub fn verify_signatures(path: impl AsRef<Path>, public_hex: &str) -> anyhow::Result<usize> {
     let path = path.as_ref();
     if !path.exists() {
@@ -330,6 +334,14 @@ pub fn verify_signatures(path: impl AsRef<Path>, public_hex: &str) -> anyhow::Re
             continue;
         }
         let rec: ActionRecord = serde_json::from_str(&line)?;
+        if rec.sig.is_none() && verified > 0 {
+            anyhow::bail!(
+                "audit: record seq {} is unsigned after signed records — either \
+                 signing lapsed (the vault was unavailable at a restart) or its \
+                 signature was removed; only the HMAC chain can tell which",
+                rec.seq
+            );
+        }
         if let Some(sig) = &rec.sig {
             let canon = canonical(
                 rec.seq,
@@ -493,6 +505,46 @@ mod tests {
         }
         // No signer ⇒ no signatures; verification is a vacuous pass (HMAC still covers it).
         assert_eq!(verify_signatures(&path, "deadbeef").unwrap(), 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_unsigned_record_after_signed_ones_fails_signature_verification() {
+        let path = tmp_path("sig-gap");
+        let signer = crate::audit_sign::AuditSigner::generate();
+        let public = signer.public_hex();
+        let rec = |a: &mut ActionAuditor, pin: u8| {
+            a.record(
+                1,
+                "n",
+                "gpio_write",
+                &json!({ "pin": pin }),
+                high_risk(),
+                Decision::Allowed,
+            )
+            .unwrap();
+        };
+        // Legacy unsigned, then signed: fine.
+        rec(
+            &mut ActionAuditor::open(b"k".to_vec(), path.clone()).unwrap(),
+            1,
+        );
+        rec(
+            &mut ActionAuditor::open(b"k".to_vec(), path.clone())
+                .unwrap()
+                .with_signer(signer),
+            2,
+        );
+        assert_eq!(verify_signatures(&path, &public).unwrap(), 1);
+        // Then unsigned again: indistinguishable from a stripped signature.
+        rec(
+            &mut ActionAuditor::open(b"k".to_vec(), path.clone()).unwrap(),
+            3,
+        );
+        let err = verify_signatures(&path, &public).unwrap_err().to_string();
+        assert!(err.contains("unsigned after signed"), "{err}");
+        // The HMAC chain itself is intact throughout.
+        assert_eq!(verify(&path, b"k").unwrap(), 3);
         let _ = std::fs::remove_file(&path);
     }
 

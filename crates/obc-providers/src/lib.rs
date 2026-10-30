@@ -25,6 +25,69 @@ pub mod openai;
 pub mod openrouter;
 pub mod retry;
 
+/// Connecting to a provider: past this, the host is not answering at all.
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long a provider connection may go **silent**. Not a total: it resets on
+/// every byte, so a long streamed answer is never cut. Five minutes, because a
+/// non-streaming call to a local model on a CPU can think that long before
+/// its first byte.
+pub const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// The HTTP client every provider uses.
+///
+/// Until 2026-10-13 each provider used `Client::new()`, which has no timeout
+/// of any kind: a provider that accepted the connection and then stalled held
+/// the agent turn forever, and with it whatever the turn was doing. Retry and
+/// failover never ran, because nothing ever failed.
+pub fn http_client() -> reqwest::Client {
+    http_client_with(CONNECT_TIMEOUT, IDLE_TIMEOUT)
+}
+
+fn http_client_with(connect: std::time::Duration, idle: std::time::Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(connect)
+        .read_timeout(idle)
+        .build()
+        // Only fails if the TLS backend cannot initialise, in which case no
+        // client would work; fall back to the default rather than panic.
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod http_client_tests {
+    use super::*;
+
+    /// A server that accepts, reads the request, and never answers: the
+    /// stalled provider. The old `Client::new()` waited on it forever.
+    #[tokio::test]
+    async fn a_silent_provider_times_out_instead_of_hanging() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await;
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            drop(sock);
+        });
+        let client = http_client_with(
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_millis(300),
+        );
+        let started = std::time::Instant::now();
+        let err = client
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(err.is_timeout(), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        // And it is not retried: the provider took the request and may still
+        // be working on it, so a retry would pay for it twice.
+        assert!(!retry::RetryProvider::is_transient(&err.into()));
+    }
+}
+
 pub use failover::FailoverProvider;
 pub use retry::{RetryConfig, RetryProvider};
 
