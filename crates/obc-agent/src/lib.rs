@@ -3677,6 +3677,9 @@ mod routing_agent_tests {
         fn description(&self) -> &str {
             "counts its calls"
         }
+        fn risk_class(&self) -> RiskClass {
+            RiskClass::safe()
+        }
         async fn execute(&self, _args: serde_json::Value) -> Result<obc_tool_api::ToolResult> {
             self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(obc_tool_api::ToolResult::ok(format!("{} ran", self.0)))
