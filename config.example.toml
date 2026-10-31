@@ -125,17 +125,24 @@ initial_backoff_ms = 500
 # deserve it. Rules, first match wins: cloud failed recently (backing off) →
 # local; daily cloud budget spent → local; private facts (camera detections,
 # people) in the world-state block → local; background sessions (System 2,
-# harness, edge) → local; operator turns (console, channels, gateway) → cloud
-# when console_to_cloud; otherwise cloud when ≥ tool_threshold tools are
+# harness, edge) → local; the local brain failed recently (backing off) →
+# cloud, after the privacy rules so a private turn still stays local and
+# fails there; operator turns (console, channels, gateway) → cloud when
+# console_to_cloud; otherwise cloud when ≥ tool_threshold tools are
 # registered. The decision is written to world memory as `agent.brain`, so
 # the world-state block says which brain is answering and why. Without the
 # cloud provider's key (ANTHROPIC_API_KEY etc.) the router logs once at
-# startup and every turn stays local. One rule applies inside the turn: once
+# startup and every turn stays local. Two rules apply inside the turn: once
 # a tool in private_tools has run, the rest of the turn is local whichever
-# brain began it. With routing enabled, [[provider.fallbacks]] must be local
-# too (ollama, or a loopback base_url); cloud models go under
-# [provider.routing.cloud], or the privacy rules are bypassed when the local
-# model is down.
+# brain began it; and when the local brain fails on a turn it was given for a
+# reason other than privacy (routine turn, background session), the call is
+# retried once on the cloud (escalate_on_local_failure), unless the cloud is
+# backing off or over budget, recorded as `local brain failed, escalated`
+# with `escalated = true` and an audit row (tool `routing.escalate`), and the
+# local brain backs off for offline_backoff_secs. With routing enabled,
+# [[provider.fallbacks]] must be local too (ollama, or a loopback base_url);
+# cloud models go under [provider.routing.cloud], or the privacy rules are
+# bypassed when the local model is down.
 # [provider.routing]
 # enabled = true
 # console_to_cloud = true
@@ -144,7 +151,8 @@ initial_backoff_ms = 500
 # private_sources = ["clawcam"]
 # private_entity_prefixes = ["vision.subject."]
 # private_tools = ["hear", "sense", "audio_transcribe", "vision_analyze"]
-# offline_backoff_secs = 300
+# offline_backoff_secs = 300             # cloud failure → local, and local failure → cloud, for this long
+# escalate_on_local_failure = true       # local brain fails on a non-private turn → retry once on the cloud
 # daily_budget_usd = 5.0                 # 0 = no cap; estimated from chars/4
 # cloud_input_price_per_million = 2.0    # Sonnet 5 list prices, 2026-09-11
 # cloud_output_price_per_million = 10.0

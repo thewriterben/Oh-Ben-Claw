@@ -240,11 +240,29 @@ pub struct Agent {
     max_history: usize,
 }
 
+/// Which brain produced one completion, as [`Agent::complete_routed`] reports
+/// it: the one the route named, or the cloud after the local brain failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answered {
+    Local,
+    Cloud,
+    Escalated,
+}
+
+impl Answered {
+    fn from_cloud(self) -> bool {
+        !matches!(self, Answered::Local)
+    }
+}
+
 /// The router's runtime state: the cloud brain, its back-off, today's spend.
 struct Routing {
     cfg: obc_providers::RoutingConfig,
     cloud: Arc<dyn Provider>,
     cloud_down_until: Mutex<Option<std::time::Instant>>,
+    /// Plan P1: the local brain failed; until this passes, non-private turns
+    /// go to the cloud without waiting for it.
+    local_down_until: Mutex<Option<std::time::Instant>>,
     /// `(day number since the epoch, estimated USD spent on cloud turns that day)`.
     cloud_spend: Mutex<(u64, f64)>,
 }
@@ -265,6 +283,36 @@ impl Routing {
             std::time::Instant::now()
                 + std::time::Duration::from_secs(self.cfg.offline_backoff_secs),
         );
+    }
+
+    fn local_cooling(&self) -> bool {
+        self.local_down_until
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some_and(|until| until > std::time::Instant::now())
+    }
+
+    /// Start the local back-off (same length as the cloud one). The agent holds
+    /// no `ModelRegistry`, so `record_health` stays unwired until P3 builds one
+    /// at `start`.
+    fn mark_local_down(&self) {
+        *self
+            .local_down_until
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(
+            std::time::Instant::now()
+                + std::time::Duration::from_secs(self.cfg.offline_backoff_secs),
+        );
+    }
+
+    /// Whether a turn sent local for `reason` may be retried on the cloud brain
+    /// right now: escalation is on, the reason is not privacy, and the cloud is
+    /// neither cooling nor over budget.
+    fn can_escalate(&self, reason: &str) -> bool {
+        self.cfg.escalate_on_local_failure
+            && routing::may_escalate(reason)
+            && !self.cooling()
+            && !self.budget_exceeded()
     }
 
     fn today() -> u64 {
@@ -485,6 +533,7 @@ impl Agent {
             cfg,
             cloud,
             cloud_down_until: Mutex::new(None),
+            local_down_until: Mutex::new(None),
             cloud_spend: Mutex::new((0, 0.0)),
         });
         self
@@ -521,6 +570,7 @@ impl Agent {
                 private_facts: private,
                 cloud_cooling: r.cooling(),
                 budget_exceeded: r.budget_exceeded(),
+                local_cooling: r.local_cooling(),
             },
         )
     }
@@ -528,16 +578,68 @@ impl Agent {
     /// One model call on the chosen brain. A cloud failure is answered locally
     /// in the same call — the client is told to discard what it rendered — and
     /// starts the back-off, so the rest of the turn and the next
-    /// `offline_backoff_secs` stay local. Returns the completion and whether
-    /// the cloud produced it.
+    /// `offline_backoff_secs` stay local. The other direction (plan P1): a
+    /// local failure on a turn sent local for a reason that is not privacy is
+    /// retried once on the cloud brain, unless the cloud is cooling or over
+    /// budget, audited, and starts the local back-off. Returns the completion
+    /// and which brain produced it.
     async fn complete_routed(
         &self,
         route: routing::Route,
+        reason: &str,
+        session_id: &str,
         messages: &[ChatMessage],
         tools: &[Box<dyn Tool>],
         local_config: &obc_providers::ProviderConfig,
         sink: obc_providers::DeltaSink<'_>,
-    ) -> Result<(obc_providers::ChatCompletion, bool)> {
+    ) -> Result<(obc_providers::ChatCompletion, Answered)> {
+        if let (routing::Route::Local, Some(r)) = (route, &self.routing) {
+            // The local brain is known down and this turn may go up: do not
+            // pay its timeout first.
+            if r.local_cooling() && r.can_escalate(reason) {
+                let c = r
+                    .cloud
+                    .chat_completion_streaming(messages, tools, &r.cfg.cloud, sink)
+                    .await?;
+                return Ok((c, Answered::Escalated));
+            }
+            match self
+                .provider
+                .chat_completion_streaming(messages, tools, local_config, sink)
+                .await
+            {
+                Ok(c) => return Ok((c, Answered::Local)),
+                Err(e) => {
+                    r.mark_local_down();
+                    if let Some(obs) = &self.obs {
+                        obs.metrics.counter("routing_local_failures_total").inc();
+                    }
+                    if !r.can_escalate(reason) {
+                        return Err(e);
+                    }
+                    tracing::warn!(
+                        session_id = %session_id,
+                        error = %e,
+                        reason,
+                        backoff_secs = r.cfg.offline_backoff_secs,
+                        "routing: local turn failed; escalating to the cloud and backing off"
+                    );
+                    self.audit_escalation(
+                        session_id,
+                        reason,
+                        &format!("{}/{}", self.provider.name(), local_config.model),
+                        &format!("{}/{}", r.cloud.name(), r.cfg.cloud.model),
+                        &e,
+                    );
+                    sink(obc_providers::StreamDelta::Restart);
+                    let c = r
+                        .cloud
+                        .chat_completion_streaming(messages, tools, &r.cfg.cloud, sink)
+                        .await?;
+                    return Ok((c, Answered::Escalated));
+                }
+            }
+        }
         if let (routing::Route::Cloud, Some(r)) = (route, &self.routing) {
             if !r.cooling() {
                 match r
@@ -545,7 +647,7 @@ impl Agent {
                     .chat_completion_streaming(messages, tools, &r.cfg.cloud, sink)
                     .await
                 {
-                    Ok(c) => return Ok((c, true)),
+                    Ok(c) => return Ok((c, Answered::Cloud)),
                     Err(e) => {
                         r.mark_down();
                         tracing::warn!(
@@ -565,15 +667,46 @@ impl Agent {
             .provider
             .chat_completion_streaming(messages, tools, local_config, sink)
             .await?;
-        Ok((c, false))
+        Ok((c, Answered::Local))
+    }
+
+    /// Plan P1: one row in the Track 0 audit chain for a turn that left the
+    /// host because the local brain failed
+    /// ([`ActionAuditor::record_routing_escalation`]): the session, the two
+    /// brains, the router's reason and the local error. Without an auditor the
+    /// escalation is only logged.
+    fn audit_escalation(
+        &self,
+        session_id: &str,
+        reason: &str,
+        from: &str,
+        to: &str,
+        error: &anyhow::Error,
+    ) {
+        let Some(auditor) = &self.auditor else { return };
+        let mut a = auditor.lock().unwrap_or_else(|p| p.into_inner());
+        if let Err(e) =
+            a.record_routing_escalation(now_ms(), session_id, from, to, reason, &error.to_string())
+        {
+            tracing::warn!(error = %e, "routing: could not audit the escalation");
+        }
     }
 
     /// Write the decision to world memory as `agent.brain` when it changed, so
     /// the world-state block says which brain is answering and why.
-    fn record_brain(&self, route: routing::Route, reason: &str, provider: &str, model: &str) {
+    /// `escalated` says the turn went up because the local brain failed.
+    fn record_brain(
+        &self,
+        route: routing::Route,
+        reason: &str,
+        provider: &str,
+        model: &str,
+        escalated: bool,
+    ) {
         let Some(world) = &self.world else { return };
         let value = serde_json::json!({
             "route": route.as_str(), "provider": provider, "model": model, "reason": reason,
+            "escalated": escalated,
         });
         let unchanged = world
             .current("agent.brain")
@@ -957,6 +1090,8 @@ impl Agent {
             tracing::info!(session_id = %session_id, route = route.as_str(), reason = route_reason, "routing");
         }
         let mut used_cloud = false;
+        // Plan P1: the local brain failed and the cloud answered instead.
+        let mut escalated = false;
         // Real token numbers when the provider reports them (Anthropic, Ollama);
         // summed over the turn's iterations. Otherwise the chars/4 guess below.
         let mut turn_usage = obc_providers::Usage::default();
@@ -996,10 +1131,19 @@ impl Agent {
                     reset,
                 });
             };
-            let (completion, from_cloud) = self
-                .complete_routed(route, &messages, &tool_list, provider_config, &sink)
+            let (completion, by) = self
+                .complete_routed(
+                    route,
+                    route_reason,
+                    session_id,
+                    &messages,
+                    &tool_list,
+                    provider_config,
+                    &sink,
+                )
                 .await?;
-            used_cloud |= from_cloud;
+            used_cloud |= by.from_cloud();
+            escalated |= by == Answered::Escalated;
             brain = Some((completion.provider.clone(), completion.model.clone()));
             if let Some(u) = &completion.usage {
                 turn_usage.add(u);
@@ -1221,10 +1365,19 @@ impl Agent {
                         reset,
                     });
                 };
-                let (final_completion, from_cloud) = self
-                    .complete_routed(route, &messages, &[], provider_config, &sink)
+                let (final_completion, by) = self
+                    .complete_routed(
+                        route,
+                        route_reason,
+                        session_id,
+                        &messages,
+                        &[],
+                        provider_config,
+                        &sink,
+                    )
                     .await?;
-                used_cloud |= from_cloud;
+                used_cloud |= by.from_cloud();
+                escalated |= by == Answered::Escalated;
                 brain = Some((
                     final_completion.provider.clone(),
                     final_completion.model.clone(),
@@ -1279,14 +1432,16 @@ impl Agent {
         if let Some((provider_name, model)) = &brain {
             if self.routing.is_some() {
                 // What actually answered, not what was decided: a cloud turn
-                // that failed over mid-way was answered locally.
-                let (answered, why) = match (route, used_cloud) {
-                    (routing::Route::Cloud, false) => {
+                // that failed over mid-way was answered locally, and a local
+                // turn whose brain failed was answered by the cloud.
+                let (answered, why) = match (route, used_cloud, escalated) {
+                    (_, _, true) => (routing::Route::Cloud, "local brain failed, escalated"),
+                    (routing::Route::Cloud, false, _) => {
                         (routing::Route::Local, "cloud unreachable, backing off")
                     }
                     _ => (route, route_reason),
                 };
-                self.record_brain(answered, why, provider_name, model);
+                self.record_brain(answered, why, provider_name, model, escalated);
             }
         }
         let (model_used, in_price, out_price) = match (&self.routing, used_cloud) {
@@ -2819,6 +2974,9 @@ mod routing_agent_tests {
             if self.1 == "FAIL" {
                 anyhow::bail!("503 upstream unavailable");
             }
+            if self.1 == "PANIC" {
+                panic!("{} must not be called", self.0);
+            }
             Ok(obc_providers::ChatCompletion {
                 message: self.1.to_string(),
                 tool_calls: vec![],
@@ -2844,11 +3002,23 @@ mod routing_agent_tests {
         Arc<obc_memory::MemoryStore>,
         Arc<obc_memory::world::WorldMemory>,
     ) {
+        routed_agent_with(Named("ollama", "from local"), cloud, routing_cfg())
+    }
+
+    fn routed_agent_with(
+        local: Named,
+        cloud: Named,
+        cfg: obc_providers::RoutingConfig,
+    ) -> (
+        Agent,
+        Arc<obc_memory::MemoryStore>,
+        Arc<obc_memory::world::WorldMemory>,
+    ) {
         let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
         let world = Arc::new(obc_memory::world::WorldMemory::open_in_memory().unwrap());
         let agent = Agent::new(
             AgentConfig::default(),
-            Arc::new(Named("ollama", "from local")),
+            Arc::new(local),
             Arc::clone(&memory),
             vec![],
         )
@@ -2856,8 +3026,31 @@ mod routing_agent_tests {
             Arc::clone(&world),
             world_context::WorldContextConfig::default(),
         )
-        .with_routing_provider(routing_cfg(), Arc::new(cloud));
+        .with_routing_provider(cfg, Arc::new(cloud));
         (agent, memory, world)
+    }
+
+    /// A config under which a console turn is a `routine turn`: the one
+    /// reason, with `background session`, that may escalate.
+    fn routine_cfg() -> obc_providers::RoutingConfig {
+        obc_providers::RoutingConfig {
+            console_to_cloud: false,
+            tool_threshold: 0,
+            ..routing_cfg()
+        }
+    }
+
+    fn seed_private_fact(world: &obc_memory::world::WorldMemory) {
+        world
+            .observe_as(
+                "vision.subject.person-1",
+                serde_json::json!({"label": "person"}),
+                now_ms(),
+                now_ms(),
+                "clawcam",
+                obc_memory::world::Origin::Derived,
+            )
+            .unwrap();
     }
 
     #[tokio::test]
@@ -2959,6 +3152,173 @@ mod routing_agent_tests {
             agent2.route_turn(&session, 0),
             (routing::Route::Local, "daily cloud budget spent")
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_local_turn_is_escalated_to_the_cloud_and_recorded() {
+        let (agent, memory, world) = routed_agent_with(
+            Named("ollama", "FAIL"),
+            Named("anthropic", "from cloud"),
+            routine_cfg(),
+        );
+        let session = memory.create_session("console").unwrap();
+        assert_eq!(
+            agent.route_turn(&session, 0),
+            (routing::Route::Local, "routine turn")
+        );
+        let mut events = agent.subscribe();
+        let r = agent
+            .process(&session, "hello", &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, "from cloud");
+        let mut saw_reset = false;
+        while let Ok(ev) = events.try_recv() {
+            if let AgentEvent::Token { reset: true, .. } = ev {
+                saw_reset = true;
+            }
+        }
+        assert!(saw_reset, "a Restart token precedes the cloud answer");
+        let brain = world.current("agent.brain").unwrap().unwrap();
+        assert_eq!(brain.value["route"], "cloud");
+        assert_eq!(brain.value["provider"], "anthropic");
+        assert_eq!(brain.value["model"], "claude-sonnet-5");
+        assert_eq!(brain.value["reason"], "local brain failed, escalated");
+        assert_eq!(brain.value["escalated"], true);
+        // The local back-off: the next routine turn goes up without the timeout.
+        assert_eq!(
+            agent.route_turn(&session, 0),
+            (routing::Route::Cloud, "local brain down, backing off")
+        );
+        let r = agent
+            .process(&session, "still there?", &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, "from cloud");
+        let brain = world.current("agent.brain").unwrap().unwrap();
+        assert_eq!(brain.value["reason"], "local brain down, backing off");
+        assert_eq!(brain.value["escalated"], false);
+    }
+
+    #[tokio::test]
+    async fn a_private_turn_with_a_failing_local_brain_errors_and_never_calls_the_cloud() {
+        let (agent, memory, world) = routed_agent_with(
+            Named("ollama", "FAIL"),
+            Named("anthropic", "PANIC"),
+            routine_cfg(),
+        );
+        seed_private_fact(&world);
+        let session = memory.create_session("console").unwrap();
+        assert_eq!(
+            agent.route_turn(&session, 0),
+            (routing::Route::Local, "private facts in context")
+        );
+        let err = agent
+            .process(&session, "who is there?", &Default::default())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("503"), "{err}");
+        // The failure still starts the local back-off, but a private turn is
+        // not sent up by it: it goes local and fails again.
+        assert_eq!(
+            agent.route_turn(&session, 0),
+            (routing::Route::Local, "private facts in context")
+        );
+        let err = agent
+            .process(&session, "who is there?", &Default::default())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("503"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_background_session_escalates_but_a_cooling_cloud_does_not() {
+        let (agent, memory, world) = routed_agent_with(
+            Named("ollama", "FAIL"),
+            Named("anthropic", "from cloud"),
+            routing_cfg(),
+        );
+        memory.create_session_with_id("system2").unwrap();
+        let r = agent
+            .process("system2", "wake", &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, "from cloud");
+        assert_eq!(
+            world.current("agent.brain").unwrap().unwrap().value["reason"],
+            "local brain failed, escalated"
+        );
+        // With the cloud backing off there is nowhere to go.
+        agent.routing.as_ref().unwrap().mark_down();
+        let err = agent
+            .process("system2", "wake", &Default::default())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("503"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn escalation_can_be_switched_off() {
+        let (agent, memory, _) = routed_agent_with(
+            Named("ollama", "FAIL"),
+            Named("anthropic", "PANIC"),
+            obc_providers::RoutingConfig {
+                escalate_on_local_failure: false,
+                ..routine_cfg()
+            },
+        );
+        let session = memory.create_session("console").unwrap();
+        let err = agent
+            .process(&session, "hello", &Default::default())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("503"), "{err}");
+        assert_eq!(
+            agent.route_turn(&session, 0),
+            (routing::Route::Local, "routine turn"),
+            "no rule 5 without escalation"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_escalation_writes_an_audit_row_naming_the_session_and_the_error() {
+        let path = std::env::temp_dir().join(format!(
+            "obc-escalation-audit-{}-{}.jsonl",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let auditor = Arc::new(Mutex::new(
+            ActionAuditor::open(b"k".to_vec(), path.clone()).unwrap(),
+        ));
+        let (agent, memory, _) = routed_agent_with(
+            Named("ollama", "FAIL"),
+            Named("anthropic", "from cloud"),
+            routine_cfg(),
+        );
+        let agent = agent.with_action_auditor(Arc::clone(&auditor));
+        let session = memory.create_session("console").unwrap();
+        agent
+            .process(&session, "hello", &Default::default())
+            .await
+            .unwrap();
+        drop(agent);
+        drop(auditor);
+        let log = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let rows: Vec<obc_safety::audit::ActionRecord> = log
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 1, "{log}");
+        assert_eq!(rows[0].node_id, session);
+        assert_eq!(rows[0].tool, "routing.escalate");
+        match &rows[0].decision {
+            obc_safety::audit::Decision::AllowedUncovered(why) => {
+                assert!(why.contains("ollama/") && why.contains("503"), "{why}")
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// A cloud brain that always wants to hear the room first.

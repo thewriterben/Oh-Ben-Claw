@@ -37,11 +37,12 @@ Each step ships on its own, with tests, a roadmap row and a changelog entry.
 - `Config::validate` refuses a non-local `[[provider.fallbacks]]` when `[provider.routing]` is enabled. Local means `ollama` by name or a loopback `base_url` (the `ModelEntry::from_provider` rule). Cloud models go under `[provider.routing.cloud]`.
 - Tests: `a_private_tool_result_moves_the_rest_of_the_turn_local` (obc-agent), `a_cloud_fallback_under_the_local_brain_is_refused_when_routing_is_on` (obc-config).
 
-### P1 — Local → cloud escalation on connectivity (roadmap "policy-driven cloud fallback", first axis)
+### P1 — Local → cloud escalation on connectivity (shipped 2026-10-30; roadmap "policy-driven cloud fallback", first axis)
 
-- `Agent::complete_routed`: when the local brain fails on a turn the router sent local for a non-privacy reason (`routine turn`, `background session`), retry on the cloud brain once, unless cooling or over budget. Privacy reasons (`private facts in context`, `private tool result in context`) never escalate; `routing disabled` never escalates.
-- Audited: the `agent.brain` fact gets `escalated: true` and the reason `local brain failed, escalated`; an audit row names the session and the failure.
-- `Routing::local_down_until` mirrors the cloud backoff so a dead Ollama does not cost a timeout per turn; `ModelRegistry::record_health` finally gets its caller.
+- `Agent::complete_routed` takes the route's reason: when the local brain fails on a turn the router sent local for a non-privacy reason (`routing::may_escalate`: `routine turn`, `background session`), the call is retried on the cloud brain once, unless cooling or over budget (`Routing::can_escalate`), after a `Restart` delta. Privacy reasons (`private facts in context`, `private tool result in context`) never escalate; `routing disabled` never escalates. `RoutingConfig.escalate_on_local_failure` (default true) switches it off.
+- Audited: the `agent.brain` fact gets `escalated: true` and the reason `local brain failed, escalated`; `ActionAuditor::record_routing_escalation` writes a `routing.escalate` row with the session as node, both brains and the reason as arguments, and the local error in the decision text.
+- `Routing::local_down_until` mirrors the cloud backoff (`offline_backoff_secs`): while it cools, non-privacy turns route to the cloud up front as `local brain down, backing off` (rule 5, after the privacy and background rules), so a dead Ollama does not cost a timeout per turn; privacy turns still go local and fail.
+- Deferred: `ModelRegistry::record_health` stays unwired. The agent holds no registry; P3 builds one at `start` and `mark_local_down` feeds it then.
 
 ### P2 — Capability and confidence axes
 

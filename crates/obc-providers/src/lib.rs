@@ -530,9 +530,19 @@ pub struct RoutingConfig {
     /// said, what the sensors read, a transcript, a description of a frame.
     #[serde(default = "default_private_tools")]
     pub private_tools: Vec<String>,
-    /// After a cloud failure, route local for this long. Default 300.
+    /// After a cloud failure, route local for this long; after a local
+    /// failure, route non-private turns to the cloud for this long. Default 300.
     #[serde(default = "default_offline_backoff_secs")]
     pub offline_backoff_secs: u64,
+    /// When the local brain fails on a turn the router sent local for a reason
+    /// other than privacy (`routine turn`, `background session`), retry the
+    /// call once on the cloud brain, unless the cloud is cooling or the day's
+    /// budget is spent; and while the local brain is backing off, send such
+    /// turns up without waiting for it. Recorded as `local brain failed,
+    /// escalated` with `escalated: true` and an audit row. Private turns never
+    /// escalate. Default true.
+    #[serde(default = "default_prompt_caching")]
+    pub escalate_on_local_failure: bool,
     /// Estimated USD of cloud turns per day before the router stops sending
     /// them. 0 = no cap. Default 0.
     #[serde(default)]
@@ -589,6 +599,7 @@ impl RoutingConfig {
             private_entity_prefixes: default_private_entity_prefixes(),
             private_tools: default_private_tools(),
             offline_backoff_secs: default_offline_backoff_secs(),
+            escalate_on_local_failure: true,
             daily_budget_usd: 0.0,
             cloud_input_price_per_million: default_cloud_input_price(),
             cloud_output_price_per_million: default_cloud_output_price(),
