@@ -5,6 +5,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Privacy holds for the whole turn (2026-10-30)
+
+Phase 20 begins. Gap analysis and step plan in `docs/PHASE20-PLAN.md`; this is
+its P0.
+
+### Added
+
+- **`[provider.routing].private_tools`.** The router decided privacy from the
+  world-state block a turn started with, which is the one place a mid-turn tool
+  result cannot be: a cloud-routed turn that called `hear` or `vision_analyze`
+  sent what the room said, or what the camera saw, to the cloud on its next
+  model call. Now the result of a tool in `private_tools` (default `hear`,
+  `sense`, `audio_transcribe`, `vision_analyze`) moves the rest of the turn to
+  the local brain, whichever brain began it, recorded in `agent.brain` as
+  `private tool result in context`. Exact name match: a peer's
+  `p2p:<node>:hear` is that node's room and its result already crossed the LAN.
+  Test: `a_private_tool_result_moves_the_rest_of_the_turn_local`.
+- **A cloud fallback under the local brain is refused while routing is on.**
+  With `[provider.routing]` enabled, `[provider]` is the local brain and the
+  router decides what leaves the host; a non-local `[[provider.fallbacks]]`
+  under it answered private turns the moment Ollama was down, bypassing every
+  rule. `validate` now refuses it (local means `ollama` by name or a loopback
+  `base_url`) and points at `[provider.routing.cloud]`. Without routing the
+  fallback chain is unchanged. Test:
+  `a_cloud_fallback_under_the_local_brain_is_refused_when_routing_is_on`.
+
 ## Unreleased — A P2P frame proves which node sent it (2026-10-30)
 
 ### Added
