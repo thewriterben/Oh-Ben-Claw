@@ -14,17 +14,29 @@
 //!    Privacy is decided from what the world-state block would show this
 //!    turn, by the fact's `source` and entity prefix, not by parsing text;
 //! 4. a background session (System 2 wakes, the harness, an edge node) → local;
-//! 5. an operator turn (console, channels, gateway) → cloud when
+//! 5. the local brain failed recently (backing off) and
+//!    `escalate_on_local_failure` → cloud. Placed after the privacy and
+//!    background rules on purpose: a private turn still goes local while the
+//!    local brain is down, and fails there, because the alternative is
+//!    sending it up;
+//! 6. an operator turn (console, channels, gateway) → cloud when
 //!    `console_to_cloud`;
-//! 6. otherwise cloud when at least `tool_threshold` tools are registered;
-//! 7. otherwise local.
+//! 7. otherwise cloud when at least `tool_threshold` tools are registered;
+//! 8. otherwise local.
 //!
-//! One rule applies after the decision, inside the turn: the result of a tool
+//! Two rules apply after the decision, inside the turn. The result of a tool
 //! named in `private_tools` (`hear`, `sense`, `audio_transcribe`,
 //! `vision_analyze`) moves the rest of the turn local, whichever brain began
 //! it ([`private_tool`]). Rule 3 sees the world-state block the turn starts
 //! with; this is the one thing it cannot see, because the result does not
-//! exist yet when the route is chosen.
+//! exist yet when the route is chosen. And when the local brain fails on a
+//! turn it was given for a reason that is not privacy ([`may_escalate`]:
+//! `routine turn`, `background session`), the call is retried once on the
+//! cloud brain, unless the cloud is cooling or the day's budget is spent
+//! (plan P1, 2026-10-30). The retry is recorded as `local brain failed,
+//! escalated` with `escalated: true` on the `agent.brain` fact and an audit
+//! row, and starts the local back-off that rule 5 reads. A turn kept local
+//! for privacy never escalates; neither does one with `routing disabled`.
 
 use obc_memory::world::Fact;
 use obc_providers::RoutingConfig;
@@ -56,6 +68,8 @@ pub struct TurnFacts<'a> {
     pub cloud_cooling: bool,
     /// Today's estimated cloud spend has reached `daily_budget_usd`.
     pub budget_exceeded: bool,
+    /// The local provider failed within `offline_backoff_secs`.
+    pub local_cooling: bool,
 }
 
 /// The route for a turn and the reason, in the words the log and the
@@ -80,6 +94,9 @@ pub fn decide(cfg: &RoutingConfig, facts: &TurnFacts<'_>) -> (Route, &'static st
     {
         return (Route::Local, "background session");
     }
+    if facts.local_cooling && cfg.escalate_on_local_failure {
+        return (Route::Cloud, "local brain down, backing off");
+    }
     if cfg.console_to_cloud {
         return (Route::Cloud, "operator turn");
     }
@@ -87,6 +104,15 @@ pub fn decide(cfg: &RoutingConfig, facts: &TurnFacts<'_>) -> (Route, &'static st
         return (Route::Cloud, "tool-heavy turn");
     }
     (Route::Local, "routine turn")
+}
+
+/// Whether a turn routed local for this reason may be retried on the cloud
+/// brain when the local one fails. Only the reasons that say nothing about
+/// privacy: `routine turn` and `background session`. A privacy reason never
+/// escalates, `routing disabled` never escalates, and a turn sent local
+/// because the cloud is cooling or over budget has nowhere to go.
+pub fn may_escalate(reason: &str) -> bool {
+    matches!(reason, "routine turn" | "background session")
 }
 
 /// Whether any of these facts is private under the config: its `source` is one
@@ -139,6 +165,7 @@ mod tests {
             private_facts: false,
             cloud_cooling: false,
             budget_exceeded: false,
+            local_cooling: false,
         }
     }
 
@@ -177,6 +204,76 @@ mod tests {
         assert_eq!(decide(&c, &f), (Route::Local, "background session"));
         assert_eq!(decide(&c, &facts("harness-mission")).0, Route::Local);
         assert_eq!(decide(&c, &facts("edge-node3")).0, Route::Local);
+    }
+
+    #[test]
+    fn a_cooling_local_brain_sends_turns_up_after_the_privacy_and_background_rules() {
+        let c = cfg();
+        // Every rule above it still wins.
+        let f = TurnFacts {
+            local_cooling: true,
+            cloud_cooling: true,
+            ..facts("uuid")
+        };
+        assert_eq!(decide(&c, &f).1, "cloud unreachable, backing off");
+        let f = TurnFacts {
+            local_cooling: true,
+            budget_exceeded: true,
+            ..facts("uuid")
+        };
+        assert_eq!(decide(&c, &f).1, "daily cloud budget spent");
+        let f = TurnFacts {
+            local_cooling: true,
+            private_facts: true,
+            ..facts("uuid")
+        };
+        assert_eq!(
+            decide(&c, &f),
+            (Route::Local, "private facts in context"),
+            "a private turn stays local and fails there"
+        );
+        let f = TurnFacts {
+            local_cooling: true,
+            ..facts("system2")
+        };
+        assert_eq!(decide(&c, &f), (Route::Local, "background session"));
+        // Then it beats the operator and tool rules: a routine turn that would
+        // have stayed local goes up without paying the timeout.
+        let c = RoutingConfig {
+            console_to_cloud: false,
+            tool_threshold: 0,
+            ..cfg()
+        };
+        let f = TurnFacts {
+            local_cooling: true,
+            ..facts("uuid")
+        };
+        assert_eq!(
+            decide(&c, &f),
+            (Route::Cloud, "local brain down, backing off")
+        );
+        // Unless escalation is off, when the rule does not exist.
+        let c = RoutingConfig {
+            escalate_on_local_failure: false,
+            ..c
+        };
+        assert_eq!(decide(&c, &f), (Route::Local, "routine turn"));
+    }
+
+    #[test]
+    fn only_routine_and_background_turns_may_escalate() {
+        assert!(may_escalate("routine turn"));
+        assert!(may_escalate("background session"));
+        for r in [
+            "private facts in context",
+            "private tool result in context",
+            "routing disabled",
+            "cloud unreachable, backing off",
+            "daily cloud budget spent",
+            "no router",
+        ] {
+            assert!(!may_escalate(r), "{r}");
+        }
     }
 
     #[test]

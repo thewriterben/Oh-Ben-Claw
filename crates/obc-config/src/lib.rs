@@ -4034,6 +4034,7 @@ model = "claude-sonnet-5"
             r.private_tools,
             ["hear", "sense", "audio_transcribe", "vision_analyze"]
         );
+        assert!(r.escalate_on_local_failure);
         assert_eq!(r.daily_budget_usd, 5.0);
 
         let err = toml::from_str::<Config>(

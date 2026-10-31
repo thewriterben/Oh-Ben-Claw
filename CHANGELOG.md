@@ -5,6 +5,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Local → cloud escalation on connectivity (2026-10-30)
+
+Phase 20 plan P1 (`docs/PHASE20-PLAN.md`).
+
+### Added
+
+- **The router sends a turn up when the local brain fails.** It only sent
+  turns down (cloud → local on failure, budget, privacy); a local failure on
+  a turn it had sent local simply errored. Now, when the local brain fails on
+  a turn routed local for a reason that is not privacy (`routine turn`,
+  `background session`), the call is retried once on the cloud brain, unless
+  the cloud is backing off or the day's budget is spent, and the client is
+  told to discard what the local brain streamed. The `agent.brain` fact says
+  `local brain failed, escalated` with `escalated: true`, and the Track 0
+  audit chain gets a `routing.escalate` row (`ActionAuditor::record_routing_escalation`)
+  naming the session, both brains and the local error. A turn kept local for
+  privacy (`private facts in context`, `private tool result in context`) never
+  escalates, nor does one with `routing disabled`.
+  `[provider.routing].escalate_on_local_failure` (default true) switches it
+  off. Tests: `a_failed_local_turn_is_escalated_to_the_cloud_and_recorded`,
+  `a_private_turn_with_a_failing_local_brain_errors_and_never_calls_the_cloud`,
+  `a_background_session_escalates_but_a_cooling_cloud_does_not`,
+  `escalation_can_be_switched_off`,
+  `an_escalation_writes_an_audit_row_naming_the_session_and_the_error`.
+- **The local brain backs off too.** A local failure starts a back-off of
+  `offline_backoff_secs` (the cloud's), during which a non-private turn goes
+  to the cloud up front as `local brain down, backing off` instead of paying
+  the timeout: rule 5 of `routing::decide`, placed after the privacy and
+  background rules so a private turn still goes local and fails there. Tests:
+  `a_cooling_local_brain_sends_turns_up_after_the_privacy_and_background_rules`,
+  `only_routine_and_background_turns_may_escalate`.
+
+### Deferred
+
+- `ModelRegistry::record_health` stays unwired: the agent holds no registry.
+  P3 builds one at `start`, and the local back-off feeds it then.
+
 ## Unreleased — Privacy holds for the whole turn (2026-10-30)
 
 Phase 20 begins. Gap analysis and step plan in `docs/PHASE20-PLAN.md`; this is

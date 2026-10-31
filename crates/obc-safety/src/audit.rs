@@ -235,6 +235,35 @@ impl ActionAuditor {
             Decision::Denied(reason.to_string()),
         )
     }
+
+    /// Record a **routing escalation** — a turn the local brain failed on,
+    /// answered by the cloud brain instead (Phase 20 plan P1) — into the same
+    /// chain, so a turn that left the host is a verifiable record and not a log
+    /// line. Non-physical (`RiskClass::safe`); the node is the session the turn
+    /// belongs to, the tool `routing.escalate`, the arguments (hashed like any
+    /// other) the two brains and the router's reason, and the decision an
+    /// [`Decision::AllowedUncovered`] carrying the local error in plain text:
+    /// no limit rule bounds a routing decision, and the error is what a reader
+    /// of the chain needs to see.
+    pub fn record_routing_escalation(
+        &mut self,
+        ts_ms: u64,
+        session_id: &str,
+        from: &str,
+        to: &str,
+        reason: &str,
+        error: &str,
+    ) -> anyhow::Result<ActionRecord> {
+        let args = serde_json::json!({ "from": from, "to": to, "reason": reason });
+        self.record(
+            ts_ms,
+            session_id,
+            "routing.escalate",
+            &args,
+            crate::risk::RiskClass::safe(),
+            Decision::AllowedUncovered(format!("local brain {from} failed: {error}")),
+        )
+    }
 }
 
 /// An integrity failure found while verifying an audit chain.
