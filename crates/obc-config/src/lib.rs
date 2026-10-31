@@ -2892,6 +2892,21 @@ impl Config {
                      at least provider.model or a fallback model must be configured"
                 );
             }
+            // With routing on, `[provider]` is the local brain and the router
+            // decides what leaves this host. A cloud fallback under it would
+            // answer private turns the moment the local model is down,
+            // bypassing every rule; the cloud brain is `[provider.routing.cloud]`.
+            if self.provider.routing.as_ref().is_some_and(|r| r.enabled) {
+                for (i, fb) in self.provider.fallbacks.iter().enumerate() {
+                    let entry = obc_providers::model_registry::ModelEntry::from_provider(fb, 0);
+                    if !entry.local {
+                        anyhow::bail!(
+                            "provider.fallbacks[{i}] ({}) is not a local provider; with                              [provider.routing] enabled the fallbacks of the local brain                              must be local too (ollama, or a loopback base_url), or the                              router's privacy rules are bypassed when the local model is                              down. Put cloud models under [provider.routing.cloud].",
+                            fb.name
+                        );
+                    }
+                }
+            }
         }
 
         // ── File path validation (non-fatal) ───────────────────────────────────
@@ -4015,6 +4030,10 @@ model = "claude-sonnet-5"
             ["system2", "harness-", "edge-", "scheduled-"]
         );
         assert_eq!(r.private_sources, ["clawcam"]);
+        assert_eq!(
+            r.private_tools,
+            ["hear", "sense", "audio_transcribe", "vision_analyze"]
+        );
         assert_eq!(r.daily_budget_usd, 5.0);
 
         let err = toml::from_str::<Config>(
@@ -4028,6 +4047,63 @@ name = "anthropic"
         .unwrap_err()
         .to_string();
         assert!(err.contains("consle_to_cloud"), "{err}");
+    }
+
+    #[test]
+    fn a_cloud_fallback_under_the_local_brain_is_refused_when_routing_is_on() {
+        let routed = |fallback: &str| -> Config {
+            toml::from_str(&format!(
+                r#"
+[provider]
+name = "ollama"
+model = "qwen3-14b-16k"
+[[provider.fallbacks]]
+{fallback}
+[provider.routing.cloud]
+name = "anthropic"
+model = "claude-sonnet-5"
+"#
+            ))
+            .unwrap()
+        };
+        let err = routed(
+            "name = \"anthropic\"
+model = \"claude-haiku-5\"",
+        )
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("provider.fallbacks[0] (anthropic)"), "{err}");
+        assert!(err.contains("provider.routing.cloud"), "{err}");
+
+        // A second local model is fine, by name or by loopback URL.
+        routed(
+            "name = \"ollama\"
+model = \"gemma3n\"",
+        )
+        .validate()
+        .unwrap();
+        routed(
+            "name = \"compatible\"
+model = \"gemma3n\"
+base_url = \"http://127.0.0.1:8080/v1\"",
+        )
+        .validate()
+        .unwrap();
+
+        // Without routing the same fallback is the ordinary failover chain.
+        let plain: Config = toml::from_str(
+            r#"
+[provider]
+name = "ollama"
+model = "qwen3-14b-16k"
+[[provider.fallbacks]]
+name = "anthropic"
+model = "claude-haiku-5"
+"#,
+        )
+        .unwrap();
+        plain.validate().unwrap();
     }
 
     #[test]

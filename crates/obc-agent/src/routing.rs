@@ -18,6 +18,13 @@
 //!    `console_to_cloud`;
 //! 6. otherwise cloud when at least `tool_threshold` tools are registered;
 //! 7. otherwise local.
+//!
+//! One rule applies after the decision, inside the turn: the result of a tool
+//! named in `private_tools` (`hear`, `sense`, `audio_transcribe`,
+//! `vision_analyze`) moves the rest of the turn local, whichever brain began
+//! it ([`private_tool`]). Rule 3 sees the world-state block the turn starts
+//! with; this is the one thing it cannot see, because the result does not
+//! exist yet when the route is chosen.
 
 use obc_memory::world::Fact;
 use obc_providers::RoutingConfig;
@@ -88,6 +95,13 @@ pub fn decide(cfg: &RoutingConfig, facts: &TurnFacts<'_>) -> (Route, &'static st
 /// `private_entity_prefixes`.
 pub fn private_facts<'a>(facts: impl IntoIterator<Item = &'a Fact>, cfg: &RoutingConfig) -> bool {
     facts.into_iter().any(|f| is_private(f, cfg))
+}
+
+/// Whether a tool of this name is one whose result keeps the rest of the turn
+/// on this host (`private_tools`). Exact match: a peer's `p2p:<node>:hear` is
+/// that node's room, not this one's, and its result already crossed the LAN.
+pub fn private_tool(cfg: &RoutingConfig, tool_name: &str) -> bool {
+    cfg.private_tools.iter().any(|t| t == tool_name)
 }
 
 fn is_private(f: &Fact, cfg: &RoutingConfig) -> bool {

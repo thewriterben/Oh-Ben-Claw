@@ -130,7 +130,12 @@ initial_backoff_ms = 500
 # registered. The decision is written to world memory as `agent.brain`, so
 # the world-state block says which brain is answering and why. Without the
 # cloud provider's key (ANTHROPIC_API_KEY etc.) the router logs once at
-# startup and every turn stays local.
+# startup and every turn stays local. One rule applies inside the turn: once
+# a tool in private_tools has run, the rest of the turn is local whichever
+# brain began it. With routing enabled, [[provider.fallbacks]] must be local
+# too (ollama, or a loopback base_url); cloud models go under
+# [provider.routing.cloud], or the privacy rules are bypassed when the local
+# model is down.
 # [provider.routing]
 # enabled = true
 # console_to_cloud = true
@@ -138,6 +143,7 @@ initial_backoff_ms = 500
 # local_session_prefixes = ["system2", "harness-", "edge-"]
 # private_sources = ["clawcam"]
 # private_entity_prefixes = ["vision.subject."]
+# private_tools = ["hear", "sense", "audio_transcribe", "vision_analyze"]
 # offline_backoff_secs = 300
 # daily_budget_usd = 5.0                 # 0 = no cap; estimated from chars/4
 # cloud_input_price_per_million = 2.0    # Sonnet 5 list prices, 2026-09-11
