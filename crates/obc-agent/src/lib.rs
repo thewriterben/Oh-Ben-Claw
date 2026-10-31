@@ -3625,6 +3625,9 @@ mod routing_agent_tests {
         fn description(&self) -> &str {
             "a stub"
         }
+        fn risk_class(&self) -> obc_tool_api::RiskClass {
+            obc_tool_api::RiskClass::safe()
+        }
         async fn execute(&self, _args: serde_json::Value) -> Result<obc_tool_api::ToolResult> {
             Ok(obc_tool_api::ToolResult::ok(format!("{} ran", self.0)))
         }
