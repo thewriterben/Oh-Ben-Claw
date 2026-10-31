@@ -5,6 +5,65 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Small-model reflex tier (2026-10-30)
+
+Phase 20 plan P3 (`docs/PHASE20-PLAN.md`).
+
+### Added
+
+- **Reflex rules can ask a small model.** `obc-reflex` gains a `model`
+  action: `{ type = "model", prompt = "...", on = { label = <action>, ... } }`.
+  When the rule fires, the controller makes one call to the small local model
+  (no system prompt, no history, no tools) with the question, the rule's
+  current trusted evidence and the labels, and performs the action under the
+  label the reply names (an exact answer, or the one label it mentions). A
+  reply naming none or several, a model error, a missing model, or a call past
+  the latency ceiling is a rule miss: nothing is dispatched, the tick succeeds,
+  and `reflex.model.{hit,miss,timeout}` count it. A branch may not itself be a
+  `model` action (one call per fire), and `validate` refuses empty prompts and
+  label sets. Node-side and foresight dispatch skip it: the tier is host-only.
+  Tests: `a_model_action_performs_the_action_under_the_models_label`,
+  `a_model_call_over_the_ceiling_is_a_rule_miss_not_an_error`,
+  `a_reply_naming_no_single_label_or_no_model_is_a_miss`,
+  `match_label_takes_an_exact_answer_or_one_named_label`,
+  `a_model_action_is_validated_and_round_trips`.
+- **`[edge].local_backend`, `local_model`, `reflex_timeout_ms`.** `ollama`
+  (default) means Ollama on `127.0.0.1:11434`; `llama-cpp` means the
+  `compatible` provider against a llama.cpp server on `127.0.0.1:8080/v1`
+  (Gemma 3n per the research BOM). `reflex_timeout_ms` (default 2000) is the
+  ceiling on one call. `validate` refuses a reflex rule with a `model` action
+  unless edge mode is on and `local_model` is set. Tests:
+  `edge_names_the_reflex_tiers_small_model`,
+  `validate_refuses_a_model_action_without_a_small_model`.
+- **Local models are probed at `start` and shown in the world-state block.**
+  In edge mode, `start` builds a `ModelRegistry` from the on-device models
+  (`[provider]` when it is local, and the reflex model), probes each
+  (Ollama: `/api/tags` must list the model; llama.cpp: `/v1/models` answers),
+  and records the result; with world memory attached every change of health
+  is the fact `edge.model.<name>` = `{"status": "up"|"down", "local": bool}`.
+  The router's local back-off (`Routing::mark_local_down`, deferred by P1) now
+  marks the local model down there, and a local answer marks it up. The reflex
+  tier skips a model the registry has freshly marked down, so a dead server
+  costs one miss per recheck interval rather than one ceiling per tick. Tests:
+  `health_changes_become_edge_model_facts`,
+  `probe_asks_ollama_for_the_model_and_llama_cpp_for_any_answer`,
+  `the_local_back_off_marks_the_local_model_down_in_the_registry`, and the
+  three in `obc_agent::reflex_tier`.
+- **Eval: reflex tasks complete offline.** `tests/evals.rs`
+  `reflex_tier_offline`: four defined reflex tasks (porch person/animal twice,
+  kitchen alarm/kettle/speech, garage normal/unusual) answered by a scripted
+  local model with the cloud brain wired to fail; each escalation wakes a
+  System 2 turn that the local brain answers, and every `agent.brain` fact says
+  `local`. A second eval holds a slow model to its ceiling: a miss, not a
+  failed turn.
+
+### Removed
+
+- `EdgeAgentBuilder::prefer_local`. It had no caller, and the reflex tier
+  selects its model from `[edge]` rather than from the provider chain.
+
+---
+
 ## Unreleased — Local → cloud escalation on connectivity (2026-10-30)
 
 Phase 20 plan P1 (`docs/PHASE20-PLAN.md`).

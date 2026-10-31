@@ -374,6 +374,16 @@ max_chars = 2400
 # max_tool_iterations = 5
 # p2p_enabled = true             # join the local mesh; no broker needed
 # serve_tools = ["gpio_read"]    # what paired peers may call here
+# The reflex tier (Phase 20 P3): a small local model answers reflex rules'
+# `model` actions, one call each, no tools, no history. "ollama" is Ollama on
+# 127.0.0.1:11434; "llama-cpp" is a llama.cpp server on 127.0.0.1:8080/v1
+# (`llama-server -m gemma-3n-E2B-it-Q4_K_M.gguf`), through the compatible
+# provider. A call past reflex_timeout_ms is a rule miss. At start each local
+# model is probed and shown as edge.model.<name> up or down. A rule with a
+# model action is refused at load unless enabled and local_model are set.
+# local_backend = "ollama"       # or "llama-cpp"
+# local_model = "gemma3n"
+# reflex_timeout_ms = 2000
 
 # ── Reflexes ─────────────────────────────────────────────────────────────────
 # System 1: fast local rules over world state that act without waking the model.
@@ -383,6 +393,19 @@ safing = true
 interval_ms = 1000
 max_escalations_per_min = 6
 
+# A model action (needs [edge] local_model): when the porch PIR fires, the
+# small model is asked the question with the rule's evidence and must answer
+# with one of the labels under `on`; that label's action runs. Anything else,
+# or no answer inside [edge].reflex_timeout_ms, is a miss.
+# [[reflex.rules]]
+# id = "porch-who"
+# when = { type = "sensor", entity = "porch.motion", op = "gt", value = 0.5 }
+# [reflex.rules.then]
+# type = "model"
+# prompt = "Is the porch motion a person or an animal?"
+# on.person = { type = "escalate", reason = "person on the porch" }
+# on.animal = { type = "publish", topic = "porch/animal", payload = {} }
+#
 # The first slot-bound rule on the bench body (walkthrough §A5f): the XIAO's
 # on-die temperature drives its onboard LED (GPIO21, active-low) through a
 # threshold the brain slides — `mesh_command descend {"m":[[0, level]]}` puts

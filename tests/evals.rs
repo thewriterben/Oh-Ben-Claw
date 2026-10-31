@@ -1569,6 +1569,295 @@ mod asi_redteam {
     }
 }
 
+// ── Eval: Phase 20 P3 small-model reflex tier, offline ────────────────────────
+
+/// The roadmap's last Phase 20 row, first half: the defined reflex tasks are
+/// answered by the small local model with the cloud brain wired to fail, and
+/// the System 2 turns they wake stay local -- every `agent.brain` fact says so.
+mod reflex_tier_offline {
+    use super::*;
+    use oh_ben_claw::agent::reflex::{
+        Action, ActionSink, Cmp, Condition, ReflexController, ReflexEngine, ReflexRule,
+    };
+    use oh_ben_claw::agent::reflex_tier::ProviderReflexModel;
+    use oh_ben_claw::memory::world::{Origin, WorldMemory};
+    use std::collections::BTreeMap;
+    use std::time::Duration;
+
+    /// One defined reflex task: a fact, the question the rules cannot express,
+    /// what the small model answers, and the escalation that answer must cause
+    /// (`None`: the label's action is a quiet publish).
+    struct ReflexTask {
+        entity: &'static str,
+        value: f64,
+        prompt: &'static str,
+        labels: &'static [(&'static str, Option<&'static str>)],
+        reply: &'static str,
+        escalates: Option<&'static str>,
+    }
+
+    const REFLEX_TASKS: &[ReflexTask] = &[
+        ReflexTask {
+            entity: "porch.motion",
+            value: 0.9,
+            prompt: "Is the porch motion a person or an animal?",
+            labels: &[("person", Some("person on the porch")), ("animal", None)],
+            reply: "person",
+            escalates: Some("person on the porch"),
+        },
+        ReflexTask {
+            entity: "porch.motion",
+            value: 0.9,
+            prompt: "Is the porch motion a person or an animal?",
+            labels: &[("person", Some("person on the porch")), ("animal", None)],
+            reply: "Animal.",
+            escalates: None,
+        },
+        ReflexTask {
+            entity: "kitchen.sound_db",
+            value: 82.0,
+            prompt: "Is this sound a smoke alarm, a kettle, or speech?",
+            labels: &[
+                ("alarm", Some("smoke alarm in the kitchen")),
+                ("kettle", None),
+                ("speech", None),
+            ],
+            reply: "alarm",
+            escalates: Some("smoke alarm in the kitchen"),
+        },
+        ReflexTask {
+            entity: "garage.door_open_s",
+            value: 900.0,
+            prompt: "The garage door has been open this many seconds. Is that normal or unusual?",
+            labels: &[("unusual", Some("garage left open")), ("normal", None)],
+            reply: "unusual",
+            escalates: Some("garage left open"),
+        },
+    ];
+
+    #[derive(Default)]
+    struct Escalations(Mutex<Vec<String>>);
+
+    #[async_trait]
+    impl ActionSink for Escalations {
+        async fn gpio_write(&self, _n: &str, _p: i64, _v: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn publish(&self, _t: &str, _p: &Value) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn escalate(&self, reason: &str) -> anyhow::Result<()> {
+            self.0.lock().push(reason.to_string());
+            Ok(())
+        }
+    }
+
+    /// The cloud brain, wired to fail: any call is an error.
+    struct Unreachable;
+
+    #[async_trait]
+    impl Provider for Unreachable {
+        fn name(&self) -> &str {
+            "anthropic"
+        }
+        async fn chat_completion(
+            &self,
+            _m: &[ChatMessage],
+            _t: &[Box<dyn Tool>],
+            _c: &ProviderConfig,
+        ) -> anyhow::Result<ChatCompletion> {
+            anyhow::bail!("offline: no route to the cloud")
+        }
+    }
+
+    fn rule(task: &ReflexTask) -> ReflexRule {
+        let on = task
+            .labels
+            .iter()
+            .map(|(label, reason)| {
+                let action = match reason {
+                    Some(r) => Action::Escalate {
+                        reason: r.to_string(),
+                    },
+                    None => Action::Publish {
+                        topic: format!("reflex/{label}"),
+                        payload: json!({}),
+                    },
+                };
+                (label.to_string(), action)
+            })
+            .collect::<BTreeMap<_, _>>();
+        ReflexRule {
+            id: format!("{}-classify", task.entity),
+            when: Condition::Sensor {
+                entity: task.entity.into(),
+                op: Cmp::Gt,
+                value: 0.0,
+            },
+            then: Action::Model {
+                prompt: task.prompt.into(),
+                on,
+            },
+            debounce_ms: 0,
+            max_rate_hz: None,
+            fire_on_change: false,
+            hold_ms: 0,
+        }
+    }
+
+    fn now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    }
+
+    fn small_model() -> ProviderConfig {
+        oh_ben_claw::config::EdgeConfig {
+            enabled: true,
+            local_model: Some("gemma3n".into()),
+            ..Default::default()
+        }
+        .reflex_provider()
+        .expect("local_model is set")
+    }
+
+    fn seeded_world(task: &ReflexTask) -> (Arc<WorldMemory>, u64) {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        let t = now();
+        world
+            .observe_as(
+                task.entity,
+                json!({ "value": task.value }),
+                t,
+                t,
+                "sensor",
+                Origin::Observed,
+            )
+            .unwrap();
+        (world, t)
+    }
+
+    #[tokio::test]
+    async fn eval_reflex_tasks_answer_offline_on_the_small_model() {
+        let small = small_model();
+        let routing = oh_ben_claw::providers::RoutingConfig::default_with_cloud(ProviderConfig {
+            name: "anthropic".into(),
+            model: "claude-sonnet-5".into(),
+            ..Default::default()
+        });
+
+        for (i, task) in REFLEX_TASKS.iter().enumerate() {
+            let (world, t) = seeded_world(task);
+
+            // System 1: one bounded call to the scripted small model.
+            let local = Arc::new(ScriptedProvider::new(vec![ScriptedProvider::text(
+                task.reply,
+            )]));
+            let sink = Arc::new(Escalations::default());
+            let controller = ReflexController::new(
+                ReflexEngine::new(vec![rule(task)]),
+                Arc::clone(&world),
+                sink.clone() as Arc<dyn ActionSink>,
+            )
+            .with_model(
+                Arc::new(ProviderReflexModel::new(local.clone(), small.clone())),
+                Duration::from_secs(2),
+            );
+            controller.tick_and_dispatch(t + 1).await.unwrap();
+            let seen = local.messages_seen.lock().clone();
+            assert_eq!(seen.len(), 1, "task {i}: one call");
+            assert_eq!(seen[0].len(), 1, "task {i}: no system prompt, no history");
+            assert_eq!(
+                local.tool_counts_seen.lock().as_slice(),
+                &[0],
+                "task {i}: no tools"
+            );
+            let escalated = sink.0.lock().clone();
+            assert_eq!(
+                escalated,
+                task.escalates
+                    .map(String::from)
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                "task {i}: {:?} -> {:?}",
+                task.reply,
+                task.escalates
+            );
+
+            // System 2: each escalation wakes a background turn, the local
+            // brain answers it, and the failing cloud is never needed.
+            let brain = Arc::new(ScriptedProvider::new(
+                escalated
+                    .iter()
+                    .map(|_| ScriptedProvider::text("noted"))
+                    .collect(),
+            ));
+            let memory = Arc::new(MemoryStore::open_in_memory().unwrap());
+            let agent = Agent::new(AgentConfig::default(), brain, Arc::clone(&memory), vec![])
+                .with_world_context(
+                    Arc::clone(&world),
+                    oh_ben_claw::agent::world_context::WorldContextConfig::default(),
+                )
+                .with_routing_provider(routing.clone(), Arc::new(Unreachable));
+            memory.create_session_with_id("system2").unwrap();
+            for reason in &escalated {
+                let r = agent
+                    .process("system2", reason, &small)
+                    .await
+                    .expect("the local brain answers");
+                assert_eq!(r.message, "noted");
+            }
+            let facts = world.history("agent.brain").unwrap();
+            assert_eq!(facts.is_empty(), escalated.is_empty(), "task {i}");
+            for f in facts {
+                assert_eq!(f.value["route"], "local", "task {i}: {}", f.value);
+                assert_eq!(f.value["escalated"], false, "task {i}");
+            }
+        }
+    }
+
+    /// A small model past its ceiling is a rule miss: nothing dispatches, the
+    /// tick succeeds, and no System 2 turn is woken to pay for it.
+    #[tokio::test]
+    async fn eval_a_slow_small_model_is_a_miss_not_a_failed_turn() {
+        struct Slow;
+
+        #[async_trait]
+        impl Provider for Slow {
+            fn name(&self) -> &str {
+                "ollama"
+            }
+            async fn chat_completion(
+                &self,
+                _m: &[ChatMessage],
+                _t: &[Box<dyn Tool>],
+                _c: &ProviderConfig,
+            ) -> anyhow::Result<ChatCompletion> {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                Ok(ScriptedProvider::text("person"))
+            }
+        }
+
+        let task = &REFLEX_TASKS[0];
+        let (world, t) = seeded_world(task);
+        let sink = Arc::new(Escalations::default());
+        let controller = ReflexController::new(
+            ReflexEngine::new(vec![rule(task)]),
+            world,
+            sink.clone() as Arc<dyn ActionSink>,
+        )
+        .with_model(
+            Arc::new(ProviderReflexModel::new(Arc::new(Slow), small_model())),
+            Duration::from_millis(50),
+        );
+        let started = std::time::Instant::now();
+        controller.tick_and_dispatch(t + 1).await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(sink.0.lock().is_empty());
+    }
+}
+
 // ── Eval: approval policy matrix golden ───────────────────────────────────────
 
 #[test]
