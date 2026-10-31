@@ -65,11 +65,13 @@ pub fn turn_message(task_name: &str, prompt: &str, tool_report: Option<&str>) ->
 ///
 /// **Taint (decided 2026-10-30).** The call runs with no taint pool, and that is
 /// deliberate. `tool_args` were written by the model in an earlier turn that may
-/// have read external content, but that turn already checked them: `schedule`
-/// is irreversible, so `taint::gated` holds for it, and `taint::scan_args`
-/// walks into the nested `tool_args` (and `prompt`). With `[safety].taint_mode
-/// = "enforce"` a `schedule` call whose arguments echo pooled external content
-/// is refused before anything is stored. Carrying the pool into the stored task
+/// have read external content, and that turn is where they are checked:
+/// `schedule` is irreversible, so `taint::gated` holds for it, and
+/// `taint::scan_args` walks into the nested `tool_args` (and `prompt`). With
+/// `[safety].taint_mode = "enforce"` a `schedule` call whose arguments echo
+/// pooled external content is refused before anything is stored; with `"warn"`
+/// it is flagged and stored. With the default, `"off"`, neither turn scans, so
+/// a pool at fire time would change nothing there either. Carrying the pool into the stored task
 /// would add a column and a migration to re-run a check that has already run,
 /// against content that cannot have changed. Two gaps remain, recorded in
 /// ROADMAP Track 0: an explicit grant for `schedule` waives the check for
