@@ -250,7 +250,7 @@ enum Answered {
 }
 
 impl Answered {
-    fn from_cloud(self) -> bool {
+    fn is_cloud(self) -> bool {
         !matches!(self, Answered::Local)
     }
 }
@@ -585,8 +585,7 @@ impl Agent {
     /// and which brain produced it.
     async fn complete_routed(
         &self,
-        route: routing::Route,
-        reason: &str,
+        (route, reason): (routing::Route, &str),
         session_id: &str,
         messages: &[ChatMessage],
         tools: &[Box<dyn Tool>],
@@ -1133,8 +1132,7 @@ impl Agent {
             };
             let (completion, by) = self
                 .complete_routed(
-                    route,
-                    route_reason,
+                    (route, route_reason),
                     session_id,
                     &messages,
                     &tool_list,
@@ -1142,7 +1140,7 @@ impl Agent {
                     &sink,
                 )
                 .await?;
-            used_cloud |= by.from_cloud();
+            used_cloud |= by.is_cloud();
             escalated |= by == Answered::Escalated;
             brain = Some((completion.provider.clone(), completion.model.clone()));
             if let Some(u) = &completion.usage {
@@ -1367,8 +1365,7 @@ impl Agent {
                 };
                 let (final_completion, by) = self
                     .complete_routed(
-                        route,
-                        route_reason,
+                        (route, route_reason),
                         session_id,
                         &messages,
                         &[],
@@ -1376,7 +1373,7 @@ impl Agent {
                         &sink,
                     )
                     .await?;
-                used_cloud |= by.from_cloud();
+                used_cloud |= by.is_cloud();
                 escalated |= by == Answered::Escalated;
                 brain = Some((
                     final_completion.provider.clone(),
