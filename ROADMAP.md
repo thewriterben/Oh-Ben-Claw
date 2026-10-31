@@ -597,11 +597,13 @@ registry — into ambient conversational agents. Builds on `channels`, `audio`,
 Make on-device inference first-class so the fleet is private, low-latency, and
 resilient offline — deepening the embodied moat. Builds on `agent/edge`,
 `providers`. Enables Phase 18's System 1 and Phase 19's graceful degradation.
+Gap analysis + step plan: `docs/PHASE20-PLAN.md`.
 
 - [x] **`[edge]` takes effect at `start`** — the section was parsed, validated, emitted by the deployment planner, and read by nothing in the binary (Phase 7's NanoPi row below described a library type no command built). Now `[edge].enabled` bounds the agent serving traffic, plain or the orchestrator's inner one (`max_tool_iterations` as a ceiling, `max_history_messages`) and `p2p_enabled` joins the P2P mesh beside MQTT, registering peer tools as peers are heard (`obc_config::edge_start`, `run_start`). Settings that cannot take effect are refused at load. Since then: `[edge].serve_tools` names what a node serves paired peers, each call run through the agent's gated path (policy, Track 0 gate and audit, trust, approval), only with `require_pairing` and `require_frame_auth` enforced; P2P calls also return now, which none did
 - [ ] **Small-model reflex tier** — first-class support for small local models powering System 1 (llama.cpp/Ollama on Pi/Jetson; TinyML on MCUs where viable)
 - [ ] **On-device wake-word + STT/TTS** — local audio front-end so devices respond without round-tripping to the cloud
-- [ ] **Policy-driven cloud fallback** — deterministic rules for escalating local → cloud (capability, confidence, connectivity), honoring cost and privacy config
+- [x] **Privacy holds for the whole turn** (2026-10-30, plan P0) — the router decided privacy from the world-state block the turn started with, so a cloud-routed turn that called `hear` or `vision_analyze` sent the result up on its next model call, and a cloud `[[provider.fallbacks]]` under the local brain answered private turns whenever Ollama was down. Now the result of a tool in `[provider.routing].private_tools` (`hear`, `sense`, `audio_transcribe`, `vision_analyze`) moves the rest of the turn local, recorded as `agent.brain.reason = "private tool result in context"`, and `validate` refuses a non-local fallback while routing is enabled
+- [ ] **Policy-driven cloud fallback** — deterministic rules for escalating local → cloud (capability, confidence, connectivity), honoring cost and privacy config. The cloud → local direction exists (backoff, budget, privacy); local → cloud does not: plan P1 (connectivity, audited) and P2 (capability, confidence)
 - [ ] **Edge model management** — provision/update local models per node role from the deployment planner
 - [ ] Eval: defined reflex tasks complete fully offline; correct, audited fallback to cloud when required
 

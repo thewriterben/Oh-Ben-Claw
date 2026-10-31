@@ -952,7 +952,7 @@ impl Agent {
 
         // Which brain answers this turn (parity item 3). Decided once per turn;
         // a cloud failure mid-turn falls back to local inside `complete_routed`.
-        let (route, route_reason) = self.route_turn(session_id, self.registry_len());
+        let (mut route, mut route_reason) = self.route_turn(session_id, self.registry_len());
         if self.routing.is_some() {
             tracing::info!(session_id = %session_id, route = route.as_str(), reason = route_reason, "routing");
         }
@@ -1166,6 +1166,27 @@ impl Agent {
                         .join(", ")
                 ),
             });
+
+            // A private tool's result (what the room said, what the sensors
+            // read, a frame described) is now in the context; the rest of the
+            // turn is answered here, whichever brain began it. The router saw
+            // the world-state block when the turn started, not this.
+            if route == routing::Route::Cloud {
+                if let Some(r) = self.routing.as_ref() {
+                    if let Some((_, name, _)) = tool_results
+                        .iter()
+                        .find(|(_, name, _)| routing::private_tool(&r.cfg, name))
+                    {
+                        tracing::info!(
+                            session_id = %session_id,
+                            tool = %name,
+                            "private tool result in context; rest of turn local"
+                        );
+                        route = routing::Route::Local;
+                        route_reason = "private tool result in context";
+                    }
+                }
+            }
 
             for (call_id, tool_name, result) in tool_results {
                 messages.push(ChatMessage {
@@ -2938,6 +2959,81 @@ mod routing_agent_tests {
             agent2.route_turn(&session, 0),
             (routing::Route::Local, "daily cloud budget spent")
         );
+    }
+
+    /// A cloud brain that always wants to hear the room first.
+    struct AsksToHear;
+
+    #[async_trait::async_trait]
+    impl obc_providers::Provider for AsksToHear {
+        fn name(&self) -> &str {
+            "anthropic"
+        }
+        async fn chat_completion(
+            &self,
+            _m: &[obc_providers::ChatMessage],
+            _t: &[Box<dyn Tool>],
+            c: &obc_providers::ProviderConfig,
+        ) -> Result<obc_providers::ChatCompletion> {
+            Ok(obc_providers::ChatCompletion {
+                message: String::new(),
+                tool_calls: vec![obc_providers::ToolCall {
+                    id: "call-1".into(),
+                    name: "hear".into(),
+                    args: "{}".into(),
+                }],
+                provider: "anthropic".into(),
+                model: c.model.clone(),
+                usage: None,
+            })
+        }
+    }
+
+    struct Hear;
+
+    #[async_trait::async_trait]
+    impl Tool for Hear {
+        fn name(&self) -> &str {
+            "hear"
+        }
+        fn description(&self) -> &str {
+            "what the room said"
+        }
+        async fn execute(&self, _args: serde_json::Value) -> Result<obc_tool_api::ToolResult> {
+            Ok(obc_tool_api::ToolResult::ok(
+                "someone said: the door code is 4471",
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_private_tool_result_moves_the_rest_of_the_turn_local() {
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
+        let world = Arc::new(obc_memory::world::WorldMemory::open_in_memory().unwrap());
+        let agent = Agent::new(
+            AgentConfig::default(),
+            Arc::new(Named("ollama", "from local")),
+            Arc::clone(&memory),
+            vec![Box::new(Hear)],
+        )
+        .with_world_context(
+            Arc::clone(&world),
+            world_context::WorldContextConfig::default(),
+        )
+        .with_routing_provider(routing_cfg(), Arc::new(AsksToHear));
+        let session = memory.create_session("console").unwrap();
+        assert_eq!(agent.route_turn(&session, 1).0, routing::Route::Cloud);
+
+        let r = agent
+            .process(&session, "what did they say?", &Default::default())
+            .await
+            .unwrap();
+        // The cloud brain asked `hear`; its result never went back up.
+        assert_eq!(r.message, "from local");
+        let brain = world.current("agent.brain").unwrap().unwrap();
+        assert_eq!(brain.value["route"], "local");
+        assert_eq!(brain.value["provider"], "ollama");
+        assert_eq!(brain.value["reason"], "private tool result in context");
     }
 }
 

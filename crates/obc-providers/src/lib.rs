@@ -522,6 +522,14 @@ pub struct RoutingConfig {
     /// `["vision.subject."]` (ClawCam detections of people and animals).
     #[serde(default = "default_private_entity_prefixes")]
     pub private_entity_prefixes: Vec<String>,
+    /// Tools whose result must not leave this host. Once one of them has run
+    /// in a turn, the rest of that turn is answered locally, whichever brain
+    /// began it: the decision is made before the model is called, and the
+    /// result of a mid-turn tool call is the one thing it cannot see. Default
+    /// `["hear", "sense", "audio_transcribe", "vision_analyze"]`: what the room
+    /// said, what the sensors read, a transcript, a description of a frame.
+    #[serde(default = "default_private_tools")]
+    pub private_tools: Vec<String>,
     /// After a cloud failure, route local for this long. Default 300.
     #[serde(default = "default_offline_backoff_secs")]
     pub offline_backoff_secs: u64,
@@ -552,6 +560,12 @@ fn default_private_sources() -> Vec<String> {
 fn default_private_entity_prefixes() -> Vec<String> {
     vec!["vision.subject.".to_string()]
 }
+fn default_private_tools() -> Vec<String> {
+    ["hear", "sense", "audio_transcribe", "vision_analyze"]
+        .into_iter()
+        .map(String::from)
+        .collect()
+}
 fn default_offline_backoff_secs() -> u64 {
     300
 }
@@ -573,6 +587,7 @@ impl RoutingConfig {
             local_session_prefixes: default_local_session_prefixes(),
             private_sources: default_private_sources(),
             private_entity_prefixes: default_private_entity_prefixes(),
+            private_tools: default_private_tools(),
             offline_backoff_secs: default_offline_backoff_secs(),
             daily_budget_usd: 0.0,
             cloud_input_price_per_million: default_cloud_input_price(),
