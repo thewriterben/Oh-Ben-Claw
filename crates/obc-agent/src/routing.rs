@@ -37,6 +37,19 @@
 //! escalated` with `escalated: true` on the `agent.brain` fact and an audit
 //! row, and starts the local back-off that rule 5 reads. A turn kept local
 //! for privacy never escalates; neither does one with `routing disabled`.
+//!
+//! Two more ways up, both inside the turn and both once per turn (plan P2,
+//! 2026-10-30). Capability: a local turn that runs a tool named in
+//! `cloud_tools` hands the rest of the turn to the cloud brain as `cloud tool
+//! called` ([`cloud_tool_escalates`]), the mirror image of the private-tool
+//! rule, and privacy wins when both apply: a turn local for a privacy reason,
+//! or in which a private tool has already run, stays. Confidence: with
+//! `escalate_on_low_confidence` the local brain is told
+//! ([`LOW_CONFIDENCE_CONTRACT`]) that a final answer of exactly
+//! `{"escalate": "<why>"}` asks for the cloud; the agent drops that answer and
+//! re-runs the turn there as `local brain asked to escalate: <why>`
+//! ([`escalation_request`]). Both respect the cloud back-off and budget, and
+//! both are recorded like P1: `escalated: true` and a `routing.escalate` row.
 
 use obc_memory::world::Fact;
 use obc_providers::RoutingConfig;
@@ -128,6 +141,92 @@ pub fn private_facts<'a>(facts: impl IntoIterator<Item = &'a Fact>, cfg: &Routin
 /// that node's room, not this one's, and its result already crossed the LAN.
 pub fn private_tool(cfg: &RoutingConfig, tool_name: &str) -> bool {
     cfg.private_tools.iter().any(|t| t == tool_name)
+}
+
+/// Whether a tool of this name is one whose call deserves the cloud brain
+/// (`cloud_tools`). Exact match, like [`private_tool`].
+pub fn cloud_tool(cfg: &RoutingConfig, tool_name: &str) -> bool {
+    cfg.cloud_tools.iter().any(|t| t == tool_name)
+}
+
+/// Whether running `tool_name` on a turn routed local for `reason` sends the
+/// rest of the turn to the cloud brain (plan P2, capability axis): the tool is
+/// in `cloud_tools`, the reason is one that may escalate ([`may_escalate`]),
+/// and no private tool has run in the turn so far. Privacy wins: a turn kept
+/// local for `private facts in context` or `private tool result in context`
+/// stays, and so does one in which `hear` ran before `plan_site`. The caller
+/// still checks the cloud back-off and budget.
+pub fn cloud_tool_escalates(
+    cfg: &RoutingConfig,
+    reason: &str,
+    private_tool_ran: bool,
+    tool_name: &str,
+) -> bool {
+    !private_tool_ran && may_escalate(reason) && cloud_tool(cfg, tool_name)
+}
+
+/// What the local brain is told when `escalate_on_low_confidence` is on, and
+/// only then: a model that was never told about the contract never triggers
+/// it. Appended to the system prompt of a turn routed local.
+pub const LOW_CONFIDENCE_CONTRACT: &str = "### Asking for the larger model\n\
+If this request needs more than you can do well (long-horizon planning, deep \
+reasoning, knowledge you are unsure of), answer with exactly this JSON object \
+and nothing else: {\"escalate\": \"<one sentence on why>\"}. The turn is then \
+re-run on the larger model and your answer is dropped. Do not use it for \
+requests you can answer, and never after a tool result that must stay on this \
+device (what the room said, what the camera saw).";
+
+/// The longest `why` kept from an escalation request; the rest is cut.
+pub const MAX_ESCALATION_WHY: usize = 200;
+
+/// Whether a local completion's final text is a request to escalate (plan P2,
+/// confidence axis): a JSON object with the single key `escalate` and a
+/// non-empty string value, allowing surrounding whitespace or one fenced
+/// block (with or without a `json` tag) and nothing else. Anything looser,
+/// such as prose around it, other keys, an array or a non-string value, is an
+/// ordinary answer. Returns the why, trimmed and cut to
+/// [`MAX_ESCALATION_WHY`] chars.
+pub fn escalation_request(text: &str) -> Option<String> {
+    let body = unfence(text.trim());
+    if !body.starts_with('{') {
+        return None;
+    }
+    let obj = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(body).ok()?;
+    if obj.len() != 1 {
+        return None;
+    }
+    let why = obj.get("escalate")?.as_str()?.trim();
+    if why.is_empty() {
+        return None;
+    }
+    let cut = why
+        .char_indices()
+        .nth(MAX_ESCALATION_WHY)
+        .map_or(why.len(), |(i, _)| i);
+    Some(why[..cut].trim_end().to_string())
+}
+
+/// Strip one fenced code block around `s`, if that is all there is.
+fn unfence(s: &str) -> &str {
+    let Some(rest) = s.strip_prefix("```") else {
+        return s;
+    };
+    let Some(inner) = rest.strip_suffix("```") else {
+        return s;
+    };
+    // An optional language tag ends at the first line break.
+    let inner = match inner.find('\n') {
+        Some(nl)
+            if inner[..nl]
+                .trim()
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric()) =>
+        {
+            &inner[nl + 1..]
+        }
+        _ => inner,
+    };
+    inner.trim()
 }
 
 fn is_private(f: &Fact, cfg: &RoutingConfig) -> bool {
@@ -274,6 +373,109 @@ mod tests {
         ] {
             assert!(!may_escalate(r), "{r}");
         }
+    }
+
+    #[test]
+    fn a_cloud_tool_escalates_a_routine_turn_unless_privacy_applies() {
+        let c = RoutingConfig {
+            cloud_tools: vec!["plan_site".into(), "foresight".into()],
+            ..cfg()
+        };
+        assert!(cloud_tool(&c, "plan_site"));
+        assert!(!cloud_tool(&c, "p2p:node3:plan_site"), "exact match");
+        assert!(!cloud_tool(&cfg(), "plan_site"), "default list is empty");
+        assert!(cloud_tool_escalates(&c, "routine turn", false, "plan_site"));
+        assert!(cloud_tool_escalates(
+            &c,
+            "background session",
+            false,
+            "foresight"
+        ));
+        assert!(!cloud_tool_escalates(&c, "routine turn", false, "shell"));
+        // Privacy wins over capability, both ways it can arrive.
+        assert!(!cloud_tool_escalates(
+            &c,
+            "private facts in context",
+            false,
+            "plan_site"
+        ));
+        assert!(!cloud_tool_escalates(
+            &c,
+            "private tool result in context",
+            false,
+            "plan_site"
+        ));
+        assert!(
+            !cloud_tool_escalates(&c, "routine turn", true, "plan_site"),
+            "a private tool ran earlier in the turn"
+        );
+        // A turn with nowhere to go, or no router, stays where it is.
+        for r in [
+            "routing disabled",
+            "cloud unreachable, backing off",
+            "daily cloud budget spent",
+            "no router",
+        ] {
+            assert!(!cloud_tool_escalates(&c, r, false, "plan_site"), "{r}");
+        }
+    }
+
+    #[test]
+    fn an_escalation_request_is_exactly_one_json_object() {
+        assert_eq!(
+            escalation_request(r#"{"escalate": "needs a site plan"}"#).as_deref(),
+            Some("needs a site plan")
+        );
+        assert_eq!(
+            escalation_request("  \n{\"escalate\":\"why\"}\n\n").as_deref(),
+            Some("why"),
+            "surrounding whitespace"
+        );
+        assert_eq!(
+            escalation_request("```json\n{\"escalate\": \"why\"}\n```").as_deref(),
+            Some("why"),
+            "one fenced block with a tag"
+        );
+        assert_eq!(
+            escalation_request("```\n{\"escalate\": \"why\"}\n```").as_deref(),
+            Some("why"),
+            "one fenced block without a tag"
+        );
+        for text in [
+            "",
+            "I think {\"escalate\": \"why\"} is best",
+            "{\"escalate\": \"why\"} and more",
+            "{\"escalate\": \"\"}",
+            "{\"escalate\": \"   \"}",
+            "{\"escalate\": true}",
+            "{\"escalate\": \"why\", \"answer\": \"x\"}",
+            "{\"reason\": \"why\"}",
+            "[{\"escalate\": \"why\"}]",
+            "```json\n{\"escalate\": \"why\"}\n```\nso there",
+            "```json\n{\"escalate\": \"why\"}",
+            "The answer is 42.",
+        ] {
+            assert_eq!(escalation_request(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_long_why_is_cut_on_a_char_boundary() {
+        let why = "x".repeat(MAX_ESCALATION_WHY + 50);
+        let got = escalation_request(&format!("{{\"escalate\": \"{why}\"}}")).unwrap();
+        assert_eq!(got.chars().count(), MAX_ESCALATION_WHY);
+        let why = "é".repeat(MAX_ESCALATION_WHY + 5);
+        let got = escalation_request(&format!("{{\"escalate\": \"{why}\"}}")).unwrap();
+        assert_eq!(got.chars().count(), MAX_ESCALATION_WHY);
+    }
+
+    #[test]
+    fn the_contract_names_the_shape_the_parser_accepts() {
+        assert!(LOW_CONFIDENCE_CONTRACT.contains(r#"{"escalate": "<one sentence on why>"}"#));
+        assert_eq!(
+            escalation_request(r#"{"escalate": "<one sentence on why>"}"#).as_deref(),
+            Some("<one sentence on why>")
+        );
     }
 
     #[test]

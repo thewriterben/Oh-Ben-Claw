@@ -543,6 +543,24 @@ pub struct RoutingConfig {
     /// escalate. Default true.
     #[serde(default = "default_prompt_caching")]
     pub escalate_on_local_failure: bool,
+    /// Tools that deserve the cloud brain (plan P2, capability axis). When a
+    /// turn on the local brain runs one of them for a reason other than
+    /// privacy, the rest of the turn goes to the cloud, unless it is cooling
+    /// or over budget: the mirror image of `private_tools`, and privacy wins
+    /// when both apply. Exact name match. Recorded as `cloud tool called` with
+    /// `escalated: true` and an audit row. Default empty; candidates are
+    /// `plan_site` and `foresight`.
+    #[serde(default)]
+    pub cloud_tools: Vec<String>,
+    /// Let the local brain ask for the cloud (plan P2, confidence axis). When
+    /// on, the system prompt tells it that a final answer of exactly
+    /// `{"escalate": "<why>"}` hands the turn to the cloud brain; the agent
+    /// drops the local answer and re-runs the turn there once, unless the
+    /// turn is private or the cloud is cooling or over budget. Recorded as
+    /// `local brain asked to escalate: <why>` with `escalated: true` and an
+    /// audit row. Off, the text is returned as it is. Default false.
+    #[serde(default)]
+    pub escalate_on_low_confidence: bool,
     /// Estimated USD of cloud turns per day before the router stops sending
     /// them. 0 = no cap. Default 0.
     #[serde(default)]
@@ -600,6 +618,8 @@ impl RoutingConfig {
             private_tools: default_private_tools(),
             offline_backoff_secs: default_offline_backoff_secs(),
             escalate_on_local_failure: true,
+            cloud_tools: Vec::new(),
+            escalate_on_low_confidence: false,
             daily_budget_usd: 0.0,
             cloud_input_price_per_million: default_cloud_input_price(),
             cloud_output_price_per_million: default_cloud_output_price(),

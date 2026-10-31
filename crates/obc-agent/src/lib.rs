@@ -311,8 +311,14 @@ impl Routing {
     fn can_escalate(&self, reason: &str) -> bool {
         self.cfg.escalate_on_local_failure
             && routing::may_escalate(reason)
-            && !self.cooling()
-            && !self.budget_exceeded()
+            && self.cloud_available()
+    }
+
+    /// Whether the cloud brain can take a turn right now: neither cooling nor
+    /// over budget. What every way up (P1's failure, P2's capability and
+    /// confidence axes) checks last.
+    fn cloud_available(&self) -> bool {
+        !self.cooling() && !self.budget_exceeded()
     }
 
     fn today() -> u64 {
@@ -691,9 +697,22 @@ impl Agent {
         }
     }
 
+    /// Plan P2: the same row for a turn handed up by policy
+    /// ([`ActionAuditor::record_routing_handoff`]): a cloud tool ran on the
+    /// local brain, or the local brain asked for the larger model. `detail`
+    /// names the tool or the brain's reason in the decision text.
+    fn audit_handoff(&self, session_id: &str, reason: &str, from: &str, to: &str, detail: &str) {
+        let Some(auditor) = &self.auditor else { return };
+        let mut a = auditor.lock().unwrap_or_else(|p| p.into_inner());
+        if let Err(e) = a.record_routing_handoff(now_ms(), session_id, from, to, reason, detail) {
+            tracing::warn!(error = %e, "routing: could not audit the hand-off");
+        }
+    }
+
     /// Write the decision to world memory as `agent.brain` when it changed, so
     /// the world-state block says which brain is answering and why.
-    /// `escalated` says the turn went up because the local brain failed.
+    /// `escalated` says the turn went up after being routed local: the local
+    /// brain failed, a cloud tool ran, or the local brain asked (P1, P2).
     fn record_brain(
         &self,
         route: routing::Route,
@@ -1088,9 +1107,38 @@ impl Agent {
         if self.routing.is_some() {
             tracing::info!(session_id = %session_id, route = route.as_str(), reason = route_reason, "routing");
         }
+        // Plan P2, confidence axis: a turn on the local brain that may go up
+        // is told the contract, and only when the option is on, so a model
+        // never told about it never triggers it. Appended to the system
+        // message, not the ephemeral tail: the same bytes every such turn.
+        if route == routing::Route::Local
+            && routing::may_escalate(route_reason)
+            && self
+                .routing
+                .as_ref()
+                .is_some_and(|r| r.cfg.escalate_on_low_confidence)
+        {
+            if let Some(system) = messages
+                .first_mut()
+                .filter(|m| matches!(m.role, ChatRole::System))
+            {
+                let trimmed = system.content.trim_end().to_string();
+                system.content = format!("{trimmed}\n\n{}", routing::LOW_CONFIDENCE_CONTRACT);
+            }
+        }
+        let local_brain = format!("{}/{}", self.provider.name(), provider_config.model);
+        let cloud_brain = self
+            .routing
+            .as_ref()
+            .map(|r| format!("{}/{}", r.cloud.name(), r.cfg.cloud.model))
+            .unwrap_or_default();
         let mut used_cloud = false;
-        // Plan P1: the local brain failed and the cloud answered instead.
-        let mut escalated = false;
+        // The turn went up after being routed local, and why: the local brain
+        // failed (P1), a cloud tool ran, or the local brain asked (P2). At most
+        // one per turn; the string is the `agent.brain` reason.
+        let mut escalated: Option<String> = None;
+        // A tool in `private_tools` has run this turn: nothing goes up after.
+        let mut private_tool_ran = false;
         // Real token numbers when the provider reports them (Anthropic, Ollama);
         // summed over the turn's iterations. Otherwise the chars/4 guess below.
         let mut turn_usage = obc_providers::Usage::default();
@@ -1141,7 +1189,9 @@ impl Agent {
                 )
                 .await?;
             used_cloud |= by.is_cloud();
-            escalated |= by == Answered::Escalated;
+            if by == Answered::Escalated && escalated.is_none() {
+                escalated = Some("local brain failed, escalated".to_string());
+            }
             brain = Some((completion.provider.clone(), completion.model.clone()));
             if let Some(u) = &completion.usage {
                 turn_usage.add(u);
@@ -1149,6 +1199,47 @@ impl Agent {
             }
 
             if completion.tool_calls.is_empty() {
+                // Plan P2, confidence axis: the local brain, told the contract,
+                // answered that it wants the larger model. Drop that answer and
+                // re-run the turn on the cloud brain, once, when the turn may
+                // go up and the cloud is available. At the last iteration
+                // there is no turn left to re-run, so the text stands.
+                let asked = self.routing.as_ref().and_then(|r| {
+                    (route == routing::Route::Local
+                        && escalated.is_none()
+                        && iteration + 1 < max_iterations
+                        && r.cfg.escalate_on_low_confidence
+                        && routing::may_escalate(route_reason)
+                        && !private_tool_ran
+                        && r.cloud_available())
+                    .then(|| routing::escalation_request(&completion.message))
+                    .flatten()
+                });
+                if let Some(why) = asked {
+                    let reason = format!("local brain asked to escalate: {why}");
+                    tracing::info!(
+                        session_id = %session_id,
+                        why = %why,
+                        "routing: local brain asked to escalate; re-running the turn on the cloud"
+                    );
+                    if let Some(obs) = &self.obs {
+                        obs.metrics
+                            .counter("routing_low_confidence_escalations_total")
+                            .inc();
+                    }
+                    self.audit_handoff(
+                        session_id,
+                        &reason,
+                        &local_brain,
+                        &cloud_brain,
+                        &format!("local brain {local_brain} asked to escalate: {why}"),
+                    );
+                    sink(obc_providers::StreamDelta::Restart);
+                    route = routing::Route::Cloud;
+                    route_reason = "local brain asked to escalate";
+                    escalated = Some(reason);
+                    continue;
+                }
                 // Final text response — we're done
                 final_response = completion.message.clone();
                 break;
@@ -1313,6 +1404,11 @@ impl Agent {
             // read, a frame described) is now in the context; the rest of the
             // turn is answered here, whichever brain began it. The router saw
             // the world-state block when the turn started, not this.
+            if let Some(r) = self.routing.as_ref() {
+                private_tool_ran |= tool_results
+                    .iter()
+                    .any(|(_, name, _)| routing::private_tool(&r.cfg, name));
+            }
             if route == routing::Route::Cloud {
                 if let Some(r) = self.routing.as_ref() {
                     if let Some((_, name, _)) = tool_results
@@ -1326,6 +1422,49 @@ impl Agent {
                         );
                         route = routing::Route::Local;
                         route_reason = "private tool result in context";
+                        // The turn came back down; the audit row keeps the trip.
+                        escalated = None;
+                    }
+                }
+            }
+            // Plan P2, capability axis: a tool that deserves the cloud brain
+            // (`cloud_tools`) ran on the local one; the rest of the turn goes
+            // up, once, unless privacy applies (`cloud_tool_escalates`) or the
+            // cloud is cooling or over budget. The mirror image of the rule
+            // above.
+            if route == routing::Route::Local && escalated.is_none() {
+                if let Some(r) = self.routing.as_ref() {
+                    if let Some((_, name, _)) = tool_results.iter().find(|(_, name, _)| {
+                        routing::cloud_tool_escalates(&r.cfg, route_reason, private_tool_ran, name)
+                    }) {
+                        if r.cloud_available() {
+                            tracing::info!(
+                                session_id = %session_id,
+                                tool = %name,
+                                "routing: cloud tool called; rest of turn on the cloud"
+                            );
+                            if let Some(obs) = &self.obs {
+                                obs.metrics
+                                    .counter("routing_cloud_tool_escalations_total")
+                                    .inc();
+                            }
+                            self.audit_handoff(
+                                session_id,
+                                "cloud tool called",
+                                &local_brain,
+                                &cloud_brain,
+                                &format!("cloud tool {name} called on the local brain"),
+                            );
+                            route = routing::Route::Cloud;
+                            route_reason = "cloud tool called";
+                            escalated = Some("cloud tool called".to_string());
+                        } else {
+                            tracing::debug!(
+                                session_id = %session_id,
+                                tool = %name,
+                                "routing: cloud tool called, but the cloud is cooling or over budget; staying local"
+                            );
+                        }
                     }
                 }
             }
@@ -1374,7 +1513,9 @@ impl Agent {
                     )
                     .await?;
                 used_cloud |= by.is_cloud();
-                escalated |= by == Answered::Escalated;
+                if by == Answered::Escalated && escalated.is_none() {
+                    escalated = Some("local brain failed, escalated".to_string());
+                }
                 brain = Some((
                     final_completion.provider.clone(),
                     final_completion.model.clone(),
@@ -1431,14 +1572,20 @@ impl Agent {
                 // What actually answered, not what was decided: a cloud turn
                 // that failed over mid-way was answered locally, and a local
                 // turn whose brain failed was answered by the cloud.
-                let (answered, why) = match (route, used_cloud, escalated) {
-                    (_, _, true) => (routing::Route::Cloud, "local brain failed, escalated"),
-                    (routing::Route::Cloud, false, _) => {
+                let (answered, why) = match (&escalated, route, used_cloud) {
+                    (Some(why), _, true) => (routing::Route::Cloud, why.as_str()),
+                    (_, routing::Route::Cloud, false) => {
                         (routing::Route::Local, "cloud unreachable, backing off")
                     }
                     _ => (route, route_reason),
                 };
-                self.record_brain(answered, why, provider_name, model, escalated);
+                self.record_brain(
+                    answered,
+                    why,
+                    provider_name,
+                    model,
+                    escalated.is_some() && used_cloud,
+                );
             }
         }
         let (model_used, in_price, out_price) = match (&self.routing, used_cloud) {
@@ -3391,6 +3538,403 @@ mod routing_agent_tests {
         assert_eq!(brain.value["route"], "local");
         assert_eq!(brain.value["provider"], "ollama");
         assert_eq!(brain.value["reason"], "private tool result in context");
+    }
+
+    // ── Plan P2: capability and confidence axes ──
+
+    /// A provider that replays a script of completions and records what it
+    /// was shown. Running past the script is the test's failure, not the
+    /// router's: a `FAIL` here would be mistaken for P1's connectivity axis.
+    struct Scripted {
+        name: &'static str,
+        script: Mutex<std::collections::VecDeque<obc_providers::ChatCompletion>>,
+        seen: Mutex<Vec<Vec<obc_providers::ChatMessage>>>,
+    }
+
+    impl Scripted {
+        fn new(name: &'static str, script: Vec<obc_providers::ChatCompletion>) -> Arc<Self> {
+            Arc::new(Self {
+                name,
+                script: Mutex::new(script.into()),
+                seen: Mutex::new(Vec::new()),
+            })
+        }
+        fn text(message: &str) -> obc_providers::ChatCompletion {
+            obc_providers::ChatCompletion {
+                message: message.to_string(),
+                tool_calls: vec![],
+                provider: String::new(),
+                model: String::new(),
+                usage: None,
+            }
+        }
+        fn call(tool: &str) -> obc_providers::ChatCompletion {
+            obc_providers::ChatCompletion {
+                message: String::new(),
+                tool_calls: vec![obc_providers::ToolCall {
+                    id: format!("call-{tool}"),
+                    name: tool.to_string(),
+                    args: "{}".into(),
+                }],
+                provider: String::new(),
+                model: String::new(),
+                usage: None,
+            }
+        }
+        fn calls(&self) -> usize {
+            self.seen.lock().unwrap().len()
+        }
+        /// The system message of the n-th call.
+        fn system_prompt(&self, n: usize) -> String {
+            self.seen.lock().unwrap()[n][0].content.clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl obc_providers::Provider for Scripted {
+        fn name(&self) -> &str {
+            self.name
+        }
+        async fn chat_completion(
+            &self,
+            m: &[obc_providers::ChatMessage],
+            _t: &[Box<dyn Tool>],
+            c: &obc_providers::ProviderConfig,
+        ) -> Result<obc_providers::ChatCompletion> {
+            self.seen.lock().unwrap().push(m.to_vec());
+            let mut next = self
+                .script
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| panic!("{} ran past its script", self.name));
+            next.provider = self.name.into();
+            next.model = c.model.clone();
+            Ok(next)
+        }
+    }
+
+    /// A tool that does nothing but exist under a name.
+    struct Stub(&'static str);
+
+    #[async_trait::async_trait]
+    impl Tool for Stub {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn description(&self) -> &str {
+            "a stub"
+        }
+        async fn execute(&self, _args: serde_json::Value) -> Result<obc_tool_api::ToolResult> {
+            Ok(obc_tool_api::ToolResult::ok(format!("{} ran", self.0)))
+        }
+    }
+
+    /// `routine_cfg` with `plan_site` as a cloud tool.
+    fn cloud_tool_cfg() -> obc_providers::RoutingConfig {
+        obc_providers::RoutingConfig {
+            cloud_tools: vec!["plan_site".into()],
+            ..routine_cfg()
+        }
+    }
+
+    fn scripted_agent(
+        local: Arc<Scripted>,
+        cloud: Arc<Scripted>,
+        tools: Vec<Box<dyn Tool>>,
+        cfg: obc_providers::RoutingConfig,
+    ) -> (
+        Agent,
+        Arc<obc_memory::MemoryStore>,
+        Arc<obc_memory::world::WorldMemory>,
+    ) {
+        let memory = Arc::new(obc_memory::MemoryStore::open_in_memory().unwrap());
+        let world = Arc::new(obc_memory::world::WorldMemory::open_in_memory().unwrap());
+        let agent = Agent::new(AgentConfig::default(), local, Arc::clone(&memory), tools)
+            .with_world_context(
+                Arc::clone(&world),
+                world_context::WorldContextConfig::default(),
+            )
+            .with_routing_provider(cfg, cloud);
+        (agent, memory, world)
+    }
+
+    #[tokio::test]
+    async fn a_cloud_tool_call_on_the_local_brain_escalates_the_rest_of_the_turn() {
+        let path = std::env::temp_dir().join(format!(
+            "obc-cloud-tool-audit-{}-{}.jsonl",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let auditor = Arc::new(Mutex::new(
+            ActionAuditor::open(b"k".to_vec(), path.clone()).unwrap(),
+        ));
+        let local = Scripted::new("ollama", vec![Scripted::call("plan_site")]);
+        let cloud = Scripted::new("anthropic", vec![Scripted::text("from cloud")]);
+        let (agent, memory, world) = scripted_agent(
+            Arc::clone(&local),
+            Arc::clone(&cloud),
+            vec![Box::new(Stub("plan_site"))],
+            cloud_tool_cfg(),
+        );
+        let agent = agent.with_action_auditor(Arc::clone(&auditor));
+        let session = memory.create_session("console").unwrap();
+        assert_eq!(
+            agent.route_turn(&session, 1),
+            (routing::Route::Local, "routine turn")
+        );
+
+        let r = agent
+            .process(&session, "plan the site", &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, "from cloud");
+        assert_eq!(
+            local.calls(),
+            1,
+            "the local brain called the tool, then stepped aside"
+        );
+        assert_eq!(cloud.calls(), 1);
+        assert!(
+            cloud.seen.lock().unwrap()[0]
+                .iter()
+                .any(|m| m.content.contains("plan_site ran")),
+            "the cloud brain got the tool result"
+        );
+        let brain = world.current("agent.brain").unwrap().unwrap();
+        assert_eq!(brain.value["route"], "cloud");
+        assert_eq!(brain.value["provider"], "anthropic");
+        assert_eq!(brain.value["reason"], "cloud tool called");
+        assert_eq!(brain.value["escalated"], true);
+
+        drop(agent);
+        drop(auditor);
+        let log = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let rows: Vec<obc_safety::audit::ActionRecord> = log
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 1, "{log}");
+        assert_eq!(rows[0].node_id, session);
+        assert_eq!(rows[0].tool, "routing.escalate");
+        match &rows[0].decision {
+            obc_safety::audit::Decision::AllowedUncovered(why) => {
+                assert!(why.contains("plan_site"), "{why}")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn privacy_wins_over_a_cloud_tool() {
+        // A private tool ran first: the turn stays local, cloud tool or not.
+        let local = Scripted::new(
+            "ollama",
+            vec![
+                Scripted::call("hear"),
+                Scripted::call("plan_site"),
+                Scripted::text("from local"),
+            ],
+        );
+        let cloud = Scripted::new("anthropic", vec![]);
+        let (agent, memory, world) = scripted_agent(
+            Arc::clone(&local),
+            Arc::clone(&cloud),
+            vec![Box::new(Hear), Box::new(Stub("plan_site"))],
+            cloud_tool_cfg(),
+        );
+        let session = memory.create_session("console").unwrap();
+        let r = agent
+            .process(&session, "listen, then plan", &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, "from local");
+        assert_eq!(local.calls(), 3);
+        assert_eq!(cloud.calls(), 0, "nothing went up");
+        let brain = world.current("agent.brain").unwrap().unwrap();
+        assert_eq!(brain.value["route"], "local");
+        assert_eq!(brain.value["escalated"], false);
+
+        // The turn was private from the start: same.
+        let local = Scripted::new(
+            "ollama",
+            vec![Scripted::call("plan_site"), Scripted::text("from local")],
+        );
+        let cloud = Scripted::new("anthropic", vec![]);
+        let (agent, memory, world) = scripted_agent(
+            Arc::clone(&local),
+            Arc::clone(&cloud),
+            vec![Box::new(Stub("plan_site"))],
+            cloud_tool_cfg(),
+        );
+        seed_private_fact(&world);
+        let session = memory.create_session("console").unwrap();
+        assert_eq!(
+            agent.route_turn(&session, 1),
+            (routing::Route::Local, "private facts in context")
+        );
+        let r = agent
+            .process(&session, "plan the site", &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, "from local");
+        assert_eq!(cloud.calls(), 0);
+        assert_eq!(
+            world.current("agent.brain").unwrap().unwrap().value["reason"],
+            "private facts in context"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cooling_cloud_keeps_a_cloud_tool_turn_local() {
+        let local = Scripted::new(
+            "ollama",
+            vec![Scripted::call("plan_site"), Scripted::text("from local")],
+        );
+        let cloud = Scripted::new("anthropic", vec![]);
+        let (agent, memory, world) = scripted_agent(
+            Arc::clone(&local),
+            Arc::clone(&cloud),
+            vec![Box::new(Stub("plan_site"))],
+            cloud_tool_cfg(),
+        );
+        agent.routing.as_ref().unwrap().mark_down();
+        let session = memory.create_session("console").unwrap();
+        let r = agent
+            .process(&session, "plan the site", &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, "from local");
+        assert_eq!(cloud.calls(), 0);
+        let brain = world.current("agent.brain").unwrap().unwrap();
+        assert_eq!(brain.value["reason"], "cloud unreachable, backing off");
+        assert_eq!(brain.value["escalated"], false);
+    }
+
+    /// `routine_cfg` with the confidence axis on.
+    fn low_confidence_cfg() -> obc_providers::RoutingConfig {
+        obc_providers::RoutingConfig {
+            escalate_on_low_confidence: true,
+            ..routine_cfg()
+        }
+    }
+
+    const ASK: &str = r#"{"escalate": "this needs long-horizon planning"}"#;
+
+    #[tokio::test]
+    async fn a_low_confidence_answer_is_re_run_on_the_cloud_once() {
+        let local = Scripted::new("ollama", vec![Scripted::text(ASK)]);
+        let cloud = Scripted::new("anthropic", vec![Scripted::text("from cloud")]);
+        let (agent, memory, world) = scripted_agent(
+            Arc::clone(&local),
+            Arc::clone(&cloud),
+            vec![],
+            low_confidence_cfg(),
+        );
+        let session = memory.create_session("console").unwrap();
+        let r = agent
+            .process(&session, "plan the week", &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, "from cloud", "the cloud answer is the turn's");
+        assert_eq!(local.calls(), 1);
+        assert_eq!(cloud.calls(), 1);
+        assert!(
+            local
+                .system_prompt(0)
+                .contains(routing::LOW_CONFIDENCE_CONTRACT),
+            "the local brain was told the contract"
+        );
+        assert!(
+            !cloud.seen.lock().unwrap()[0]
+                .iter()
+                .any(|m| m.content.contains(ASK)),
+            "the local answer was dropped, not shown to the cloud"
+        );
+        let brain = world.current("agent.brain").unwrap().unwrap();
+        assert_eq!(brain.value["route"], "cloud");
+        assert_eq!(brain.value["provider"], "anthropic");
+        assert_eq!(
+            brain.value["reason"],
+            "local brain asked to escalate: this needs long-horizon planning"
+        );
+        assert_eq!(brain.value["escalated"], true);
+        let stored = memory.load_messages(&session).unwrap();
+        assert!(
+            stored.iter().any(|m| m.content == "from cloud")
+                && !stored.iter().any(|m| m.content == ASK),
+            "only the cloud answer is in the history"
+        );
+
+        // Once: a cloud brain that answers the same JSON is quoted, not looped.
+        let local = Scripted::new("ollama", vec![Scripted::text(ASK)]);
+        let cloud = Scripted::new("anthropic", vec![Scripted::text(ASK)]);
+        let (agent, memory, _) = scripted_agent(
+            Arc::clone(&local),
+            Arc::clone(&cloud),
+            vec![],
+            low_confidence_cfg(),
+        );
+        let session = memory.create_session("console").unwrap();
+        let r = agent
+            .process(&session, "plan the week", &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, ASK);
+        assert_eq!(cloud.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn with_the_option_off_the_json_is_ordinary_text() {
+        let local = Scripted::new("ollama", vec![Scripted::text(ASK)]);
+        let cloud = Scripted::new("anthropic", vec![]);
+        let (agent, memory, world) = scripted_agent(
+            Arc::clone(&local),
+            Arc::clone(&cloud),
+            vec![],
+            routine_cfg(),
+        );
+        let session = memory.create_session("console").unwrap();
+        let r = agent
+            .process(&session, "plan the week", &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, ASK);
+        assert_eq!(cloud.calls(), 0);
+        assert!(
+            !local
+                .system_prompt(0)
+                .contains(routing::LOW_CONFIDENCE_CONTRACT),
+            "a brain never told the contract"
+        );
+        let brain = world.current("agent.brain").unwrap().unwrap();
+        assert_eq!(brain.value["reason"], "routine turn");
+        assert_eq!(brain.value["escalated"], false);
+    }
+
+    #[tokio::test]
+    async fn a_private_turn_is_not_told_the_contract_and_its_ask_is_text() {
+        let local = Scripted::new("ollama", vec![Scripted::text(ASK)]);
+        let cloud = Scripted::new("anthropic", vec![]);
+        let (agent, memory, world) = scripted_agent(
+            Arc::clone(&local),
+            Arc::clone(&cloud),
+            vec![],
+            low_confidence_cfg(),
+        );
+        seed_private_fact(&world);
+        let session = memory.create_session("console").unwrap();
+        let r = agent
+            .process(&session, "who is there?", &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(r.message, ASK);
+        assert_eq!(cloud.calls(), 0);
+        assert!(!local
+            .system_prompt(0)
+            .contains(routing::LOW_CONFIDENCE_CONTRACT));
     }
 }
 

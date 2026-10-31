@@ -254,6 +254,43 @@ impl ActionAuditor {
         reason: &str,
         error: &str,
     ) -> anyhow::Result<ActionRecord> {
+        self.routing_escalation_row(
+            ts_ms,
+            session_id,
+            from,
+            to,
+            reason,
+            format!("local brain {from} failed: {error}"),
+        )
+    }
+
+    /// The same `routing.escalate` row for a turn that left the host by
+    /// policy rather than failure (Phase 20 plan P2): a tool in `cloud_tools`
+    /// ran on the local brain, or the local brain answered that it wanted the
+    /// larger model. `detail` is the decision text in plain words, naming the
+    /// tool or the brain's reason, so a reader of the chain sees why the turn
+    /// went up without the arguments' hashes.
+    pub fn record_routing_handoff(
+        &mut self,
+        ts_ms: u64,
+        session_id: &str,
+        from: &str,
+        to: &str,
+        reason: &str,
+        detail: &str,
+    ) -> anyhow::Result<ActionRecord> {
+        self.routing_escalation_row(ts_ms, session_id, from, to, reason, detail.to_string())
+    }
+
+    fn routing_escalation_row(
+        &mut self,
+        ts_ms: u64,
+        session_id: &str,
+        from: &str,
+        to: &str,
+        reason: &str,
+        decision: String,
+    ) -> anyhow::Result<ActionRecord> {
         let args = serde_json::json!({ "from": from, "to": to, "reason": reason });
         self.record(
             ts_ms,
@@ -261,7 +298,7 @@ impl ActionAuditor {
             "routing.escalate",
             &args,
             crate::risk::RiskClass::safe(),
-            Decision::AllowedUncovered(format!("local brain {from} failed: {error}")),
+            Decision::AllowedUncovered(decision),
         )
     }
 }

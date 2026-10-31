@@ -4035,6 +4035,8 @@ model = "claude-sonnet-5"
             ["hear", "sense", "audio_transcribe", "vision_analyze"]
         );
         assert!(r.escalate_on_local_failure);
+        assert!(r.cloud_tools.is_empty(), "P2: no cloud tool by default");
+        assert!(!r.escalate_on_low_confidence, "P2: off by default");
         assert_eq!(r.daily_budget_usd, 5.0);
 
         let err = toml::from_str::<Config>(

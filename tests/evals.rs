@@ -16,8 +16,9 @@
 use async_trait::async_trait;
 use oh_ben_claw::agent::Agent;
 use oh_ben_claw::config::{AgentConfig, AutonomyConfig, AutonomyLevel, ProviderConfig};
+use oh_ben_claw::memory::world::WorldMemory;
 use oh_ben_claw::memory::MemoryStore;
-use oh_ben_claw::providers::{ChatCompletion, ChatMessage, Provider, ToolCall};
+use oh_ben_claw::providers::{ChatCompletion, ChatMessage, Provider, RoutingConfig, ToolCall};
 use oh_ben_claw::tools::traits::{Tool, ToolResult};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
@@ -147,6 +148,39 @@ fn echo_tool(name: &str, fail: bool) -> (Box<dyn Tool>, Arc<Mutex<Vec<String>>>)
     )
 }
 
+/// A routed agent (Phase 20): `local` is the `[provider]` brain, `cloud` the
+/// `[provider.routing.cloud]` one, with world memory so `agent.brain` is
+/// written. Console turns are `routine turn`s (no `console_to_cloud`).
+fn make_routed_agent(
+    local: Arc<dyn Provider>,
+    cloud: Arc<dyn Provider>,
+    tools: Vec<Box<dyn Tool>>,
+    cfg: impl FnOnce(RoutingConfig) -> RoutingConfig,
+) -> (Agent, String, Arc<WorldMemory>) {
+    let config = AgentConfig {
+        name: "eval-agent".to_string(),
+        system_prompt: "You are an eval agent.".to_string(),
+        max_tool_iterations: 4,
+        ..AgentConfig::default()
+    };
+    let memory = Arc::new(MemoryStore::open_in_memory().expect("in-memory store"));
+    let world = Arc::new(WorldMemory::open_in_memory().expect("in-memory world"));
+    let session_id = memory.create_session("eval").expect("create session");
+    let routing = cfg(RoutingConfig {
+        console_to_cloud: false,
+        tool_threshold: 0,
+        ..RoutingConfig::default_with_cloud(ProviderConfig {
+            name: "anthropic".into(),
+            model: "claude-sonnet-5".into(),
+            ..ProviderConfig::default()
+        })
+    });
+    let agent = Agent::new(config, local, memory, tools)
+        .with_world_context(Arc::clone(&world), Default::default())
+        .with_routing_provider(routing, cloud);
+    (agent, session_id, world)
+}
+
 // ── Eval: agent-loop tool routing ─────────────────────────────────────────────
 
 #[tokio::test]
@@ -254,6 +288,77 @@ async fn eval_routing_unknown_tool_degrades_gracefully() {
     // Golden: no real tool ran; the error surfaced to the model; final answer produced.
     assert!(calls.lock().is_empty());
     assert_eq!(resp.message, "That tool does not exist.");
+}
+
+// ── Eval: escalation axes (Phase 20 plan P2) ──────────────────────────────────
+// The connectivity axis (P1) is covered in `obc-agent`'s own tests, where the
+// local back-off can be inspected; these pin the two policy axes end to end:
+// the turn's answer, the `agent.brain` fact, and that nothing loops.
+
+#[tokio::test]
+async fn eval_escalation_cloud_tool_hands_the_turn_up() {
+    let local = Arc::new(ScriptedProvider::new(vec![ScriptedProvider::tool_call(
+        "plan_site",
+        json!({"site": "barn"}),
+    )]));
+    let cloud = Arc::new(ScriptedProvider::new(vec![ScriptedProvider::text(
+        "Site plan: three nodes.",
+    )]));
+    let (tool, calls) = echo_tool("plan_site", false);
+    let (agent, session, world) =
+        make_routed_agent(local, cloud.clone(), vec![tool], |c| RoutingConfig {
+            cloud_tools: vec!["plan_site".into()],
+            ..c
+        });
+
+    let resp = agent
+        .process(&session, "plan the barn", &ProviderConfig::default())
+        .await
+        .unwrap();
+
+    assert_eq!(resp.message, "Site plan: three nodes.");
+    assert_eq!(calls.lock().len(), 1);
+    assert_eq!(
+        cloud.tool_counts_seen.lock().len(),
+        1,
+        "the cloud answered once"
+    );
+    let brain = world.current("agent.brain").unwrap().unwrap();
+    assert_eq!(brain.value["route"], "cloud");
+    assert_eq!(brain.value["reason"], "cloud tool called");
+    assert_eq!(brain.value["escalated"], true);
+}
+
+#[tokio::test]
+async fn eval_escalation_low_confidence_re_runs_the_turn_once() {
+    let ask = r#"{"escalate": "needs the larger model"}"#;
+    let local = Arc::new(ScriptedProvider::new(vec![ScriptedProvider::text(ask)]));
+    // The cloud brain asks too: it is quoted, never looped.
+    let cloud = Arc::new(ScriptedProvider::new(vec![ScriptedProvider::text(ask)]));
+    let (agent, session, world) =
+        make_routed_agent(local.clone(), cloud.clone(), vec![], |c| RoutingConfig {
+            escalate_on_low_confidence: true,
+            ..c
+        });
+
+    let resp = agent
+        .process(&session, "plan the week", &ProviderConfig::default())
+        .await
+        .unwrap();
+
+    assert_eq!(resp.message, ask, "the cloud's text stands as it is");
+    assert_eq!(local.tool_counts_seen.lock().len(), 1);
+    assert_eq!(cloud.tool_counts_seen.lock().len(), 1);
+    assert!(
+        local.messages_seen.lock()[0][0].contains("Asking for the larger model"),
+        "the local brain saw the contract"
+    );
+    let brain = world.current("agent.brain").unwrap().unwrap();
+    assert_eq!(
+        brain.value["reason"],
+        "local brain asked to escalate: needs the larger model"
+    );
+    assert_eq!(brain.value["escalated"], true);
 }
 
 // ── Eval: MCP wire-shape goldens ──────────────────────────────────────────────

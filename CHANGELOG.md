@@ -5,6 +5,47 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Capability and confidence axes (2026-10-30)
+
+Phase 20 plan P2 (`docs/PHASE20-PLAN.md`).
+
+### Added
+
+- **A cloud tool hands the turn up.** `[provider.routing].cloud_tools`
+  (default empty; `plan_site` and `foresight` are the documented candidates)
+  names the tools that deserve the cloud brain. When a turn on the local brain
+  runs one of them, the rest of the turn goes to the cloud as `cloud tool
+  called`: the mirror image of P0's `private_tools` rule, exact name match
+  like it. Privacy wins when both apply: a turn local for `private facts in
+  context` or `private tool result in context`, or one in which a private
+  tool has already run, stays local; so does one while the cloud is backing
+  off or over budget. Tests:
+  `a_cloud_tool_escalates_a_routine_turn_unless_privacy_applies`,
+  `a_cloud_tool_call_on_the_local_brain_escalates_the_rest_of_the_turn`,
+  `privacy_wins_over_a_cloud_tool`, `a_cooling_cloud_keeps_a_cloud_tool_turn_local`,
+  `eval_escalation_cloud_tool_hands_the_turn_up`.
+- **The local brain can ask for the larger model.**
+  `[provider.routing].escalate_on_low_confidence` (default false). When on, a
+  turn routed local for a reason other than privacy has the contract appended
+  to its system prompt (`routing::LOW_CONFIDENCE_CONTRACT`), and only then, so
+  a model never told about it never triggers it. A final answer that is
+  exactly `{"escalate": "<why>"}` (whitespace or one fenced block around it;
+  anything looser is an ordinary answer) is dropped, the client told to
+  discard what streamed, and the turn re-run on the cloud brain once as `local
+  brain asked to escalate: <why>`. Never loops: a cloud answer of the same
+  shape is returned as text. Tests:
+  `an_escalation_request_is_exactly_one_json_object`,
+  `a_long_why_is_cut_on_a_char_boundary`,
+  `the_contract_names_the_shape_the_parser_accepts`,
+  `a_low_confidence_answer_is_re_run_on_the_cloud_once`,
+  `with_the_option_off_the_json_is_ordinary_text`,
+  `a_private_turn_is_not_told_the_contract_and_its_ask_is_text`,
+  `eval_escalation_low_confidence_re_runs_the_turn_once`.
+- **Both are audited like P1.** The `agent.brain` fact gets `escalated: true`
+  and the reason; `ActionAuditor::record_routing_handoff`, a sibling of
+  `record_routing_escalation`, writes the `routing.escalate` row with the
+  session as node and the tool, or the brain's why, in the decision text.
+
 ## Unreleased — Local → cloud escalation on connectivity (2026-10-30)
 
 Phase 20 plan P1 (`docs/PHASE20-PLAN.md`).

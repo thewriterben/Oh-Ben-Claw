@@ -44,11 +44,12 @@ Each step ships on its own, with tests, a roadmap row and a changelog entry.
 - `Routing::local_down_until` mirrors the cloud backoff (`offline_backoff_secs`): while it cools, non-privacy turns route to the cloud up front as `local brain down, backing off` (rule 5, after the privacy and background rules), so a dead Ollama does not cost a timeout per turn; privacy turns still go local and fail.
 - Deferred: `ModelRegistry::record_health` stays unwired. The agent holds no registry; P3 builds one at `start` and `mark_local_down` feeds it then.
 
-### P2 — Capability and confidence axes
+### P2 — Capability and confidence axes (shipped 2026-10-30; roadmap "policy-driven cloud fallback", second and third axes)
 
-- Capability: a `RoutingConfig.cloud_tools` list (default empty); a turn whose first completion calls one of them escalates the rest of the turn, the mirror image of P0's rule. Candidate defaults: `plan_site`, `foresight`.
-- Confidence: the local completion may end with a structured `{"escalate": "<why>"}` (System 2 already parses structured output); the agent re-runs the turn on the cloud brain with the local answer dropped, once, audited as above. Config `escalate_on_low_confidence = true`.
-- Eval rows for both in `tests/evals.rs`.
+- Capability: `RoutingConfig.cloud_tools` (default empty; candidates `plan_site`, `foresight`, documented in `config.example.toml` and not enabled). When a turn on the local brain runs one of them (exact name match, like `private_tools`), the rest of the turn goes to the cloud brain as `cloud tool called` (`routing::cloud_tool_escalates`), the mirror image of P0's rule. Privacy wins: a turn local for `private facts in context` or `private tool result in context`, or one in which a private tool has already run, stays local. The cloud back-off and budget are respected (`Routing::cloud_available`).
+- Confidence: `RoutingConfig.escalate_on_low_confidence` (default false). When on, a turn routed local for a non-privacy reason gets `routing::LOW_CONFIDENCE_CONTRACT` appended to its system message, and only then, so a model never told about the contract never triggers it. A local final answer that is exactly `{"escalate": "<why>"}` (surrounding whitespace or one fenced block allowed; prose, other keys, non-string values are an ordinary answer; `routing::escalation_request`) is dropped, the client told to discard it (`Restart`), and the turn re-run on the cloud brain as `local brain asked to escalate: <why>` (the why cut at 200 chars). Once per turn: a cloud answer of the same shape is returned as text, and so is the ask when the cloud is cooling or over budget, or at the last tool iteration.
+- Audited like P1: `agent.brain` gets `escalated: true` and the reason; `ActionAuditor::record_routing_handoff` (a sibling of `record_routing_escalation`) writes the `routing.escalate` row with the session as node and the tool, or the brain's why, in the decision text.
+- Tests: `routing.rs` `a_cloud_tool_escalates_a_routine_turn_unless_privacy_applies`, `an_escalation_request_is_exactly_one_json_object`, `a_long_why_is_cut_on_a_char_boundary`, `the_contract_names_the_shape_the_parser_accepts`; `lib.rs` `a_cloud_tool_call_on_the_local_brain_escalates_the_rest_of_the_turn`, `privacy_wins_over_a_cloud_tool`, `a_cooling_cloud_keeps_a_cloud_tool_turn_local`, `a_low_confidence_answer_is_re_run_on_the_cloud_once`, `with_the_option_off_the_json_is_ordinary_text`, `a_private_turn_is_not_told_the_contract_and_its_ask_is_text`; `tests/evals.rs` `eval_escalation_cloud_tool_hands_the_turn_up`, `eval_escalation_low_confidence_re_runs_the_turn_once`.
 
 ### P3 — Small-model reflex tier
 
@@ -69,4 +70,4 @@ Each step ships on its own, with tests, a roadmap row and a changelog entry.
 
 ### Eval (roadmap last row)
 
-`tests/evals.rs`: a scripted local provider answers the defined reflex tasks with the cloud provider wired to fail, and every `agent.brain` fact says `local`; a second set forces each escalation axis (P1–P2) and checks the audit row exists and the reason names the axis.
+`tests/evals.rs`: a scripted local provider answers the defined reflex tasks with the cloud provider wired to fail, and every `agent.brain` fact says `local`; a second set forces each escalation axis (P1–P2) and checks the audit row exists and the reason names the axis. The P2 axes are in (`eval_escalation_*`, checking the answer and the `agent.brain` reason; the audit row is checked in `obc-agent`'s own tests); the offline reflex set and the P1 row wait for P3's reflex tier.
