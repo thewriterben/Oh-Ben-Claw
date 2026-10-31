@@ -139,7 +139,13 @@ initial_backoff_ms = 500
 # retried once on the cloud (escalate_on_local_failure), unless the cloud is
 # backing off or over budget, recorded as `local brain failed, escalated`
 # with `escalated = true` and an audit row (tool `routing.escalate`), and the
-# local brain backs off for offline_backoff_secs. With routing enabled,
+# local brain backs off for offline_backoff_secs. Two more ways up, each once
+# per turn and recorded the same way (Phase 20 P2): a turn on the local brain
+# that runs a tool in cloud_tools hands the rest of the turn to the cloud as
+# `cloud tool called` (the mirror of private_tools; privacy wins when both
+# apply); and with escalate_on_low_confidence the local brain is told that a
+# final answer of exactly {"escalate": "<why>"} asks for the cloud, which
+# then re-runs the turn with that answer dropped. With routing enabled,
 # [[provider.fallbacks]] must be local too (ollama, or a loopback base_url);
 # cloud models go under [provider.routing.cloud], or the privacy rules are
 # bypassed when the local model is down.
@@ -153,6 +159,8 @@ initial_backoff_ms = 500
 # private_tools = ["hear", "sense", "audio_transcribe", "vision_analyze"]
 # offline_backoff_secs = 300             # cloud failure → local, and local failure → cloud, for this long
 # escalate_on_local_failure = true       # local brain fails on a non-private turn → retry once on the cloud
+# cloud_tools = []                       # tools that hand the rest of a local turn to the cloud; candidates: ["plan_site", "foresight"]
+# escalate_on_low_confidence = false     # tell the local brain it may answer {"escalate": "<why>"} to hand the turn to the cloud
 # daily_budget_usd = 5.0                 # 0 = no cap; estimated from chars/4
 # cloud_input_price_per_million = 2.0    # Sonnet 5 list prices, 2026-09-11
 # cloud_output_price_per_million = 10.0
