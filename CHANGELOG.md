@@ -5,6 +5,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Capability and confidence escalation (2026-10-30)
+
+Phase 20 plan P2 (`docs/PHASE20-PLAN.md`).
+
+### Added
+
+- **A cloud tool sends the rest of the turn up.** `[provider.routing].cloud_tools`
+  (default empty; `plan_site` and `foresight` are candidates) names tools
+  whose result the cloud brain should reason about. When the local brain
+  calls one on a turn routed local for a reason that is not privacy, the
+  tool runs here and the rest of the turn goes to the cloud brain, unless it
+  is backing off or over budget: the mirror of `private_tools`. Recorded as
+  `agent.brain.reason = "cloud tool called, escalated"` with `escalated: true`
+  and a `routing.escalate` audit row whose detail is `called cloud tool <name>`.
+  Tests: `a_cloud_tool_call_sends_the_rest_of_the_turn_up_and_is_audited`,
+  `without_cloud_tools_the_same_call_stays_local`,
+  `a_private_turn_keeps_a_cloud_tool_local`.
+- **The local brain can hand a turn up.** On a turn that may go up, the local
+  brain is told (an ephemeral system message, `routing::ESCALATE_HINT`) that
+  it may answer `{"escalate": "<why>"}`. Such an answer is dropped behind a
+  `Restart` delta and the step re-runs on the cloud brain once, with the hint
+  removed, recorded as `local brain unsure, escalated` and audited with
+  `unsure: <why>`. A request that may not go up is stripped from the answer.
+  `[provider.routing].escalate_on_low_confidence` (default true). Tests:
+  `an_unsure_local_answer_is_dropped_and_the_turn_reruns_on_the_cloud`,
+  `an_unsure_answer_that_may_not_go_up_is_stripped`,
+  `an_escalation_request_is_a_trailing_json_object_with_a_reason`.
+- **Evals for every escalation axis.** `tests/evals.rs` `escalation_axes`
+  forces P1 (local failure), capability and confidence with scripted brains
+  and checks that the `agent.brain` reason names the axis and that one
+  `routing.escalate` row carries it; a control row stays local with the
+  cloud brain wired to fail.
+
+### Changed
+
+- The `routing.escalate` audit row's decision text is now `local brain
+  <from> <detail>`, where the detail names the axis (`failed: <error>`,
+  `called cloud tool <name>`, `unsure: <why>`).
+
+### Fixed
+
+- **A private tool result on a local turn could still escalate.** P0's rule
+  only fired on cloud-routed turns, so a `routine turn` that called `hear`
+  and then hit a local failure sent the transcript up through P1. The rule
+  now also moves a local turn's reason to `private tool result in context`,
+  which no axis escalates. Test:
+  `a_private_tool_result_on_a_local_turn_stops_every_escalation`.
+
+---
+
 ## Unreleased — Local → cloud escalation on connectivity (2026-10-30)
 
 Phase 20 plan P1 (`docs/PHASE20-PLAN.md`).

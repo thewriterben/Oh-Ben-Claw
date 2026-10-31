@@ -37,6 +37,17 @@
 //! escalated` with `escalated: true` on the `agent.brain` fact and an audit
 //! row, and starts the local back-off that rule 5 reads. A turn kept local
 //! for privacy never escalates; neither does one with `routing disabled`.
+//!
+//! Plan P2 (2026-10-30) adds two more axes on the same terms — a turn the
+//! router sent local for a reason that may escalate, the cloud neither cooling
+//! nor over budget, once per turn, audited. Capability: when the local brain
+//! calls a tool named in `cloud_tools`, the rest of the turn goes up
+//! ([`cloud_tool`]), recorded as `cloud tool called, escalated`. Confidence:
+//! the local brain is told it may answer `{"escalate": "<why>"}`
+//! ([`escalation_request`]); the answer is dropped and the turn continues on
+//! the cloud brain, recorded as `local brain unsure, escalated`. A private
+//! tool result anywhere in the turn — on either brain — makes the reason
+//! `private tool result in context`, which none of the three axes accept.
 
 use obc_memory::world::Fact;
 use obc_providers::RoutingConfig;
@@ -128,6 +139,70 @@ pub fn private_facts<'a>(facts: impl IntoIterator<Item = &'a Fact>, cfg: &Routin
 /// that node's room, not this one's, and its result already crossed the LAN.
 pub fn private_tool(cfg: &RoutingConfig, tool_name: &str) -> bool {
     cfg.private_tools.iter().any(|t| t == tool_name)
+}
+
+/// Whether a tool of this name is one whose call sends the rest of the turn
+/// to the cloud brain (`cloud_tools`, plan P2). Exact match, as for
+/// [`private_tool`].
+pub fn cloud_tool(cfg: &RoutingConfig, tool_name: &str) -> bool {
+    cfg.cloud_tools.iter().any(|t| t == tool_name)
+}
+
+/// What the local brain is told on a turn it may hand up (plan P2).
+pub const ESCALATE_HINT: &str = "If this needs more than you can do well here, answer with only \
+{\"escalate\": \"<why>\"} and a larger model will take the turn.";
+
+/// The context a local turn takes up to the cloud brain: everything but
+/// [`ESCALATE_HINT`], which is for the local brain only. Borrowed when the
+/// hint is not there.
+pub fn cloud_context(
+    messages: &[obc_providers::ChatMessage],
+) -> std::borrow::Cow<'_, [obc_providers::ChatMessage]> {
+    let hint = |m: &obc_providers::ChatMessage| {
+        m.role == obc_providers::ChatRole::System && m.content == ESCALATE_HINT
+    };
+    if messages.iter().any(hint) {
+        messages.iter().filter(|m| !hint(m)).cloned().collect()
+    } else {
+        std::borrow::Cow::Borrowed(messages)
+    }
+}
+
+/// The local brain's request to hand the turn up: an answer that ends with a
+/// JSON object carrying a string `escalate`, bare or in a code fence. Returns
+/// the reason and the answer with the marker removed. Only the last KiB is
+/// searched; the marker is short and an answer may be long.
+pub fn escalation_request(answer: &str) -> Option<(String, String)> {
+    let mut body = answer.trim_end();
+    if let Some(b) = body.strip_suffix("```") {
+        body = b.trim_end();
+    }
+    if !body.ends_with('}') {
+        return None;
+    }
+    // At most one `{` starts an object that runs exactly to the end: an inner
+    // one would leave its parent's closing brace as trailing text.
+    let (start, obj) = body
+        .rmatch_indices('{')
+        .take_while(|(i, _)| body.len() - i <= 1024)
+        .find_map(|(i, _)| {
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&body[i..])
+                .ok()
+                .map(|o| (i, o))
+        })?;
+    let why = obj.get("escalate")?.as_str()?.trim();
+    let why = if why.is_empty() {
+        "no reason given"
+    } else {
+        why
+    };
+    let rest = body[..start].trim_end();
+    let rest = rest
+        .strip_suffix("```json")
+        .or_else(|| rest.strip_suffix("```"))
+        .unwrap_or(rest)
+        .trim_end();
+    Some((why.to_string(), rest.to_string()))
 }
 
 fn is_private(f: &Fact, cfg: &RoutingConfig) -> bool {
@@ -273,6 +348,43 @@ mod tests {
             "no router",
         ] {
             assert!(!may_escalate(r), "{r}");
+        }
+    }
+
+    #[test]
+    fn cloud_tools_match_by_exact_name_and_default_to_none() {
+        assert!(!cloud_tool(&cfg(), "plan_site"));
+        let c = RoutingConfig {
+            cloud_tools: vec!["plan_site".into()],
+            ..cfg()
+        };
+        assert!(cloud_tool(&c, "plan_site"));
+        assert!(!cloud_tool(&c, "p2p:node1:plan_site"));
+    }
+
+    #[test]
+    fn an_escalation_request_is_a_trailing_json_object_with_a_reason() {
+        assert_eq!(
+            escalation_request(r#"{"escalate": "needs a site plan"}"#),
+            Some(("needs a site plan".into(), String::new()))
+        );
+        assert_eq!(
+            escalation_request("I am not sure.\n```json\n{\"escalate\":\"too hard\"}\n```\n"),
+            Some(("too hard".into(), "I am not sure.".into()))
+        );
+        assert_eq!(
+            escalation_request(r#"{"escalate": "  "}"#).unwrap().0,
+            "no reason given"
+        );
+        for not in [
+            "The answer is 4.",
+            r#"{"answer": "4"}"#,
+            r#"{"escalate": true}"#,
+            r#"{"a": {"escalate": "inner"}}"#,
+            r#"{"escalate": "x"} and then more text"#,
+            "a brace at the end }",
+        ] {
+            assert_eq!(escalation_request(not), None, "{not}");
         }
     }
 

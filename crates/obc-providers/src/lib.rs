@@ -530,6 +530,15 @@ pub struct RoutingConfig {
     /// said, what the sensors read, a transcript, a description of a frame.
     #[serde(default = "default_private_tools")]
     pub private_tools: Vec<String>,
+    /// Tools whose call means the turn needs the cloud brain: once the local
+    /// brain calls one on a turn it was given for a reason other than privacy
+    /// (`routine turn`, `background session`), the rest of that turn goes up,
+    /// unless the cloud is cooling or over budget — the mirror of
+    /// `private_tools`. The tool itself runs here either way; the cloud reasons
+    /// about its result. Recorded as `cloud tool called, escalated` with an
+    /// audit row. Default empty (`plan_site` and `foresight` are candidates).
+    #[serde(default)]
+    pub cloud_tools: Vec<String>,
     /// After a cloud failure, route local for this long; after a local
     /// failure, route non-private turns to the cloud for this long. Default 300.
     #[serde(default = "default_offline_backoff_secs")]
@@ -543,6 +552,13 @@ pub struct RoutingConfig {
     /// escalate. Default true.
     #[serde(default = "default_prompt_caching")]
     pub escalate_on_local_failure: bool,
+    /// On a turn the local brain may hand up (the same reasons), it is told it
+    /// can answer `{"escalate": "<why>"}` instead; when it does, its answer is
+    /// dropped and the turn continues on the cloud brain, once, recorded as
+    /// `local brain unsure, escalated` with an audit row. Where the turn may
+    /// not go up, the marker is stripped from the answer. Default true.
+    #[serde(default = "default_prompt_caching")]
+    pub escalate_on_low_confidence: bool,
     /// Estimated USD of cloud turns per day before the router stops sending
     /// them. 0 = no cap. Default 0.
     #[serde(default)]
@@ -598,8 +614,10 @@ impl RoutingConfig {
             private_sources: default_private_sources(),
             private_entity_prefixes: default_private_entity_prefixes(),
             private_tools: default_private_tools(),
+            cloud_tools: Vec::new(),
             offline_backoff_secs: default_offline_backoff_secs(),
             escalate_on_local_failure: true,
+            escalate_on_low_confidence: true,
             daily_budget_usd: 0.0,
             cloud_input_price_per_million: default_cloud_input_price(),
             cloud_output_price_per_million: default_cloud_output_price(),
