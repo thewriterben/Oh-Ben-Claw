@@ -61,6 +61,11 @@ pub struct EdgeStart {
     pub mesh: Option<obc_spine::p2p::P2pConfig>,
     /// Tools to serve paired peers on that mesh (`[edge].serve_tools`).
     pub serve_tools: Vec<String>,
+    /// The reflex tier's small model (`[edge].local_backend`/`local_model`),
+    /// which answers reflex rules' `model` actions. Plan P3.
+    pub reflex_model: Option<ProviderConfig>,
+    /// The latency ceiling on one reflex model call (`[edge].reflex_timeout_ms`).
+    pub reflex_timeout: std::time::Duration,
 }
 
 /// `None` when `[edge]` is off, which leaves `start` exactly as it was.
@@ -76,6 +81,8 @@ pub fn edge_start(config: &Config) -> Option<EdgeStart> {
         max_history: edge.max_history_messages,
         mesh: edge.p2p_enabled.then(|| config.spine.p2p_config()),
         serve_tools: edge.serve_tools.clone(),
+        reflex_model: edge.reflex_provider(),
+        reflex_timeout: std::time::Duration::from_millis(edge.reflex_timeout_ms),
     })
 }
 
@@ -119,7 +126,7 @@ pub use obc_spine::{MeshSupervisorConfig, SpineConfig};
 /// config block, the root `Config` composes it. `ProviderConfig` went to
 /// `providers`, `SpineConfig` and `MeshSupervisorConfig` went to `spine`, and
 /// these four close the final cycle in the core.
-pub use obc_agent::{AgentConfig, EdgeConfig};
+pub use obc_agent::{AgentConfig, EdgeConfig, LocalBackend};
 pub use obc_approval::{AutonomyConfig, AutonomyLevel};
 
 // ── Agent Configuration ──────────────────────────────────────────────────────
@@ -2728,6 +2735,34 @@ impl Config {
                  served only on the mesh. Set p2p_enabled = true, or drop serve_tools."
             );
         }
+        // Plan P3: a `model` action needs the small model `[edge]` names, and is
+        // checked here rather than when the controller first ticks.
+        for rule in &self.reflex.rules {
+            rule.validate()
+                .map_err(|e| anyhow::anyhow!("reflex rule {:?}: {e}", rule.id))?;
+        }
+        let model_rules: Vec<&str> = self
+            .reflex
+            .rules
+            .iter()
+            .filter(|r| matches!(r.then, obc_reflex::Action::Model { .. }))
+            .map(|r| r.id.as_str())
+            .collect();
+        if !model_rules.is_empty() && !(self.edge.enabled && self.edge.reflex_provider().is_some())
+        {
+            anyhow::bail!(
+                "reflex rules {model_rules:?} use a model action, which needs [edge]                  enabled = true and local_model set to the small model that answers it"
+            );
+        }
+        if self.edge.reflex_timeout_ms == 0 {
+            anyhow::bail!("edge.reflex_timeout_ms must be > 0");
+        }
+        if self.edge.local_model.is_some() && !self.edge.enabled {
+            warnings.push(
+                "edge.local_model has no effect while edge.enabled = false: the reflex                  tier runs only in edge mode"
+                    .to_string(),
+            );
+        }
         let mut seen = std::collections::HashSet::new();
         for name in &self.edge.serve_tools {
             if name.trim().is_empty() {
@@ -3482,6 +3517,54 @@ mod tests {
         let edge = edge_start(&config).unwrap();
         assert_eq!(edge.agent.max_tool_iterations, 2);
         assert!(edge.mesh.is_none());
+    }
+
+    /// Plan P3: `[edge].local_backend` picks the server, `local_model` the model.
+    #[test]
+    fn edge_names_the_reflex_tiers_small_model() {
+        let config: Config = toml::from_str(
+            "[edge]
+enabled = true
+local_backend = \"llama-cpp\"
+local_model = \"gemma-3n\"
+",
+        )
+        .unwrap();
+        let edge = edge_start(&config).unwrap();
+        let model = edge.reflex_model.expect("local_model is set");
+        assert_eq!(model.name, "compatible");
+        assert_eq!(
+            model.base_url.as_deref(),
+            Some("http://127.0.0.1:8080/v1/chat/completions")
+        );
+        assert_eq!(edge.reflex_timeout, std::time::Duration::from_millis(2_000));
+
+        let mut config = config;
+        config.edge.local_backend = obc_agent::LocalBackend::Ollama;
+        let model = edge_start(&config).unwrap().reflex_model.unwrap();
+        assert_eq!(model.name, "ollama");
+        assert_eq!(model.model, "gemma-3n");
+        config.edge.local_model = None;
+        assert!(edge_start(&config).unwrap().reflex_model.is_none());
+    }
+
+    #[test]
+    fn validate_refuses_a_model_action_without_a_small_model() {
+        let toml = "[reflex]
+enabled = true
+[[reflex.rules]]
+id = \"porch\"
+            when = { type = \"sensor\", entity = \"porch.motion\", op = \"gt\", value = 0.5 }
+            then = { type = \"model\", prompt = \"Person or animal?\",             on = { person = { type = \"escalate\", reason = \"person\" } } }
+";
+        let mut config: Config = toml::from_str(toml).unwrap();
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("local_model"), "{err}");
+        config.edge.enabled = true;
+        config.edge.local_model = Some("gemma3n".into());
+        config.validate().unwrap();
+        config.edge.reflex_timeout_ms = 0;
+        assert!(config.validate().is_err());
     }
 
     fn require_mesh_auth(config: &mut Config) {

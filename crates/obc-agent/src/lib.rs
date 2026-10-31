@@ -94,6 +94,7 @@ mod skill_replay;
 // from inside the loop as they happen rather than reconstructed afterwards.
 pub mod context;
 pub mod posture;
+pub mod reflex_tier;
 pub mod routing;
 pub mod scheduled;
 pub mod system2;
@@ -210,6 +211,9 @@ pub struct Agent {
     /// Parity item 3: a second, cloud brain chosen per turn. `None` means
     /// every turn uses `provider`, as before 2026-09-11.
     routing: Option<Routing>,
+    /// Plan P3: the edge node's model registry. The local brain's failures and
+    /// recoveries are recorded in it, and through it as `edge.model.<name>`.
+    models: Option<Arc<obc_providers::model_registry::ModelRegistry>>,
     /// Parity item 4: the agent's two bounded note files, appended to the
     /// system prompt (so they sit in the cached prefix and change rarely).
     notes: Option<Arc<obc_memory::notes::Notes>>,
@@ -292,10 +296,17 @@ impl Routing {
             .is_some_and(|until| until > std::time::Instant::now())
     }
 
-    /// Start the local back-off (same length as the cloud one). The agent holds
-    /// no `ModelRegistry`, so `record_health` stays unwired until P3 builds one
-    /// at `start`.
-    fn mark_local_down(&self) {
+    /// Start the local back-off (same length as the cloud one), and mark
+    /// `model` down in the edge node's registry when it has one (plan P3), so
+    /// the world-state block shows `edge.model.<model>` down too.
+    fn mark_local_down(
+        &self,
+        models: Option<&obc_providers::model_registry::ModelRegistry>,
+        model: &str,
+    ) {
+        if let Some(m) = models {
+            m.record_health(model, false, now_ms());
+        }
         *self
             .local_down_until
             .lock()
@@ -377,6 +388,7 @@ impl Agent {
             experience_k: None,
             posture: None,
             routing: None,
+            models: None,
             notes: None,
             skill_usage: None,
             cost: None,
@@ -539,6 +551,23 @@ impl Agent {
         self
     }
 
+    /// Attach the edge node's model registry (plan P3). The router's local
+    /// back-off marks the local model down in it, and a local answer marks it
+    /// up again.
+    pub fn with_model_registry(
+        mut self,
+        models: Arc<obc_providers::model_registry::ModelRegistry>,
+    ) -> Self {
+        self.models = Some(models);
+        self
+    }
+
+    fn record_local_health(&self, model: &str, healthy: bool) {
+        if let Some(m) = &self.models {
+            m.record_health(model, healthy, now_ms());
+        }
+    }
+
     /// Decide which brain answers this turn. See [`routing::decide`].
     pub fn route_turn(
         &self,
@@ -607,9 +636,12 @@ impl Agent {
                 .chat_completion_streaming(messages, tools, local_config, sink)
                 .await
             {
-                Ok(c) => return Ok((c, Answered::Local)),
+                Ok(c) => {
+                    self.record_local_health(&local_config.model, true);
+                    return Ok((c, Answered::Local));
+                }
                 Err(e) => {
-                    r.mark_local_down();
+                    r.mark_local_down(self.models.as_deref(), &local_config.model);
                     if let Some(obs) = &self.obs {
                         obs.metrics.counter("routing_local_failures_total").inc();
                     }
@@ -665,7 +697,9 @@ impl Agent {
         let c = self
             .provider
             .chat_completion_streaming(messages, tools, local_config, sink)
-            .await?;
+            .await
+            .inspect_err(|_| self.record_local_health(&local_config.model, false))?;
+        self.record_local_health(&local_config.model, true);
         Ok((c, Answered::Local))
     }
 
@@ -2635,6 +2669,34 @@ pub struct EdgeConfig {
     /// agent's gated path, as a local call does.
     #[serde(default)]
     pub serve_tools: Vec<String>,
+    /// The server the reflex tier's small model runs on (plan P3).
+    #[serde(default)]
+    pub local_backend: LocalBackend,
+    /// The reflex tier's small model, by the backend's name for it (`gemma3n`
+    /// on Ollama, whatever the llama.cpp server was started with). Unset, no
+    /// reflex rule may use a `model` action.
+    #[serde(default)]
+    pub local_model: Option<String>,
+    /// The latency ceiling on one reflex model call. Past it the call is
+    /// abandoned and the rule counts a miss.
+    #[serde(default = "default_reflex_timeout_ms")]
+    pub reflex_timeout_ms: u64,
+}
+
+/// Which local server answers the reflex tier.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LocalBackend {
+    /// Ollama on `127.0.0.1:11434`.
+    #[default]
+    Ollama,
+    /// A llama.cpp server on `127.0.0.1:8080`, through the OpenAI-compatible
+    /// provider.
+    LlamaCpp,
+}
+
+fn default_reflex_timeout_ms() -> u64 {
+    2_000
 }
 
 impl Default for EdgeConfig {
@@ -2645,7 +2707,34 @@ impl Default for EdgeConfig {
             max_tool_iterations: default_edge_max_tool_iterations(),
             p2p_enabled: false,
             serve_tools: Vec::new(),
+            local_backend: LocalBackend::default(),
+            local_model: None,
+            reflex_timeout_ms: default_reflex_timeout_ms(),
         }
+    }
+}
+
+impl EdgeConfig {
+    /// The provider config for the reflex tier's small model, or `None` when
+    /// `local_model` is unset. Both backends are on loopback, so the model
+    /// registry counts the model as local.
+    pub fn reflex_provider(&self) -> Option<obc_providers::ProviderConfig> {
+        let model = self.local_model.as_deref()?.trim();
+        if model.is_empty() {
+            return None;
+        }
+        let (name, base_url) = match self.local_backend {
+            LocalBackend::Ollama => ("ollama", "http://127.0.0.1:11434/api/chat"),
+            LocalBackend::LlamaCpp => ("compatible", "http://127.0.0.1:8080/v1/chat/completions"),
+        };
+        Some(obc_providers::ProviderConfig {
+            name: name.to_string(),
+            model: model.to_string(),
+            base_url: Some(base_url.to_string()),
+            // A classifier: the same question should get the same label.
+            temperature: 0.0,
+            ..obc_providers::ProviderConfig::default()
+        })
     }
 }
 
@@ -3226,6 +3315,50 @@ mod routing_agent_tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("503"), "{err}");
+    }
+
+    /// Plan P3: the local back-off feeds the edge node's model registry, so
+    /// the world-state block shows the local model down, then up again.
+    #[tokio::test]
+    async fn the_local_back_off_marks_the_local_model_down_in_the_registry() {
+        use obc_providers::model_registry::{registry_from_providers, ModelRegistry};
+        let local_cfg = obc_providers::ProviderConfig {
+            name: "ollama".into(),
+            model: "gemma3n".into(),
+            ..Default::default()
+        };
+        let registry = |world: &Arc<obc_memory::world::WorldMemory>| -> Arc<ModelRegistry> {
+            Arc::new(
+                registry_from_providers(std::slice::from_ref(&local_cfg), 60_000)
+                    .with_world(Arc::clone(world)),
+            )
+        };
+        let (agent, memory, world) = routed_agent_with(
+            Named("ollama", "FAIL"),
+            Named("anthropic", "from cloud"),
+            routine_cfg(),
+        );
+        let models = registry(&world);
+        let agent = agent.with_model_registry(Arc::clone(&models));
+        let session = memory.create_session("console").unwrap();
+        agent.process(&session, "hello", &local_cfg).await.unwrap();
+        let fact = world.current("edge.model.gemma3n").unwrap().unwrap();
+        assert_eq!(
+            fact.value,
+            serde_json::json!({"status": "down", "local": true})
+        );
+        assert!(!models.usable("gemma3n", now_ms()));
+
+        let (agent, memory, world) = routed_agent_with(
+            Named("ollama", "from local"),
+            Named("anthropic", "PANIC"),
+            routine_cfg(),
+        );
+        let agent = agent.with_model_registry(registry(&world));
+        let session = memory.create_session("console").unwrap();
+        agent.process(&session, "hello", &local_cfg).await.unwrap();
+        let fact = world.current("edge.model.gemma3n").unwrap().unwrap();
+        assert_eq!(fact.value["status"], "up");
     }
 
     #[tokio::test]

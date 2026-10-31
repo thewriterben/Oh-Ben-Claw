@@ -14,9 +14,9 @@ What the phase builds on, as of this date. "Where" is the file to open.
 | Local → cloud escalation (local brain down or unable) | **Missing.** The only way up is `[[provider.fallbacks]]`, which the router does not see | `obc_providers::from_config_full` (`FailoverProvider`) |
 | Privacy rule sees mid-turn tool results | **Hole** (closed by P0). Rule 3 reads the world-state block when the turn starts; a cloud-routed turn that called `hear` or `vision_analyze` sent the result up on the next model call | `Agent::process`, tool-results push |
 | Non-local fallback under the local brain with routing on | **Hole** (closed by P0). Validation only checked that a model exists; a cloud fallback answered private turns the moment Ollama was down | `obc_config::Config::validate`, provider block |
-| `ModelRegistry`: local-first, health-aware, stale recheck | Library only. `record_health` and `EdgeAgentBuilder::prefer_local` have no production caller; no command builds an `EdgeAgent` | `crates/obc-providers/src/model_registry.rs`, `crates/obc-agent/src/edge.rs` |
-| System 1 (deterministic reflexes) | Done, rules only, no model | `crates/obc-reflex` |
-| Small local model as a reflex tier | **Missing.** `[provider]` with `name = "ollama"` or `compatible` + loopback URL is the whole story; nothing picks a small model per role | — |
+| `ModelRegistry`: local-first, health-aware, stale recheck | Done (P3). Built at `start` in edge mode, probed, writes `edge.model.<name>`; fed by the local back-off and the reflex tier. `prefer_local` deleted | `crates/obc-providers/src/model_registry.rs`, `src/main.rs` `run_start` |
+| System 1 (deterministic reflexes) | Done; P3 added the `model` action | `crates/obc-reflex` |
+| Small local model as a reflex tier | Done (P3). `[edge].local_backend`/`local_model`, `obc_agent::reflex_tier::ProviderReflexModel` | `crates/obc-agent/src/reflex_tier.rs` |
 | `audio_transcribe`, `text_to_speech` | Cloud by default: `OPENAI_API_BASE` (api.openai.com), whisper-1. Pointable at a local server only by env var | `crates/obc-tools/src/builtin/audio.rs` |
 | `vision_analyze` | Cloud by default: `OBC_VISION_API_BASE`, gpt-5.4. Same | `crates/obc-tools/src/builtin/vision.rs` |
 | `hear` | Local: reads and queries world-memory `audio.{stream}` events; nothing writes them from a microphone | `crates/obc-tools/src/builtin/audio_suite.rs` |
@@ -42,7 +42,7 @@ Each step ships on its own, with tests, a roadmap row and a changelog entry.
 - `Agent::complete_routed` takes the route's reason: when the local brain fails on a turn the router sent local for a non-privacy reason (`routing::may_escalate`: `routine turn`, `background session`), the call is retried on the cloud brain once, unless cooling or over budget (`Routing::can_escalate`), after a `Restart` delta. Privacy reasons (`private facts in context`, `private tool result in context`) never escalate; `routing disabled` never escalates. `RoutingConfig.escalate_on_local_failure` (default true) switches it off.
 - Audited: the `agent.brain` fact gets `escalated: true` and the reason `local brain failed, escalated`; `ActionAuditor::record_routing_escalation` writes a `routing.escalate` row with the session as node, both brains and the reason as arguments, and the local error in the decision text.
 - `Routing::local_down_until` mirrors the cloud backoff (`offline_backoff_secs`): while it cools, non-privacy turns route to the cloud up front as `local brain down, backing off` (rule 5, after the privacy and background rules), so a dead Ollama does not cost a timeout per turn; privacy turns still go local and fail.
-- Deferred: `ModelRegistry::record_health` stays unwired. The agent holds no registry; P3 builds one at `start` and `mark_local_down` feeds it then.
+- Deferred to P3, since done: `ModelRegistry::record_health` was unwired because the agent held no registry. P3 builds one at `start` and `mark_local_down` feeds it.
 
 ### P2 — Capability and confidence axes
 
@@ -50,11 +50,12 @@ Each step ships on its own, with tests, a roadmap row and a changelog entry.
 - Confidence: the local completion may end with a structured `{"escalate": "<why>"}` (System 2 already parses structured output); the agent re-runs the turn on the cloud brain with the local answer dropped, once, audited as above. Config `escalate_on_low_confidence = true`.
 - Eval rows for both in `tests/evals.rs`.
 
-### P3 — Small-model reflex tier
+### P3 — Small-model reflex tier (shipped 2026-10-30)
 
 - `[edge].local_backend = "ollama" | "llama-cpp"` and `[edge].local_model`; `llama-cpp` means the `compatible` provider against `http://127.0.0.1:8080/v1` (llama.cpp server, Gemma 3n per the research BOM). `prefer_local` in `EdgeAgentBuilder` either gets a caller (the reflex tier) or is deleted.
 - Health probe at `start` (`ModelRegistry` with `record_health`): the world-state block shows `edge.model.<name>` up or down.
 - Reflex rules in `obc-reflex` gain a `model` action: a bounded, single-call prompt to the small model (no tools, no history), for classifications the rules cannot express. Latency ceiling enforced; a timeout is a rule miss, not a turn.
+- As shipped: `prefer_local` was deleted (the reflex tier takes its model from `[edge]`, not from the provider chain). `Action::Model { prompt, on }` maps labels to actions, one level deep; `ReflexController::with_model(model, ceiling)` runs it under `tokio::time::timeout`, sending the rule's trusted evidence with the question, and counts `reflex.model.{hit,miss,timeout}`. `[edge].reflex_timeout_ms` (default 2000) is the ceiling. `start` probes `[provider]` (if local) and the reflex model into a `ModelRegistry` with world memory; `edge.model.<name>` is `{"status": "up"|"down", "local": bool}`, written on change. `Routing::mark_local_down` marks the local model down there; a local answer marks it up. Eval: `reflex_tier_offline` in `tests/evals.rs` (first half of the roadmap's last row).
 
 ### P4 — Edge model management from the deployment planner
 
