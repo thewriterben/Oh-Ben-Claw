@@ -1595,3 +1595,165 @@ fn eval_approval_policy_matrix_golden() {
     }
     std::fs::remove_file(&grants_path).ok();
 }
+
+// ── Eval: escalation axes (Phase 20 plan P1–P2) ───────────────────────────────
+
+/// Each axis on which a turn the router sent local may go up to the cloud
+/// brain, forced with scripted brains: the turn goes up once, the
+/// `agent.brain` fact's reason names the axis, and one `routing.escalate` row
+/// lands in the audit chain with the axis in its decision text. A control row
+/// keeps a plain local answer local with the cloud brain wired to fail.
+mod escalation_axes {
+    use super::*;
+    use oh_ben_claw::agent::routing::ESCALATE_HINT;
+    use oh_ben_claw::agent::world_context::WorldContextConfig;
+    use oh_ben_claw::memory::world::WorldMemory;
+    use oh_ben_claw::providers::RoutingConfig;
+    use oh_ben_claw::security::audit::{ActionAuditor, ActionRecord, Decision};
+
+    struct Run {
+        answer: String,
+        brain: Value,
+        rows: Vec<ActionRecord>,
+        cloud_saw: Vec<Vec<String>>,
+    }
+
+    /// One turn routed local (`console_to_cloud` off, no tool threshold) with
+    /// `cloud_tools = ["plan_site"]`. An empty script is a brain that fails.
+    async fn run(local: Vec<ChatCompletion>, cloud: Vec<ChatCompletion>) -> Run {
+        let cloud = Arc::new(ScriptedProvider::new(cloud));
+        let world = Arc::new(WorldMemory::open_in_memory().expect("world memory"));
+        let audit = std::env::temp_dir().join(format!(
+            "obc-eval-escalate-{}-{}.jsonl",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let auditor = Arc::new(std::sync::Mutex::new(
+            ActionAuditor::open(b"eval".to_vec(), audit.clone()).expect("auditor"),
+        ));
+        let cfg = RoutingConfig {
+            console_to_cloud: false,
+            tool_threshold: 0,
+            cloud_tools: vec!["plan_site".into()],
+            ..RoutingConfig::default_with_cloud(ProviderConfig {
+                name: "anthropic".into(),
+                model: "claude-sonnet-5".into(),
+                ..Default::default()
+            })
+        };
+        let (tool, _) = echo_tool("plan_site", false);
+        let (agent, session) = make_agent(Arc::new(ScriptedProvider::new(local)), vec![tool]);
+        let agent = agent
+            .with_world_context(Arc::clone(&world), WorldContextConfig::default())
+            .with_routing_provider(cfg, cloud.clone())
+            .with_action_auditor(Arc::clone(&auditor));
+        let answer = agent
+            .process(&session, "plan the site", &Default::default())
+            .await
+            .map(|r| r.message)
+            .unwrap_or_else(|e| format!("error: {e}"));
+        let brain = world
+            .current("agent.brain")
+            .expect("world read")
+            .expect("agent.brain fact")
+            .value;
+        // The chain is flushed per row; let go of it before reading.
+        drop(agent);
+        drop(auditor);
+        let log = std::fs::read_to_string(&audit).unwrap_or_default();
+        let _ = std::fs::remove_file(&audit);
+        let rows = log
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("audit row"))
+            .collect();
+        let cloud_saw = cloud.messages_seen.lock().clone();
+        Run {
+            answer,
+            brain,
+            rows,
+            cloud_saw,
+        }
+    }
+
+    fn assert_escalated(run: &Run, axis: &str, detail_ends: &str) {
+        assert_eq!(run.brain["route"], "cloud", "{axis}");
+        assert_eq!(run.brain["reason"], axis);
+        assert_eq!(run.brain["escalated"], true, "{axis}");
+        assert_eq!(run.rows.len(), 1, "{axis}: one audit row per escalation");
+        let row = &run.rows[0];
+        assert_eq!(row.tool, "routing.escalate", "{axis}");
+        match &row.decision {
+            Decision::AllowedUncovered(why) => {
+                assert!(why.starts_with("local brain "), "{axis}: {why}");
+                assert!(why.ends_with(detail_ends), "{axis}: {why}");
+            }
+            other => panic!("{axis}: {other:?}"),
+        }
+        assert!(
+            !run.cloud_saw.concat().iter().any(|m| m == ESCALATE_HINT),
+            "{axis}: the hint is for the local brain only"
+        );
+    }
+
+    #[tokio::test]
+    async fn control_a_plain_local_answer_stays_local() {
+        let run = run(vec![ScriptedProvider::text("done here")], vec![]).await;
+        assert_eq!(run.answer, "done here");
+        assert_eq!(run.brain["route"], "local");
+        assert_eq!(run.brain["reason"], "routine turn");
+        assert_eq!(run.brain["escalated"], false);
+        assert!(run.rows.is_empty());
+        assert!(run.cloud_saw.is_empty());
+    }
+
+    #[tokio::test]
+    async fn p1_connectivity_a_failed_local_brain_escalates() {
+        let run = run(vec![], vec![ScriptedProvider::text("from the cloud")]).await;
+        assert_eq!(run.answer, "from the cloud");
+        assert_escalated(
+            &run,
+            "local brain failed, escalated",
+            "scripted provider exhausted",
+        );
+    }
+
+    #[tokio::test]
+    async fn p2_capability_a_cloud_tool_call_escalates() {
+        let run = run(
+            vec![ScriptedProvider::tool_call("plan_site", json!({}))],
+            vec![ScriptedProvider::text("the plan")],
+        )
+        .await;
+        assert_eq!(run.answer, "the plan");
+        assert_escalated(
+            &run,
+            "cloud tool called, escalated",
+            "called cloud tool plan_site",
+        );
+        // The tool ran locally; the cloud brain reasoned about its result.
+        assert!(run.cloud_saw[0].iter().any(|m| m.contains("echo:")));
+    }
+
+    #[tokio::test]
+    async fn p2_confidence_an_unsure_local_answer_escalates() {
+        let run = run(
+            vec![ScriptedProvider::text(
+                r#"{"escalate": "needs a site survey"}"#,
+            )],
+            vec![ScriptedProvider::text("the survey")],
+        )
+        .await;
+        assert_eq!(run.answer, "the survey");
+        assert_escalated(
+            &run,
+            "local brain unsure, escalated",
+            "unsure: needs a site survey",
+        );
+        // The dropped local answer never reaches the cloud brain.
+        assert!(!run
+            .cloud_saw
+            .concat()
+            .iter()
+            .any(|m| m.contains("escalate")));
+    }
+}

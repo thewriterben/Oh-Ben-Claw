@@ -44,11 +44,13 @@ Each step ships on its own, with tests, a roadmap row and a changelog entry.
 - `Routing::local_down_until` mirrors the cloud backoff (`offline_backoff_secs`): while it cools, non-privacy turns route to the cloud up front as `local brain down, backing off` (rule 5, after the privacy and background rules), so a dead Ollama does not cost a timeout per turn; privacy turns still go local and fail.
 - Deferred: `ModelRegistry::record_health` stays unwired. The agent holds no registry; P3 builds one at `start` and `mark_local_down` feeds it then.
 
-### P2 — Capability and confidence axes
+### P2 — Capability and confidence axes (shipped 2026-10-30)
 
-- Capability: a `RoutingConfig.cloud_tools` list (default empty); a turn whose first completion calls one of them escalates the rest of the turn, the mirror image of P0's rule. Candidate defaults: `plan_site`, `foresight`.
-- Confidence: the local completion may end with a structured `{"escalate": "<why>"}` (System 2 already parses structured output); the agent re-runs the turn on the cloud brain with the local answer dropped, once, audited as above. Config `escalate_on_low_confidence = true`.
-- Eval rows for both in `tests/evals.rs`.
+- Capability: `RoutingConfig.cloud_tools` (default empty; `plan_site`, `foresight` are candidates). When a local completion calls one of them, on a turn routed local for an escalatable reason, the tool runs here and the rest of the turn goes to the cloud brain (`Agent::hand_up`, unless cooling or over budget), recorded as `cloud tool called, escalated`. Any completion, not only the first: a later call is as much a sign the turn needs the cloud.
+- Confidence: on such a turn the local brain gets `routing::ESCALATE_HINT`, an ephemeral system message before the ask. An answer ending in `{"escalate": "<why>"}` (`routing::escalation_request`: bare or fenced, last 1 KiB) drops the local answer behind a `Restart` delta and re-runs the step on the cloud brain once, with one extra iteration, recorded as `local brain unsure, escalated`; the hint leaves the context first, and `routing::cloud_context` keeps it out of P1's retries too. A request that may not go up is stripped from the answer (`I can't answer that well here: <why>.` when nothing else is left). `RoutingConfig.escalate_on_low_confidence` (default true).
+- Audit: every axis writes the P1 row; the arguments carry the router's reason, the decision text names the axis (`failed: …`, `called cloud tool …`, `unsure: …`).
+- P0 now stops every axis: a private tool result on a local `routine turn` changes the reason to `private tool result in context`, so a later failure, cloud tool or unsure answer stays local (before, the rule only fired on cloud-routed turns, and a `routine turn` that called `hear` and then failed escalated the result).
+- Evals: `tests/evals.rs` `escalation_axes` forces P1, capability and confidence, and checks the `agent.brain` reason names the axis and one `routing.escalate` row exists, plus a control row that stays local.
 
 ### P3 — Small-model reflex tier
 
