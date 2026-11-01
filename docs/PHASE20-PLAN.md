@@ -17,11 +17,11 @@ What the phase builds on, as of this date. "Where" is the file to open.
 | `ModelRegistry`: local-first, health-aware, stale recheck | Done (P3). Built at `start` in edge mode, probed, writes `edge.model.<name>`; fed by the local back-off and the reflex tier. `prefer_local` deleted | `crates/obc-providers/src/model_registry.rs`, `src/main.rs` `run_start` |
 | System 1 (deterministic reflexes) | Done; P3 added the `model` action | `crates/obc-reflex` |
 | Small local model as a reflex tier | Done (P3). `[edge].local_backend`/`local_model`, `obc_agent::reflex_tier::ProviderReflexModel` | `crates/obc-agent/src/reflex_tier.rs` |
-| `audio_transcribe`, `text_to_speech` | Cloud by default: `OPENAI_API_BASE` (api.openai.com), whisper-1. Pointable at a local server only by env var | `crates/obc-tools/src/builtin/audio.rs` |
+| `audio_transcribe`, `text_to_speech` | Done (P5): a local Wyoming server first when `[voice] stt`/`tts` name one, the cloud (`OPENAI_API_BASE`) as the fallback; cloud-only, as before, when neither is set | `crates/obc-tools/src/builtin/audio.rs` |
 | `vision_analyze` | Cloud by default: `OBC_VISION_API_BASE`, gpt-5.4. Same | `crates/obc-tools/src/builtin/vision.rs` |
 | `hear` | Local: reads and queries world-memory `audio.{stream}` events; nothing writes them from a microphone | `crates/obc-tools/src/builtin/audio_suite.rs` |
-| Wake-word | **Missing.** Firmware has I2S capture; no detector on the MCU or the SBC | `firmware/obc-esp32-s3/src/audio.rs` |
-| `obc-audio` crate | Vocabulary + `SpeechSink` only (pipeline removed 2026-07-30) | `crates/obc-audio` |
+| Wake-word | SBC half done (P5): `[voice.wake]` gates `obc/voice/wake/{node}` and answers with `obc/voice/listen/{node}`. **The MCU detector is still missing**; firmware has I2S capture only | `crates/obc-spine/src/wake_bridge.rs`, `firmware/obc-esp32-s3/src/audio.rs` |
+| `obc-audio` crate | Vocabulary + `SpeechSink`, and since P5 the Wyoming client, WAV conversion and the wake gate | `crates/obc-audio` |
 | Deployment planner: per-role local model | **Missing.** The planner emits `[edge]` but no model name, no pull, no health check | `crates/obc-planner` (`plan_site`) |
 | Eval | **Missing.** `tests/evals.rs` has a scripted-provider harness and `EchoTool` to build on | `tests/evals.rs` |
 
@@ -64,11 +64,13 @@ Each step ships on its own, with tests, a roadmap row and a changelog entry.
 - `plan_site` emits `[edge].local_model` per node role and a `models` section (name, size, quantisation, source); `obc fleet` gets `models pull|status` through the existing OTA/channel path, with the pull verified by digest.
 - The planner refuses a model that does not fit the role's RAM budget.
 
-### P5 — On-device wake-word + STT/TTS
+### P5 — On-device wake-word + STT/TTS (SBC side shipped 2026-11-01)
 
 - SBC: a Wyoming-protocol client in `obc-audio` (the crate is a vocabulary today) talking to local Moonshine (STT) and Piper or Kokoro (TTS); `audio_transcribe` and `text_to_speech` prefer it when configured, so the env-var cloud default becomes the fallback and not the rule. Transcripts land as `audio.{stream}` events, which `hear` already reads.
 - MCU: microWakeWord on the ESP32-S3 (`firmware/obc-esp32-s3`), publishing a wake event on the mesh; the SBC opens the stream on it.
 - Under P0 every transcript is private by construction: `audio_transcribe` is in `private_tools`.
+- As shipped: a new `[voice]` section (not `[edge]`, which is the node's role and brain, nor `[audio_suite]`, which switches `hear`/`speak`): `stt` and `tts` are Wyoming endpoints (`tcp://host:port`), with `tts_voice`, `cloud_fallback` (default true), `timeout_ms` (default 30000) and `stream` (default `mic0`). `obc_audio::wyoming` is the client: one TCP exchange per call under the deadline, size caps on every header, data block and payload. `obc_audio::wav` converts between the tools' files and the protocol's PCM. `stt_plan` and `tts_plan` in `obc-tools` choose the backends in order. The Wyoming server comes first when the input is a PCM WAV (STT) or the format is `wav` (TTS, now the default on-device). The cloud follows only with `cloud_fallback`, and `use_local` (whisper.cpp) still never reaches it. `start` and both MCP paths swap the two tools in place. With the audio suite on, each transcript is recorded as `audio.{stream}` (source `audio_transcribe: <backend>`). Wake: `[voice.wake]` (`words`, `min_confidence`, `listen_ms`, `cooldown_ms`) runs `obc_audio::wake::WakeGate` over `obc/voice/wake/{node}`, where the node is the topic's last segment and never the payload's. An accepted wake is recorded as an `audio.{stream}` event labelled `wake` and answered on `obc/voice/listen/{node}` with the window. `validate` refuses bad endpoints, a zero timeout or listen window, an out-of-range or NaN confidence and empty wake words.
+- Not done here: the microWakeWord detector and the mic streaming in `firmware/obc-esp32-s3`. The SBC half of the wake contract is in place and waits for the firmware. No resampling or compressed-audio decoding on-device, so non-WAV audio goes to the cloud or fails without `cloud_fallback`. Voice models are not managed through P4's `[[edge.models]]`. `obc doctor` does not probe the Wyoming servers.
 
 ### Eval (roadmap last row)
 

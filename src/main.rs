@@ -1622,7 +1622,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                             .clone()
                             .unwrap_or_else(|| "/tmp".to_string());
                         info!(dir = %dir, "Audio: speech rendered locally via TTS");
-                        Arc::new(oh_ben_claw::tools::builtin::audio_speech::TtsSpeechSink::new(dir))
+                        Arc::new(
+                            oh_ben_claw::tools::builtin::audio_speech::TtsSpeechSink::with_tool(
+                                voice_tts_tool(&config).unwrap_or_default(),
+                                dir,
+                            ),
+                        )
                     } else {
                         match &reflex_spine {
                             Some(spine) => {
@@ -1669,6 +1674,28 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                      tools need world memory to record events; skipping"
                 );
             }
+        }
+    }
+
+    // Plan P5: on-device speech ahead of the cloud, and wake events from a
+    // microcontroller's detector. Both no-ops with `[voice]` unset.
+    apply_voice(&config, &mut all_tools, audio_controller.clone());
+    if config.voice.wake.enabled {
+        match &reflex_spine {
+            Some(spine) => {
+                use oh_ben_claw::spine::wake_bridge::{spine_wake_handler, WAKE_FILTER};
+                let gate = Arc::new(std::sync::Mutex::new(
+                    oh_ben_claw::audio::wake::WakeGate::new(config.voice.wake.policy()),
+                ));
+                let handler = spine_wake_handler(gate, audio_controller.clone(), Arc::clone(spine));
+                match spine.subscribe_handler(WAKE_FILTER, handler).await {
+                    Ok(()) => info!("Voice: wake events open listen windows ({WAKE_FILTER})"),
+                    Err(e) => tracing::warn!("voice wake subscription failed: {e}"),
+                }
+            }
+            None => tracing::warn!(
+                "[voice.wake] enabled but the spine is not connected; no wake events will arrive"
+            ),
         }
     }
 
@@ -2245,23 +2272,26 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 if config.notifications.speak_escalations {
                     // Speak escalations aloud through a speech sink (same TTS / spine /
                     // dry-run selection as the audio suite). Best-effort, headline only.
-                    let speech: Arc<dyn oh_ben_claw::audio::suite::SpeechSink> = if config
-                        .audio_suite
-                        .render_tts
-                    {
-                        let dir = config
-                            .audio_suite
-                            .tts_out_dir
-                            .clone()
-                            .unwrap_or_else(|| "/tmp".to_string());
-                        Arc::new(oh_ben_claw::tools::builtin::audio_speech::TtsSpeechSink::new(dir))
-                    } else if let Some(spine) = &reflex_spine {
-                        Arc::new(oh_ben_claw::spine::speech::SpineSpeechSink::new(
-                            Arc::clone(spine),
-                        ))
-                    } else {
-                        Arc::new(oh_ben_claw::audio::suite::LoggingSpeechSink)
-                    };
+                    let speech: Arc<dyn oh_ben_claw::audio::suite::SpeechSink> =
+                        if config.audio_suite.render_tts {
+                            let dir = config
+                                .audio_suite
+                                .tts_out_dir
+                                .clone()
+                                .unwrap_or_else(|| "/tmp".to_string());
+                            Arc::new(
+                                oh_ben_claw::tools::builtin::audio_speech::TtsSpeechSink::with_tool(
+                                    voice_tts_tool(&config).unwrap_or_default(),
+                                    dir,
+                                ),
+                            )
+                        } else if let Some(spine) = &reflex_spine {
+                            Arc::new(oh_ben_claw::spine::speech::SpineSpeechSink::new(
+                                Arc::clone(spine),
+                            ))
+                        } else {
+                            Arc::new(oh_ben_claw::audio::suite::LoggingSpeechSink)
+                        };
                     let voice = config
                         .audio_suite
                         .voice
@@ -4628,6 +4658,63 @@ fn seed_browser_cdp_url(config: &Config) {
     }
 }
 
+/// Plan P5: with `[voice] stt` or `tts` set, `audio_transcribe` and
+/// `text_to_speech` are swapped in place for ones that try that Wyoming server
+/// before the cloud. `audio` (the audio suite, when on) records transcripts.
+/// A tool an earlier fence removed stays removed.
+fn apply_voice(
+    config: &Config,
+    all_tools: &mut [Box<dyn oh_ben_claw::tools::Tool>],
+    audio: Option<Arc<oh_ben_claw::audio::suite::AudioController>>,
+) {
+    use oh_ben_claw::tools::builtin::audio::AudioTranscribeTool;
+    let voice = &config.voice;
+    let mut swap = |tool: Box<dyn oh_ben_claw::tools::Tool>, server: &str| {
+        if let Some(slot) = all_tools.iter_mut().find(|t| t.name() == tool.name()) {
+            info!(tool = tool.name(), %server, cloud_fallback = voice.cloud_fallback, "Voice: on-device (Wyoming) first");
+            *slot = tool;
+        }
+    };
+    if let Some(endpoint) = &voice.stt {
+        let timeout = std::time::Duration::from_millis(voice.timeout_ms);
+        match oh_ben_claw::audio::wyoming::WyomingClient::new(endpoint, timeout) {
+            Ok(client) => {
+                let mut tool =
+                    AudioTranscribeTool::default().with_wyoming(client, voice.cloud_fallback);
+                if let Some(audio) = audio {
+                    tool = tool.with_recorder(audio, voice.stream.clone());
+                }
+                swap(Box::new(tool), endpoint);
+            }
+            Err(e) => tracing::warn!("voice.stt: {e}; audio_transcribe stays on the cloud"),
+        }
+    }
+    if let (Some(endpoint), Some(tool)) = (&voice.tts, voice_tts_tool(config)) {
+        swap(Box::new(tool), endpoint);
+    }
+}
+
+/// The `text_to_speech` tool `[voice] tts` asks for (plan P5); `None` without
+/// one, or for an endpoint that does not parse (validation refuses those).
+fn voice_tts_tool(config: &Config) -> Option<oh_ben_claw::tools::builtin::audio::TextToSpeechTool> {
+    let voice = &config.voice;
+    let endpoint = voice.tts.as_deref()?;
+    let timeout = std::time::Duration::from_millis(voice.timeout_ms);
+    match oh_ben_claw::audio::wyoming::WyomingClient::new(endpoint, timeout) {
+        Ok(client) => Some(
+            oh_ben_claw::tools::builtin::audio::TextToSpeechTool::default().with_wyoming(
+                client,
+                voice.tts_voice.clone(),
+                voice.cloud_fallback,
+            ),
+        ),
+        Err(e) => {
+            tracing::warn!("voice.tts: {e}; text_to_speech stays on the cloud");
+            None
+        }
+    }
+}
+
 fn apply_tool_fences(config: &Config, all_tools: &mut Vec<Box<dyn oh_ben_claw::tools::Tool>>) {
     // `[browser]`: `enabled = false` drops the seven tools (and their schemas
     // from every prompt); the CDP endpoint was seeded from `cdp_url` before
@@ -4729,6 +4816,7 @@ async fn run_mcp_serve(config: &Config, transport: &str, port: u16, mode: &str) 
     // The same fences as the agent: browser on/off, shell backend, file roots.
     // Claude Desktop drives these tools through this path (2026-09-12).
     apply_tool_fences(config, &mut tools);
+    apply_voice(config, &mut tools, None);
     let server = McpServer::with_mode(tools, mode);
 
     match transport {
@@ -4798,6 +4886,7 @@ async fn run_a2a_serve(
         default_tools()
     };
     apply_tool_fences(config, &mut tools);
+    apply_voice(config, &mut tools, None);
     // Skills advertised on the card: the config's list when it names any,
     // otherwise the agent's actual tool names. A card that advertises a skill
     // the agent does not have is a lie told at discovery time, so the fallback

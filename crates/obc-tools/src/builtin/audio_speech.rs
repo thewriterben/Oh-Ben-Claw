@@ -28,8 +28,14 @@ pub struct TtsSpeechSink {
 impl TtsSpeechSink {
     /// Render into `out_dir` (created on demand by the TTS tool's file write).
     pub fn new(out_dir: impl Into<String>) -> Self {
+        Self::with_tool(TextToSpeechTool::default(), out_dir)
+    }
+
+    /// Render with a configured tool — one with an on-device server (plan
+    /// P5) writes `.wav` files rather than `.mp3`.
+    pub fn with_tool(tts: TextToSpeechTool, out_dir: impl Into<String>) -> Self {
         Self {
-            tts: TextToSpeechTool::default(),
+            tts,
             out_dir: out_dir.into(),
         }
     }
@@ -37,9 +43,10 @@ impl TtsSpeechSink {
     /// The output file path for an utterance at `at_ms`.
     pub fn out_path(&self, at_ms: u64) -> String {
         format!(
-            "{}/obc_tts_{}.mp3",
+            "{}/obc_tts_{}.{}",
             self.out_dir.trim_end_matches('/'),
-            at_ms
+            at_ms,
+            self.tts.default_format()
         )
     }
 }

@@ -36,6 +36,7 @@ anyhow = "1.0"
 directories = "5.0"
 obc-agent = { path = "../obc-agent" }
 obc-approval = { path = "../obc-approval" }
+obc-audio = { path = "../obc-audio" }
 obc-conscience = { path = "../obc-conscience" }
 obc-cost = { path = "../obc-cost" }
 obc-foresight = { path = "../obc-foresight" }

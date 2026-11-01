@@ -394,6 +394,31 @@ max_chars = 2400
 # local_model = "gemma3n"
 # reflex_timeout_ms = 2000
 
+# ── On-device speech (Phase 20 P5) ───────────────────────────────────────────
+# audio_transcribe and text_to_speech try local Wyoming servers before the
+# cloud (OPENAI_API_BASE). With neither stt nor tts set, nothing changes.
+# The STT server takes PCM WAV; other audio goes to the cloud. On-device TTS
+# writes .wav. cloud_fallback = false makes those calls fail instead.
+#   docker run -p 10300:10300 rhasspy/wyoming-whisper --model tiny-int8
+#   docker run -p 10200:10200 rhasspy/wyoming-piper --voice en_US-lessac-medium
+#
+# [voice]
+# stt = "tcp://127.0.0.1:10300"
+# tts = "tcp://127.0.0.1:10200"
+# tts_voice = "en_US-lessac-medium"
+# cloud_fallback = true
+# timeout_ms = 30000
+# stream = "mic0"                 # audio.{stream} for transcripts ([audio_suite] on)
+#
+# Wake events from a microcontroller's detector over the spine: accepted ones
+# are answered on obc/voice/listen/{node} with how long to stream.
+# [voice.wake]
+# enabled = true
+# words = ["okay nabu"]           # empty accepts whatever the detector heard
+# min_confidence = 0.8
+# listen_ms = 8000
+# cooldown_ms = 2000
+
 # ── Reflexes ─────────────────────────────────────────────────────────────────
 # System 1: fast local rules over world state that act without waking the model.
 [reflex]

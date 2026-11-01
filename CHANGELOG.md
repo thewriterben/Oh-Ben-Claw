@@ -5,6 +5,64 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — On-device speech and wake events (2026-11-01)
+
+Phase 20 plan P5 (`docs/PHASE20-PLAN.md`), SBC side.
+
+### Added
+
+- **`[voice]`: on-device STT and TTS ahead of the cloud.** `stt` and `tts`
+  name Wyoming servers (`tcp://127.0.0.1:10300` for Moonshine or
+  faster-whisper, `tcp://127.0.0.1:10200` for Piper or Kokoro). With either
+  set, `audio_transcribe` and `text_to_speech` try it first and the
+  OpenAI-compatible API second; `cloud_fallback = false` makes a failed or
+  unsuitable call fail instead. With neither set the tools are unchanged.
+  The server takes PCM WAV: other audio goes straight to the cloud, and
+  on-device TTS writes `.wav` (now the default format there; `wav` is also a
+  cloud format). `use_local = true` (whisper.cpp) still never reaches the
+  cloud. When every backend fails, the error names each one in order.
+  `tts_voice` is the server's voice; `timeout_ms` (default 30000) bounds each
+  exchange. With the audio suite on, each transcript is recorded as an
+  `audio.{stream}` event (`stream`, default `mic0`) that `hear` reads. The
+  `speak` renderer and spoken escalations use the same TTS tool. Tests:
+  `plans_put_the_wyoming_server_first_and_the_cloud_last`,
+  `an_on_device_transcript_is_returned_and_recorded`,
+  `a_failed_server_falls_back_to_the_cloud_only_when_allowed`,
+  `audio_the_server_cannot_take_stays_off_the_cloud_without_fallback`,
+  `on_device_speech_is_written_as_wav`, and the client's own in
+  `obc_audio::wyoming` (fake servers over in-memory and loopback streams).
+- **`[voice.wake]`: wake events in, listen windows out.** With `enabled`,
+  `start` subscribes to `obc/voice/wake/{node}` (`{word, confidence,
+  stream?}` from a microcontroller's detector). `obc_audio::wake::WakeGate`
+  accepts only the configured `words` (any word when the list is empty), at
+  or above `min_confidence` (default 0.8), and once per node per
+  `cooldown_ms` (default 2000). The node is the topic's last segment, not
+  the payload's. An accepted wake is recorded as an `audio.{stream}` event
+  labelled `wake` and answered on `obc/voice/listen/{node}` with the window
+  (`listen_ms`, default 8000). Tests in `obc_audio::wake` and
+  `obc_spine::wake_bridge`.
+- **`obc_audio::wyoming` and `obc_audio::wav`.** A Wyoming client (header
+  line, data block, payload; inline data from older peers; size caps on all
+  three) and integer-PCM WAV parse and encode. `obc-audio` was a vocabulary
+  crate; these are its first I/O, and they own no runtime.
+- `validate` refuses a `voice.stt`/`voice.tts` that is not `tcp://host:port`,
+  `timeout_ms = 0`, an empty `stream`, and, with the gate enabled, a
+  `min_confidence` outside 0..=1 or NaN, `listen_ms = 0`, or an empty wake
+  word. It warns about `tts_voice` without `tts`, `cloud_fallback = false`
+  with no server, and a gate whose wakes the audio suite will not record.
+  Tests: `voice_defaults_are_cloud_only`,
+  `voice_endpoints_and_wake_policy_are_validated`,
+  `voice_settings_that_do_nothing_warn`.
+
+### Not done here
+
+- The microWakeWord detector and microphone streaming in
+  `firmware/obc-esp32-s3`; the SBC side of the wake contract waits for them.
+- Resampling and compressed-audio decoding on-device; voice models under
+  P4's `[[edge.models]]`; an `obc doctor` probe of the Wyoming servers.
+
+---
+
 ## Unreleased — Small-model reflex tier (2026-10-30)
 
 Phase 20 plan P3 (`docs/PHASE20-PLAN.md`).
