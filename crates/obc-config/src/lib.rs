@@ -2751,7 +2751,8 @@ impl Config {
         if !model_rules.is_empty() && !(self.edge.enabled && self.edge.reflex_provider().is_some())
         {
             anyhow::bail!(
-                "reflex rules {model_rules:?} use a model action, which needs [edge]                  enabled = true and local_model set to the small model that answers it"
+                "reflex rules {model_rules:?} use a model action, which needs [edge] \
+                 enabled = true and local_model set to the small model that answers it"
             );
         }
         if self.edge.reflex_timeout_ms == 0 {
@@ -2759,9 +2760,32 @@ impl Config {
         }
         if self.edge.local_model.is_some() && !self.edge.enabled {
             warnings.push(
-                "edge.local_model has no effect while edge.enabled = false: the reflex                  tier runs only in edge mode"
+                "edge.local_model has no effect while edge.enabled = false: the reflex \
+                 tier runs only in edge mode"
                     .to_string(),
             );
+        }
+        // Plan P4: the model list a pull is checked against.
+        obc_tools::builtin::edge_models::validate(&self.edge.models)?;
+        if let Some(local) = &self.edge.local_model {
+            let listed = self.edge.models.iter().find(|m| &m.name == local);
+            if listed.is_none() && !self.edge.models.is_empty() {
+                warnings.push(format!(
+                    "edge.local_model {local:?} is not one of [[edge.models]], so \
+                     `oh-ben-claw fleet models pull` cannot fetch or check it"
+                ));
+            }
+            if let Some(entry) = listed {
+                let from_ollama = entry.source.starts_with("ollama://");
+                let backend_is_ollama = self.edge.local_backend == obc_agent::LocalBackend::Ollama;
+                if from_ollama != backend_is_ollama {
+                    warnings.push(format!(
+                        "edge.local_model {local:?} comes from {}, but edge.local_backend \
+                         is {:?}: the backend will not find a model pulled there",
+                        entry.source, self.edge.local_backend
+                    ));
+                }
+            }
         }
         let mut seen = std::collections::HashSet::new();
         for name in &self.edge.serve_tools {
@@ -2936,7 +2960,11 @@ impl Config {
                     let entry = obc_providers::model_registry::ModelEntry::from_provider(fb, 0);
                     if !entry.local {
                         anyhow::bail!(
-                            "provider.fallbacks[{i}] ({}) is not a local provider; with                              [provider.routing] enabled the fallbacks of the local brain                              must be local too (ollama, or a loopback base_url), or the                              router's privacy rules are bypassed when the local model is                              down. Put cloud models under [provider.routing.cloud].",
+                            "provider.fallbacks[{i}] ({}) is not a local provider; with \
+                             [provider.routing] enabled the fallbacks of the local brain \
+                             must be local too (ollama, or a loopback base_url), or the \
+                             router's privacy rules are bypassed when the local model is \
+                             down. Put cloud models under [provider.routing.cloud].",
                             fb.name
                         );
                     }
@@ -3565,6 +3593,51 @@ id = \"porch\"
         config.validate().unwrap();
         config.edge.reflex_timeout_ms = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_checks_the_edge_model_list() {
+        let toml = "[edge]
+enabled = true
+local_backend = \"ollama\"
+local_model = \"gemma3:270m\"
+
+[[edge.models]]
+name = \"gemma3:270m\"
+source = \"ollama://gemma3:270m\"
+";
+        let mut config: Config = toml::from_str(toml).unwrap();
+        let warnings = config.validate().unwrap();
+        assert!(
+            !warnings.iter().any(|w| w.contains("edge.local_model")),
+            "{warnings:?}"
+        );
+
+        // A model the list does not hold cannot be pulled or checked.
+        config.edge.local_model = Some("qwen3:0.6b".into());
+        let warnings = config.validate().unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("is not one of [[edge.models]]")),
+            "{warnings:?}"
+        );
+
+        // A llama.cpp backend does not read Ollama's store.
+        config.edge.local_model = Some("gemma3:270m".into());
+        config.edge.local_backend = obc_agent::LocalBackend::LlamaCpp;
+        let warnings = config.validate().unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("the backend will not find a model")),
+            "{warnings:?}"
+        );
+
+        // A direct download with nothing to check it against is refused outright.
+        config.edge.models[0].source = "https://example.org/gemma3-270m.gguf".into();
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("digest"), "{err}");
     }
 
     fn require_mesh_auth(config: &mut Config) {

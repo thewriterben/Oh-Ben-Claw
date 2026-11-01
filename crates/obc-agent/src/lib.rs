@@ -2871,6 +2871,11 @@ pub struct EdgeConfig {
     /// abandoned and the rule counts a miss.
     #[serde(default = "default_reflex_timeout_ms")]
     pub reflex_timeout_ms: u64,
+    /// The on-device models this node may hold (plan P4). A pull, from
+    /// `oh-ben-claw fleet models pull` or the `ota_update` tool, is checked
+    /// against the digest pinned here.
+    #[serde(default)]
+    pub models: Vec<obc_tools::builtin::edge_models::EdgeModelEntry>,
 }
 
 /// Which local server answers the reflex tier.
@@ -2900,6 +2905,7 @@ impl Default for EdgeConfig {
             local_backend: LocalBackend::default(),
             local_model: None,
             reflex_timeout_ms: default_reflex_timeout_ms(),
+            models: Vec::new(),
         }
     }
 }

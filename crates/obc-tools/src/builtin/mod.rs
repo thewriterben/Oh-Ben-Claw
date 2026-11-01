@@ -9,6 +9,7 @@ pub mod audio_suite;
 pub mod browser;
 pub mod browser_cdp;
 pub mod comms;
+pub mod edge_models;
 pub mod file;
 pub mod fleet;
 pub mod foresight;

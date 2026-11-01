@@ -100,6 +100,10 @@ enum Commands {
     #[command(subcommand)]
     World(WorldCommands),
 
+    /// This node's part in the fleet. Today: its on-device models.
+    #[command(subcommand)]
+    Fleet(FleetCommands),
+
     /// Run the MCP server standalone (stdio for host integration, http for
     /// gateways and the official conformance suite).
     McpServe {
@@ -282,6 +286,26 @@ enum WorldCommands {
 }
 
 #[derive(Subcommand, Debug)]
+enum FleetCommands {
+    /// The on-device models listed under `[[edge.models]]` (Phase 20 plan P4).
+    #[command(subcommand)]
+    Models(ModelsCommands),
+}
+
+#[derive(Subcommand, Debug)]
+enum ModelsCommands {
+    /// Each listed model: missing, installed but unpinned, verified against its
+    /// pinned digest, or installed with a different digest.
+    Status,
+    /// Fetch a listed model, or every one, and check it against its pinned
+    /// digest. A model that does not match is removed, not left to load.
+    Pull {
+        /// The model's `name` in `[[edge.models]]`. Omitted, all of them.
+        name: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum HistoryCommands {
     /// List all conversation sessions.
     List,
@@ -394,6 +418,9 @@ async fn main() -> Result<()> {
         }
         Commands::World(cmd) => {
             run_world(&config, cmd)?;
+        }
+        Commands::Fleet(FleetCommands::Models(cmd)) => {
+            run_fleet_models(&config, cmd).await?;
         }
         Commands::Skill(cmd) => {
             run_skill(&config, cmd)?;
@@ -4704,6 +4731,71 @@ fn apply_tool_fences(config: &Config, all_tools: &mut Vec<Box<dyn oh_ben_claw::t
         all_tools.retain(|t| t.name() != "file");
         all_tools.push(Box::new(fenced));
     }
+    // `[[edge.models]]` (Phase 20 plan P4): `ota_update` with board_type
+    // "model" pulls only a listed model, checked against the digest pinned
+    // there rather than one the caller supplies.
+    if !config.edge.models.is_empty() {
+        use oh_ben_claw::tools::builtin::ota::OtaUpdateTool;
+        all_tools.retain(|t| t.name() != "ota_update");
+        all_tools.push(Box::new(OtaUpdateTool::with_models(
+            config.edge.models.clone(),
+            oh_ben_claw::config::paths::in_data_dir("models"),
+        )));
+    }
+}
+
+/// `oh-ben-claw fleet models status|pull [name]` — this node's on-device
+/// models (Phase 20 plan P4), checked against the digests `[[edge.models]]`
+/// pins. Ollama models go through the local Ollama; `https://` GGUF files land
+/// in the data directory's `models/`.
+async fn run_fleet_models(config: &Config, cmd: ModelsCommands) -> Result<()> {
+    use oh_ben_claw::tools::builtin::edge_models::{self, OLLAMA_URL, PULL_TIMEOUT};
+
+    let models = &config.edge.models;
+    if models.is_empty() {
+        anyhow::bail!(
+            "the config lists no [[edge.models]]. The deployment planner writes one \
+             for the edge_inference desire; config.example.toml shows the fields."
+        );
+    }
+    let gguf_dir = oh_ben_claw::config::paths::in_data_dir("models");
+    match cmd {
+        ModelsCommands::Status => {
+            for s in edge_models::status(models, OLLAMA_URL, &gguf_dir).await? {
+                println!("{}: {}", s.name, s.state);
+            }
+        }
+        ModelsCommands::Pull { name } => {
+            let chosen: Vec<_> = match &name {
+                Some(n) => match models.iter().find(|m| &m.name == n) {
+                    Some(entry) => vec![entry],
+                    None => anyhow::bail!(
+                        "no [[edge.models]] entry is named {n:?} (the config lists: {})",
+                        models
+                            .iter()
+                            .map(|m| m.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                },
+                None => models.iter().collect(),
+            };
+            let mut failed = 0;
+            for entry in chosen {
+                match edge_models::pull(entry, OLLAMA_URL, &gguf_dir, PULL_TIMEOUT).await {
+                    Ok(report) => println!("{report}"),
+                    Err(e) => {
+                        eprintln!("{}: {e:#}", entry.name);
+                        failed += 1;
+                    }
+                }
+            }
+            if failed > 0 {
+                anyhow::bail!("{failed} model pull(s) failed");
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn run_mcp_serve(config: &Config, transport: &str, port: u16, mode: &str) -> Result<()> {
