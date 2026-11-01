@@ -359,6 +359,21 @@ function getConfigStep(state: WizardState): GuideStep {
   };
 }
 
+/** `s` as a TOML basic string, quotes included. What the user types is free
+ *  text, and a `"` or `\` left bare in it would end the file's TOML there. */
+function tomlString(s: string): string {
+  let out = '"';
+  for (const ch of s) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (ch === '"') out += '\\"';
+    else if (ch === '\\') out += '\\\\';
+    else if (code < 0x20 || (code >= 0x7f && code <= 0x9f))
+      out += `\\u${code.toString(16).toUpperCase().padStart(4, '0')}`;
+    else out += ch;
+  }
+  return out + '"';
+}
+
 function generateConfigToml(state: WizardState): string {
   const lines: string[] = [];
 
@@ -378,23 +393,23 @@ function generateConfigToml(state: WizardState): string {
   lines.push(`[provider]`);
   if (state.llmProvider === 'openai') {
     lines.push(`name = "openai"`);
-    lines.push(`model = "${state.llmModel || 'gpt-4o'}"`);
+    lines.push(`model = ${tomlString(state.llmModel || 'gpt-4o')}`);
     if (state.llmApiKey) {
-      lines.push(`api_key = "${state.llmApiKey}"`);
+      lines.push(`api_key = ${tomlString(state.llmApiKey)}`);
     } else {
       lines.push(`# api_key = "sk-..."  # Or set the OPENAI_API_KEY environment variable`);
     }
   } else if (state.llmProvider === 'anthropic') {
     lines.push(`name = "anthropic"`);
-    lines.push(`model = "${state.llmModel || 'claude-3-5-sonnet-20241022'}"`);
+    lines.push(`model = ${tomlString(state.llmModel || 'claude-3-5-sonnet-20241022')}`);
     if (state.llmApiKey) {
-      lines.push(`api_key = "${state.llmApiKey}"`);
+      lines.push(`api_key = ${tomlString(state.llmApiKey)}`);
     } else {
       lines.push(`# api_key = "sk-ant-..."  # Or set the ANTHROPIC_API_KEY environment variable`);
     }
   } else if (state.llmProvider === 'ollama') {
     lines.push(`name = "ollama"`);
-    lines.push(`model = "${state.llmModel || 'llama3.2'}"`);
+    lines.push(`model = ${tomlString(state.llmModel || 'llama3.2')}`);
     lines.push(`base_url = "http://localhost:11434"`);
   } else {
     lines.push(`name = "openai"`);
@@ -406,7 +421,7 @@ function generateConfigToml(state: WizardState): string {
   if (state.featureDesires.includes('WirelessMesh') || state.peripheralBoards.length > 0) {
     lines.push(`[spine]`);
     lines.push(`kind = "mqtt"`);
-    lines.push(`host = "${state.mqttHost || 'localhost'}"`);
+    lines.push(`host = ${tomlString(state.mqttHost || 'localhost')}`);
     lines.push(`port = 1883`);
     lines.push(`tool_timeout_secs = 30`);
     lines.push(``);
@@ -442,7 +457,7 @@ function generateConfigToml(state: WizardState): string {
         lines.push(`path = "/dev/ttyUSB0"   # Linux: /dev/ttyUSB0 or /dev/ttyACM0; macOS: /dev/cu.usbmodem*`);
         lines.push(`baud = 115200`);
       } else if (board.transport === 'mqtt') {
-        lines.push(`node_id = "${state.nodeId || boardId + '-node'}"`);
+        lines.push(`node_id = ${tomlString(state.nodeId || boardId + '-node')}`);
       }
 
       // Emit role assignments
@@ -453,9 +468,9 @@ function generateConfigToml(state: WizardState): string {
           if (!roleDef) continue;
           lines.push(`# ${roleDef.label} — bus: ${assignment.bus}${assignment.pinOrAddress ? ', pin/addr: ' + assignment.pinOrAddress : ''}`);
           lines.push(`[peripherals.roles.${assignment.roleId}.${boardId.replace(/-/g, '_')}]`);
-          lines.push(`bus = "${assignment.bus}"`);
-          if (assignment.pinOrAddress) lines.push(`pin_or_address = "${assignment.pinOrAddress}"`);
-          if (assignment.notes) lines.push(`notes = "${assignment.notes}"`);
+          lines.push(`bus = ${tomlString(assignment.bus)}`);
+          if (assignment.pinOrAddress) lines.push(`pin_or_address = ${tomlString(assignment.pinOrAddress)}`);
+          if (assignment.notes) lines.push(`notes = ${tomlString(assignment.notes)}`);
           lines.push(``);
         }
       }
