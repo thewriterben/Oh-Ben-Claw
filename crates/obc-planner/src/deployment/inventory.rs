@@ -210,6 +210,11 @@ pub struct HardwareItem {
     /// Capabilities provided by this item.  When empty, looked up from the registry.
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// The board's RAM in MB, when it is more than the planner's floor for that
+    /// board (`models::board_ram_mb`). Only the host's is read: it sets the
+    /// budget an on-device model must fit (Phase 20 plan P4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ram_mb: Option<u32>,
 }
 
 impl HardwareItem {
@@ -228,7 +233,14 @@ impl HardwareItem {
             role: ItemRole::Unassigned,
             accessories: Vec::new(),
             capabilities: Vec::new(),
+            ram_mb: None,
         }
+    }
+
+    /// State the board's RAM in MB.
+    pub fn with_ram_mb(mut self, ram_mb: u32) -> Self {
+        self.ram_mb = Some(ram_mb);
+        self
     }
 
     /// Assign an explicit role to this item.
@@ -304,6 +316,11 @@ pub struct HardwareInventory {
     pub items: Vec<HardwareItem>,
     /// The high-level features the operator wants to achieve.
     pub feature_desires: Vec<FeatureDesire>,
+    /// The on-device model the operator asks for by name, with
+    /// [`FeatureDesire::EdgeInference`]. Unset, the planner picks the largest
+    /// reflex model that fits the host (Phase 20 plan P4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_model: Option<String>,
 }
 
 impl HardwareInventory {
@@ -313,6 +330,7 @@ impl HardwareInventory {
             scenario_name: scenario_name.into(),
             items: Vec::new(),
             feature_desires: Vec::new(),
+            local_model: None,
         }
     }
 
@@ -362,9 +380,10 @@ impl HardwareInventory {
     /// byte-identical output for the same inventory, pinned by the shared
     /// golden fixtures in `tests/fixtures/deployment/`. Emission rules:
     /// deterministic field order (`name`, `board_name`, `transport`, `path?`,
-    /// `node_id?`, `role?`, `accessories?`); optional fields omitted when
-    /// absent (`role` when unassigned, `accessories` when empty); feature
-    /// desires as their serde snake_case tokens in inventory order.
+    /// `node_id?`, `role?`, `accessories?`, `ram_mb?`); optional fields omitted
+    /// when absent (`role` when unassigned, `accessories` when empty); feature
+    /// desires as their serde snake_case tokens in inventory order, then
+    /// `local_model?` (plan P4; absent from every fixture so far).
     pub fn to_deployment_toml(&self) -> String {
         fn desire_token(d: &FeatureDesire) -> String {
             // Unit variants serialize to their snake_case token; Custom(s)
@@ -391,6 +410,9 @@ impl HardwareInventory {
             .map(|s| format!("{:?}", s))
             .collect();
         out.push_str(&format!("feature_desires = [{}]\n", desires.join(", ")));
+        if let Some(model) = &self.local_model {
+            out.push_str(&format!("local_model = {:?}\n", model));
+        }
 
         for item in &self.items {
             out.push_str("\n[[deployment.hardware]]\n");
@@ -413,6 +435,9 @@ impl HardwareInventory {
                     .map(|a| format!("{:?}", a))
                     .collect();
                 out.push_str(&format!("accessories = [{}]\n", accs.join(", ")));
+            }
+            if let Some(ram) = item.ram_mb {
+                out.push_str(&format!("ram_mb = {ram}\n"));
             }
         }
         out
@@ -447,6 +472,7 @@ impl HardwareInventory {
     /// [`to_deployment_toml`]: HardwareInventory::to_deployment_toml
     pub fn from_deployment_config(cfg: &crate::config::DeploymentConfig) -> Self {
         let mut inv = Self::new(cfg.scenario.clone());
+        inv.local_model = cfg.local_model.clone();
 
         for want in &cfg.feature_desires {
             // The exact inverse of `desire_token` above: unit variants round-trip
@@ -469,6 +495,7 @@ impl HardwareInventory {
                 role: hw.role.parse().unwrap_or_default(),
                 accessories: hw.accessories.clone(),
                 capabilities: Vec::new(),
+                ram_mb: hw.ram_mb,
             });
         }
 

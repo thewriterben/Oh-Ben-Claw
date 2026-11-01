@@ -15,6 +15,7 @@
 
 use crate::deployment::advisor::HardwareAdvisor;
 use crate::deployment::inventory::{FeatureDesire, HardwareInventory, ItemRole};
+use crate::deployment::models::{self, EdgeModel};
 use crate::deployment::scheme::{AgentAssignment, DeploymentScheme, NodeRole};
 
 // ── Deployment Planner ────────────────────────────────────────────────────────
@@ -40,6 +41,11 @@ impl DeploymentPlanner {
             .or_else(|| inventory.items.iter().find(|i| i.transport == "native"))
             .map(|i| i.board_name.clone())
             .unwrap_or_else(|| "unknown".to_string());
+
+        let host_ram_mb = inventory
+            .find_role(&ItemRole::Host)
+            .or_else(|| inventory.items.iter().find(|i| i.transport == "native"))
+            .and_then(|i| i.ram_mb);
 
         // ── Orchestrator ──────────────────────────────────────────────────────
         assignments.push(AgentAssignment {
@@ -256,7 +262,33 @@ impl DeploymentPlanner {
         let suggested_hardware = HardwareAdvisor::suggest_missing(inventory);
 
         // ── Generate TOML config ──────────────────────────────────────────────
-        let config_toml = Self::render_config(inventory, &assignments, &host_board);
+        // ── On-device model (Phase 20 plan P4) ─────────────────────────────────
+        // Only an edge host gets an [edge] section to write it into. A model
+        // that does not fit is a warning and no model, never a substitute.
+        let wants_edge_inference = inventory
+            .feature_desires
+            .iter()
+            .any(|d| matches!(d, FeatureDesire::EdgeInference));
+        let edge_model = if wants_edge_inference && Self::is_edge_host(&host_board) {
+            match models::choose(inventory.local_model.as_deref(), &host_board, host_ram_mb) {
+                Ok(chosen) => Some(chosen),
+                Err(warning) => {
+                    warnings.push(warning);
+                    None
+                }
+            }
+        } else {
+            if let Some(name) = &inventory.local_model {
+                warnings.push(format!(
+                    "local_model '{name}' was not planned: it needs the edge_inference \
+                     desire and a single-board host (nanopi-neo3 or raspberry-pi-*); \
+                     this host is '{host_board}'."
+                ));
+            }
+            None
+        };
+
+        let config_toml = Self::render_config(inventory, &assignments, &host_board, edge_model);
 
         // ── Summary ───────────────────────────────────────────────────────────
         let summary = format!(
@@ -284,7 +316,12 @@ impl DeploymentPlanner {
         }
     }
 
-    /// Render the TOML configuration snippet for the deployment.
+    /// A single-board Linux host: it gets the `[edge]` section, and the only
+    /// node that can run an on-device model.
+    fn is_edge_host(board: &str) -> bool {
+        board == "nanopi-neo3" || board.starts_with("raspberry-pi")
+    }
+
     /// Render the TOML configuration for the deployment.
     ///
     /// # This output is fixtured, byte for byte
@@ -310,6 +347,7 @@ impl DeploymentPlanner {
         inventory: &HardwareInventory,
         assignments: &[AgentAssignment],
         host_board: &str,
+        edge_model: Option<(&EdgeModel, u32)>,
     ) -> String {
         let mut out = String::new();
 
@@ -401,7 +439,7 @@ impl DeploymentPlanner {
             }
         }
 
-        let edge_host = host_board == "nanopi-neo3" || host_board.starts_with("raspberry-pi");
+        let edge_host = Self::is_edge_host(host_board);
 
         // [spine] — only when something is not on the host itself. An edge host
         // gets a fixed mesh id, so peers that pair with it still know it after a
@@ -438,7 +476,46 @@ impl DeploymentPlanner {
                  # require_frame_auth = true and a pairing_secret every node shares\n\
                  # (openssl rand -hex 32). Set those, then turn this on.\n",
             );
-            out.push_str("p2p_enabled = false\n\n");
+            out.push_str("p2p_enabled = false\n");
+            if let Some((model, budget)) = edge_model {
+                let why = if inventory.local_model.is_some() {
+                    "as [deployment] local_model asks"
+                } else {
+                    "the largest reflex model that fits"
+                };
+                out.push_str(&format!(
+                    "# edge_inference: {} ({} parameters, {}), {why}.\n\
+                     # It needs about {} MB of RAM; this host's model budget is {budget} MB.\n",
+                    model.name,
+                    model.params,
+                    model.quantisation,
+                    model.ram_mb(),
+                ));
+                out.push_str("local_backend = \"ollama\"\n");
+                out.push_str(&format!(
+                    "local_model = {}\n",
+                    Self::toml_string(model.name)
+                ));
+            }
+            out.push('\n');
+            if let Some((model, _)) = edge_model {
+                out.push_str(
+                    "# `oh-ben-claw fleet models pull` fetches it and prints its digest:\n\
+                     # pin it here as digest = \"sha256:...\" and later pulls are checked.\n",
+                );
+                out.push_str("[[edge.models]]\n");
+                out.push_str(&format!("name = {}\n", Self::toml_string(model.name)));
+                out.push_str(&format!("size_mb = {}\n", model.size_mb));
+                out.push_str(&format!("ram_mb = {}\n", model.ram_mb()));
+                out.push_str(&format!(
+                    "quantisation = {}\n",
+                    Self::toml_string(model.quantisation)
+                ));
+                out.push_str(&format!(
+                    "source = {}\n\n",
+                    Self::toml_string(&model.source())
+                ));
+            }
         }
 
         // [fleet] — LoRa mesh coordination, when the inventory can actually carry it.
@@ -649,5 +726,92 @@ mod tests {
         let report = scheme.report();
         assert!(report.contains("Agent Topology"));
         assert!(report.contains("orchestrator"));
+    }
+
+    fn nanopi_with_edge_inference(
+        ram_mb: Option<u32>,
+        local_model: Option<&str>,
+    ) -> HardwareInventory {
+        let mut inv = HardwareInventory::nanopi_scenario();
+        inv.feature_desires.push(FeatureDesire::EdgeInference);
+        inv.local_model = local_model.map(str::to_string);
+        let host = inv
+            .items
+            .iter_mut()
+            .find(|i| i.board_name == "nanopi-neo3")
+            .unwrap();
+        host.ram_mb = ram_mb;
+        inv
+    }
+
+    #[test]
+    fn edge_inference_writes_the_model_into_the_edge_section() {
+        // The 1 GB floor: only the 270M model fits.
+        let scheme = DeploymentPlanner::plan(&nanopi_with_edge_inference(None, None));
+        let cfg = &scheme.config_toml;
+        assert!(
+            cfg.contains("p2p_enabled = false\n# edge_inference: gemma3:270m"),
+            "{cfg}"
+        );
+        assert!(cfg.contains("local_backend = \"ollama\"\nlocal_model = \"gemma3:270m\"\n"));
+        assert!(cfg.contains(
+            "[[edge.models]]\nname = \"gemma3:270m\"\nsize_mb = 292\nram_mb = 621\n\
+             quantisation = \"Q8_0\"\nsource = \"ollama://gemma3:270m\"\n\n"
+        ));
+        assert!(cfg.contains("this host's model budget is 640 MB"));
+
+        // A 2 GB board, stated on the host item, gets the larger model.
+        let scheme = DeploymentPlanner::plan(&nanopi_with_edge_inference(Some(2048), None));
+        assert!(scheme.config_toml.contains("local_model = \"gemma3:1b\"\n"));
+        // And one the operator names is planned as asked.
+        let scheme =
+            DeploymentPlanner::plan(&nanopi_with_edge_inference(Some(2048), Some("qwen3:0.6b")));
+        assert!(scheme
+            .config_toml
+            .contains("local_model = \"qwen3:0.6b\"\n"));
+        assert!(scheme
+            .config_toml
+            .contains("as [deployment] local_model asks"));
+    }
+
+    #[test]
+    fn a_model_that_does_not_fit_is_a_warning_and_no_model() {
+        let scheme =
+            DeploymentPlanner::plan(&nanopi_with_edge_inference(Some(2048), Some("qwen3:4b")));
+        // The request stays in the echoed [deployment] section; [edge] gets nothing.
+        let cfg = &scheme.config_toml;
+        assert!(cfg.contains("local_model = \"qwen3:4b\"\n"), "{cfg}");
+        assert!(!cfg.contains("local_backend"), "{cfg}");
+        assert!(!cfg.contains("[[edge.models]]"));
+        assert!(
+            scheme
+                .warnings
+                .iter()
+                .any(|w| w.contains("'qwen3:4b' needs about 3456 MB")),
+            "{:?}",
+            scheme.warnings
+        );
+    }
+
+    #[test]
+    fn without_edge_inference_no_model_is_planned() {
+        let plain = DeploymentPlanner::plan(&HardwareInventory::nanopi_scenario());
+        assert!(!plain.config_toml.contains("local_model"));
+        assert!(!plain.config_toml.contains("[[edge.models]]"));
+
+        // A local_model with no edge_inference desire is not planned, and says so.
+        let mut inv = HardwareInventory::nanopi_scenario();
+        inv.local_model = Some("gemma3:270m".into());
+        let scheme = DeploymentPlanner::plan(&inv);
+        assert!(!scheme.config_toml.contains("local_backend"));
+        assert!(!scheme.config_toml.contains("[[edge.models]]"));
+        assert!(
+            scheme
+                .warnings
+                .iter()
+                .any(|w| w.contains("local_model 'gemma3:270m' was not planned")),
+            "{:?}",
+            scheme.warnings
+        );
     }
 }

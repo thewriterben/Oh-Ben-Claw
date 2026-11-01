@@ -53,6 +53,26 @@ fn emit_parse_rebuild_emit_is_a_fixed_point() {
     );
 }
 
+/// Phase 20 plan P4 added `local_model` to the block and `ram_mb` to an item.
+/// Neither is in the nanopi fixture, so the fixed point above does not see them.
+#[test]
+fn local_model_and_ram_mb_survive_the_round_trip() {
+    use oh_ben_claw::deployment::FeatureDesire;
+
+    let mut original = HardwareInventory::nanopi_scenario();
+    original.feature_desires.push(FeatureDesire::EdgeInference);
+    original.local_model = Some("gemma3:1b".into());
+    original.items[0].ram_mb = Some(2048);
+    let once = original.to_deployment_toml();
+    assert!(once.contains("local_model = \"gemma3:1b\"\n"), "{once}");
+    assert!(once.contains("ram_mb = 2048\n"), "{once}");
+
+    let rebuilt = HardwareInventory::from_deployment_config(&parse_block(&once));
+    assert_eq!(rebuilt.local_model.as_deref(), Some("gemma3:1b"));
+    assert_eq!(rebuilt.items[0].ram_mb, Some(2048));
+    assert_eq!(once, rebuilt.to_deployment_toml());
+}
+
 /// The fixed-point test above would pass on two empty strings. This is the
 /// control: the fixture is not vacuous.
 ///

@@ -63,6 +63,52 @@ Phase 20 plan P5 (`docs/PHASE20-PLAN.md`), SBC side.
 
 ---
 
+## Unreleased — Edge model management from the deployment planner (2026-11-01)
+
+Phase 20 plan P4 (`docs/PHASE20-PLAN.md`).
+
+### Added
+
+- **The planner picks the host's on-device model.** With the `edge_inference`
+  desire on a single-board host, `plan_site` writes `[edge].local_backend =
+  "ollama"`, `local_model` and one `[[edge.models]]` entry (name, size_mb,
+  ram_mb, quantisation, source). The model comes from a six-model catalogue in
+  `obc_planner::deployment::models` and must fit the host's budget: its RAM
+  (`ram_mb` on the host item, new, else a 1 GB floor for nanopi-neo3 and
+  raspberry-pi-4/5) less 384 MB for the system, against weights plus a quarter
+  plus 256 MB. `[deployment] local_model` (new) asks for one by name; a model
+  that does not fit, or that the catalogue does not know, is a warning and no
+  model, never a substitute. Without the desire the output is unchanged.
+  Tests: `the_largest_reflex_model_that_fits_is_chosen`,
+  `a_requested_model_that_does_not_fit_is_refused_not_swapped`,
+  `edge_inference_writes_the_model_into_the_edge_section`,
+  `a_model_that_does_not_fit_is_a_warning_and_no_model`,
+  `without_edge_inference_no_model_is_planned`,
+  `edge_inference_output_names_the_model_it_lists`.
+- **`[[edge.models]]` and digest-checked pulls.** Each entry names a model, its
+  source (`ollama://<tag>` or an `https://` GGUF URL) and an optional
+  `digest = "sha256:<hex>"`, required for `https`. `oh-ben-claw fleet models
+  status` reports each as missing, installed but unpinned, verified, or a
+  mismatch; `oh-ben-claw fleet models pull [name]` fetches through Ollama's
+  `/api/pull` or downloads the file, and checks the digest. A mismatch is
+  removed (`/api/delete`, or the partial file deleted), not left for the
+  reflex tier to load. The `ota_update` tool takes `board_type = "model"` with
+  a `model` name and does the same, only for a model the config lists, so the
+  digest it checks never comes from the call. `Config::validate` refuses a bad
+  list and warns when `local_model` is not in it or its source does not match
+  `local_backend`. Tests: the `edge_models` tests in obc-tools,
+  `a_model_pull_needs_the_model_listed_in_the_config`,
+  `validate_checks_the_edge_model_list`.
+
+### Fixed
+
+- Four config error and warning messages carried a run of spaces in the middle
+  where a line continuation had lost its backslash (`[edge]` reflex model
+  action, `edge.local_model` without edge mode, and the non-local
+  `[provider.fallbacks]` refusal).
+
+---
+
 ## Unreleased — Small-model reflex tier (2026-10-30)
 
 Phase 20 plan P3 (`docs/PHASE20-PLAN.md`).
