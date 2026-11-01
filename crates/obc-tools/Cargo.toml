@@ -70,6 +70,9 @@ tokio = { version = "1.42", default-features = false, features = [
 # Fourteen call sites, all at full paths, no `use` line. Seventh crate this
 # month whose real dependency list came from the compiler rather than a survey.
 tracing = { version = "0.1", default-features = false }
+# Model pulls (Phase 20 plan P4): a GGUF download is hashed as it arrives.
+sha2 = "0.10"
+hex = "0.4"
 uuid = { version = "1.11", default-features = false, features = ["v4", "std"] }
 
 [dev-dependencies]

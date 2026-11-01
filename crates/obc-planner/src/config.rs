@@ -62,6 +62,10 @@ pub struct DeploymentHardwareConfig {
     /// Accessory names attached to this board (e.g. `["dht22"]`).
     #[serde(default)]
     pub accessories: Vec<String>,
+    /// The board's RAM in MB, when it is more than the planner assumes for it.
+    /// The host's sets the budget an on-device model must fit.
+    #[serde(default)]
+    pub ram_mb: Option<u32>,
 }
 
 /// Configuration for the deployment scheme generator (Phase 13).
@@ -127,6 +131,11 @@ pub struct DeploymentConfig {
     /// `"edge_inference"`, `"wireless_mesh"`, `"persistent_memory"`.
     #[serde(default)]
     pub feature_desires: Vec<String>,
+    /// With `"edge_inference"`, the on-device model to plan for, by its Ollama
+    /// tag. The planner refuses one that does not fit the host's RAM rather
+    /// than substitute another; unset, it picks the largest that fits.
+    #[serde(default)]
+    pub local_model: Option<String>,
 }
 
 fn default_scenario_name() -> String {
@@ -141,6 +150,7 @@ impl Default for DeploymentConfig {
             auto_plan: false,
             hardware: Vec::new(),
             feature_desires: Vec::new(),
+            local_model: None,
         }
     }
 }

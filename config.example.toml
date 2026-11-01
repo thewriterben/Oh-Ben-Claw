@@ -393,6 +393,20 @@ max_chars = 2400
 # local_backend = "ollama"       # or "llama-cpp"
 # local_model = "gemma3n"
 # reflex_timeout_ms = 2000
+#
+# The models this node may hold (Phase 20 P4). The deployment planner writes
+# one for the edge_inference desire. `oh-ben-claw fleet models pull` fetches
+# them, and the ota_update tool can with board_type = "model"; each pull is
+# checked against digest. Leave digest out on the first pull, which prints the
+# line to pin. An https source (a GGUF for llama-cpp, saved under the data
+# directory's models/) must carry its digest from the start.
+# [[edge.models]]
+# name = "gemma3:270m"
+# size_mb = 292
+# ram_mb = 621
+# quantisation = "Q8_0"
+# source = "ollama://gemma3:270m"
+# digest = "sha256:<64 hex digits>"
 
 # ── Reflexes ─────────────────────────────────────────────────────────────────
 # System 1: fast local rules over world state that act without waking the model.

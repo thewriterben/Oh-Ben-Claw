@@ -84,7 +84,7 @@ pub fn default_tools_with_reach(
         Box::new(http_tool),
         Box::new(AudioTranscribeTool::default()),
         Box::new(TextToSpeechTool::default()),
-        Box::new(OtaUpdateTool),
+        Box::new(OtaUpdateTool::default()),
         Box::new(DeviceHealthTool),
         Box::new(builtin::siteplan::SitePlanTool::new()),
         Box::new(builtin::aerial::AerialStatusTool::new()),

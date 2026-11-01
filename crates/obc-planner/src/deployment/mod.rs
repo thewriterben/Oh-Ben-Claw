@@ -13,6 +13,7 @@
 pub mod advisor;
 pub mod firmware_scaffold;
 pub mod inventory;
+pub mod models;
 pub mod planner;
 pub mod scheme;
 

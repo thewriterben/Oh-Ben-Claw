@@ -14,7 +14,7 @@
 //! planner told them to run.
 
 use oh_ben_claw::config::Config;
-use oh_ben_claw::obc_planner::deployment::{DeploymentPlanner, HardwareInventory};
+use oh_ben_claw::obc_planner::deployment::{DeploymentPlanner, FeatureDesire, HardwareInventory};
 
 fn parse(toml_text: &str, label: &str) -> Config {
     toml::from_str(toml_text)
@@ -28,7 +28,35 @@ fn scenarios() -> Vec<(&'static str, HardwareInventory)> {
         // "empty inventory produces warnings" path, and a config emitted down
         // that path is still a config someone could be handed.
         ("empty", HardwareInventory::new("empty")),
+        // Phase 20 plan P4: edge inference writes `[edge].local_backend`,
+        // `local_model` and an `[[edge.models]]` entry, which must be keys the
+        // config schema has and a model list that validates.
+        ("nanopi_edge_inference", nanopi_edge_inference()),
     ]
+}
+
+fn nanopi_edge_inference() -> HardwareInventory {
+    let mut inv = HardwareInventory::nanopi_scenario();
+    inv.feature_desires.push(FeatureDesire::EdgeInference);
+    inv
+}
+
+#[test]
+fn edge_inference_output_names_the_model_it_lists() {
+    let scheme = DeploymentPlanner::plan(&nanopi_edge_inference());
+    let config = parse(&scheme.config_toml, "nanopi_edge_inference");
+    let model = config
+        .edge
+        .local_model
+        .as_deref()
+        .expect("local_model is set");
+    assert_eq!(
+        config.edge.local_backend,
+        oh_ben_claw::config::LocalBackend::Ollama
+    );
+    assert_eq!(config.edge.models.len(), 1);
+    assert_eq!(config.edge.models[0].name, model);
+    assert_eq!(config.edge.models[0].source, format!("ollama://{model}"));
 }
 
 #[test]

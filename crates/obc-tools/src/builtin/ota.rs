@@ -5,9 +5,12 @@
 //! - Raspberry Pi: SSH-based package update and service restart
 //! - STM32: Flash via probe-rs (USB debug probe)
 //! - Arduino: Serial flash via avrdude
+//! - On-device models: `board_type = "model"` pulls one of this node's
+//!   `[[edge.models]]` and checks its digest (Phase 20 plan P4)
 
+use super::edge_models::{self, EdgeModelEntry};
 use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -15,8 +18,60 @@ use std::time::Duration;
 
 // ── OTA Tool ─────────────────────────────────────────────────────────────────
 
-/// Tool for performing OTA firmware updates on connected peripheral nodes.
-pub struct OtaUpdateTool;
+/// Tool for performing OTA firmware updates on connected peripheral nodes, and
+/// for pulling this node's on-device models.
+#[derive(Default)]
+pub struct OtaUpdateTool {
+    /// This node's `[[edge.models]]`. A model pull checks the digest pinned
+    /// here, never one passed in the call: the model asking for a pull is not
+    /// the authority on what it should get.
+    models: Vec<EdgeModelEntry>,
+    /// Where downloaded GGUF files go.
+    gguf_dir: PathBuf,
+}
+
+impl OtaUpdateTool {
+    /// The tool with this node's model list, for `board_type = "model"`.
+    pub fn with_models(models: Vec<EdgeModelEntry>, gguf_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            models,
+            gguf_dir: gguf_dir.into(),
+        }
+    }
+
+    async fn pull_model(&self, name: &str, dry_run: bool) -> Result<String> {
+        let Some(entry) = self.models.iter().find(|m| m.name == name) else {
+            let known: Vec<&str> = self.models.iter().map(|m| m.name.as_str()).collect();
+            bail!(
+                "this node has no [[edge.models]] entry named {name:?} (it has: {}). \
+                 The digest a pull is checked against comes from the config, so a \
+                 model must be listed there before it can be pulled.",
+                if known.is_empty() {
+                    "none".to_string()
+                } else {
+                    known.join(", ")
+                }
+            );
+        };
+        if dry_run {
+            let s = edge_models::status(
+                std::slice::from_ref(entry),
+                edge_models::OLLAMA_URL,
+                &self.gguf_dir,
+            )
+            .await?;
+            return Ok(format!("[DRY RUN] {name}: {}", s[0].state));
+        }
+        Ok(edge_models::pull(
+            entry,
+            edge_models::OLLAMA_URL,
+            &self.gguf_dir,
+            edge_models::PULL_TIMEOUT,
+        )
+        .await?
+        .to_string())
+    }
+}
 
 #[async_trait]
 impl Tool for OtaUpdateTool {
@@ -37,7 +92,10 @@ impl Tool for OtaUpdateTool {
     fn description(&self) -> &str {
         "Perform an over-the-air (OTA) firmware update on a connected peripheral node. \
         Supports ESP32 (HTTP OTA), Raspberry Pi (apt/pip), STM32 (probe-rs flash), \
-        and Arduino (avrdude serial flash). Returns update status and new firmware version."
+        and Arduino (avrdude serial flash). Returns update status and new firmware version. \
+        With board_type \"model\", pulls one of this node's on-device models by name \
+        and checks it against the digest pinned in the config; dry_run reports what \
+        is installed instead."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -50,7 +108,7 @@ impl Tool for OtaUpdateTool {
                 },
                 "board_type": {
                     "type": "string",
-                    "enum": ["esp32", "rpi", "stm32", "arduino"],
+                    "enum": ["esp32", "rpi", "stm32", "arduino", "model"],
                     "description": "Type of board to update"
                 },
                 "firmware_url": {
@@ -64,6 +122,10 @@ impl Tool for OtaUpdateTool {
                 "target_version": {
                     "type": "string",
                     "description": "Expected target firmware version (for verification)"
+                },
+                "model": {
+                    "type": "string",
+                    "description": "For board_type model: the name of one of this node's [[edge.models]] entries"
                 },
                 "serial_port": {
                     "type": "string",
@@ -121,6 +183,14 @@ impl Tool for OtaUpdateTool {
                     .and_then(|v| v.as_str())
                     .unwrap_or("/dev/ttyUSB0");
                 ota_arduino(&node_name, &path, port, dry_run).await
+            }
+            "model" => {
+                let Some(name) = args.get("model").and_then(|v| v.as_str()) else {
+                    return Ok(ToolResult::err(
+                        "model required for board_type model: the name of one of this node's [[edge.models]] entries",
+                    ));
+                };
+                self.pull_model(name, dry_run).await
             }
             other => {
                 return Ok(ToolResult::err(format!("Unsupported board type: {other}")));
@@ -432,8 +502,44 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn a_model_pull_needs_the_model_listed_in_the_config() {
+        let tool = OtaUpdateTool::default();
+        let r = tool
+            .execute(json!({"node_name": "edge-1", "board_type": "model"}))
+            .await
+            .unwrap();
+        assert!(r
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("model required"));
+
+        let tool = OtaUpdateTool::with_models(
+            vec![EdgeModelEntry {
+                name: "gemma3:270m".into(),
+                size_mb: None,
+                ram_mb: None,
+                quantisation: None,
+                source: "ollama://gemma3:270m".into(),
+                digest: None,
+            }],
+            "models",
+        );
+        let r = tool
+            .execute(json!({"node_name": "edge-1", "board_type": "model", "model": "qwen3:4b"}))
+            .await
+            .unwrap();
+        let err = r.error.unwrap_or_default();
+        assert!(
+            err.contains("no [[edge.models]] entry named \"qwen3:4b\""),
+            "{err}"
+        );
+        assert!(err.contains("it has: gemma3:270m"), "{err}");
+    }
+
+    #[tokio::test]
     async fn test_ota_tool_missing_node_name() {
-        let tool = OtaUpdateTool;
+        let tool = OtaUpdateTool::default();
         let result = tool.execute(json!({"board_type": "esp32"})).await.unwrap();
         assert!(!result.success);
         assert!(result
@@ -445,7 +551,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ota_tool_missing_board_type() {
-        let tool = OtaUpdateTool;
+        let tool = OtaUpdateTool::default();
         let result = tool.execute(json!({"node_name": "test"})).await.unwrap();
         assert!(!result.success);
         assert!(result
@@ -457,7 +563,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ota_tool_unsupported_board() {
-        let tool = OtaUpdateTool;
+        let tool = OtaUpdateTool::default();
         let result = tool
             .execute(json!({"node_name": "test", "board_type": "unknown_board"}))
             .await
@@ -472,7 +578,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ota_stm32_missing_firmware() {
-        let tool = OtaUpdateTool;
+        let tool = OtaUpdateTool::default();
         let result = tool
             .execute(json!({
                 "node_name": "stm32-1",
@@ -491,7 +597,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ota_arduino_dry_run_missing_firmware() {
-        let tool = OtaUpdateTool;
+        let tool = OtaUpdateTool::default();
         let result = tool
             .execute(json!({
                 "node_name": "arduino-1",
@@ -533,7 +639,7 @@ mod tests {
 
     #[test]
     fn test_ota_tool_name() {
-        let tool = OtaUpdateTool;
+        let tool = OtaUpdateTool::default();
         assert_eq!(tool.name(), "ota_update");
     }
 
