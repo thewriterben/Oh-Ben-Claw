@@ -2037,6 +2037,58 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             _ => None,
         };
 
+    // Phase 20 plan P3: the edge node's local models -- `[provider]` when it is
+    // on-device, and the reflex tier's small model -- probed once here so the
+    // world-state block shows each as `edge.model.<name>` up or down. The
+    // router's local back-off and the reflex tier's calls keep it current.
+    let model_registry: Option<Arc<providers::model_registry::ModelRegistry>> = match &edge {
+        Some(edge) => {
+            use providers::model_registry::{probe, registry_from_providers, ModelEntry};
+            let mut brain = config.provider.clone();
+            brain.fallbacks.clear();
+            let mut local = Vec::new();
+            if ModelEntry::from_provider(&brain, 0).local {
+                local.push(brain);
+            }
+            if let Some(m) = &edge.reflex_model {
+                if !local
+                    .iter()
+                    .any(|c: &providers::ProviderConfig| c.model == m.model)
+                {
+                    local.push(m.clone());
+                }
+            }
+            if local.is_empty() {
+                None
+            } else {
+                let mut registry = registry_from_providers(&local, 60_000);
+                if let Some(world) = &world_mem {
+                    registry = registry.with_world(Arc::clone(world));
+                }
+                for cfg in &local {
+                    let up = probe(cfg, std::time::Duration::from_secs(3)).await;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    registry.record_health(&cfg.model, up, now);
+                    if up {
+                        info!(provider = %cfg.name, model = %cfg.model, "edge: local model is up");
+                    } else {
+                        tracing::warn!(
+                            provider = %cfg.name,
+                            model = %cfg.model,
+                            url = cfg.base_url.as_deref().unwrap_or(""),
+                            "edge: local model did not answer its probe; marked down until it does"
+                        );
+                    }
+                }
+                Some(Arc::new(registry))
+            }
+        }
+        None => None,
+    };
+
     let reflex_rules: Vec<oh_ben_claw::agent::reflex::ReflexRule> = {
         let mut rules = config.reflex.rules.clone();
         if config.reflex.safing {
@@ -2317,6 +2369,33 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
                 .with_metrics(Arc::clone(&obs.metrics));
             if let Some(max) = config.reflex.max_escalations_per_min {
                 controller = controller.with_escalation_budget(EscalationBudget::per_minute(max));
+            }
+            // Phase 20 plan P3: the small model behind `model` actions, one
+            // bounded call each. `validate` refused model actions without it.
+            if let Some(m) = edge.as_ref().and_then(|e| e.reflex_model.clone()) {
+                let timeout = edge.as_ref().map(|e| e.reflex_timeout).unwrap_or_default();
+                match providers::from_config(&m) {
+                    Ok(provider) => {
+                        let mut tier = oh_ben_claw::agent::reflex_tier::ProviderReflexModel::new(
+                            provider,
+                            m.clone(),
+                        );
+                        if let Some(models) = &model_registry {
+                            tier = tier.with_registry(Arc::clone(models));
+                        }
+                        controller = controller.with_model(Arc::new(tier), timeout);
+                        info!(
+                            provider = %m.name,
+                            model = %m.model,
+                            ceiling_ms = timeout.as_millis() as u64,
+                            "edge: reflex tier armed"
+                        );
+                    }
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "edge: could not build the reflex tier's model; model actions will miss"
+                    ),
+                }
             }
             let interval =
                 std::time::Duration::from_millis(config.reflex.interval_ms.unwrap_or(1000));
@@ -3395,6 +3474,9 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
     // Parity item 3: a second, cloud brain chosen per turn (`[provider.routing]`).
     if let Some(routing) = &config.provider.routing {
         agent = agent.with_routing((**routing).clone())?;
+    }
+    if let Some(models) = &model_registry {
+        agent = agent.with_model_registry(Arc::clone(models));
     }
     agent = agent
         .with_rollout(Arc::clone(&rollout_tracker))

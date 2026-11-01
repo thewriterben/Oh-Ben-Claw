@@ -399,6 +399,11 @@ impl ForesightController {
                     }
                 }
                 Action::Move { command } => self.sink.move_actuator(command).await?,
+                // The reflex tier runs under the reflex controller, which
+                // holds the model; foresight has none to ask.
+                Action::Model { .. } => {
+                    tracing::debug!(rule = %f.rule_id, "foresight: model action skipped")
+                }
             }
         }
         Ok(fired)

@@ -13,13 +13,19 @@
 //! Safety: an [`Action::GpioWrite`] is still bounded by the node's deterministic
 //! `SafetyGate` (Track 0) — a reflex can request an actuator change but cannot
 //! exceed the on-MCU limits. [`Action::Escalate`] hands control up to System 2.
+//!
+//! Between the two sits [`Action::Model`] (Phase 20 plan P3): one bounded call
+//! to a small on-device model, for a classification a threshold cannot say.
+//! It runs host-side only, under a [`ReflexController`] given a
+//! [`ReflexModel`] and a latency ceiling; the node has no model to ask.
 
 use async_trait::async_trait;
 use obc_movement::{MovementCommand, MovementController};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// The standard safing rule set — the library of rules this engine was built to
 /// run, and the escalation text `docs/playbooks/safing-escalations.md`
@@ -385,6 +391,60 @@ pub enum Action {
     /// Apply a typed, safety-bounded movement (Movement subsystem). Still bounded
     /// by the Track 0 gate inside the `MovementController` before it actuates.
     Move { command: MovementCommand },
+    /// Ask the small local model (the reflex tier, plan P3) to classify what the
+    /// rule saw, then perform the action filed under its answer.
+    ///
+    /// One call, no tools, no history: the prompt is `prompt`, the current
+    /// trusted values of the rule's entities, and the labels in `on`. The reply
+    /// must name exactly one label. Anything else (no model, an error, a reply
+    /// naming no label or two, a call slower than the controller's ceiling) is
+    /// a rule miss: nothing is dispatched and the tick goes on.
+    ///
+    /// Host-only. A node evaluates rules with no model to ask.
+    Model {
+        prompt: String,
+        /// Label → action. A branch may not itself be a `model` action.
+        on: BTreeMap<String, Action>,
+    },
+}
+
+impl Action {
+    /// Reject an action that could never run: a `model` action with no prompt,
+    /// no labels, an empty label, or a branch that is another `model` (one
+    /// bounded call per fire, not a chain).
+    pub fn validate(&self) -> Result<(), String> {
+        let Action::Model { prompt, on } = self else {
+            return Ok(());
+        };
+        if prompt.trim().is_empty() {
+            return Err("model action has an empty prompt".into());
+        }
+        if on.is_empty() {
+            return Err("model action has no labels in `on`".into());
+        }
+        for (label, then) in on {
+            if label.trim().is_empty() {
+                return Err("model action has an empty label".into());
+            }
+            if matches!(then, Action::Model { .. }) {
+                return Err(format!(
+                    "model action label {label:?} is another model action; one call per fire"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The metrics name of the action's kind.
+    fn kind(&self) -> &'static str {
+        match self {
+            Action::GpioWrite { .. } => "gpio_write",
+            Action::Publish { .. } => "publish",
+            Action::Escalate { .. } => "escalate",
+            Action::Move { .. } => "move",
+            Action::Model { .. } => "model",
+        }
+    }
 }
 
 /// A reflex rule: when `when` holds, perform `then`, subject to debounce/rate.
@@ -457,6 +517,7 @@ impl ReflexRule {
     pub fn validate(&self) -> Result<(), String> {
         self.when
             .validate()
+            .and_then(|()| self.then.validate())
             .map_err(|e| format!("reflex rule {}: {e}", self.id))
     }
 
@@ -648,6 +709,35 @@ impl ReflexEngine {
         fired
     }
 
+    /// The rule with this id.
+    pub fn rule(&self, id: &str) -> Option<&ReflexRule> {
+        self.rules.iter().find(|r| r.id == id)
+    }
+
+    /// The current values of the entities rule `id` reads, from facts this
+    /// engine trusts: what a `model` action shows the small model. The same
+    /// trust gate as [`tick`](Self::tick), so the model is never shown a fact
+    /// the rule itself would not have acted on.
+    pub fn evidence(
+        &self,
+        id: &str,
+        world: &obc_memory::world::WorldMemory,
+    ) -> anyhow::Result<BTreeMap<String, Value>> {
+        let mut entities = HashSet::new();
+        if let Some(rule) = self.rule(id) {
+            rule.when.collect_entities(&mut entities);
+        }
+        let mut out = BTreeMap::new();
+        for entity in entities {
+            if let Some(fact) = world.current(&entity)? {
+                if self.trusted.accepts(fact.origin) {
+                    out.insert(entity, fact.value);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// All entity names referenced by any rule's condition.
     pub fn referenced_entities(&self) -> HashSet<String> {
         let mut set = HashSet::new();
@@ -738,9 +828,62 @@ pub async fn dispatch(actions: &[FiredReflex], sink: &dyn ActionSink) -> anyhow:
             Action::Publish { topic, payload } => sink.publish(topic, payload).await?,
             Action::Escalate { reason } => sink.escalate(reason).await?,
             Action::Move { command } => sink.move_actuator(command).await?,
+            Action::Model { .. } => tracing::debug!(
+                rule = %f.rule_id,
+                "reflex: model action skipped; only a ReflexController with a model runs it"
+            ),
         }
     }
     Ok(())
+}
+
+// ── The reflex tier (plan P3) ───────────────────────────────────────────────────
+
+/// The small model an [`Action::Model`] asks. One prompt in, one reply out: no
+/// tools, no history. Implemented over a provider in `obc_agent::reflex_tier`.
+#[async_trait]
+pub trait ReflexModel: Send + Sync {
+    /// The model's name, for logs.
+    fn name(&self) -> &str;
+    /// Answer one prompt.
+    async fn complete(&self, prompt: &str) -> anyhow::Result<String>;
+    /// The controller gave up on a call at its latency ceiling. Default:
+    /// nothing; a model that tracks its own health marks itself down.
+    fn timed_out(&self) {}
+}
+
+/// The prompt a `model` action sends: the rule's question, the evidence, and
+/// the labels the reply must choose between.
+pub fn model_prompt(prompt: &str, evidence: &BTreeMap<String, Value>, labels: &[&str]) -> String {
+    let facts = serde_json::to_string(evidence).unwrap_or_else(|_| "{}".into());
+    format!(
+        "{prompt}\n\nFacts: {facts}\n\nAnswer with exactly one of: {}. Reply with the label only.",
+        labels.join(", ")
+    )
+}
+
+/// The label a reply names, or `None` when it names none or more than one.
+/// An exact answer (case and surrounding punctuation ignored) wins; otherwise
+/// the one label that appears in the reply as a whole word.
+pub fn match_label<'a>(reply: &str, labels: &[&'a str]) -> Option<&'a str> {
+    let trimmed = reply
+        .trim()
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase();
+    if let Some(l) = labels.iter().find(|l| l.to_lowercase() == trimmed) {
+        return Some(l);
+    }
+    let words: HashSet<String> = reply
+        .to_lowercase()
+        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
+        .filter(|w| !w.is_empty())
+        .map(String::from)
+        .collect();
+    let mut named = labels.iter().filter(|l| words.contains(&l.to_lowercase()));
+    match (named.next(), named.next()) {
+        (Some(l), None) => Some(l),
+        _ => None,
+    }
 }
 
 /// The part of an escalation reason worth putting on a log line: its first
@@ -903,6 +1046,9 @@ pub struct ReflexController {
     sink: Arc<dyn ActionSink>,
     escalation_budget: Option<EscalationBudget>,
     metrics: Option<Arc<obc_observability::MetricsRegistry>>,
+    /// The reflex tier: the small model `model` actions ask, and the latency
+    /// ceiling on one call.
+    model: Option<(Arc<dyn ReflexModel>, Duration)>,
 }
 
 impl ReflexController {
@@ -918,7 +1064,15 @@ impl ReflexController {
             sink,
             escalation_budget: None,
             metrics: None,
+            model: None,
         }
+    }
+
+    /// Give `model` actions a small model to ask, and the most one call may
+    /// take. A slower call is a rule miss, counted as `reflex.model.timeout`.
+    pub fn with_model(mut self, model: Arc<dyn ReflexModel>, ceiling: Duration) -> Self {
+        self.model = Some((model, ceiling));
+        self
     }
 
     /// Cap how often reflexes may escalate to System 2.
@@ -939,14 +1093,99 @@ impl ReflexController {
         if let Some(m) = &self.metrics {
             m.counter("reflex.fired_total").inc();
             m.counter(format!("reflex.rule.{}", f.rule_id)).inc();
-            let kind = match &f.action {
-                Action::GpioWrite { .. } => "gpio_write",
-                Action::Publish { .. } => "publish",
-                Action::Escalate { .. } => "escalate",
-                Action::Move { .. } => "move",
-            };
-            m.counter(format!("reflex.action.{kind}")).inc();
+            m.counter(format!("reflex.action.{}", f.action.kind()))
+                .inc();
         }
+    }
+
+    fn count(&self, name: &str) {
+        if let Some(m) = &self.metrics {
+            m.counter(name).inc();
+        }
+    }
+
+    /// Run one `model` action: the action filed under the model's label, or
+    /// `None` for a miss.
+    async fn classify<'a>(
+        &self,
+        rule_id: &str,
+        prompt: &str,
+        on: &'a BTreeMap<String, Action>,
+    ) -> Option<&'a Action> {
+        let Some((model, ceiling)) = &self.model else {
+            tracing::debug!(rule = rule_id, "reflex: model action with no model; miss");
+            self.count("reflex.model.miss");
+            return None;
+        };
+        let evidence = match self.engine.evidence(rule_id, &self.world) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::debug!(rule = rule_id, error = %e, "reflex: no evidence for the model; miss");
+                self.count("reflex.model.miss");
+                return None;
+            }
+        };
+        let labels: Vec<&str> = on.keys().map(String::as_str).collect();
+        let text = model_prompt(prompt, &evidence, &labels);
+        let reply = match tokio::time::timeout(*ceiling, model.complete(&text)).await {
+            Ok(Ok(reply)) => reply,
+            Ok(Err(e)) => {
+                tracing::debug!(rule = rule_id, model = model.name(), error = %e, "reflex: model call failed; miss");
+                self.count("reflex.model.miss");
+                return None;
+            }
+            Err(_) => {
+                model.timed_out();
+                tracing::debug!(
+                    rule = rule_id,
+                    model = model.name(),
+                    ceiling_ms = ceiling.as_millis() as u64,
+                    "reflex: model call over the latency ceiling; miss"
+                );
+                self.count("reflex.model.timeout");
+                self.count("reflex.model.miss");
+                return None;
+            }
+        };
+        match match_label(&reply, &labels) {
+            Some(label) => {
+                self.count("reflex.model.hit");
+                on.get(label)
+            }
+            None => {
+                tracing::debug!(rule = rule_id, model = model.name(), reply = %reply, "reflex: reply named no single label; miss");
+                self.count("reflex.model.miss");
+                None
+            }
+        }
+    }
+
+    /// Dispatch one action that is not a `model` action.
+    async fn perform(&self, action: &Action, now_ms: u64) -> anyhow::Result<()> {
+        match action {
+            Action::GpioWrite {
+                node_id,
+                pin,
+                value,
+            } => self.sink.gpio_write(node_id, *pin, *value).await?,
+            Action::Publish { topic, payload } => self.sink.publish(topic, payload).await?,
+            Action::Escalate { reason } => {
+                let allowed = self
+                    .escalation_budget
+                    .as_ref()
+                    .is_none_or(|b| b.allow(now_ms));
+                if allowed {
+                    self.sink.escalate(reason).await?;
+                } else {
+                    tracing::debug!(reason, "reflex: escalation suppressed by budget");
+                }
+            }
+            Action::Move { command } => self.sink.move_actuator(command).await?,
+            // `Action::validate` refuses a model branch; one that arrives
+            // unvalidated is a miss rather than a second call.
+            Action::Model { .. } => self.count("reflex.model.miss"),
+        }
+        Ok(())
     }
 
     /// Read world state, evaluate reflexes, dispatch the fired actions; returns
@@ -956,24 +1195,12 @@ impl ReflexController {
         for f in &fired {
             self.record_fire(f);
             match &f.action {
-                Action::GpioWrite {
-                    node_id,
-                    pin,
-                    value,
-                } => self.sink.gpio_write(node_id, *pin, *value).await?,
-                Action::Publish { topic, payload } => self.sink.publish(topic, payload).await?,
-                Action::Escalate { reason } => {
-                    let allowed = self
-                        .escalation_budget
-                        .as_ref()
-                        .is_none_or(|b| b.allow(now_ms));
-                    if allowed {
-                        self.sink.escalate(reason).await?;
-                    } else {
-                        tracing::debug!(reason, "reflex: escalation suppressed by budget");
+                Action::Model { prompt, on } => {
+                    if let Some(action) = self.classify(&f.rule_id, prompt, on).await {
+                        self.perform(action, now_ms).await?;
                     }
                 }
-                Action::Move { command } => self.sink.move_actuator(command).await?,
+                action => self.perform(action, now_ms).await?,
             }
         }
         Ok(fired)
@@ -1936,6 +2163,193 @@ mod tests {
             sink.calls.lock().unwrap().as_slice(),
             &["gpio:node-1:18:1".to_string()]
         );
+    }
+
+    // ── The reflex tier (plan P3) ──
+
+    /// A small model with a fixed reply and a fixed delay; records each prompt
+    /// and each timeout it is told about.
+    struct FakeModel {
+        reply: &'static str,
+        delay_ms: u64,
+        prompts: Mutex<Vec<String>>,
+        timeouts: Mutex<u32>,
+    }
+
+    impl FakeModel {
+        fn new(reply: &'static str, delay_ms: u64) -> Arc<Self> {
+            Arc::new(Self {
+                reply,
+                delay_ms,
+                prompts: Mutex::new(Vec::new()),
+                timeouts: Mutex::new(0),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ReflexModel for FakeModel {
+        fn name(&self) -> &str {
+            "fake-small"
+        }
+        async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
+            self.prompts.lock().unwrap().push(prompt.to_string());
+            if self.delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
+            }
+            Ok(self.reply.to_string())
+        }
+        fn timed_out(&self) {
+            *self.timeouts.lock().unwrap() += 1;
+        }
+    }
+
+    /// When the porch motion level is up, ask the model whether it is a person
+    /// or an animal; only a person escalates.
+    fn porch_rule() -> ReflexRule {
+        ReflexRule {
+            id: "porch-motion".into(),
+            when: Condition::Sensor {
+                entity: "porch.motion".into(),
+                op: Cmp::Gt,
+                value: 0.5,
+            },
+            then: Action::Model {
+                prompt: "Is the porch motion a person or an animal?".into(),
+                on: BTreeMap::from([
+                    (
+                        "person".to_string(),
+                        Action::Escalate {
+                            reason: "person on the porch".into(),
+                        },
+                    ),
+                    (
+                        "animal".to_string(),
+                        Action::Publish {
+                            topic: "porch/animal".into(),
+                            payload: json!({}),
+                        },
+                    ),
+                ]),
+            },
+            debounce_ms: 0,
+            max_rate_hz: None,
+            fire_on_change: false,
+            hold_ms: 0,
+        }
+    }
+
+    fn porch_controller(
+        model: Option<(Arc<FakeModel>, u64)>,
+    ) -> (
+        ReflexController,
+        Arc<MockSink>,
+        Arc<obc_observability::MetricsRegistry>,
+    ) {
+        let world = Arc::new(WorldMemory::open_in_memory().unwrap());
+        world
+            .observe("porch.motion", json!({"value": 0.9}), 1_000, 1_000, "pir")
+            .unwrap();
+        let sink = Arc::new(MockSink::default());
+        let metrics = obc_observability::MetricsRegistry::new();
+        let mut ctl = ReflexController::new(
+            ReflexEngine::new(vec![porch_rule()]),
+            world,
+            sink.clone() as Arc<dyn ActionSink>,
+        )
+        .with_metrics(Arc::clone(&metrics));
+        if let Some((m, ceiling_ms)) = model {
+            ctl = ctl.with_model(m, Duration::from_millis(ceiling_ms));
+        }
+        (ctl, sink, metrics)
+    }
+
+    #[tokio::test]
+    async fn a_model_action_performs_the_action_under_the_models_label() {
+        let model = FakeModel::new("Person.", 0);
+        let (ctl, sink, metrics) = porch_controller(Some((Arc::clone(&model), 1_000)));
+        let fired = ctl.tick_and_dispatch(2_000).await.unwrap();
+        assert_eq!(fired.len(), 1);
+        assert_eq!(
+            sink.calls.lock().unwrap().as_slice(),
+            &["esc:person on the porch".to_string()]
+        );
+        assert_eq!(metrics.counter("reflex.model.hit").get(), 1);
+        assert_eq!(metrics.counter("reflex.action.model").get(), 1);
+        // One bounded call: the question, the rule's evidence, the labels.
+        let prompts = model.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].starts_with("Is the porch motion a person or an animal?"));
+        assert!(prompts[0].contains("\"porch.motion\":{\"value\":0.9}"));
+        assert!(prompts[0].contains("animal, person"));
+    }
+
+    #[tokio::test]
+    async fn a_model_call_over_the_ceiling_is_a_rule_miss_not_an_error() {
+        let model = FakeModel::new("person", 500);
+        let (ctl, sink, metrics) = porch_controller(Some((Arc::clone(&model), 20)));
+        let started = std::time::Instant::now();
+        let fired = ctl
+            .tick_and_dispatch(2_000)
+            .await
+            .expect("a timeout must not fail the tick");
+        assert!(started.elapsed() < Duration::from_millis(400));
+        assert_eq!(fired.len(), 1, "the rule fired; its model missed");
+        assert!(sink.calls.lock().unwrap().is_empty());
+        assert_eq!(*model.timeouts.lock().unwrap(), 1);
+        assert_eq!(metrics.counter("reflex.model.timeout").get(), 1);
+        assert_eq!(metrics.counter("reflex.model.miss").get(), 1);
+        assert_eq!(metrics.counter("reflex.model.hit").get(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_reply_naming_no_single_label_or_no_model_is_a_miss() {
+        for reply in ["not sure", "a person or an animal"] {
+            let (ctl, sink, metrics) = porch_controller(Some((FakeModel::new(reply, 0), 1_000)));
+            ctl.tick_and_dispatch(2_000).await.unwrap();
+            assert!(sink.calls.lock().unwrap().is_empty(), "{reply}");
+            assert_eq!(metrics.counter("reflex.model.miss").get(), 1, "{reply}");
+        }
+        let (ctl, sink, metrics) = porch_controller(None);
+        ctl.tick_and_dispatch(2_000).await.unwrap();
+        assert!(sink.calls.lock().unwrap().is_empty());
+        assert_eq!(metrics.counter("reflex.model.miss").get(), 1);
+    }
+
+    #[test]
+    fn match_label_takes_an_exact_answer_or_one_named_label() {
+        let labels = ["animal", "person"];
+        assert_eq!(match_label("  PERSON. ", &labels), Some("person"));
+        assert_eq!(match_label("Answer: animal", &labels), Some("animal"));
+        assert_eq!(match_label("personnel", &labels), None);
+        assert_eq!(match_label("person, maybe animal", &labels), None);
+        assert_eq!(match_label("", &labels), None);
+    }
+
+    #[test]
+    fn a_model_action_is_validated_and_round_trips() {
+        let rule = porch_rule();
+        rule.validate().unwrap();
+        let json = serde_json::to_value(&rule.then).unwrap();
+        assert_eq!(json["type"], "model");
+        assert_eq!(json["on"]["person"]["type"], "escalate");
+        let back: Action = serde_json::from_value(json).unwrap();
+        assert_eq!(back, rule.then);
+
+        let mut chained = porch_rule();
+        if let Action::Model { on, .. } = &mut chained.then {
+            on.insert("again".into(), porch_rule().then);
+        }
+        assert!(chained
+            .validate()
+            .unwrap_err()
+            .contains("one call per fire"));
+        let mut empty = porch_rule();
+        empty.then = Action::Model {
+            prompt: "x".into(),
+            on: BTreeMap::new(),
+        };
+        assert!(empty.validate().unwrap_err().contains("no labels"));
     }
 
     #[tokio::test]
