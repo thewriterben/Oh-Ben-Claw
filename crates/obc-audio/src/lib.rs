@@ -30,5 +30,18 @@
 //! depends on nothing ([`suite::LoggingSpeechSink`], which is what makes it the
 //! safe default), and the controller that records both directions into world
 //! memory.
+//!
+//! ## On-device speech (plan P5, 2026-11-01)
+//!
+//! [`wyoming`] is a client for the Wyoming voice protocol, so `audio_transcribe`
+//! and `text_to_speech` can use local Moonshine / faster-whisper and Piper /
+//! Kokoro servers before the cloud; [`wav`] converts between the files those
+//! tools take and the raw PCM the protocol carries. [`wake`] gates wake events
+//! from a microcontroller's detector into listen windows. None of the three
+//! owns a runtime, a socket or a clock beyond the one exchange it was asked
+//! for: the wiring is upstream, where the config is.
 
 pub mod suite;
+pub mod wake;
+pub mod wav;
+pub mod wyoming;

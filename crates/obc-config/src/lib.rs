@@ -1309,6 +1309,150 @@ pub struct AudioSuiteConfig {
     pub tts_out_dir: Option<String>,
 }
 
+/// On-device speech (`[voice]`, plan P5). With `stt` or `tts` set,
+/// `audio_transcribe` and `text_to_speech` try a local Wyoming server
+/// (Moonshine or faster-whisper; Piper or Kokoro) before the cloud
+/// (`OPENAI_API_BASE`). With neither set the tools are exactly as before.
+///
+/// Its own section rather than keys under `[edge]` or `[audio_suite]`: `[edge]`
+/// is the node's role and brain, `[audio_suite]` switches the `hear` and
+/// `speak` tools, and on-device speech is wanted with either off.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceConfig {
+    /// Wyoming speech-to-text server, `tcp://host:port` (typically
+    /// `tcp://127.0.0.1:10300`).
+    pub stt: Option<String>,
+    /// Wyoming text-to-speech server (typically `tcp://127.0.0.1:10200`).
+    pub tts: Option<String>,
+    /// Voice name sent to the TTS server (`en_US-lessac-medium` for Piper);
+    /// the server's own default when unset. The tool's `voice` argument names
+    /// cloud voices and is not sent on-device.
+    pub tts_voice: Option<String>,
+    /// When the on-device server fails, or cannot take the request (audio that
+    /// is not a PCM WAV, a TTS format other than WAV), use the cloud. Default
+    /// true; false makes those calls fail instead.
+    pub cloud_fallback: bool,
+    /// Deadline for one Wyoming exchange, ms. Default 30000.
+    pub timeout_ms: u64,
+    /// `audio.{stream}` that `audio_transcribe` results are recorded under when
+    /// `[audio_suite]` is on. Default `mic0`.
+    pub stream: String,
+    /// Wake events from a microcontroller's detector (`[voice.wake]`).
+    pub wake: VoiceWakeConfig,
+}
+
+impl Default for VoiceConfig {
+    fn default() -> Self {
+        Self {
+            stt: None,
+            tts: None,
+            tts_voice: None,
+            cloud_fallback: true,
+            timeout_ms: 30_000,
+            stream: "mic0".to_string(),
+            wake: VoiceWakeConfig::default(),
+        }
+    }
+}
+
+/// `[voice.wake]`: subscribe to `obc/voice/wake/{node}` and answer accepted
+/// wake events with `obc/voice/listen/{node}`. Needs the spine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceWakeConfig {
+    pub enabled: bool,
+    /// Accepted wake words, case-insensitive; empty accepts any.
+    pub words: Vec<String>,
+    /// Lowest detector confidence accepted, 0..=1. Default 0.8.
+    pub min_confidence: f64,
+    /// How long the node streams after the word, ms. Default 8000.
+    pub listen_ms: u64,
+    /// Per-node quiet time after an accepted wake, ms. Default 2000.
+    pub cooldown_ms: u64,
+}
+
+impl Default for VoiceWakeConfig {
+    fn default() -> Self {
+        let policy = obc_audio::wake::WakePolicy::default();
+        Self {
+            enabled: false,
+            words: policy.words,
+            min_confidence: policy.min_confidence,
+            listen_ms: policy.listen_ms,
+            cooldown_ms: policy.cooldown_ms,
+        }
+    }
+}
+
+impl VoiceWakeConfig {
+    pub fn policy(&self) -> obc_audio::wake::WakePolicy {
+        obc_audio::wake::WakePolicy {
+            words: self.words.iter().map(|w| w.trim().to_string()).collect(),
+            min_confidence: self.min_confidence,
+            listen_ms: self.listen_ms,
+            cooldown_ms: self.cooldown_ms,
+        }
+    }
+}
+
+impl VoiceConfig {
+    /// `true` when either on-device server is configured.
+    pub fn on_device(&self) -> bool {
+        self.stt.is_some() || self.tts.is_some()
+    }
+
+    /// The `[voice]` part of [`Config::validate`].
+    fn check(&self, audio_suite: bool, warnings: &mut Vec<String>) -> Result<()> {
+        for (key, endpoint) in [("voice.stt", &self.stt), ("voice.tts", &self.tts)] {
+            if let Some(endpoint) = endpoint {
+                if let Err(e) = obc_audio::wyoming::parse_endpoint(endpoint) {
+                    anyhow::bail!("{key}: {e}");
+                }
+            }
+        }
+        if self.timeout_ms == 0 {
+            anyhow::bail!("voice.timeout_ms must be > 0");
+        }
+        if self.stream.trim().is_empty() {
+            anyhow::bail!("voice.stream must not be empty");
+        }
+        if self.tts_voice.is_some() && self.tts.is_none() {
+            warnings.push("voice.tts_voice is set but voice.tts is not; it is unused".into());
+        }
+        if !self.cloud_fallback && !self.on_device() {
+            warnings.push(
+                "voice.cloud_fallback = false has no effect without voice.stt or voice.tts".into(),
+            );
+        }
+        let wake = &self.wake;
+        if wake.enabled {
+            if !(0.0..=1.0).contains(&wake.min_confidence) {
+                anyhow::bail!(
+                    "voice.wake.min_confidence must be within 0..=1, not {}",
+                    wake.min_confidence
+                );
+            }
+            if wake.listen_ms == 0 {
+                anyhow::bail!("voice.wake.listen_ms must be > 0");
+            }
+            if wake.words.iter().any(|w| w.trim().is_empty()) {
+                anyhow::bail!(
+                    "voice.wake.words has an empty entry; leave the list empty to accept any word"
+                );
+            }
+            if !audio_suite {
+                warnings.push(
+                    "voice.wake is enabled but [audio_suite] is not; wake events open listen \
+                     windows but are not recorded as audio.{stream} events"
+                        .into(),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Power suite configuration (`[power]`). Exposes the `power` tool and records
 /// battery telemetry + a derived power mode into world memory (`power.battery`,
 /// `power.mode`). Reflexes can watch `power.mode` for low-power safing. Requires
@@ -2192,6 +2336,9 @@ pub struct Config {
     /// Audio suite — `hear` (perceive) + `speak` (act) tools.
     #[serde(default)]
     pub audio_suite: AudioSuiteConfig,
+    /// On-device speech — Wyoming STT/TTS ahead of the cloud, and wake events.
+    #[serde(default)]
+    pub voice: VoiceConfig,
     /// Power suite — battery telemetry + derived power mode for safing.
     #[serde(default)]
     pub power: PowerConfig,
@@ -2972,6 +3119,9 @@ impl Config {
             }
         }
 
+        // ── On-device speech (plan P5) ─────────────────────────────────────────
+        self.voice.check(self.audio_suite.enabled, &mut warnings)?;
+
         // ── File path validation (non-fatal) ───────────────────────────────────
         for (label, path_opt) in [
             ("spine.ca_cert_path", &self.spine.ca_cert_path),
@@ -3593,6 +3743,80 @@ id = \"porch\"
         config.validate().unwrap();
         config.edge.reflex_timeout_ms = 0;
         assert!(config.validate().is_err());
+    }
+
+    /// `[voice]` is off by default and absent from a config that predates it.
+    #[test]
+    fn voice_defaults_are_cloud_only() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(!config.voice.on_device());
+        assert!(config.voice.cloud_fallback);
+        assert!(!config.voice.wake.enabled);
+        assert_eq!(
+            config.voice.wake.policy(),
+            obc_audio::wake::WakePolicy::default()
+        );
+    }
+
+    #[test]
+    fn voice_endpoints_and_wake_policy_are_validated() {
+        let toml = "[voice]
+stt = \"tcp://127.0.0.1:10300\"
+tts = \"127.0.0.1:10200\"
+tts_voice = \"en_US-lessac-medium\"
+[voice.wake]
+enabled = true
+words = [\"Hey Jarvis\"]
+min_confidence = 0.9
+";
+        let mut config: Config = toml::from_str(toml).unwrap();
+        assert!(config.voice.on_device());
+        let warnings = config.validate().unwrap();
+        // The audio suite is off, so wakes are not recorded.
+        assert!(
+            warnings.iter().any(|w| w.contains("voice.wake")),
+            "{warnings:?}"
+        );
+        assert_eq!(config.voice.wake.policy().min_confidence, 0.9);
+
+        let bad = |f: fn(&mut Config), needle: &str| {
+            let mut c = config.clone();
+            f(&mut c);
+            let err = c.validate().unwrap_err().to_string();
+            assert!(err.contains(needle), "{needle}: {err}");
+        };
+        bad(
+            |c| c.voice.stt = Some("http://127.0.0.1:10300".into()),
+            "voice.stt",
+        );
+        bad(|c| c.voice.tts = Some("127.0.0.1:0".into()), "voice.tts");
+        bad(|c| c.voice.timeout_ms = 0, "voice.timeout_ms");
+        bad(|c| c.voice.stream = " ".into(), "voice.stream");
+        bad(|c| c.voice.wake.min_confidence = 1.5, "min_confidence");
+        bad(|c| c.voice.wake.min_confidence = f64::NAN, "min_confidence");
+        bad(|c| c.voice.wake.listen_ms = 0, "listen_ms");
+        bad(|c| c.voice.wake.words.push("  ".into()), "voice.wake.words");
+
+        // A disabled gate is not checked.
+        config.voice.wake.enabled = false;
+        config.voice.wake.min_confidence = 7.0;
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn voice_settings_that_do_nothing_warn() {
+        let mut config = Config::default();
+        config.voice.tts_voice = Some("en_US-lessac-medium".into());
+        config.voice.cloud_fallback = false;
+        let warnings = config.validate().unwrap();
+        assert!(
+            warnings.iter().any(|w| w.contains("voice.tts_voice")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("voice.cloud_fallback")),
+            "{warnings:?}"
+        );
     }
 
     #[test]

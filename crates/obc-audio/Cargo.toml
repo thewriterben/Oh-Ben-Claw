@@ -39,6 +39,9 @@ async-trait = "0.1"
 obc-memory = { path = "../obc-memory" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Plan P5 (2026-11-01): the Wyoming client is TCP with a deadline on every
+# exchange, and nothing more -- no runtime of its own, the caller's.
+tokio = { version = "1.42", default-features = false, features = ["net", "io-util", "time"] }
 tracing = { version = "0.1", default-features = false }
 
 [dev-dependencies]

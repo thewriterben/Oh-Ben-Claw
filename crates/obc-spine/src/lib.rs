@@ -34,6 +34,9 @@ pub mod p2p;
 /// The spine's `SpeechSink` — utterances out over MQTT. Moved here from
 /// `audio::suite` on 2026-08-13, where it was holding a `SpineClient`.
 pub mod speech;
+/// Wake events from a microcontroller detector in, listen commands out
+/// (plan P5, 2026-11-01). The gate itself is `obc_audio::wake`.
+pub mod wake_bridge;
 
 pub use action::SpineActionSink;
 pub use actuator::SpineActuatorSink;
