@@ -236,15 +236,18 @@ impl ActionAuditor {
         )
     }
 
-    /// Record a **routing escalation** — a turn the local brain failed on,
-    /// answered by the cloud brain instead (Phase 20 plan P1) — into the same
-    /// chain, so a turn that left the host is a verifiable record and not a log
-    /// line. Non-physical (`RiskClass::safe`); the node is the session the turn
-    /// belongs to, the tool `routing.escalate`, the arguments (hashed like any
-    /// other) the two brains and the router's reason, and the decision an
-    /// [`Decision::AllowedUncovered`] carrying the local error in plain text:
-    /// no limit rule bounds a routing decision, and the error is what a reader
-    /// of the chain needs to see.
+    /// Record a **routing escalation** — a turn the router gave the local brain,
+    /// answered by the cloud brain instead (Phase 20 plans P1 and P2: the local
+    /// brain failed, called a cloud tool, or asked to hand the turn up) — into
+    /// the same chain, so a turn that left the host is a verifiable record and
+    /// not a log line. Non-physical (`RiskClass::safe`); the node is the
+    /// session the turn belongs to, the tool `routing.escalate`, the arguments
+    /// (hashed like any other) the two brains and the router's reason for
+    /// sending the turn local, and the decision an
+    /// [`Decision::AllowedUncovered`] carrying `detail` in plain text, which
+    /// names the axis (`failed: <error>`, `called cloud tool <name>`,
+    /// `unsure: <why>`): no limit rule bounds a routing decision, and the
+    /// detail is what a reader of the chain needs to see.
     pub fn record_routing_escalation(
         &mut self,
         ts_ms: u64,
@@ -252,7 +255,7 @@ impl ActionAuditor {
         from: &str,
         to: &str,
         reason: &str,
-        error: &str,
+        detail: &str,
     ) -> anyhow::Result<ActionRecord> {
         let args = serde_json::json!({ "from": from, "to": to, "reason": reason });
         self.record(
@@ -261,7 +264,7 @@ impl ActionAuditor {
             "routing.escalate",
             &args,
             crate::risk::RiskClass::safe(),
-            Decision::AllowedUncovered(format!("local brain {from} failed: {error}")),
+            Decision::AllowedUncovered(detail.to_string()),
         )
     }
 }
