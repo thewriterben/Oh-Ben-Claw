@@ -1186,11 +1186,18 @@ mod tests_2026_09_11 {
         for _ in 0..MAX_CONCURRENT_DISPATCHES {
             started.push(next_start(&mut rx, 5).await);
         }
-        assert_eq!(started, IDS[..MAX_CONCURRENT_DISPATCHES], "earliest due first");
+        assert_eq!(
+            started,
+            IDS[..MAX_CONCURRENT_DISPATCHES],
+            "earliest due first"
+        );
         let over = tokio::time::timeout(Duration::from_millis(2_500), rx.recv()).await;
         assert!(over.is_err(), "ran more than the limit at once");
         let last = sched.get_task("t4").unwrap().unwrap();
-        assert!(last.enabled && last.run_count == 0, "advanced without running");
+        assert!(
+            last.enabled && last.run_count == 0,
+            "advanced without running"
+        );
 
         gate.add_permits(1);
         assert_eq!(next_start(&mut rx, 3).await, "t4");
