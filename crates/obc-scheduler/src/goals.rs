@@ -160,8 +160,22 @@ fn query_goals(conn: &Connection, sql: &str, p: impl rusqlite::Params) -> Result
 impl Scheduler {
     /// Store a goal (replacing one with the same id) and the task that ticks it.
     pub fn add_goal(&self, goal: &Goal, kind: TaskKind, tz: Tz) -> Result<ScheduledTask> {
+        self.add_goal_tainted(goal, kind, tz, None)
+    }
+
+    /// [`add_goal`](Self::add_goal), with the task stamped as set after
+    /// reading the untrusted sources `tainted_by` (see
+    /// [`ScheduledTask::tainted_by`]).
+    pub fn add_goal_tainted(
+        &self,
+        goal: &Goal,
+        kind: TaskKind,
+        tz: Tz,
+        tainted_by: Option<String>,
+    ) -> Result<ScheduledTask> {
         kind.validate().map_err(|e| anyhow::anyhow!(e))?;
-        let task = goal.task(kind, tz);
+        let mut task = goal.task(kind, tz);
+        task.tainted_by = tainted_by;
         {
             let conn = self.conn.lock().unwrap();
             conn.execute(
