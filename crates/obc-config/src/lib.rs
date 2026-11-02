@@ -1729,9 +1729,10 @@ pub struct SelfImprovementConfig {
     #[serde(default)]
     pub promotion_clean_runs: Option<u32>,
     /// Sessions whose turns are *not* captured as trajectories, by id prefix
-    /// (2026-09-12). Default `["scheduled-"]`: a timer's own turn is not an
-    /// operator asking for something, and on the bench it became a learned
-    /// skill that replayed the timer. Add `"tg-"` to keep phone chats out too.
+    /// (2026-09-12). Default `["scheduled-", "goal-"]`: a timer's own turn is
+    /// not an operator asking for something, and on the bench it became a
+    /// learned skill that replayed the timer. A standing goal's check is the
+    /// same kind of turn (2026-11-02). Add `"tg-"` to keep phone chats out too.
     #[serde(default = "default_trajectory_skip")]
     pub skip_session_prefixes: Vec<String>,
     /// Let a verified, non-physical learned skill enable itself (2026-09-26).
@@ -2072,10 +2073,29 @@ pub struct SchedulerConfig {
     /// Tasks created before this option existed stay UTC.
     #[serde(default = "default_scheduler_tz")]
     pub timezone: String,
+    /// Register the `goal` tool: standing goals, ticked by this loop until met
+    /// (2026-11-02). Needs world memory for the progress notes.
+    #[serde(default = "default_true")]
+    pub goals: bool,
+    /// How often a goal is checked when the operator names no cadence, as a
+    /// repeating phrase. Default `"every 30 minutes"`.
+    #[serde(default = "default_goal_every")]
+    pub goal_every: String,
+    /// How many earlier progress notes a tick is shown. Default 5.
+    #[serde(default = "default_goal_history")]
+    pub goal_history: usize,
 }
 
 fn default_scheduler_tick() -> u64 {
     30
+}
+
+fn default_goal_every() -> String {
+    "every 30 minutes".to_string()
+}
+
+fn default_goal_history() -> usize {
+    5
 }
 
 fn default_scheduler_tz() -> String {
@@ -2088,6 +2108,9 @@ impl Default for SchedulerConfig {
             enabled: true,
             tick_interval_secs: default_scheduler_tick(),
             timezone: default_scheduler_tz(),
+            goals: true,
+            goal_every: default_goal_every(),
+            goal_history: default_goal_history(),
         }
     }
 }
@@ -2170,7 +2193,7 @@ fn default_shell_cpus() -> f64 {
 }
 
 fn default_trajectory_skip() -> Vec<String> {
-    vec!["scheduled-".to_string()]
+    vec!["scheduled-".to_string(), "goal-".to_string()]
 }
 
 impl Default for ShellConfig {

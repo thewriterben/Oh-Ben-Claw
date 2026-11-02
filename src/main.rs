@@ -1172,6 +1172,38 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         None
     };
 
+    // Standing goals (personal-agents item 4): a goal is a scheduled task whose
+    // tick is one unattended turn. Its progress notes live in world memory, it
+    // reports to the chat it was set from only when something changed, and it
+    // closes itself when met. The scheduler loop below routes its ticks.
+    let goals: Option<Arc<oh_ben_claw::agent::goals::Goals>> =
+        if config.scheduler.enabled && config.scheduler.goals {
+            let mut g = oh_ben_claw::agent::goals::Goals::new(Arc::clone(&scheduler))
+                .with_history(config.scheduler.goal_history);
+            if let Some(wm) = &world_mem {
+                g = g.with_world(Arc::clone(wm));
+            }
+            if let Some(r) = oh_ben_claw::channels::OwnerReporter::from_config(
+                &config.channels.telegram,
+                &config.channels.slack,
+            ) {
+                g = g.with_reporter(Arc::new(r));
+            }
+            let g = Arc::new(g);
+            all_tools.push(Box::new(oh_ben_claw::agent::goals::GoalTool::new(
+                Arc::clone(&g),
+                scheduler_tz,
+                &config.scheduler.goal_every,
+            )));
+            info!(
+                world_memory = world_mem.is_some(),
+                "Standing goals active (goal tool)"
+            );
+            Some(g)
+        } else {
+            None
+        };
+
     // Handle to the mesh command sink (set when the LoRa gateway opens), shared with
     // the mesh supervisor below so it can auto-issue recovery commands over the mesh.
     #[allow(unused_mut)]
@@ -3906,18 +3938,21 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         let sched = Arc::clone(&scheduler);
         let loop_handle = handle.clone();
         let loop_notifier = scheduled_notifier.clone();
+        let loop_goals = goals.clone();
         info!(
             tick_secs = tick,
             tz = scheduler_tz.as_str(),
             tasks = scheduler.enabled_count().unwrap_or(0),
             notifier = loop_notifier.is_some(),
+            goals = loop_goals.is_some(),
             "Scheduler loop spawned (schedule tool active)"
         );
         tokio::spawn(scheduler::run_scheduler_loop(sched, tick, move |d| {
             let h = loop_handle.clone();
             let n = loop_notifier.clone();
+            let g = loop_goals.clone();
             async move {
-                oh_ben_claw::agent::scheduled::run_scheduled(&h, d, n).await;
+                oh_ben_claw::agent::scheduled::dispatch(&h, d, n, g.as_deref()).await;
             }
         }));
     } else {

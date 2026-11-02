@@ -91,7 +91,7 @@ impl Default for WorldContextConfig {
     }
 }
 
-fn age(now_ms: u64, then_ms: u64) -> String {
+pub(crate) fn age(now_ms: u64, then_ms: u64) -> String {
     let s = now_ms.saturating_sub(then_ms) / 1000;
     if s < 90 {
         format!("{s}s ago")
