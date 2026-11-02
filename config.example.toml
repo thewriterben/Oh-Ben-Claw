@@ -205,9 +205,16 @@ timeout_secs = 30
 # tools that ask regardless. The `memory` tool writes the agent's two note
 # files (MEMORY.md, USER.md under <data dir>/notes/) that open every prompt;
 # list it here if you want to see each note before it lands.
+#
+# Scheduled tasks and A2A calls run with nobody watching, so for them "full"
+# is not enough: a physical, irreversible or blast-radius tool needs
+# `auto_approve`, a forever grant, or a session grant made within
+# `unattended_grant_ttl_secs` (default 1800 = 30 min; 0 = never).
 # [autonomy]
 # level = "full"
 # always_ask = ["memory"]
+# auto_approve = ["gpio_write"]   # what a scheduled task may actuate unasked
+# unattended_grant_ttl_secs = 1800
 
 # ── Self-improvement ─────────────────────────────────────────────────────────
 # Phase 16: every run is captured as a trajectory; an hourly loop synthesises
@@ -562,7 +569,7 @@ timezone = "local"              # "local" or "utc"; phrases and cron are read he
 enabled = true
 # audit_key = "..."            # HMAC key for the tamper-evident action log
 dynamic_trust = true
-taint_mode = "warn"
+taint_mode = "warn"            # the default since 2026-11-01; "enforce" refuses, "off" disables
 
 # NOTE the plural. `[[safety.limit]]` parses as an unknown key and silently
 # leaves the gate with zero limits — which is why unknown keys under [safety]

@@ -405,7 +405,7 @@ impl Agent {
             cost: None,
             rollout: None,
             forge_dir: None,
-            taint_mode: obc_safety::taint::TaintMode::Off,
+            taint_mode: obc_safety::taint::TaintMode::default(),
             max_history: MAX_HISTORY_MESSAGES,
         }
     }
@@ -1105,11 +1105,49 @@ impl Agent {
     /// 5. Feeds tool results back to the LLM.
     /// 6. Repeats steps 3–5 until the LLM produces a final text response.
     /// 7. Appends the final response to memory and returns it.
+    ///
+    /// The turn is [`Presence::Attended`]: someone asked and reads the reply.
+    /// A scheduled task or an A2A call uses [`Agent::process_unattended`].
     pub async fn process(
         &self,
         session_id: &str,
         user_message: &str,
         provider_config: &obc_providers::ProviderConfig,
+    ) -> Result<AgentResponse> {
+        self.process_as(
+            session_id,
+            user_message,
+            provider_config,
+            Presence::Attended,
+        )
+        .await
+    }
+
+    /// [`Agent::process`] for a turn nobody is watching (a scheduled task, an
+    /// A2A call). `Full` autonomy stops counting as a grant for gated tools,
+    /// and a session grant counts only within
+    /// `[autonomy].unattended_grant_ttl_secs`; see [`obc_approval::Presence`].
+    pub async fn process_unattended(
+        &self,
+        session_id: &str,
+        user_message: &str,
+        provider_config: &obc_providers::ProviderConfig,
+    ) -> Result<AgentResponse> {
+        self.process_as(
+            session_id,
+            user_message,
+            provider_config,
+            Presence::Unattended,
+        )
+        .await
+    }
+
+    async fn process_as(
+        &self,
+        session_id: &str,
+        user_message: &str,
+        provider_config: &obc_providers::ProviderConfig,
+        presence: Presence,
     ) -> Result<AgentResponse> {
         // WS5: outer span for the whole run (finished before returning).
         let mut run_span = self.obs.as_ref().map(|obs| {
@@ -1406,7 +1444,7 @@ impl Agent {
                 });
                 let t0 = std::time::Instant::now();
                 let result = self
-                    .execute_tool(&call.name, &call.args, taint_pool.as_ref())
+                    .execute_tool(&call.name, &call.args, taint_pool.as_ref(), presence)
                     .await;
                 let duration_ms = t0.elapsed().as_millis() as u64;
 
@@ -2104,8 +2142,9 @@ impl Agent {
         name: &str,
         args_str: &str,
         taint: Option<&obc_safety::taint::TaintPool>,
+        presence: Presence,
     ) -> Result<obc_tool_api::ToolResult> {
-        self.execute_tool_inner(name, args_str, false, taint, None)
+        self.execute_tool_inner(name, args_str, false, taint, None, presence)
             .await
     }
 
@@ -2114,7 +2153,8 @@ impl Agent {
     /// `taint` is the per-run untrusted-content pool (Track 0 taint tracking);
     /// `None` disables pooling/scanning for this call. `peer` is the P2P node
     /// the call came from, when it came from one: trust, approval and the audit
-    /// record then name it, never `args.node_id` or `"local"`.
+    /// record then name it, never `args.node_id` or `"local"`. `presence` says
+    /// whether anyone is watching; approval tightens when nobody is.
     async fn execute_tool_inner(
         &self,
         name: &str,
@@ -2122,6 +2162,7 @@ impl Agent {
         in_sequence: bool,
         taint: Option<&obc_safety::taint::TaintPool>,
         peer: Option<&str>,
+        presence: Presence,
     ) -> Result<obc_tool_api::ToolResult> {
         let mut name = name.to_string();
         let mut args_str = args_str.to_string();
@@ -2242,9 +2283,10 @@ impl Agent {
             let mut outputs = Vec::with_capacity(steps.len());
             for (i, (step_tool, template)) in steps.iter().enumerate() {
                 let step_args = obc_skill_forge::substitute_args(template, &args).to_string();
-                let result =
-                    Box::pin(self.execute_tool_inner(step_tool, &step_args, true, taint, peer))
-                        .await;
+                let result = Box::pin(
+                    self.execute_tool_inner(step_tool, &step_args, true, taint, peer, presence),
+                )
+                .await;
                 match result {
                     Ok(r) if r.success => {
                         outputs.push(format!("[step {} {}] {}", i + 1, step_tool, r.output));
@@ -2328,8 +2370,11 @@ impl Agent {
         // Approval policy: gate the call by the autonomy level + auto-approve list +
         // session/forever grants (and dynamic trust, via decide()). In this
         // autonomous loop a tool that needs operator approval is refused rather than
-        // blocking on a prompt; Full autonomy and granted/auto-approved tools pass.
-        if let Err(reason) = approval_authorize(self.approval.as_deref(), name, &node_id, risk) {
+        // blocking on a prompt; Full autonomy and granted/auto-approved tools pass,
+        // except that an unattended turn needs an explicit grant for a gated tool.
+        if let Err(reason) =
+            approval_authorize_as(self.approval.as_deref(), name, &node_id, risk, presence)
+        {
             tracing::warn!(tool = %name, node = %node_id, reason = %reason, "tool call refused by approval policy");
             return Ok(obc_tool_api::ToolResult::err(format!(
                 "Tool '{}' refused: {}",
@@ -2452,7 +2497,20 @@ impl Agent {
         args: serde_json::Value,
     ) -> Result<obc_tool_api::ToolResult> {
         let args_str = args.to_string();
-        self.execute_tool(name, &args_str, None).await
+        self.execute_tool(name, &args_str, None, Presence::Attended)
+            .await
+    }
+
+    /// [`Agent::execute_tool_direct`] for a call nobody is watching: a
+    /// scheduled task's stored tool. Approval runs as [`Presence::Unattended`].
+    pub async fn execute_tool_unattended(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> Result<obc_tool_api::ToolResult> {
+        let args_str = args.to_string();
+        self.execute_tool(name, &args_str, None, Presence::Unattended)
+            .await
     }
 
     /// [`Agent::execute_tool_direct`] for a call P2P `peer` made. Trust,
@@ -2467,7 +2525,9 @@ impl Agent {
         args: serde_json::Value,
     ) -> Result<obc_tool_api::ToolResult> {
         let args_str = args.to_string();
-        self.execute_tool_inner(name, &args_str, false, None, Some(peer))
+        // A peer call keeps the attended posture: it already answers to trust,
+        // and every argument counts as external content under taint tracking.
+        self.execute_tool_inner(name, &args_str, false, None, Some(peer), Presence::Attended)
             .await
     }
 
@@ -2520,7 +2580,7 @@ impl Agent {
 // the entry point to it.
 //
 // Re-exported so this crate's callers are unchanged.
-pub use obc_approval::approval_authorize;
+pub use obc_approval::{approval_authorize, approval_authorize_as, Presence};
 
 /// Merge a delegate skill's fixed args with the runtime args (runtime wins).
 fn merge_delegate_args(fixed: Value, runtime: &Value) -> Value {

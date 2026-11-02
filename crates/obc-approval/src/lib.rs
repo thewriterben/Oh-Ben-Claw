@@ -23,10 +23,11 @@ use obc_safety::trust::{self, TrustGate, TrustScorer};
 use obc_tool_api::RiskClass;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// A pending tool approval request.
 #[derive(Debug, Clone)]
@@ -443,10 +444,29 @@ pub enum Decision {
     Deny,
 }
 
+/// Whether someone is there to see a call happen.
+///
+/// A CLI, channel, GUI or gateway request is `Attended`: someone asked and is
+/// reading the reply. A scheduled task or an A2A call is `Unattended`: it runs
+/// because a timer fired or another agent asked. When unattended, `Full`
+/// autonomy no longer covers a gated tool (physical, irreversible or with a
+/// blast radius, [`obc_safety::taint::gated`]); only an explicit grant does,
+/// and a session grant counts only for
+/// [`AutonomyConfig::unattended_grant_ttl_secs`] after it was made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Presence {
+    /// Someone asked and is watching.
+    #[default]
+    Attended,
+    /// Nobody is watching: a scheduled task or an A2A call.
+    Unattended,
+}
+
 pub struct ApprovalManager {
     config: AutonomyConfig,
-    /// Tools approved with `Always` during this session.
-    session_allowlist: Arc<Mutex<HashSet<String>>>,
+    /// Tools approved with `Always` during this session, with when each was
+    /// last granted (unattended turns honour a grant only for a while).
+    session_allowlist: Arc<Mutex<HashMap<String, Instant>>>,
     /// Cross-session forever grants (persisted).
     forever_grants: Arc<ForeverGrants>,
     /// Approved multi-step plans, by plan id. Revoked on first violation.
@@ -494,7 +514,7 @@ impl ApprovalManager {
     ) -> Self {
         Self {
             config: config.clone(),
-            session_allowlist: Arc::new(Mutex::new(HashSet::new())),
+            session_allowlist: Arc::new(Mutex::new(HashMap::new())),
             forever_grants: Arc::new(forever_grants),
             plans: Arc::new(Mutex::new(HashMap::new())),
             audit_log: Arc::new(Mutex::new(Vec::new())),
@@ -531,7 +551,7 @@ impl ApprovalManager {
             return false;
         }
         // session allowlist from previous Always decisions
-        if self.session_allowlist.lock().contains(tool_name) {
+        if self.session_allowlist.lock().contains_key(tool_name) {
             return false;
         }
         // persisted forever grants
@@ -556,8 +576,23 @@ impl ApprovalManager {
             return false;
         }
         self.config.auto_approve.iter().any(|t| t == tool_name)
-            || self.session_allowlist.lock().contains(tool_name)
+            || self.session_allowlist.lock().contains_key(tool_name)
             || self.forever_grants.contains(tool_name)
+    }
+
+    /// Whether a session grant for `tool_name` covers a call made with
+    /// `presence`: any grant for an attended call, and for an unattended one
+    /// only a grant made within `unattended_grant_ttl_secs`.
+    fn session_grant_covers(&self, tool_name: &str, presence: Presence) -> bool {
+        let Some(granted_at) = self.session_allowlist.lock().get(tool_name).copied() else {
+            return false;
+        };
+        match presence {
+            Presence::Attended => true,
+            Presence::Unattended => {
+                granted_at.elapsed() < Duration::from_secs(self.config.unattended_grant_ttl_secs)
+            }
+        }
     }
 
     /// Trust-aware approval check for a tool call by `node_id` with risk profile
@@ -567,28 +602,58 @@ impl ApprovalManager {
     /// granted. Non-physical actions, a trusted node, or no scorer attached fall
     /// through to the ordinary [`needs_approval`](Self::needs_approval) rules.
     pub fn decide(&self, tool_name: &str, node_id: Option<&str>, risk: RiskClass) -> Decision {
-        self.decide_gated(tool_name, self.trust_gate(node_id, risk), risk)
+        self.decide_as(tool_name, node_id, risk, Presence::Attended)
     }
 
-    /// [`decide`](Self::decide) with the trust gate already read, so a caller
-    /// that also explains the decision reads the scorer once and explains the
-    /// same verdict it got.
-    fn decide_gated(&self, tool_name: &str, gate: Option<TrustGate>, risk: RiskClass) -> Decision {
+    /// [`decide`](Self::decide) for a call made with `presence`. Unattended,
+    /// a gated tool runs only on an explicit grant: `auto_approve`, a forever
+    /// grant, or a session grant still inside `unattended_grant_ttl_secs`.
+    /// `Full` autonomy is not a grant. Like trust, presence only tightens.
+    pub fn decide_as(
+        &self,
+        tool_name: &str,
+        node_id: Option<&str>,
+        risk: RiskClass,
+        presence: Presence,
+    ) -> Decision {
+        self.decide_gated(tool_name, self.trust_gate(node_id, risk), risk, presence)
+    }
+
+    /// [`decide_as`](Self::decide_as) with the trust gate already read, so a
+    /// caller that also explains the decision reads the scorer once and
+    /// explains the same verdict it got.
+    fn decide_gated(
+        &self,
+        tool_name: &str,
+        gate: Option<TrustGate>,
+        risk: RiskClass,
+        presence: Presence,
+    ) -> Decision {
         match gate {
             Some(TrustGate::Deny) => return Decision::Deny,
             Some(TrustGate::RequireApproval) => return Decision::NeedsApproval,
             Some(TrustGate::Allow) | None => {}
         }
+        let auto_approved = self.config.auto_approve.iter().any(|t| t == tool_name);
+        let session = self.session_grant_covers(tool_name, presence);
         // Track 0: irreversible / high-blast physical actions default to
         // **per-call approval**. Only an explicit `auto_approve` listing or a
         // session grant the operator made *this session* exempts them —
         // persisted forever grants and `Full` autonomy deliberately do not
         // (such tools are never auto-grantable across sessions).
-        if risk.requires_per_call_approval()
-            && !self.config.auto_approve.iter().any(|t| t == tool_name)
-            && !self.session_allowlist.lock().contains(tool_name)
-        {
+        if risk.requires_per_call_approval() && !auto_approved && !session {
             return Decision::NeedsApproval;
+        }
+        // Nobody is watching: the autonomy level stops counting as a grant
+        // for anything gated, and a session grant has to be recent.
+        if presence == Presence::Unattended && obc_safety::taint::gated(risk) {
+            let always_ask = self.config.always_ask.iter().any(|t| t == tool_name);
+            let granted = auto_approved || session || self.forever_grants.contains(tool_name);
+            return if granted && !always_ask {
+                Decision::Allow
+            } else {
+                Decision::NeedsApproval
+            };
         }
         if self.needs_approval(tool_name) {
             Decision::NeedsApproval
@@ -678,8 +743,11 @@ impl ApprovalManager {
 
     fn apply_decision(&self, tool_name: &str, decision: &ApprovalResponse) {
         match decision {
+            // Re-granting restarts the unattended window.
             ApprovalResponse::Always => {
-                self.session_allowlist.lock().insert(tool_name.to_string());
+                self.session_allowlist
+                    .lock()
+                    .insert(tool_name.to_string(), Instant::now());
             }
             ApprovalResponse::Forever => {
                 self.forever_grants.grant(tool_name);
@@ -764,14 +832,14 @@ impl ApprovalManager {
 
     /// Tools granted `Always` (session scope) so far this session, sorted.
     pub fn session_grants(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.session_allowlist.lock().iter().cloned().collect();
+        let mut v: Vec<String> = self.session_allowlist.lock().keys().cloned().collect();
         v.sort();
         v
     }
 
     /// Revoke a session-scope grant. Returns whether it was present.
     pub fn revoke_session(&self, tool_name: &str) -> bool {
-        self.session_allowlist.lock().remove(tool_name)
+        self.session_allowlist.lock().remove(tool_name).is_some()
     }
 }
 
@@ -807,13 +875,25 @@ pub fn approval_authorize(
     node_id: &str,
     risk: RiskClass,
 ) -> Result<(), String> {
+    approval_authorize_as(approval, tool, node_id, risk, Presence::Attended)
+}
+
+/// [`approval_authorize`] for a call made with `presence`. Scheduled tasks and
+/// A2A calls pass [`Presence::Unattended`]; see [`ApprovalManager::decide_as`].
+pub fn approval_authorize_as(
+    approval: Option<&ApprovalManager>,
+    tool: &str,
+    node_id: &str,
+    risk: RiskClass,
+    presence: Presence,
+) -> Result<(), String> {
     let Some(approval) = approval else {
         return Ok(());
     };
     // One read of the scorer: a second one could see the node's level change
     // and explain a different verdict from the one that was made.
     let gate = approval.trust_gate(Some(node_id), risk);
-    match approval.decide_gated(tool, gate, risk) {
+    match approval.decide_gated(tool, gate, risk, presence) {
         Decision::Allow => Ok(()),
         Decision::Deny => Err("denied by approval policy".to_string()),
         // Named apart, because under `Full` autonomy the other reason cannot
@@ -822,6 +902,18 @@ pub fn approval_authorize(
             Err(format!(
                 "requires operator approval (node '{node_id}' is on trust probation after \
                  recent failures, so its physical actions lose auto-approval)"
+            ))
+        }
+        // Named apart for the same reason: under `Full` the level is not why.
+        Decision::NeedsApproval
+            if presence == Presence::Unattended && obc_safety::taint::gated(risk) =>
+        {
+            Err(format!(
+                "requires operator approval (unattended turn: a scheduled task or A2A call \
+                 does not get autonomy-level approval for a physical or irreversible tool; \
+                 list '{tool}' in [autonomy].auto_approve, or grant it for the session \
+                 within the last {}s ([autonomy].unattended_grant_ttl_secs))",
+                approval.config.unattended_grant_ttl_secs
             ))
         }
         Decision::NeedsApproval => Err(
@@ -841,6 +933,7 @@ mod tests {
             level: AutonomyLevel::Full,
             auto_approve: vec![],
             always_ask: vec![],
+            ..Default::default()
         }
     }
     fn config_supervised() -> AutonomyConfig {
@@ -848,6 +941,7 @@ mod tests {
             level: AutonomyLevel::Supervised,
             auto_approve: vec![],
             always_ask: vec![],
+            ..Default::default()
         }
     }
     fn config_manual() -> AutonomyConfig {
@@ -855,6 +949,7 @@ mod tests {
             level: AutonomyLevel::Manual,
             auto_approve: vec![],
             always_ask: vec![],
+            ..Default::default()
         }
     }
 
@@ -946,6 +1041,7 @@ mod tests {
             level: AutonomyLevel::Full,
             auto_approve: vec!["door_lock".into()],
             always_ask: vec![],
+            ..Default::default()
         };
         assert_eq!(
             manager(&cfg, false).decide("door_lock", Some("rover"), phys_critical()),
@@ -1023,6 +1119,7 @@ mod tests {
             level: AutonomyLevel::Supervised,
             auto_approve: vec!["move".into()],
             always_ask: vec![],
+            ..Default::default()
         };
         let mgr = manager(&cfg, false).with_trust(scorer_at(0)); // trusted
         assert_eq!(
@@ -1037,6 +1134,7 @@ mod tests {
             level: AutonomyLevel::Supervised,
             auto_approve: vec!["move".into()],
             always_ask: vec![],
+            ..Default::default()
         };
         // Two failures → probation; the auto-approve shortcut is overridden.
         let mgr = manager(&cfg, false).with_trust(scorer_at(2));
@@ -1089,6 +1187,7 @@ mod tests {
             level: AutonomyLevel::Supervised,
             auto_approve: vec!["read_file".to_string()],
             always_ask: vec![],
+            ..Default::default()
         };
         let mgr = manager(&cfg, false);
         assert!(!mgr.needs_approval("read_file"));
@@ -1101,6 +1200,7 @@ mod tests {
             level: AutonomyLevel::Full,
             auto_approve: vec![],
             always_ask: vec!["delete_file".to_string()],
+            ..Default::default()
         };
         let mgr = manager(&cfg, false);
         assert!(mgr.needs_approval("delete_file"));
@@ -1121,7 +1221,9 @@ mod tests {
     #[test]
     fn session_allowlist_populated_by_always() {
         let mgr = manager(&config_supervised(), true);
-        mgr.session_allowlist.lock().insert("read_file".to_string());
+        mgr.session_allowlist
+            .lock()
+            .insert("read_file".to_string(), Instant::now());
         assert!(!mgr.needs_approval("read_file"));
     }
 
@@ -1207,6 +1309,7 @@ mod tests {
             level: AutonomyLevel::Full,
             auto_approve: vec![],
             always_ask: vec!["delete_file".to_string()],
+            ..Default::default()
         };
         let mgr = manager(&cfg, true);
         let req = ApprovalRequest {
@@ -1386,8 +1489,180 @@ mod tests {
             level,
             auto_approve,
             always_ask: vec![],
+            ..Default::default()
         };
         manager(&cfg, false)
+    }
+
+    // ── Unattended posture ───────────────────────────────────────────────────
+
+    fn irreversible_software() -> RiskClass {
+        RiskClass {
+            reversible: false,
+            blast: obc_tool_api::BlastRadius::None,
+            physical: false,
+        }
+    }
+
+    fn always(mgr: &ApprovalManager, tool: &str) {
+        let req = ApprovalRequest {
+            tool_name: tool.to_string(),
+            arguments: json!({}),
+            risk: None,
+        };
+        mgr.record_external_decision(&req, ApprovalResponse::Always);
+    }
+
+    /// The gap this closes: under `Full`, a scheduled task could run a gated
+    /// tool nobody had granted, because the level itself was the grant.
+    #[test]
+    fn unattended_full_autonomy_is_not_a_grant_for_gated_tools() {
+        let mgr = manager(&config_full(), false);
+        for risk in [irreversible_software(), phys_low()] {
+            assert_eq!(mgr.decide("browser_click", None, risk), Decision::Allow);
+            assert_eq!(
+                mgr.decide_as("browser_click", None, risk, Presence::Unattended),
+                Decision::NeedsApproval
+            );
+        }
+        let err = approval_authorize_as(
+            Some(&mgr),
+            "browser_click",
+            "local",
+            irreversible_software(),
+            Presence::Unattended,
+        )
+        .unwrap_err();
+        assert!(err.contains("unattended"), "{err}");
+        assert!(err.contains("auto_approve"), "{err}");
+    }
+
+    #[test]
+    fn unattended_safe_tools_are_unaffected() {
+        let mgr = manager(&config_full(), false);
+        assert_eq!(
+            mgr.decide_as("read_file", None, RiskClass::safe(), Presence::Unattended),
+            Decision::Allow
+        );
+        // Supervised still refuses an ungranted safe tool, with the old reason.
+        let mgr = manager(&config_supervised(), false);
+        let err = approval_authorize_as(
+            Some(&mgr),
+            "read_file",
+            "local",
+            RiskClass::safe(),
+            Presence::Unattended,
+        )
+        .unwrap_err();
+        assert!(err.contains("supervised/manual"), "{err}");
+    }
+
+    #[test]
+    fn unattended_explicit_grants_still_allow() {
+        let cfg = AutonomyConfig {
+            auto_approve: vec!["browser_click".to_string()],
+            ..Default::default()
+        };
+        let mgr = manager(&cfg, false);
+        assert_eq!(
+            mgr.decide_as(
+                "browser_click",
+                None,
+                irreversible_software(),
+                Presence::Unattended
+            ),
+            Decision::Allow
+        );
+
+        let mgr = manager(&config_full(), false);
+        mgr.forever_grants().grant("file_delete");
+        assert_eq!(
+            mgr.decide_as(
+                "file_delete",
+                None,
+                irreversible_software(),
+                Presence::Unattended
+            ),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn unattended_always_ask_overrides_every_grant() {
+        let cfg = AutonomyConfig {
+            auto_approve: vec!["browser_click".to_string()],
+            always_ask: vec!["browser_click".to_string()],
+            ..Default::default()
+        };
+        let mgr = manager(&cfg, false);
+        assert_eq!(
+            mgr.decide_as(
+                "browser_click",
+                None,
+                irreversible_software(),
+                Presence::Unattended
+            ),
+            Decision::NeedsApproval
+        );
+    }
+
+    #[test]
+    fn a_fresh_session_grant_covers_unattended_work() {
+        let mgr = manager(&config_full(), false);
+        always(&mgr, "browser_click");
+        assert_eq!(
+            mgr.decide_as(
+                "browser_click",
+                None,
+                irreversible_software(),
+                Presence::Unattended
+            ),
+            Decision::Allow
+        );
+    }
+
+    /// A session grant expires for unattended work and only for unattended
+    /// work: ttl 0 makes every grant stale on arrival.
+    #[test]
+    fn a_stale_session_grant_does_not_cover_unattended_work() {
+        let cfg = AutonomyConfig {
+            level: AutonomyLevel::Supervised,
+            unattended_grant_ttl_secs: 0,
+            ..Default::default()
+        };
+        let mgr = manager(&cfg, false);
+        always(&mgr, "browser_click");
+        assert_eq!(
+            mgr.decide_as(
+                "browser_click",
+                None,
+                irreversible_software(),
+                Presence::Unattended
+            ),
+            Decision::NeedsApproval
+        );
+        assert_eq!(
+            mgr.decide("browser_click", None, irreversible_software()),
+            Decision::Allow,
+            "attended calls keep the session grant"
+        );
+        // The per-call rule for critical physical tools honours the same window.
+        always(&mgr, "door_unlock");
+        assert_eq!(
+            mgr.decide_as("door_unlock", None, phys_critical(), Presence::Unattended),
+            Decision::NeedsApproval
+        );
+        assert_eq!(
+            mgr.decide("door_unlock", None, phys_critical()),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn unattended_grant_ttl_defaults_to_thirty_minutes() {
+        assert_eq!(AutonomyConfig::default().unattended_grant_ttl_secs, 1800);
+        let parsed: AutonomyConfig = serde_json::from_str(r#"{"level": "full"}"#).unwrap();
+        assert_eq!(parsed.unattended_grant_ttl_secs, 1800);
     }
 
     #[test]
@@ -1470,6 +1745,16 @@ pub struct AutonomyConfig {
     /// Tools that always need approval regardless of level or session allowlist.
     #[serde(default)]
     pub always_ask: Vec<String>,
+    /// How long a session ("Always") grant keeps covering a gated tool in an
+    /// unattended turn (scheduled task, A2A call), counted from when it was
+    /// granted. Attended turns are not affected. Default 1800 (30 minutes);
+    /// 0 means a session grant never covers unattended work.
+    #[serde(default = "default_unattended_grant_ttl_secs")]
+    pub unattended_grant_ttl_secs: u64,
+}
+
+fn default_unattended_grant_ttl_secs() -> u64 {
+    1800
 }
 
 impl Default for AutonomyConfig {
@@ -1478,6 +1763,7 @@ impl Default for AutonomyConfig {
             level: AutonomyLevel::Full,
             auto_approve: vec![],
             always_ask: vec![],
+            unattended_grant_ttl_secs: default_unattended_grant_ttl_secs(),
         }
     }
 }

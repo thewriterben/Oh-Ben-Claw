@@ -84,6 +84,14 @@ operator for explicit approval before execution. A session-scoped allowlist
 remembers previous decisions. All approvals and denials are written to an
 immutable audit log.
 
+Scheduled tasks and A2A calls run **unattended**. There, `full` autonomy is not
+a grant for a physical, irreversible or blast-radius tool: it needs
+`[autonomy].auto_approve`, a forever grant, or a session grant made within
+`[autonomy].unattended_grant_ttl_secs` (default 30 minutes). Attended turns
+(CLI, channels, GUI, gateway) are unchanged. P2P peer calls keep the attended
+posture; they already answer to dynamic trust and count as external content
+under taint tracking.
+
 ## OWASP Top 10 for Agentic Applications (ASI) Coverage
 
 Oh-Ben-Claw's Track 0 controls are mapped to the [OWASP Top 10 for Agentic

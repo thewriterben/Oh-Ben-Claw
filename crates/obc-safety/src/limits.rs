@@ -96,7 +96,8 @@ pub struct SafetyConfig {
     /// **Taint tracking** mode (Track 0 provenance guard): `"off"`, `"warn"`
     /// (default — log + count), or `"enforce"` (refuse a privileged call whose
     /// argument values echo untrusted external content, unless the tool is
-    /// explicitly operator-granted). Unset ⇒ off (opt-in).
+    /// explicitly operator-granted). Unset ⇒ warn; only an explicit `"off"`
+    /// disables scanning.
     #[serde(default)]
     pub taint_mode: Option<String>,
 }
