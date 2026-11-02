@@ -5,6 +5,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Unattended posture and taint on by default (2026-11-01)
+
+Items 1 and 3 of `docs/PERSONAL-AGENTS-2026-11.md`, taken from OpenAI Dots
+(background work cannot change anything) and xAI Grok Bot (background
+approvals expire).
+
+### Changed
+
+- **Scheduled tasks and A2A calls run unattended.** Both the tool form and the
+  prompt form of a scheduled task, and every inbound A2A message, now reach
+  the approval gate as `Presence::Unattended`. There, `level = "full"` is no
+  longer a grant for a gated tool (physical, irreversible, or with blast
+  radius). Such a call runs only if it is in `[autonomy].auto_approve`, has a
+  forever grant, or has a session grant made within
+  `[autonomy].unattended_grant_ttl_secs` (new, default 1800; `0` means a
+  session grant never covers unattended work). `always_ask` still overrides
+  everything. Safe tools are unaffected, and so are attended turns (CLI,
+  channels, GUI, gateway) and P2P peer calls. The refusal names both remedies.
+  **Behaviour change:** a scheduled task that actuated under `full` autonomy
+  until now is refused; list the tool in `auto_approve` to restore it.
+- **Taint tracking is on by default.** `[safety].taint_mode` unset now means
+  `warn` (it meant `off`): external content is pooled on every run and every
+  gated call is scanned and logged, but nothing is refused. Only an explicit
+  `taint_mode = "off"` disables it; `enforce` stays opt-in.
+
+### Added
+
+- `ApprovalManager::decide_as`, `approval_authorize_as`, `Presence`,
+  `Agent::process_unattended`, `Agent::execute_tool_unattended`, and the
+  matching `AgentHandle` methods. Session grants now record when they were
+  made; granting again restarts the window.
+- Tests: seven in `obc-approval` (posture, explicit grants, `always_ask`,
+  fresh and stale session grants, the TTL default) and three in
+  `crates/obc-agent/tests/scheduled_track0.rs` that drive the scheduler loop
+  (tool and prompt form) and the A2A executor over an irreversible tool under
+  `full` autonomy, each paired with the same call running once granted or
+  attended.
+
+---
+
 ## Unreleased — On-device speech and wake events (2026-11-01)
 
 Phase 20 plan P5 (`docs/PHASE20-PLAN.md`), SBC side.

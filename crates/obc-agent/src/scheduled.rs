@@ -57,11 +57,17 @@ pub fn turn_message(task_name: &str, prompt: &str, tool_report: Option<&str>) ->
 
 /// Run one dispatch to completion: tool, then prompt, then delivery.
 ///
-/// The tool goes through [`AgentHandle::execute_tool_direct`], the same
+/// The tool goes through [`AgentHandle::execute_tool_unattended`], the same
 /// chokepoint as every other call, so policy, Track 0 limits and audit, trust
 /// and approval all apply to it. `tests/scheduled_track0.rs` drives the real
 /// scheduler loop into this function to hold that in place: give the scheduler
 /// its own way to run a tool and those tests fail.
+///
+/// **Unattended (2026-11-01).** Both the tool and the prompt turn run as
+/// [`Presence::Unattended`](crate::Presence): nobody is watching when a timer
+/// fires, so `Full` autonomy does not cover a physical or irreversible tool.
+/// It needs `[autonomy].auto_approve`, a forever grant, or a session grant
+/// made within `unattended_grant_ttl_secs`.
 ///
 /// **Taint (decided 2026-10-30).** The call runs with no taint pool, and that is
 /// deliberate. `tool_args` were written by the model in an earlier turn that may
@@ -70,8 +76,8 @@ pub fn turn_message(task_name: &str, prompt: &str, tool_report: Option<&str>) ->
 /// `taint::scan_args` walks into the nested `tool_args` (and `prompt`). With
 /// `[safety].taint_mode = "enforce"` a `schedule` call whose arguments echo
 /// pooled external content is refused before anything is stored; with `"warn"`
-/// it is flagged and stored. With the default, `"off"`, neither turn scans, so
-/// a pool at fire time would change nothing there either. Carrying the pool into the stored task
+/// it is flagged and stored (`"warn"` is the default); with `"off"` neither turn
+/// scans, so a pool at fire time would change nothing there either. Carrying the pool into the stored task
 /// would add a column and a migration to re-run a check that has already run,
 /// against content that cannot have changed. Two gaps remain, recorded in
 /// ROADMAP Track 0: an explicit grant for `schedule` waives the check for
@@ -88,7 +94,7 @@ pub async fn run_scheduled(
 
     if let Some(tool) = d.tool.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         let args = d.tool_args.clone().unwrap_or_else(|| serde_json::json!({}));
-        match handle.execute_tool_direct(tool, args).await {
+        match handle.execute_tool_unattended(tool, args).await {
             Ok(r) if r.success => {
                 tool_report = Some(format!("Result of `{tool}`:\n{}", r.output.trim()));
             }
@@ -111,7 +117,7 @@ pub async fn run_scheduled(
             .unwrap_or_else(|| "scheduled task had neither a prompt nor a tool".to_string())
     } else {
         let message = turn_message(&d.task_name, prompt, tool_report.as_deref());
-        match handle.process(&d.session_id, &message).await {
+        match handle.process_unattended(&d.session_id, &message).await {
             Ok(resp) => resp.message,
             Err(e) => {
                 ok = false;

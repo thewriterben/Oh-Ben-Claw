@@ -408,6 +408,7 @@ mod tests {
                 level: AutonomyLevel::Supervised,
                 auto_approve: vec![],
                 always_ask: vec![],
+                ..Default::default()
             },
             ForeverGrants::load(grants),
             true,

@@ -19,8 +19,9 @@ use crate::Agent;
 use obc_a2a::{Artifact, Message, Part, Role, Task, TaskExecutor, TaskState, TaskStatus};
 use obc_providers::ProviderConfig;
 
-/// Runs an inbound A2A message through [`Agent::process`] and returns the
-/// reply as a completed task with one text artifact.
+/// Runs an inbound A2A message through [`Agent::process_unattended`] and
+/// returns the reply as a completed task with one text artifact. Unattended,
+/// because the caller is another agent and no person reads along.
 pub struct AgentExecutor {
     agent: Arc<Agent>,
     provider: ProviderConfig,
@@ -67,9 +68,10 @@ impl TaskExecutor for AgentExecutor {
             );
         }
 
+        // Another agent asked, and no person is reading along: unattended.
         match self
             .agent
-            .process(&context_id, &prompt, &self.provider)
+            .process_unattended(&context_id, &prompt, &self.provider)
             .await
         {
             Ok(response) => {
