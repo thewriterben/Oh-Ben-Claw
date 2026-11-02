@@ -24,7 +24,7 @@ use crate::notify::Notifier;
 use async_trait::async_trait;
 use obc_memory::world::{Closure, Origin, WorldMemory};
 use obc_scheduler::{nl, Goal, GoalStatus, Scheduler, TaskDispatch, TaskKind, Tz, GOAL_PREFIX};
-use obc_tool_api::{BlastRadius, RiskClass, Tool, ToolResult};
+use obc_tool_api::{BlastRadius, RiskClass, Tool, ToolResult, TAINTED_BY_ARG};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -365,8 +365,10 @@ async fn run_tick(
         return out;
     }
 
-    let message = tick_message(&goal, &goals.notes(&goal));
-    let reply = match handle.process_unattended(&d.session_id, &message).await {
+    let notes = goals.notes(&goal);
+    let message = tick_message(&goal, &notes);
+    let turn = handle.process_unattended(&d.session_id, &message);
+    let reply = match crate::with_inherited_taint(inherited_seed(&goal, &d, &notes), turn).await {
         Ok(r) => r.message,
         Err(e) => {
             // No note and no report: a failed check is not news about the
@@ -406,6 +408,22 @@ async fn run_tick(
         "standing goal checked"
     );
     out
+}
+
+/// What a tick inherits from a goal set after reading untrusted content: the
+/// goal's text, its done condition and the notes it is shown, named after the
+/// goal and those sources (Track 0 taint, as for a scheduled task). Nothing
+/// when that turn had read none.
+fn inherited_seed(goal: &Goal, d: &TaskDispatch, notes: &[String]) -> Vec<(String, String)> {
+    let Some(by) = d.tainted_by.as_deref().filter(|s| !s.trim().is_empty()) else {
+        return Vec::new();
+    };
+    let source = format!("standing goal '{}' (set after reading {by})", goal.text);
+    [goal.text.as_str(), goal.done_when.as_str()]
+        .into_iter()
+        .chain(notes.iter().map(String::as_str))
+        .map(|c| (source.clone(), c.to_string()))
+        .collect()
 }
 
 fn now_secs() -> u64 {
@@ -477,7 +495,10 @@ impl GoalTool {
                 ));
             }
         }
-        match scheduler.add_goal(&goal, kind.clone(), self.tz) {
+        // Set by the agent, never the model: the untrusted sources this turn
+        // had read, so the ticks keep the provenance a paraphrase loses.
+        let tainted_by = str_arg(args, TAINTED_BY_ARG);
+        match scheduler.add_goal_tainted(&goal, kind.clone(), self.tz, tainted_by) {
             Ok(_) => {
                 let mut msg = format!(
                     "Goal set ({}): {}. Checked {}",
@@ -570,6 +591,10 @@ impl Tool for GoalTool {
             blast: BlastRadius::Low,
             physical: false,
         }
+    }
+
+    fn defers_call(&self) -> bool {
+        true
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {

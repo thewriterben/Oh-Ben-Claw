@@ -127,7 +127,22 @@ pub trait Tool: Send + Sync {
     fn output_trust(&self) -> OutputTrust {
         OutputTrust::Trusted
     }
+
+    /// Whether this tool stores a call to run later (the `schedule` tool: a
+    /// `tool` with `tool_args`, and/or a `prompt`; the `goal` tool: a goal
+    /// checked by unattended turns). Under taint tracking a
+    /// grant for such a tool must also cover the stored `tool`, and the agent
+    /// hands it the sources of the turn's untrusted content in
+    /// [`TAINTED_BY_ARG`] so the stored call keeps its provenance. Default: no.
+    fn defers_call(&self) -> bool {
+        false
+    }
 }
+
+/// The argument the agent sets on a [`Tool::defers_call`] tool when the turn
+/// making the call has read untrusted content: the names of the tools it came
+/// from, comma-separated. Whatever the model put there is replaced.
+pub const TAINTED_BY_ARG: &str = "_tainted_by";
 
 /// A shared handle to a tool is itself a tool (pure delegation).
 ///
@@ -167,6 +182,10 @@ impl Tool for std::sync::Arc<dyn Tool> {
 
     fn output_trust(&self) -> OutputTrust {
         (**self).output_trust()
+    }
+
+    fn defers_call(&self) -> bool {
+        (**self).defers_call()
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {

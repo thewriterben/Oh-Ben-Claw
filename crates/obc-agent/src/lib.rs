@@ -869,7 +869,7 @@ impl Agent {
         self
     }
 
-    /// Set the Track 0 taint-tracking mode (default `Off`). In `Warn`/`Enforce`,
+    /// Set the Track 0 taint-tracking mode (default `Warn`). In `Warn`/`Enforce`,
     /// each run pools output from `External`-trust tools and gated calls whose
     /// argument values echo that content are flagged (`Warn`) or refused
     /// (`Enforce`).
@@ -1195,9 +1195,10 @@ impl Agent {
 
         // Track 0 taint tracking: a fresh per-run pool of untrusted (external-
         // origin) tool output. `None` when scanning is off — no allocation, no
-        // work in the chokepoint. Never shared across runs (no cross-turn taint).
+        // work in the chokepoint. Never shared across runs, except that a fired
+        // scheduled task starts with what it inherited (`with_inherited_taint`).
         let taint_pool = (self.taint_mode != obc_safety::taint::TaintMode::Off)
-            .then(obc_safety::taint::TaintPool::new);
+            .then(|| inherited_taint_pool().unwrap_or_default());
 
         // 1. Store the user message. The session row must exist first: since
         //    `PRAGMA foreign_keys` went on (2026-09-11, #146) a message for an
@@ -2442,10 +2443,14 @@ impl Agent {
             });
             let hit = peer_hit.or_else(|| taint.and_then(|pool| taint::scan_args(&args, pool)));
             if let Some(hit) = hit {
-                let granted = self
-                    .approval
-                    .as_ref()
-                    .is_some_and(|a| a.explicitly_granted(name));
+                // A tool that stores a call for later (`schedule`) passes on a
+                // grant only when the stored tool is granted too: the stored
+                // call runs at fire time with no pool, so this is its only check.
+                let granted = self.approval.as_ref().is_some_and(|a| {
+                    a.explicitly_granted(name)
+                        && (!tool.defers_call()
+                            || deferred_tool(&args).is_none_or(|t| a.explicitly_granted(t)))
+                });
                 if let Some(obs) = &self.obs {
                     obs.metrics.counter("taint_hits_total").inc();
                 }
@@ -2469,6 +2474,25 @@ impl Agent {
                     tool = %name, arg = %hit.arg_path, source = %hit.source, granted,
                     "privileged call has an argument derived from untrusted content (Track 0 taint, advisory)"
                 );
+            }
+        }
+
+        // A stored call keeps the provenance of the turn that stored it: a
+        // paraphrase of external content matches nothing in `scan_args`, so the
+        // fired turn is seeded from the task instead (see `scheduled.rs`).
+        // A peer's call is external content as a whole.
+        let mut args = args;
+        if tool.defers_call() {
+            if let Some(obj) = args.as_object_mut() {
+                obj.remove(obc_tool_api::TAINTED_BY_ARG);
+                let mut sources = taint.map(|p| p.sources()).unwrap_or_default();
+                sources.extend(caller.clone());
+                if self.taint_mode != TaintMode::Off && !sources.is_empty() {
+                    obj.insert(
+                        obc_tool_api::TAINTED_BY_ARG.to_string(),
+                        sources.join(", ").into(),
+                    );
+                }
             }
         }
 
@@ -2533,9 +2557,7 @@ impl Agent {
     /// Bypasses the agent loop — useful for direct tool invocation via the
     /// gateway's `POST /api/v1/tools/{name}` endpoint.
     /// Security policy is still evaluated. No taint pool: a standalone call has
-    /// no prior in-run external content to be tainted by. A scheduled task's
-    /// tool also runs here; its arguments were checked against the pool of the
-    /// turn that scheduled it (see `scheduled::run_scheduled`).
+    /// no prior in-run external content to be tainted by.
     pub async fn execute_tool_direct(
         &self,
         name: &str,
@@ -2548,14 +2570,26 @@ impl Agent {
 
     /// [`Agent::execute_tool_direct`] for a call nobody is watching: a
     /// scheduled task's stored tool. Approval runs as [`Presence::Unattended`].
+    /// Its arguments were checked against the pool of the turn that scheduled
+    /// it; when that turn had read untrusted content, the call is checked again
+    /// here against what it inherited (see `scheduled::run_scheduled`).
     pub async fn execute_tool_unattended(
         &self,
         name: &str,
         args: serde_json::Value,
     ) -> Result<obc_tool_api::ToolResult> {
         let args_str = args.to_string();
-        self.execute_tool(name, &args_str, None, Presence::Unattended)
+        let pool = (self.taint_mode != obc_safety::taint::TaintMode::Off)
+            .then(inherited_taint_pool)
+            .flatten();
+        self.execute_tool(name, &args_str, pool.as_ref(), Presence::Unattended)
             .await
+    }
+
+    /// Whether `name`'s output is untrusted content (Track 0 taint).
+    pub fn tool_output_is_external(&self, name: &str) -> bool {
+        self.find_tool(name)
+            .is_some_and(|t| t.output_trust() == obc_tool_api::OutputTrust::External)
     }
 
     /// [`Agent::execute_tool_direct`] for a call P2P `peer` made. Trust,
@@ -2654,6 +2688,42 @@ fn unattended_origin() -> String {
     UNATTENDED_ORIGIN
         .try_with(String::clone)
         .unwrap_or_else(|_| "an unattended turn".to_string())
+}
+
+tokio::task_local! {
+    /// Untrusted content a fired scheduled task carries in, as
+    /// `(source, content)`: what its scheduling turn had read, and what its
+    /// stored tool fetched. Seeds the taint pool of the calls it makes.
+    static INHERITED_TAINT: Vec<(String, String)>;
+}
+
+/// Run `fut` with `seed` pooled as untrusted content in every turn and stored
+/// tool call it makes (Track 0 taint). Empty `seed`: as if not called.
+pub async fn with_inherited_taint<F: std::future::Future>(
+    seed: Vec<(String, String)>,
+    fut: F,
+) -> F::Output {
+    INHERITED_TAINT.scope(seed, fut).await
+}
+
+/// A pool holding the inherited seed, or `None` when there is none.
+fn inherited_taint_pool() -> Option<obc_safety::taint::TaintPool> {
+    let seed = INHERITED_TAINT.try_with(Vec::clone).unwrap_or_default();
+    (!seed.is_empty()).then(|| {
+        let pool = obc_safety::taint::TaintPool::new();
+        for (source, content) in &seed {
+            pool.add(source, content);
+        }
+        pool
+    })
+}
+
+/// The tool a [`obc_tool_api::Tool::defers_call`] call stores, if any.
+fn deferred_tool(args: &serde_json::Value) -> Option<&str> {
+    args.get("tool")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
 }
 
 /// Merge a delegate skill's fixed args with the runtime args (runtime wins).

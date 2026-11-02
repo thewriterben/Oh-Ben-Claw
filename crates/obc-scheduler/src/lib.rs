@@ -253,6 +253,10 @@ pub struct ScheduledTask {
     /// The operator's own words for the schedule, kept for listings.
     #[serde(default)]
     pub phrase: Option<String>,
+    /// Set when the turn that scheduled this task had read untrusted content:
+    /// the tools it came from (Track 0 taint). The fired turn starts tainted.
+    #[serde(default)]
+    pub tainted_by: Option<String>,
 }
 
 fn default_kind() -> TaskKind {
@@ -456,6 +460,11 @@ impl Scheduler {
                 "phrase",
                 "ALTER TABLE scheduled_tasks ADD COLUMN phrase TEXT",
             ),
+            // 2026-11-02: Track 0 taint provenance of the scheduling turn.
+            (
+                "tainted_by",
+                "ALTER TABLE scheduled_tasks ADD COLUMN tainted_by TEXT",
+            ),
         ] {
             if !have.iter().any(|c| c == col) {
                 conn.execute_batch(ddl)
@@ -474,8 +483,8 @@ impl Scheduler {
         conn.execute(
             "INSERT OR REPLACE INTO scheduled_tasks
              (id, name, prompt, session_id, kind, enabled, last_run, next_run, run_count, created_at,
-              tz, tool, tool_args, phrase)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+              tz, tool, tool_args, phrase, tainted_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 task.id,
                 task.name,
@@ -491,6 +500,7 @@ impl Scheduler {
                 task.tool,
                 task.tool_args.as_ref().map(|v| v.to_string()),
                 task.phrase,
+                task.tainted_by,
             ],
         )
         .context("Failed to insert scheduled task")?;
@@ -630,7 +640,7 @@ fn now_ts() -> u64 {
 }
 
 const COLUMNS: &str = "id, name, prompt, session_id, kind, enabled, last_run, next_run, \
-                       run_count, created_at, tz, tool, tool_args, phrase";
+                       run_count, created_at, tz, tool, tool_args, phrase, tainted_by";
 
 fn row_to_task(row: &rusqlite::Row<'_>) -> Result<ScheduledTask> {
     let kind_str: String = row.get(4)?;
@@ -652,6 +662,7 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> Result<ScheduledTask> {
         tool: row.get(11)?,
         tool_args: tool_args.and_then(|s| serde_json::from_str(&s).ok()),
         phrase: row.get(13)?,
+        tainted_by: row.get(14)?,
     })
 }
 
@@ -667,6 +678,8 @@ pub struct TaskDispatch {
     /// Tool (or learned skill) to run first, with its fixed arguments.
     pub tool: Option<String>,
     pub tool_args: Option<serde_json::Value>,
+    /// See [`ScheduledTask::tainted_by`].
+    pub tainted_by: Option<String>,
 }
 
 /// Run the scheduler loop, dispatching due tasks via the provided callback.
@@ -710,6 +723,7 @@ pub async fn run_scheduler_loop<F, Fut>(
                 session_id: task.session_id.clone(),
                 tool: task.tool.clone(),
                 tool_args: task.tool_args.clone(),
+                tainted_by: task.tainted_by.clone(),
             };
 
             // Advance *before* running: a slow or failing dispatch must not make

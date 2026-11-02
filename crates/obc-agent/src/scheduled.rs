@@ -101,20 +101,24 @@ pub async fn dispatch(
 /// It needs `[autonomy].auto_approve`, a forever grant, or a session grant
 /// made within `unattended_grant_ttl_secs`.
 ///
-/// **Taint (decided 2026-10-30).** The call runs with no taint pool, and that is
-/// deliberate. `tool_args` were written by the model in an earlier turn that may
-/// have read external content, and that turn is where they are checked:
-/// `schedule` is irreversible, so `taint::gated` holds for it, and
-/// `taint::scan_args` walks into the nested `tool_args` (and `prompt`). With
-/// `[safety].taint_mode = "enforce"` a `schedule` call whose arguments echo
-/// pooled external content is refused before anything is stored; with `"warn"`
-/// it is flagged and stored (`"warn"` is the default); with `"off"` neither turn
-/// scans, so a pool at fire time would change nothing there either. Carrying the pool into the stored task
-/// would add a column and a migration to re-run a check that has already run,
-/// against content that cannot have changed. Two gaps remain, recorded in
-/// ROADMAP Track 0: an explicit grant for `schedule` waives the check for
-/// whatever tool it stores, and the `prompt` turn starts a fresh pool, so an
-/// instruction paraphrased from a web page loses its provenance at fire time.
+/// **Taint (decided 2026-10-30, gaps closed 2026-11-02).** `tool_args` and
+/// `prompt` were written by the model in an earlier turn that may have read
+/// external content, and that turn checks them first: `schedule` is
+/// irreversible, so `taint::gated` holds for it, and `taint::scan_args` walks
+/// into the nested `tool_args` (and `prompt`). With `[safety].taint_mode =
+/// "enforce"` a `schedule` call whose arguments echo pooled external content is
+/// refused before anything is stored unless `schedule` *and* the stored `tool`
+/// are explicitly granted; with `"warn"` it is flagged and stored (`"warn"` is
+/// the default); with `"off"` nothing here scans.
+///
+/// A paraphrase matches nothing, so that check alone loses the provenance. The
+/// agent therefore stamps the task with the sources its scheduling turn had
+/// read (`tainted_by`), and here the stored tool and the prompt turn start with
+/// a pool holding the task's own `prompt` and `tool_args` under that name: a
+/// privileged call whose arguments come from them needs an explicit grant in
+/// `"enforce"`. The prompt turn's pool also holds the stored tool's output
+/// when that tool's output is untrusted (`web_fetch` and the like), since it
+/// reaches the turn as a report in the message, not as a tool result.
 ///
 /// **Approval in chat (2026-11-01).** A gated call that needs approval waits
 /// for an answer from a chat channel with approvers, for at most
@@ -138,11 +142,16 @@ async fn run_dispatch(
     let started = std::time::Instant::now();
     let mut ok = true;
     let mut tool_report: Option<String> = None;
+    let mut seed = inherited_seed(&d);
 
     if let Some(tool) = d.tool.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         let args = d.tool_args.clone().unwrap_or_else(|| serde_json::json!({}));
-        match handle.execute_tool_unattended(tool, args).await {
+        let run = handle.execute_tool_unattended(tool, args);
+        match crate::with_inherited_taint(seed.clone(), run).await {
             Ok(r) if r.success => {
+                if handle.tool_output_is_external(tool) {
+                    seed.push((tool.to_string(), r.output.clone()));
+                }
                 tool_report = Some(format!("Result of `{tool}`:\n{}", r.output.trim()));
             }
             Ok(r) => {
@@ -164,7 +173,8 @@ async fn run_dispatch(
             .unwrap_or_else(|| "scheduled task had neither a prompt nor a tool".to_string())
     } else {
         let message = turn_message(&d.task_name, prompt, tool_report.as_deref());
-        match handle.process_unattended(&d.session_id, &message).await {
+        let turn = handle.process_unattended(&d.session_id, &message);
+        match crate::with_inherited_taint(seed, turn).await {
             Ok(resp) => resp.message,
             Err(e) => {
                 ok = false;
@@ -209,6 +219,21 @@ async fn run_dispatch(
         text,
         ok,
     }
+}
+
+/// What a task inherits from a scheduling turn that had read untrusted
+/// content: its own `prompt` and `tool_args`, named after the task and those
+/// sources. Nothing when that turn had read none.
+fn inherited_seed(d: &TaskDispatch) -> Vec<(String, String)> {
+    let Some(by) = d.tainted_by.as_deref().filter(|s| !s.trim().is_empty()) else {
+        return Vec::new();
+    };
+    let source = format!("scheduled task '{}' (set after reading {by})", d.task_name);
+    let mut seed = vec![(source.clone(), d.prompt.clone())];
+    if let Some(args) = &d.tool_args {
+        seed.push((source, args.to_string()));
+    }
+    seed
 }
 
 fn preview(s: &str) -> String {
