@@ -5,6 +5,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Approvals in chat while you're present (2026-11-02)
+
+Item 2 of `docs/PERSONAL-AGENTS-2026-11.md`, extended to attended turns.
+
+### Changed
+
+- **An approver's own chat turn asks instead of refusing.** When someone on
+  `[channels.telegram].approver_user_ids` or `[channels.slack].approver_users`
+  sends a message and the turn reaches a call that needs approval, the call
+  waits up to `[autonomy].approval_wait_secs` while that chat alone shows it
+  with Approve / Allow this session / Deny (a reply on Telegram, the thread on
+  Slack). Other approvers are not told. Anyone else's turn is refused at once,
+  as before, and a peer agent's call never waits in the chat.
+- **The Telegram and Slack loops read taps while a turn runs.** Each is split
+  into a reader (updates, taps, Slack reconnects) and a worker that runs the
+  messages in order, so a waiting turn cannot block its own approval.
+
+---
+
 ## Unreleased — Standing goals and belief commands (2026-11-02)
 
 Items 4 and 5 of `docs/PERSONAL-AGENTS-2026-11.md`. You can give the agent a

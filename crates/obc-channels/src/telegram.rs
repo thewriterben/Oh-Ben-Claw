@@ -18,7 +18,10 @@
 //! sends a gated call from a scheduled task or an A2A call to each of
 //! `approver_user_ids` with Approve / Deny buttons, and the long-polling loop
 //! takes the tap (`callback_query`) back to the waiting call. A tap from
-//! anyone not on that list is refused and audited.
+//! anyone not on that list is refused and audited. Since 2026-11-02 an
+//! approver's own message is asked about in its chat, as a reply: the loop
+//! reads updates in one half and runs messages in the other, so a turn
+//! waiting for a tap does not stop the tap from arriving.
 //!
 //! # Limitations
 //! Only text messages from private chats and groups are processed.  Media and
@@ -42,6 +45,23 @@ use obc_config::{ProviderConfig, TelegramConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
+
+/// The chat to ask in when `user_id` is on `approvers` (2026-11-02): a gated
+/// call in their turn is asked in `chat_id`, as a reply to `message_id`.
+/// `None` for anyone else, whose gated calls are refused as before.
+pub fn present_in(
+    approvers: &[String],
+    user_id: Option<i64>,
+    chat_id: i64,
+    message_id: i64,
+) -> Option<obc_approval::ChatTarget> {
+    let user = user_id?.to_string();
+    approvers.contains(&user).then(|| obc_approval::ChatTarget {
+        channel: "telegram".to_string(),
+        chat: chat_id.to_string(),
+        reply_to: Some(message_id.to_string()),
+    })
+}
 
 /// Whether a sender may talk to the agent. An empty allowlist admits nobody.
 pub fn allowed(allowed_user_ids: &[i64], user_id: Option<i64>) -> bool {
@@ -385,8 +405,27 @@ impl TelegramChannel {
     /// Start the long-polling loop.
     ///
     /// Runs until the task is cancelled or a fatal error occurs.
+    ///
+    /// Two halves share the task: the poller reads updates and answers button
+    /// taps at once, and the worker runs the messages one at a time, in
+    /// order. A turn waiting for an approval tap in this chat therefore does
+    /// not stop the tap from being read.
     pub async fn run(&self) -> Result<()> {
         tracing::info!("Telegram channel started (long-polling)");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<TgMessage>();
+        let worker = async {
+            while let Some(msg) = rx.recv().await {
+                if let Err(e) = self.handle_message(msg).await {
+                    tracing::error!(error = %e, "Failed to handle Telegram message");
+                }
+            }
+        };
+        tokio::join!(self.poll(tx), worker);
+        Ok(())
+    }
+
+    /// Read updates forever: taps are answered here, messages go to the worker.
+    async fn poll(&self, tx: tokio::sync::mpsc::UnboundedSender<TgMessage>) {
         let mut offset: i64 = 0;
 
         loop {
@@ -419,8 +458,8 @@ impl TelegramChannel {
                             kind = %msg.kind(),
                             "Telegram update received"
                         );
-                        if let Err(e) = self.handle_message(msg).await {
-                            tracing::error!(error = %e, "Failed to handle Telegram message");
+                        if tx.send(msg).is_err() {
+                            return;
                         }
                     }
                     None => tracing::info!(
@@ -689,11 +728,15 @@ impl TelegramChannel {
             None
         };
 
-        let response = self
+        // An approver is present: a gated call in this turn is asked here.
+        let turn = self
             .agent
-            .process(&session_id, &text, &self.provider_config)
-            .await
-            .context("Agent processing error")?;
+            .process(&session_id, &text, &self.provider_config);
+        let response = match present_in(&self.approvers, user_id, msg.chat.id, msg.message_id) {
+            Some(to) => obc_agent::with_present_approver(to, turn).await,
+            None => turn.await,
+        }
+        .context("Agent processing error")?;
 
         self.send_text(msg.chat.id, &response.message, Some(msg.message_id))
             .await?;
@@ -944,6 +987,30 @@ impl TelegramApprovalPrompter {
             "reply_markup": { "inline_keyboard": [row] },
         })
     }
+
+    /// Every `sendMessage` body for `pending`: one in the chat a present
+    /// approver's turn came from, as a reply to their message, or else one
+    /// per approver in their private chat.
+    fn bodies(&self, pending: &PendingApproval) -> Vec<serde_json::Value> {
+        match &pending.to {
+            Some(to) => {
+                let Ok(chat_id) = to.chat.parse::<i64>() else {
+                    tracing::warn!(chat = %to.chat, "Telegram approval request for a chat id that is not a number");
+                    return Vec::new();
+                };
+                let mut body = Self::message(pending, chat_id);
+                if let Some(id) = to.reply_to.as_deref().and_then(|m| m.parse::<i64>().ok()) {
+                    body["reply_to_message_id"] = json!(id);
+                }
+                vec![body]
+            }
+            None => self
+                .approvers
+                .iter()
+                .map(|chat_id| Self::message(pending, *chat_id))
+                .collect(),
+        }
+    }
 }
 
 impl ApprovalPrompter for TelegramApprovalPrompter {
@@ -953,11 +1020,7 @@ impl ApprovalPrompter for TelegramApprovalPrompter {
 
     fn prompt(&self, pending: &PendingApproval) {
         let this = self.clone();
-        let bodies: Vec<serde_json::Value> = self
-            .approvers
-            .iter()
-            .map(|chat_id| Self::message(pending, *chat_id))
-            .collect();
+        let bodies = self.bodies(pending);
         tokio::spawn(async move {
             for body in bodies {
                 if let Err(e) = tg_call(&this.http, &this.api_base, "sendMessage", &body).await {
@@ -1147,6 +1210,7 @@ mod allowlist_tests {
             reason: "unattended".into(),
             expires_in_secs: 300,
             session_grant_secs: 1800,
+            to: None,
         };
         let body = TelegramApprovalPrompter::message(&pending, 42);
         assert_eq!(body["chat_id"], 42);
@@ -1172,5 +1236,61 @@ mod allowlist_tests {
             ..TelegramConfig::default()
         };
         assert!(TelegramApprovalPrompter::from_config(&cfg).is_none());
+    }
+
+    #[test]
+    fn a_present_approver_is_asked_in_their_chat_as_a_reply_and_nobody_else_is() {
+        let prompter = TelegramApprovalPrompter::from_config(&TelegramConfig {
+            token: Some("123:abc".into()),
+            approver_user_ids: vec![42, 7],
+            ..TelegramConfig::default()
+        })
+        .unwrap();
+        let mut pending = PendingApproval {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            tool_name: "open_gate".into(),
+            arguments: serde_json::json!({}),
+            risk: None,
+            origin: "your message in this chat".into(),
+            reason: "supervised".into(),
+            expires_in_secs: 300,
+            session_grant_secs: 1800,
+            to: Some(obc_approval::ChatTarget {
+                channel: "telegram".into(),
+                chat: "-1001".into(),
+                reply_to: Some("55".into()),
+            }),
+        };
+        let bodies = prompter.bodies(&pending);
+        assert_eq!(bodies.len(), 1, "the other approver is not told");
+        assert_eq!(bodies[0]["chat_id"], -1001);
+        assert_eq!(bodies[0]["reply_to_message_id"], 55);
+        let labels: Vec<&str> = bodies[0]["reply_markup"]["inline_keyboard"][0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(labels, ["Approve", "Allow this session", "Deny"]);
+
+        pending.to = None;
+        let chats: Vec<i64> = prompter
+            .bodies(&pending)
+            .iter()
+            .map(|b| b["chat_id"].as_i64().unwrap())
+            .collect();
+        assert_eq!(chats, [42, 7]);
+    }
+
+    #[test]
+    fn only_an_approver_brings_their_chat_into_the_turn() {
+        let approvers = vec!["42".to_string()];
+        let to = present_in(&approvers, Some(42), -1001, 55).unwrap();
+        assert_eq!(to.channel, "telegram");
+        assert_eq!(to.chat, "-1001");
+        assert_eq!(to.reply_to.as_deref(), Some("55"));
+        assert!(present_in(&approvers, Some(7), -1001, 55).is_none());
+        assert!(present_in(&approvers, None, -1001, 55).is_none());
+        assert!(present_in(&[], Some(42), 42, 1).is_none());
     }
 }

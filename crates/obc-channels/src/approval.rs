@@ -3,7 +3,10 @@
 //! A scheduled task or an A2A call that reaches a gated tool waits in
 //! [`ApprovalManager::wait_for_decision`] while every attached
 //! [`ApprovalPrompter`](obc_approval::ApprovalPrompter) shows the call with
-//! buttons. The Telegram and Slack prompters live with their channels; this
+//! buttons. Since 2026-11-02 an attended turn sent by an approver does the
+//! same, asked only in the chat it came from
+//! ([`obc_agent::with_present_approver`]); each channel keeps reading taps
+//! while its turns run. The Telegram and Slack prompters live with their channels; this
 //! module holds what they share: what a button carries, and what a tap on one
 //! does. Who may tap is the channel's own approver list, not its chat
 //! allowlist: talking to the agent is not the right to open its gates.
@@ -45,6 +48,10 @@ pub fn answer_tap(
     let by = format!("{channel}:{user}");
     Ok(match decision {
         ApprovalResponse::No => format!("⛔ Denied by {by}"),
+        ApprovalResponse::Always if pending.to.is_some() => format!(
+            "✅ Approved by {by}; {} allowed for this session",
+            pending.tool_name
+        ),
         ApprovalResponse::Always => {
             let window = pending
                 .chat_choices()

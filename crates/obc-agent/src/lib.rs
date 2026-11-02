@@ -2410,6 +2410,15 @@ impl Agent {
         // except that an unattended turn needs an explicit grant for a gated tool.
         // An unattended call that needs one waits for an answer in chat when a
         // channel with approvers is attached, and is refused when none comes.
+        // An attended one waits only when an approver sent the turn from a
+        // chat (`with_present_approver`), and is asked there.
+        let present = (presence == Presence::Attended && caller.is_none())
+            .then(present_approver)
+            .flatten();
+        let origin = match &present {
+            Some(_) => "your message in this chat".to_string(),
+            None => unattended_origin(),
+        };
         if let Err(reason) = obc_approval::approval_authorize_waiting(
             self.approval.as_deref(),
             name,
@@ -2417,7 +2426,8 @@ impl Agent {
             &node_id,
             risk,
             presence,
-            &unattended_origin(),
+            &origin,
+            present.as_ref(),
         )
         .await
         {
@@ -2667,6 +2677,26 @@ tokio::task_local! {
     static UNATTENDED_ORIGIN: String;
     /// The session of the turn this task runs (2026-11-02).
     static TURN_SESSION: String;
+    /// The chat an attended turn came from, set only when its sender may
+    /// approve there (2026-11-02).
+    static PRESENT_APPROVER: obc_approval::ChatTarget;
+}
+
+/// Run `fut`, an attended chat turn whose sender is on that channel's
+/// approver list, with `to` as the chat to ask in: a gated call that needs
+/// approval waits for a tap there (`[autonomy].approval_wait_secs`) instead
+/// of being refused. The channel decides who is an approver; a sender who is
+/// not one is never wrapped, and their gated calls are refused as before.
+/// The channel must keep reading taps while the turn runs.
+pub async fn with_present_approver<F: std::future::Future>(
+    to: obc_approval::ChatTarget,
+    fut: F,
+) -> F::Output {
+    PRESENT_APPROVER.scope(to, fut).await
+}
+
+fn present_approver() -> Option<obc_approval::ChatTarget> {
+    PRESENT_APPROVER.try_with(Clone::clone).ok()
 }
 
 /// The session whose turn is running, for a tool that must know where it was
