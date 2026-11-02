@@ -5,6 +5,97 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Standing goals and belief commands (2026-11-02)
+
+Items 4 and 5 of `docs/PERSONAL-AGENTS-2026-11.md`. You can give the agent a
+goal that it keeps checking on its own, and it tells you only when something
+changed or the goal is met. You can ask it why it believes something, and tell
+it to forget that.
+
+### Added
+
+- **Standing goals.** A `goal` tool with `set`, `list` and `close`. A goal
+  has its text, a done condition (`done_when`, optional), a cadence (`every`,
+  default `[scheduler].goal_every`), an optional end (`until`), a status
+  (active, done, expired, cancelled), its latest progress note and an owner.
+  It lives in a `goals` table in `obc-scheduler` next to the task that ticks
+  it; the two share the id `goal-<slug>`. Each tick is one unattended turn
+  (`process_unattended`) given the goal and its last `[scheduler].goal_history`
+  notes (default 5), and asked to answer with `NOTE:`, `CHANGED:` and `DONE:`
+  lines. The note is written to world memory as `goal.<slug>.progress`
+  (`Origin::Asserted`, source `goal:<id>`), so the notes are bitemporal
+  history and show in the agent's state like any belief. A report goes out
+  only when something changed, and when the done condition is met the goal
+  closes, its task stops and its progress belief is closed with
+  `SourceStopped`. A goal past `until` closes as expired with one last report.
+  A goal with no done condition never closes on the model's say-so.
+- **Reports go to the chat the goal was set from.** The owner is taken from
+  the session of the turn that called the tool (`tg-<chat>` becomes
+  `telegram:<chat>`, `slack-<channel>` becomes `slack:<channel>`), never from
+  a tool argument, so a goal set on a web page's say-so cannot report to a
+  chat the page names. `obc_channels::OwnerReporter` sends it with the bot
+  token the channel already uses. Goals set elsewhere, or a report that
+  fails, go through the scheduled-task notifier.
+- **"Why do you believe X" from chat.** On any attended turn, "why do you
+  believe / think / say X" is answered from world memory with no model turn:
+  the value and fact id, what kind of claim it is and who made it (a reading
+  from `node-3`, a computation, an agent's conclusion, something a person
+  said), when (UTC and age), whether what it rests on still stands, and up to
+  five beliefs that rest on it. An exact entity name wins; otherwise the
+  entity that shares the most words with the question, and a list when
+  several tie. A question about something world memory does not hold goes
+  to the model.
+- **"Forget that" from chat.** Right after a lookup, "forget that" (or
+  "forget <entity>" by exact name) withdraws the belief with
+  `Closure::Operator("forgotten on request in chat (<session>)")`. The row
+  stays in history, and the next report from the same source is believed
+  again. The reply names the beliefs that lost their grounds with it. Any
+  other message in between ends what "that" refers to.
+- **Config.** `[scheduler].goals` (default true), `goal_every` (default
+  `"every 30 minutes"`) and `goal_history` (default 5).
+- Tests: four in `crates/obc-agent/tests/standing_goals.rs` through the real
+  `run_scheduler_loop` and `scheduled::dispatch` as `main.rs` wires them. A
+  goal set in a Telegram chat reports back there on a changed check and not
+  on an unchanged one. It stays open on "not done" and closes on "done",
+  while a goal with no done condition does not. A gated tool in a tick is
+  refused when nobody taps and runs when the approver taps, and the prompt
+  names the goal. A goal's task ticks with goals on and runs nothing with
+  goals off, while a plain task beside it runs as before. Two in
+  `crates/obc-agent/tests/belief_commands.rs` through `AgentHandle::process`:
+  a lookup answered without the model, paired with the same words from a
+  scheduled task going to the model; "forget that" withdrawing right after a
+  lookup, paired with it going to the model with no lookup, after another
+  message, after a lookup in another chat, and for something not held. Plus
+  unit tests in `obc-scheduler`, `obc_agent::goals`, `obc_agent::beliefs`
+  and `obc_channels::goal_report`.
+
+### Changed
+
+- `scheduled::dispatch` replaces the direct `run_scheduled` call in
+  `main.rs`'s scheduler loop and routes goal ticks. The `goal-` id prefix
+  belongs to goals: the `schedule` tool now names a task "Goal review"
+  `task-goal-review`.
+- `[agent].trajectory_skip` defaults to `["scheduled-", "goal-"]`, so goal
+  ticks are not captured as trajectories.
+- Telegram passes a report starting with 🎯 through as written, like ⏰.
+
+### Known limits
+
+- Goals tick on a cadence only. A trigger (a world-memory change that wakes
+  the goal) is not built.
+- Whether a check changed anything, and whether the goal is met, is the
+  model's call; when it gives no `CHANGED:` line the note is compared with
+  the last one.
+- Ticks share the serial scheduler loop, so a tick waiting on a chat approval
+  holds back the tasks due after it, as for any scheduled task.
+- The belief commands need world memory attached to the agent
+  (`[perception].world_memory` and `[perception.context].enabled`, both on
+  in the example config). Matching is word overlap on entity names, not
+  meaning.
+- Owners exist for Telegram and Slack only.
+
+---
+
 ## Unreleased — Approve from the chat (2026-11-01)
 
 Item 2 of `docs/PERSONAL-AGENTS-2026-11.md`. A scheduled task or an A2A call

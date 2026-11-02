@@ -129,7 +129,8 @@ pub trait Tool: Send + Sync {
     }
 
     /// Whether this tool stores a call to run later (the `schedule` tool: a
-    /// `tool` with `tool_args`, and/or a `prompt`). Under taint tracking a
+    /// `tool` with `tool_args`, and/or a `prompt`; the `goal` tool: a goal
+    /// checked by unattended turns). Under taint tracking a
     /// grant for such a tool must also cover the stored `tool`, and the agent
     /// hands it the sources of the turn's untrusted content in
     /// [`TAINTED_BY_ARG`] so the stored call keeps its provenance. Default: no.

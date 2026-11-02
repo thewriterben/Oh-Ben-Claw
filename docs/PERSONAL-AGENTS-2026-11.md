@@ -113,7 +113,26 @@ pending.
 now. This is one line and a changelog entry, and it makes the CaMeL-style
 guard visible to every user.
 
-### 4. Standing goals — M (headline feature)
+### 4. Standing goals — M (done 2026-11-02)
+
+*As built:* the `goal` tool sets a goal with its text, an optional done
+condition, a cadence and an optional end. The record lives in a `goals` table
+in `obc-scheduler` beside the scheduled task that ticks it, and both share the
+id `goal-<slug>`, so the scheduler loop fires goals like any task and
+`scheduled::dispatch` routes them. A tick is one unattended turn, so gated
+tools in it go through the approval gate and the chat prompt from item 2,
+with the goal named as the origin. The turn sees the goal and its last five
+notes and answers with `NOTE:`, `CHANGED:` and `DONE:` lines. The note is
+written to world memory as `goal.<slug>.progress`, so the history is the
+bitemporal record. The owner is the chat the goal was set from, read from the
+turn's session and never from a tool argument; the report goes there only
+when something changed, and through the notifier when the goal was set
+elsewhere. When the done condition is met the goal closes, its task stops and
+its progress belief closes with `SourceStopped`. A goal with no done
+condition never closes on the model's say-so; past its `until` it closes as
+expired. Goals tick on a cadence only: trigger-driven ticks are a follow-up.
+`crates/obc-agent/tests/standing_goals.rs` covers it through the real
+scheduler loop. The original proposal follows.
 
 *Taken from:* Dots and Muse. A goal record holds the goal text, a done condition,
 a cadence or trigger, the latest progress note, a status, and an owner channel.
@@ -129,7 +148,19 @@ well:
 Build it on `obc-scheduler` and world memory rather than reviving the deleted
 heartbeat.
 
-### 5. "Why do you believe that?" and "Forget that" from chat — S
+### 5. "Why do you believe that?" and "Forget that" from chat — S (done 2026-11-02)
+
+*As built:* on any attended turn, "why do you believe X" (or "think", "say")
+is answered from world memory without a model turn. The answer gives the
+value and fact id, what kind of claim it is and who made it, when (UTC and
+age), whether its support still stands, and up to five beliefs that rest on
+it. Right after that, "forget that" (or "forget <entity>" by exact name)
+withdraws it through `withdraw_entity` with an operator closure that names
+the chat. The row stays in history, the next report from the same source is
+believed again, and the reply lists what lost its grounds. Anything that does
+not resolve to a held belief goes to the model, and scheduled and A2A turns
+are never read as commands. `crates/obc-agent/tests/belief_commands.rs`
+covers it through `AgentHandle::process`. The original proposal follows.
 
 *Taken from:* Grok (ask what it remembers) and Muse (forget on request). The
 substrate already beats theirs: it can answer "because sensor X said so at
@@ -189,7 +220,7 @@ document plainly that sub-agents are not a boundary.
 
 1. ~~Items 1 and 3 in one PR: unattended posture, approval expiry, and taint on by default.~~ Done 2026-11-01.
 2. ~~Item 2, approvals from Telegram and Slack, which makes item 1 usable away from the desk.~~ Done 2026-11-01.
-3. Items 4 and 5 as a "standing goals" phase.
+3. ~~Items 4 and 5 as a "standing goals" phase.~~ Done 2026-11-02.
 4. Items 6 to 9 when needed. Item 8's embodied version is the one no competitor can match.
 
 ## Sources
