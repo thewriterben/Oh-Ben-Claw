@@ -92,6 +92,16 @@ a grant for a physical, irreversible or blast-radius tool: it needs
 posture; they already answer to dynamic trust and count as external content
 under taint tracking.
 
+Such a call can be approved from chat (2026-11-01). With
+`[channels.telegram].approver_user_ids` or `[channels.slack].approver_users`
+set, it is sent to those users with Approve / Allow N min / Deny buttons and
+waits up to `[autonomy].approval_wait_secs` (default 300). No answer is a
+refusal, audited as a denial from channel `expired`. Only the approver list can
+answer, and it is separate from the chat allowlist; a tap from anyone else is
+refused and audited, and the call keeps waiting. Chat never offers a forever
+grant. With no approvers listed (the default) nothing waits, and the call is
+refused at once as before.
+
 ## OWASP Top 10 for Agentic Applications (ASI) Coverage
 
 Oh-Ben-Claw's Track 0 controls are mapped to the [OWASP Top 10 for Agentic

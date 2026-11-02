@@ -33,7 +33,8 @@ use tracing_subscriber::FmtSubscriber;
 use oh_ben_claw::agent::{Agent, AgentHandle, OrchestratorAgent};
 use oh_ben_claw::channels::{
     CliChannel, DiscordChannel, FeishuChannel, IMessageChannel, IrcChannel, MatrixChannel,
-    MattermostChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
+    MattermostChannel, SignalChannel, SlackApprovalPrompter, SlackChannel,
+    TelegramApprovalPrompter, TelegramChannel, WhatsAppChannel,
 };
 use oh_ben_claw::config::Config;
 use oh_ben_claw::memory::MemoryStore;
@@ -4037,6 +4038,12 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
 /// Each channel runs in its own `tokio::spawn` task with an infinite retry
 /// loop so that transient errors (network blips, rate-limits, WebSocket
 /// reconnects) don't crash the entire process.
+///
+/// Telegram and Slack also take approvals (2026-11-01): with approvers listed,
+/// the channel's prompter is attached to the agent's approval manager here,
+/// next to the inbound loop that receives the taps, so a scheduled task or an
+/// A2A call that reaches a gated tool asks them and waits
+/// (`[autonomy].approval_wait_secs`) instead of being refused at once.
 fn spawn_channels(agent: Arc<Agent>, config: &Config) {
     let provider = config.provider.clone();
 
@@ -4047,6 +4054,16 @@ fn spawn_channels(agent: Arc<Agent>, config: &Config) {
         provider.clone(),
     ) {
         info!("Starting Telegram channel");
+        if let (Some(approval), Some(p)) = (
+            agent.approval_manager(),
+            TelegramApprovalPrompter::from_config(&config.channels.telegram),
+        ) {
+            info!(
+                approvers = p.approver_count(),
+                "Unattended approvals will be asked on Telegram"
+            );
+            approval.add_prompter(Arc::new(p));
+        }
         tokio::spawn(async move {
             loop {
                 if let Err(e) = ch.run().await {
@@ -4079,6 +4096,16 @@ fn spawn_channels(agent: Arc<Agent>, config: &Config) {
         SlackChannel::new(&config.channels.slack, Arc::clone(&agent), provider.clone())
     {
         info!("Starting Slack channel");
+        if let (Some(approval), Some(p)) = (
+            agent.approval_manager(),
+            SlackApprovalPrompter::from_config(&config.channels.slack),
+        ) {
+            info!(
+                approvers = p.approver_count(),
+                "Unattended approvals will be asked on Slack"
+            );
+            approval.add_prompter(Arc::new(p));
+        }
         tokio::spawn(async move {
             loop {
                 if let Err(e) = ch.run().await {

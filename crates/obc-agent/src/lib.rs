@@ -887,6 +887,12 @@ impl Agent {
         self
     }
 
+    /// The attached approval manager, for a chat channel that answers
+    /// pending calls ([`ApprovalManager::resolve_pending`]).
+    pub fn approval_manager(&self) -> Option<&Arc<ApprovalManager>> {
+        self.approval.as_ref()
+    }
+
     /// Add tools to the agent's registry.
     pub fn add_tools(&self, tools: Vec<Box<dyn Tool>>) {
         let mut reg = self.tools.write().unwrap_or_else(|p| p.into_inner());
@@ -2372,8 +2378,18 @@ impl Agent {
         // autonomous loop a tool that needs operator approval is refused rather than
         // blocking on a prompt; Full autonomy and granted/auto-approved tools pass,
         // except that an unattended turn needs an explicit grant for a gated tool.
-        if let Err(reason) =
-            approval_authorize_as(self.approval.as_deref(), name, &node_id, risk, presence)
+        // An unattended call that needs one waits for an answer in chat when a
+        // channel with approvers is attached, and is refused when none comes.
+        if let Err(reason) = obc_approval::approval_authorize_waiting(
+            self.approval.as_deref(),
+            name,
+            &args,
+            &node_id,
+            risk,
+            presence,
+            &unattended_origin(),
+        )
+        .await
         {
             tracing::warn!(tool = %name, node = %node_id, reason = %reason, "tool call refused by approval policy");
             return Ok(obc_tool_api::ToolResult::err(format!(
@@ -2581,6 +2597,25 @@ impl Agent {
 //
 // Re-exported so this crate's callers are unchanged.
 pub use obc_approval::{approval_authorize, approval_authorize_as, Presence};
+
+tokio::task_local! {
+    /// What started the unattended turn this task runs, named on the prompt
+    /// a gated call sends to chat while it waits for approval.
+    static UNATTENDED_ORIGIN: String;
+}
+
+/// Run `fut` with `origin` (`"scheduled task 'open-gate'"`, `"an A2A call"`)
+/// as the answer to "who is asking?" on any approval prompt its unattended
+/// tool calls send to chat. Display only: it decides nothing.
+pub async fn with_unattended_origin<F: std::future::Future>(origin: String, fut: F) -> F::Output {
+    UNATTENDED_ORIGIN.scope(origin, fut).await
+}
+
+fn unattended_origin() -> String {
+    UNATTENDED_ORIGIN
+        .try_with(String::clone)
+        .unwrap_or_else(|_| "an unattended turn".to_string())
+}
 
 /// Merge a delegate skill's fixed args with the runtime args (runtime wins).
 fn merge_delegate_args(fixed: Value, runtime: &Value) -> Value {

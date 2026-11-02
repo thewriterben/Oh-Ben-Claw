@@ -69,11 +69,10 @@ impl TaskExecutor for AgentExecutor {
         }
 
         // Another agent asked, and no person is reading along: unattended.
-        match self
+        let turn = self
             .agent
-            .process_unattended(&context_id, &prompt, &self.provider)
-            .await
-        {
+            .process_unattended(&context_id, &prompt, &self.provider);
+        match crate::with_unattended_origin("an A2A call".to_string(), turn).await {
             Ok(response) => {
                 let reply = Message {
                     role: Role::Agent,

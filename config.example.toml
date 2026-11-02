@@ -198,6 +198,24 @@ timeout_secs = 30
 # transcribe_voice = true         # voice notes -> text via OPENAI_API_BASE /audio/transcriptions
 # voice_replies = false           # answer a voice note with audio too (Kokoro via /audio/speech)
 # tts_voice = "af_bella"
+#
+# Approve from the chat (2026-11-01). When a scheduled task or an A2A call
+# reaches a gated tool, each user listed here gets the call in their private
+# chat with Approve / Allow 30 min / Deny buttons, and the call waits for the
+# tap (`[autonomy].approval_wait_secs`). Empty (the default) means nobody is
+# asked and the call is refused at once. Separate from allowed_user_ids:
+# talking to the agent is not the right to open its gates. A tap from anyone
+# else is refused and audited. Each approver must have sent the bot /start.
+# approver_user_ids = [123456789]
+
+# ── Channels: Slack ──────────────────────────────────────────────────────────
+# Socket Mode; tokens in SLACK_APP_TOKEN / SLACK_BOT_TOKEN. allowed_users is
+# who may talk to the agent (empty admits nobody). approver_users get gated
+# calls from scheduled tasks and A2A calls as a DM with buttons, as on
+# Telegram; turn on Interactivity for the app so the taps arrive.
+# [channels.slack]
+# allowed_users = ["U0123ABCD"]
+# approver_users = ["U0123ABCD"]
 
 # ── Autonomy ─────────────────────────────────────────────────────────────────
 # Which tool calls wait for the operator. Level "full" (default) runs every
@@ -209,12 +227,17 @@ timeout_secs = 30
 # Scheduled tasks and A2A calls run with nobody watching, so for them "full"
 # is not enough: a physical, irreversible or blast-radius tool needs
 # `auto_approve`, a forever grant, or a session grant made within
-# `unattended_grant_ttl_secs` (default 1800 = 30 min; 0 = never).
+# `unattended_grant_ttl_secs` (default 1800 = 30 min; 0 = never). With
+# Telegram or Slack approvers listed, such a call is sent to them and waits
+# `approval_wait_secs` (default 300) for a tap; unanswered, it is refused and
+# the expiry is audited as a denial. Tasks run one at a time, so a waiting
+# call holds back the tasks due after it. 0 refuses at once.
 # [autonomy]
 # level = "full"
 # always_ask = ["memory"]
 # auto_approve = ["gpio_write"]   # what a scheduled task may actuate unasked
 # unattended_grant_ttl_secs = 1800
+# approval_wait_secs = 300
 
 # ── Self-improvement ─────────────────────────────────────────────────────────
 # Phase 16: every run is captured as a trajectory; an hourly loop synthesises

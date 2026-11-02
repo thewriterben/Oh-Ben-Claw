@@ -211,6 +211,15 @@ pub struct TelegramConfig {
     /// Voice for `voice_replies` (Kokoro names, e.g. `af_bella`).
     #[serde(default = "default_tg_voice")]
     pub tts_voice: String,
+    /// Telegram user ids who may answer an approval request from a scheduled
+    /// task or an A2A call with the Approve / Deny buttons. Each gets the
+    /// request in their private chat with the bot (start the bot first).
+    /// **Empty means nobody**, and unattended calls are refused at once as
+    /// before. Separate from `allowed_user_ids`: talking to the agent is not
+    /// the right to open its gates. A tap from anyone else is refused and
+    /// audited. (2026-11-01)
+    #[serde(default)]
+    pub approver_user_ids: Vec<i64>,
 }
 
 fn default_tg_voice() -> String {
@@ -244,6 +253,14 @@ pub struct SlackConfig {
     /// channel had no list at all.
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// Slack member IDs who may answer an approval request from a scheduled
+    /// task or an A2A call with the Approve / Deny buttons, sent to each as a
+    /// direct message. Needs Interactivity turned on for the app (Socket Mode
+    /// delivers the taps). **Empty means nobody**, and unattended calls are
+    /// refused at once as before. A tap from anyone else is refused and
+    /// audited. (2026-11-01)
+    #[serde(default)]
+    pub approver_users: Vec<String>,
 }
 
 /// Configuration for the WhatsApp Business Cloud API channel.

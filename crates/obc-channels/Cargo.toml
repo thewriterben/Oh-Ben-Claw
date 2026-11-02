@@ -34,6 +34,8 @@ hex = "0.4"
 hmac = "0.12"
 sha2 = "0.10"
 obc-agent = { path = "../obc-agent" }
+# Chat approvals (2026-11-01): the prompter trait, the pending queue's answer.
+obc-approval = { path = "../obc-approval" }
 obc-reflex = { path = "../obc-reflex" }
 obc-config = { path = "../obc-config" }
 reqwest = { version = "0.12", default-features = false, features = [

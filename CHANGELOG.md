@@ -5,6 +5,71 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Approve from the chat (2026-11-01)
+
+Item 2 of `docs/PERSONAL-AGENTS-2026-11.md`. A scheduled task or an A2A call
+that reaches a gated tool now asks you on Telegram or Slack and waits for the
+tap, where until now it was refused.
+
+### Added
+
+- **A pending-approval queue with expiry.** An unattended call that needs
+  approval (and that dynamic trust has not denied) is held by the approval
+  manager and sent to every attached prompter. It waits up to
+  `[autonomy].approval_wait_secs` (new, default 300; `0` refuses at once, as
+  before). A tap resolves it. No answer within the window is a refusal,
+  audited as `No` from channel `expired`, and the refusal names who was asked
+  and for how long. Attended calls never wait. A queue rather than a grant on
+  refusal through `record_external_decision`, because a grant only helps the
+  next call: a one-shot task has no next firing, a daily task fires again
+  after the 30-minute grant window, and an A2A caller cannot be told to retry.
+- **Telegram approvals.** `[channels.telegram].approver_user_ids` (new,
+  default empty). Each approver gets the call in their private chat with the
+  bot, with inline buttons: Approve (this call), Allow N min (a session grant
+  covering unattended work for `unattended_grant_ttl_secs`; shown only when
+  that is above 0) and Deny. The long-polling loop now also takes
+  `callback_query` updates; a tap is answered with `answerCallbackQuery` and
+  the message is edited to show the outcome, which removes the buttons.
+- **Slack approvals.** `[channels.slack].approver_users` (member IDs, default
+  empty). The request is a DM with the same buttons, and taps arrive as Socket
+  Mode `interactive` envelopes. The outcome replaces the message through
+  `chat.update`; an error reaches only the person who tapped
+  (`chat.postEphemeral`). Turn on Interactivity for the app.
+- **Who may approve.** Only the channel's approver list, which is separate
+  from its chat allowlist: talking to the agent is not the right to open its
+  gates. A tap from anyone else is refused and audited (`refused` on the audit
+  entry), and the call keeps waiting. Chat never offers a forever grant; that
+  stays a CLI or gateway decision. A button carries `obc:<y|a|n>:<id>`, and any
+  other value is rejected.
+- `ApprovalPrompter`, `PendingApproval`, `WaitOutcome`, `ResolveError`,
+  `ApprovalManager::{add_prompter, can_wait, pending, wait_for_decision,
+  resolve_pending}`, `approval_authorize_waiting`, `Agent::approval_manager`,
+  `TelegramApprovalPrompter`, `SlackApprovalPrompter` and
+  `obc_channels::approval`. `src/main.rs` attaches each prompter in
+  `spawn_channels`, next to the inbound loop that receives its taps.
+- Tests: five in `crates/obc-agent/tests/chat_approval.rs` that drive the real
+  scheduler loop and the A2A executor over a physical, irreversible gate. The
+  gate opens on the approver's tap; it stays shut on Deny, on expiry and on a
+  stranger's tap, each paired with the same fixture opening once approved.
+  Plus six in `obc-approval`, three in `obc_channels::approval` and two each
+  for the Telegram and Slack wire formats.
+
+### Known limits
+
+- The scheduler runs one task at a time, so a waiting call holds back the
+  tasks due after it, for up to `approval_wait_secs`.
+- Attended turns cannot yet be approved from chat: the Telegram loop handles
+  one update at a time, so a turn waiting there would block its own tap. For
+  the same reason a tap is read only once an attended turn in progress ends.
+- An A2A HTTP caller may time out before the tap lands. `a2a serve` on its own
+  attaches no prompters, because no inbound channel runs there.
+- Taint is checked after approval, so with `taint_mode = "enforce"` an
+  approved call can still be refused.
+- With several approvers, the other approvers' messages keep their buttons; a
+  late tap is told the request is no longer pending.
+
+---
+
 ## Unreleased — Unattended posture and taint on by default (2026-11-01)
 
 Items 1 and 3 of `docs/PERSONAL-AGENTS-2026-11.md`, taken from OpenAI Dots
