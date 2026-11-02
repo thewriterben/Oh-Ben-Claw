@@ -83,7 +83,22 @@ pub fn turn_message(task_name: &str, prompt: &str, tool_report: Option<&str>) ->
 /// ROADMAP Track 0: an explicit grant for `schedule` waives the check for
 /// whatever tool it stores, and the `prompt` turn starts a fresh pool, so an
 /// instruction paraphrased from a web page loses its provenance at fire time.
+///
+/// **Approval in chat (2026-11-01).** A gated call that needs approval waits
+/// for an answer from a chat channel with approvers, for at most
+/// `[autonomy].approval_wait_secs`, and the prompt names this task. The
+/// scheduler loop runs one dispatch at a time, so the tasks due after it wait
+/// too.
 pub async fn run_scheduled(
+    handle: &AgentHandle,
+    d: TaskDispatch,
+    notifier: Option<Arc<Notifier>>,
+) -> Outcome {
+    let origin = format!("scheduled task '{}'", d.task_name);
+    crate::with_unattended_origin(origin, run_dispatch(handle, d, notifier)).await
+}
+
+async fn run_dispatch(
     handle: &AgentHandle,
     d: TaskDispatch,
     notifier: Option<Arc<Notifier>>,

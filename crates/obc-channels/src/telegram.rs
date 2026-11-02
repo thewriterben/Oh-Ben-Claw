@@ -14,6 +14,12 @@
 //! every allowed user's private chat, which is what "and message me" means on
 //! a phone.
 //!
+//! Since 2026-11-01 it also carries approvals: [`TelegramApprovalPrompter`]
+//! sends a gated call from a scheduled task or an A2A call to each of
+//! `approver_user_ids` with Approve / Deny buttons, and the long-polling loop
+//! takes the tap (`callback_query`) back to the waiting call. A tap from
+//! anyone not on that list is refused and audited.
+//!
 //! # Limitations
 //! Only text messages from private chats and groups are processed.  Media and
 //! commands other than `/start`, `/help`, and `/clear` are ignored. Replies are
@@ -31,8 +37,10 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use obc_agent::notify::{Escalation, NotificationChannel};
 use obc_agent::Agent;
+use obc_approval::{ApprovalPrompter, PendingApproval};
 use obc_config::{ProviderConfig, TelegramConfig};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::sync::Arc;
 
 /// Whether a sender may talk to the agent. An empty allowlist admits nobody.
@@ -75,6 +83,21 @@ struct TgResponse<T> {
 struct TgUpdate {
     update_id: i64,
     message: Option<TgMessage>,
+    /// A tap on an inline-keyboard button: the approval buttons.
+    #[serde(default)]
+    callback_query: Option<TgCallbackQuery>,
+}
+
+/// A button tap. `message` is the message the button was under; `data` is
+/// the button's `callback_data`.
+#[derive(Debug, Deserialize)]
+struct TgCallbackQuery {
+    id: String,
+    from: TgUser,
+    #[serde(default)]
+    message: Option<TgMessage>,
+    #[serde(default)]
+    data: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -183,6 +206,8 @@ pub struct TelegramChannel {
     tts_voice: String,
     /// Whether to send "typing…" indicators while the agent processes.
     typing_indicators: bool,
+    /// `approver_user_ids`, as the strings the approval manager compares.
+    approvers: Vec<String>,
 }
 
 impl TelegramChannel {
@@ -232,6 +257,11 @@ impl TelegramChannel {
             voice_replies: config.voice_replies,
             tts_voice: config.tts_voice.clone(),
             typing_indicators,
+            approvers: config
+                .approver_user_ids
+                .iter()
+                .map(i64::to_string)
+                .collect(),
         })
     }
 
@@ -371,6 +401,15 @@ impl TelegramChannel {
 
             for update in updates {
                 offset = offset.max(update.update_id + 1);
+                if let Some(tap) = update.callback_query {
+                    tracing::info!(
+                        update_id = update.update_id,
+                        user_id = tap.from.id,
+                        "Telegram button tap received"
+                    );
+                    self.handle_tap(tap).await;
+                    continue;
+                }
                 match update.message {
                     Some(msg) => {
                         tracing::info!(
@@ -403,7 +442,7 @@ impl TelegramChannel {
             .query(&[
                 ("offset", offset.to_string()),
                 ("timeout", "30".into()),
-                ("allowed_updates", "[\"message\"]".into()),
+                ("allowed_updates", "[\"message\",\"callback_query\"]".into()),
             ])
             .timeout(std::time::Duration::from_secs(45))
             .send()
@@ -420,6 +459,36 @@ impl TelegramChannel {
             );
         }
         Ok(resp.result.unwrap_or_default())
+    }
+
+    /// An approval button was tapped: answer the waiting call (or say why
+    /// not, to whoever tapped), then replace the buttons with the outcome so
+    /// the request cannot be answered twice from this message.
+    async fn handle_tap(&self, tap: TgCallbackQuery) {
+        let answer = crate::approval::answer_tap(
+            self.agent.approval_manager().map(|a| a.as_ref()),
+            "telegram",
+            tap.data.as_deref().unwrap_or_default(),
+            &tap.from.id.to_string(),
+            &self.approvers,
+        );
+        let (toast, alert) = match &answer {
+            Ok(line) => (line.as_str(), false),
+            Err(why) => (why.as_str(), true),
+        };
+        let body = json!({ "callback_query_id": tap.id, "text": toast, "show_alert": alert });
+        if let Err(e) = tg_call(&self.http, &self.api_base, "answerCallbackQuery", &body).await {
+            tracing::warn!(error = %e, "Telegram answerCallbackQuery failed");
+        }
+        if let (Ok(line), Some(msg)) = (answer, tap.message) {
+            let text = format!("{}\n\n{line}", msg.text.unwrap_or_default());
+            // No `reply_markup`: the edit drops the buttons.
+            let body =
+                json!({ "chat_id": msg.chat.id, "message_id": msg.message_id, "text": text });
+            if let Err(e) = tg_call(&self.http, &self.api_base, "editMessageText", &body).await {
+                tracing::warn!(error = %e, "Telegram editMessageText failed");
+            }
+        }
     }
 
     async fn send_text(&self, chat_id: i64, text: &str, reply_to: Option<i64>) -> Result<()> {
@@ -789,6 +858,111 @@ impl NotificationChannel for TelegramNotifyChannel {
     }
 }
 
+/// POST `body` to Bot API `method`; an answer with `ok: false` is an error.
+async fn tg_call(
+    http: &reqwest::Client,
+    api_base: &str,
+    method: &str,
+    body: &serde_json::Value,
+) -> Result<()> {
+    let resp: TgResponse<serde_json::Value> = http
+        .post(format!("{api_base}/{method}"))
+        .json(body)
+        .send()
+        .await
+        .with_context(|| format!("Telegram {method} HTTP error"))?
+        .json()
+        .await
+        .with_context(|| format!("Telegram {method} JSON parse error"))?;
+    if !resp.ok {
+        anyhow::bail!(
+            "Telegram {method} refused: {}",
+            resp.description.as_deref().unwrap_or("unknown")
+        );
+    }
+    Ok(())
+}
+
+/// Approval requests on Telegram (2026-11-01): an [`ApprovalPrompter`] that
+/// sends a waiting call to each of `approver_user_ids` in their private chat
+/// with the bot (chat id == user id; they must have started the bot), with
+/// one button per answer. The tap comes back through [`TelegramChannel`]'s
+/// long-polling loop, so the inbound channel has to be running for an answer
+/// to land. `None` without a token or without approvers.
+#[derive(Clone)]
+pub struct TelegramApprovalPrompter {
+    api_base: String,
+    approvers: Vec<i64>,
+    http: reqwest::Client,
+}
+
+impl TelegramApprovalPrompter {
+    pub fn from_config(config: &TelegramConfig) -> Option<Self> {
+        if config.approver_user_ids.is_empty() {
+            return None;
+        }
+        let token = config
+            .token
+            .clone()
+            .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())?;
+        Some(Self {
+            api_base: format!("https://api.telegram.org/bot{token}"),
+            approvers: config.approver_user_ids.clone(),
+            http: reqwest::Client::new(),
+        })
+    }
+
+    pub fn approver_count(&self) -> usize {
+        self.approvers.len()
+    }
+
+    /// The `sendMessage` body for one approver: the request as plain text and
+    /// one row of buttons, Approve / Allow N min / Deny.
+    fn message(pending: &PendingApproval, chat_id: i64) -> serde_json::Value {
+        let row: Vec<serde_json::Value> = pending
+            .chat_choices()
+            .iter()
+            .map(|(decision, label)| {
+                json!({
+                    "text": label,
+                    "callback_data": crate::approval::button_value(decision, &pending.id),
+                })
+            })
+            .collect();
+        json!({
+            "chat_id": chat_id,
+            "text": pending.prompt_text(),
+            "reply_markup": { "inline_keyboard": [row] },
+        })
+    }
+}
+
+impl ApprovalPrompter for TelegramApprovalPrompter {
+    fn name(&self) -> &str {
+        "telegram"
+    }
+
+    fn prompt(&self, pending: &PendingApproval) {
+        let this = self.clone();
+        let bodies: Vec<serde_json::Value> = self
+            .approvers
+            .iter()
+            .map(|chat_id| Self::message(pending, *chat_id))
+            .collect();
+        tokio::spawn(async move {
+            for body in bodies {
+                if let Err(e) = tg_call(&this.http, &this.api_base, "sendMessage", &body).await {
+                    tracing::warn!(
+                        chat_id = ?body["chat_id"],
+                        error = %e,
+                        "Telegram approval request not delivered"
+                    );
+                }
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 mod allowlist_tests {
     use super::*;
@@ -869,6 +1043,7 @@ mod allowlist_tests {
             transcribe_voice: true,
             voice_replies: false,
             tts_voice: "af_bella".into(),
+            approver_user_ids: vec![],
         };
         assert_eq!(
             TelegramNotifyChannel::from_config(&cfg)
@@ -921,5 +1096,72 @@ mod allowlist_tests {
         );
         let esc = Escalation::new("mesh node lost", 0);
         assert_eq!(TelegramNotifyChannel::text_for(&esc), "OBC: mesh node lost");
+    }
+
+    #[test]
+    fn a_button_tap_parses_out_of_an_update() {
+        let raw = r#"{"ok":true,"result":[{"update_id":8,"callback_query":{"id":"cb1",
+            "from":{"id":42,"is_bot":false,"first_name":"B"},
+            "message":{"message_id":5,"chat":{"id":42,"type":"private"},"date":1,"text":"Approve?"},
+            "chat_instance":"x","data":"obc:y:0123456789abcdef0123456789abcdef"}}]}"#;
+        let resp: TgResponse<Vec<TgUpdate>> = serde_json::from_str(raw).unwrap();
+        let update = resp.result.unwrap().remove(0);
+        assert!(update.message.is_none());
+        let tap = update.callback_query.unwrap();
+        assert_eq!(tap.from.id, 42);
+        assert_eq!(tap.message.unwrap().message_id, 5);
+        assert_eq!(
+            tap.data.as_deref(),
+            Some("obc:y:0123456789abcdef0123456789abcdef")
+        );
+    }
+
+    #[test]
+    fn an_approval_request_carries_one_button_per_answer_and_no_forever() {
+        let cfg = TelegramConfig {
+            token: Some("123:abc".into()),
+            approver_user_ids: vec![42, 7],
+            ..TelegramConfig::default()
+        };
+        assert_eq!(
+            TelegramApprovalPrompter::from_config(&cfg)
+                .unwrap()
+                .approver_count(),
+            2
+        );
+        let pending = PendingApproval {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            tool_name: "open_gate".into(),
+            arguments: serde_json::json!({}),
+            risk: None,
+            origin: "scheduled task 'gate'".into(),
+            reason: "unattended".into(),
+            expires_in_secs: 300,
+            session_grant_secs: 1800,
+        };
+        let body = TelegramApprovalPrompter::message(&pending, 42);
+        assert_eq!(body["chat_id"], 42);
+        assert!(body["text"]
+            .as_str()
+            .unwrap()
+            .contains("scheduled task 'gate'"));
+        let row = body["reply_markup"]["inline_keyboard"][0]
+            .as_array()
+            .unwrap();
+        let labels: Vec<&str> = row.iter().map(|b| b["text"].as_str().unwrap()).collect();
+        assert_eq!(labels, ["Approve", "Allow 30 min", "Deny"]);
+        for b in row {
+            let data = b["callback_data"].as_str().unwrap();
+            assert!(data.len() <= 64);
+            assert!(crate::approval::parse_button_value(data).is_some());
+        }
+
+        // Nobody to ask: no prompter, and unattended calls refuse at once.
+        let cfg = TelegramConfig {
+            token: Some("123:abc".into()),
+            allowed_user_ids: vec![42],
+            ..TelegramConfig::default()
+        };
+        assert!(TelegramApprovalPrompter::from_config(&cfg).is_none());
     }
 }

@@ -17,6 +17,7 @@
 //! * **Feishu/Lark** — Feishu enterprise messaging via webhook event subscription,
 //!   inspired by [MimiClaw](https://github.com/memovai/mimiclaw).
 
+pub mod approval;
 pub mod cli;
 pub mod discord;
 pub mod feishu;
@@ -39,7 +40,9 @@ pub use irc::IrcChannel;
 pub use matrix::MatrixChannel;
 pub use mattermost::MattermostChannel;
 pub use signal::SignalChannel;
+pub use slack::SlackApprovalPrompter;
 pub use slack::SlackChannel;
+pub use telegram::TelegramApprovalPrompter;
 pub use telegram::{TelegramChannel, TelegramNotifyChannel};
 pub use typing::TypingTask;
 pub use whatsapp::WhatsAppChannel;

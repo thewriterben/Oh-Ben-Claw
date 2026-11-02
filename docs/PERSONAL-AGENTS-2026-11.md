@@ -31,7 +31,7 @@ details:
 | Standing goals that keep moving | Routines on a schedule, or after an event | Larger goals; checks in on change | Several goals at once, worked around the clock | **Partial.** Cron prompts (`crates/obc-agent/src/scheduled.rs`) and physical missions. No goal object with progress or a done condition |
 | Proactive background work | — | Makes suggestions | "Proactive research", **read-only** | **Gap.** The heartbeat was dropped 2026-10-30 because nothing wired it |
 | Posture with no one watching | Background approvals **expire after ~30 min** | Asks before sends and purchases | Background work **cannot send or change anything** | **Have** (2026-11-01). Scheduled and A2A turns run unattended: `full` autonomy is not a grant there, and a session grant covers them for 30 min |
-| Approvals reach you where you are | Apps, X Chat, Slack | WhatsApp | ChatGPT, Slack, Teams | **Partial.** The gateway records out-of-band decisions (`crates/obc-gateway/src/routes.rs:1527`). No chat channel shows approve or deny |
+| Approvals reach you where you are | Apps, X Chat, Slack | WhatsApp | ChatGPT, Slack, Teams | **Have** (2026-11-01). Telegram and Slack show an unattended call with Approve / Deny buttons, and it waits for the tap. The gateway also records out-of-band decisions |
 | Allow / block / ask rules | "Ask first" for send, publish, delete, purchase, prod | Per-app scope (e.g. read-only mail) | Custom Rules per action | **Have, stronger.** `[[security.policies]]`, autonomy levels, plan-mode argument bounds, Track 0 mirrored on the MCU |
 | A second agent reviews actions | Auto-review rules | **Sentinel**: a second agent that must approve all internet access | Auto-review of account and sharing actions; a monitor can pause the dot | **Partial.** The checks are deterministic: taint tracking (default `warn` since 2026-11-01) and the conscience egress allowlist. No model-based reviewer |
 | Credentials it can use but not see | Vault, password manager, Secure Form | Credential store it can use but not read; Stripe Link single-use cards | Saved passwords hidden from the model | **Partial.** The vault exists (`crates/obc-safety/src/vault.rs`). I found no path that fills a browser field from the vault without the secret entering the model's context |
@@ -66,8 +66,8 @@ already been built, configured, tested and never invoked.
 
 ### 1. Unattended posture and approval expiry — S (done 2026-11-01)
 
-*As built:* OBC has no pending-approval queue (a call that needs approval is
-refused), so expiry became a window on session grants: one covers unattended
+*As built:* OBC had no pending-approval queue (a call that needed approval was
+refused; item 2 added one), so expiry became a window on session grants: one covers unattended
 work for `[autonomy].unattended_grant_ttl_secs`, default 1800. Gated means
 physical, irreversible or with blast radius. P2P peer calls stay attended;
 they already answer to dynamic trust and count as external under taint.
@@ -82,7 +82,20 @@ auto-approves under `Full` autonomy**. An expired approval becomes a denial and
 is audited as one. This closes the widest gap in the table, and it matches the
 existing rule that the model proposes and deterministic code disposes.
 
-### 2. Approve from the chat you're already in — S/M
+### 2. Approve from the chat you're already in — S/M (done 2026-11-01)
+
+*As built:* a tap that called `record_external_decision` would only grant the
+*next* call, and a one-shot task has no next firing, a daily task fires again
+after the 30-minute grant window, and an A2A caller cannot be told to retry.
+So OBC now has the queue item 1 lacked: an unattended call that needs approval
+waits up to `[autonomy].approval_wait_secs` (default 300) while each approver
+gets it with Approve / Allow 30 min / Deny buttons. No answer is a refusal,
+audited as a denial. Approvers are `[channels.telegram].approver_user_ids` and
+`[channels.slack].approver_users`, separate from the chat allowlists; anyone
+else's tap is refused and audited. Attended turns do not wait, because the
+Telegram loop handles one update at a time. `crates/obc-agent/tests/chat_approval.rs`
+covers it through the scheduler loop and the A2A executor. The original
+proposal follows.
 
 *Taken from:* all three. Telegram inline buttons and Slack interactive messages
 call `record_external_decision`, which is the function the gateway route
@@ -173,7 +186,7 @@ document plainly that sub-agents are not a boundary.
 ## Suggested order
 
 1. ~~Items 1 and 3 in one PR: unattended posture, approval expiry, and taint on by default.~~ Done 2026-11-01.
-2. Item 2, approvals from Telegram and Slack, which makes item 1 usable away from the desk.
+2. ~~Item 2, approvals from Telegram and Slack, which makes item 1 usable away from the desk.~~ Done 2026-11-01.
 3. Items 4 and 5 as a "standing goals" phase.
 4. Items 6 to 9 when needed. Item 8's embodied version is the one no competitor can match.
 

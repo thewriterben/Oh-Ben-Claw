@@ -44,6 +44,9 @@ obc-tool-api = { path = "../obc-tool-api" }
 parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# A call from an unattended turn can wait for an answer from a chat channel:
+# a oneshot carries the answer, a timeout turns silence into a denial.
+tokio = { version = "1.42", default-features = false, features = ["sync", "time"] }
 tracing = { version = "0.1", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 
@@ -53,3 +56,4 @@ uuid = { version = "1", features = ["v4"] }
 # this month to split on that exact line, which is why the CI job runs both.
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1.42", default-features = false, features = ["macros", "rt", "sync", "time"] }
