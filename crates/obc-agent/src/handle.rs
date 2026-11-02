@@ -24,7 +24,7 @@
 
 #[allow(unused_imports)]
 use crate::EVENT_CHANNEL_CAPACITY;
-use crate::{Agent, AgentResponse};
+use crate::{Agent, AgentResponse, Presence};
 use anyhow::Result;
 use obc_providers::ProviderConfig;
 use serde::{Deserialize, Serialize};
@@ -155,6 +155,27 @@ impl AgentHandle {
     /// `AgentEvent::ToolCall`, `AgentEvent::ToolResult`, and
     /// `AgentEvent::Response` (or `AgentEvent::Error`) during execution.
     pub async fn process(&self, session_id: &str, user_message: &str) -> Result<AgentResponse> {
+        self.process_as(session_id, user_message, Presence::Attended)
+            .await
+    }
+
+    /// [`AgentHandle::process`] for a turn nobody is watching: a scheduled
+    /// task or an A2A call. See [`Agent::process_unattended`].
+    pub async fn process_unattended(
+        &self,
+        session_id: &str,
+        user_message: &str,
+    ) -> Result<AgentResponse> {
+        self.process_as(session_id, user_message, Presence::Unattended)
+            .await
+    }
+
+    async fn process_as(
+        &self,
+        session_id: &str,
+        user_message: &str,
+        presence: Presence,
+    ) -> Result<AgentResponse> {
         // Mark as busy
         {
             let mut busy = self.busy.lock().await;
@@ -169,10 +190,18 @@ impl AgentHandle {
 
         // Run the agent — it handles its own tool-call loop internally and
         // emits Thinking / Token / ToolCall / ToolResult live from inside it.
-        let result = self
-            .agent
-            .process(session_id, user_message, &self.provider_config)
-            .await;
+        let result = match presence {
+            Presence::Attended => {
+                self.agent
+                    .process(session_id, user_message, &self.provider_config)
+                    .await
+            }
+            Presence::Unattended => {
+                self.agent
+                    .process_unattended(session_id, user_message, &self.provider_config)
+                    .await
+            }
+        };
 
         // Mark as not busy
         {
@@ -274,6 +303,25 @@ impl AgentHandle {
         name: &str,
         args: serde_json::Value,
     ) -> anyhow::Result<obc_tool_api::ToolResult> {
+        self.execute_tool_as(name, args, Presence::Attended).await
+    }
+
+    /// [`AgentHandle::execute_tool_direct`] for a call nobody is watching: a
+    /// scheduled task's stored tool. See [`Agent::execute_tool_unattended`].
+    pub async fn execute_tool_unattended(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> anyhow::Result<obc_tool_api::ToolResult> {
+        self.execute_tool_as(name, args, Presence::Unattended).await
+    }
+
+    async fn execute_tool_as(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        presence: Presence,
+    ) -> anyhow::Result<obc_tool_api::ToolResult> {
         let call_id = uuid::Uuid::new_v4().to_string();
 
         // Broadcast the tool call event
@@ -285,7 +333,10 @@ impl AgentHandle {
         });
 
         let start = std::time::Instant::now();
-        let result = self.agent.execute_tool_direct(name, args).await;
+        let result = match presence {
+            Presence::Attended => self.agent.execute_tool_direct(name, args).await,
+            Presence::Unattended => self.agent.execute_tool_unattended(name, args).await,
+        };
         let duration_ms = start.elapsed().as_millis() as u64;
 
         // Broadcast the result event

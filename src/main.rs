@@ -3103,7 +3103,7 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             None => manager,
         })
     };
-    // Track 0 taint tracking: opt-in (unset ⇒ off). Shared by both the plain
+    // Track 0 taint tracking: on by default (unset ⇒ warn). Shared by both the plain
     // and orchestrator inner agents.
     let taint_mode =
         oh_ben_claw::security::taint::TaintMode::from_config(config.safety.taint_mode.as_deref());

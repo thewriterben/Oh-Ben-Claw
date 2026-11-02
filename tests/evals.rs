@@ -822,6 +822,7 @@ mod staged_rollout {
             level,
             auto_approve,
             always_ask: vec![],
+            ..Default::default()
         };
         let grants = std::env::temp_dir().join(format!(
             "obc-eval-rollout-grants-{}.json",
@@ -1390,6 +1391,7 @@ mod taint_redteam {
                 level: AutonomyLevel::Full,
                 auto_approve: vec!["gpio_write".to_string()],
                 always_ask: vec![],
+                ..Default::default()
             },
             ForeverGrants::load(grants),
             true,
@@ -1870,6 +1872,7 @@ fn eval_approval_policy_matrix_golden() {
         level: AutonomyLevel::Supervised,
         auto_approve: vec!["read_file".to_string()],
         always_ask: vec!["delete_file".to_string()],
+        ..Default::default()
     };
     let mgr = ApprovalManager::with_grants(&cfg, ForeverGrants::load(&grants_path), true);
 

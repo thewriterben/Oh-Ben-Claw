@@ -2,7 +2,7 @@
 //!
 //! The `schedule` tool stores a tool name and model-authored `tool_args`, and
 //! fires them later with nobody watching. The path is `run_scheduler_loop` ->
-//! `run_scheduled` -> `AgentHandle::execute_tool_direct` ->
+//! `run_scheduled` -> `AgentHandle::execute_tool_unattended` ->
 //! `Agent::execute_tool_inner` -> `track0_authorize_as`. That holds only
 //! because of how the code is built: a refactor that gave the scheduler its
 //! own way to run a tool would silently drop the safety gate and the audit from
@@ -14,9 +14,14 @@
 //! every "it did not run" is paired with the same fixture running when the
 //! limits permit it.
 //!
-//! The last test is the taint half. A fired call has no taint pool, so the
-//! check against external content has to happen when the call is scheduled,
-//! where the pool still exists. See the doc comment on `run_scheduled`.
+//! The taint tests come next. A fired call has no taint pool, so the check
+//! against external content has to happen when the call is scheduled, where
+//! the pool still exists. See the doc comment on `run_scheduled`.
+//!
+//! The last tests are the unattended posture (2026-11-01): a fired task runs
+//! as `Presence::Unattended`, so `Full` autonomy does not cover a gated tool,
+//! for the stored tool and for the prompt turn alike. An A2A turn is checked
+//! here too, because it reuses the same bench.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -26,6 +31,9 @@ use async_trait::async_trait;
 use obc_agent::handle::AgentHandle;
 use obc_agent::scheduled::{run_scheduled, Outcome};
 use obc_agent::{Agent, AgentConfig};
+use obc_approval::{
+    ApprovalManager, ApprovalRequest, ApprovalResponse, AutonomyConfig, ForeverGrants,
+};
 use obc_memory::MemoryStore;
 use obc_providers::{ChatCompletion, ChatMessage, Provider, ProviderConfig, ToolCall};
 use obc_safety::audit::{ActionAuditor, ActionRecord, Decision};
@@ -145,9 +153,14 @@ fn now_secs() -> u64 {
 /// scheduler loop pick it up and hand it to `run_scheduled`, and return what
 /// that run produced.
 async fn fire(handle: &Arc<AgentHandle>, id: &str, args: Value) -> Outcome {
-    let sched = Scheduler::new(":memory:").unwrap();
     let task = ScheduledTask::one_shot(id, id, "", "scheduled-test", now_secs() - 1)
         .with_tool("gpio_write", Some(args));
+    fire_task(handle, task).await
+}
+
+/// Let the real scheduler loop pick up `task` and hand it to `run_scheduled`.
+async fn fire_task(handle: &Arc<AgentHandle>, task: ScheduledTask) -> Outcome {
+    let sched = Scheduler::new(":memory:").unwrap();
     sched.add_task(task).unwrap();
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Outcome>(1);
@@ -370,5 +383,189 @@ async fn scheduled_args_echoing_external_content_are_refused_when_scheduled() {
         tasks.is_empty(),
         "a scheduled call carrying external content was stored and would fire \
          later with no taint check: {tasks:?}"
+    );
+}
+
+// ── Unattended: autonomy is not a grant when nobody is watching ─────────────
+
+/// An irreversible software action, like a post or a send: gated, not physical,
+/// so Track 0's limit table has nothing to say and only approval decides.
+struct PostNote(Arc<Mutex<usize>>);
+
+#[async_trait]
+impl Tool for PostNote {
+    fn name(&self) -> &str {
+        "post_note"
+    }
+    fn description(&self) -> &str {
+        "posts a note somewhere it cannot be taken back"
+    }
+    fn risk_class(&self) -> RiskClass {
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::None,
+            physical: false,
+        }
+    }
+    async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
+        *self.0.lock().unwrap() += 1;
+        Ok(ToolResult::ok("posted"))
+    }
+}
+
+/// Ask for `post_note` once, then stop.
+struct AsksToPost(Mutex<usize>);
+
+#[async_trait]
+impl Provider for AsksToPost {
+    fn name(&self) -> &str {
+        "asks-to-post"
+    }
+    async fn chat_completion(
+        &self,
+        _messages: &[ChatMessage],
+        _tools: &[Box<dyn Tool>],
+        c: &ProviderConfig,
+    ) -> anyhow::Result<ChatCompletion> {
+        let first = {
+            let mut s = self.0.lock().unwrap();
+            *s += 1;
+            *s == 1
+        };
+        let tool_calls = if first {
+            vec![ToolCall {
+                id: "p1".into(),
+                name: "post_note".into(),
+                args: "{}".into(),
+            }]
+        } else {
+            vec![]
+        };
+        Ok(ChatCompletion {
+            message: if first { String::new() } else { "done".into() },
+            tool_calls,
+            provider: "asks-to-post".into(),
+            model: c.model.clone(),
+            usage: None,
+        })
+    }
+}
+
+/// An agent under `Full` autonomy (the default config) with an approval
+/// manager attached, whose one tool is `post_note`. Returns the handle, the
+/// manager and how many times the note was posted.
+fn unattended_bench(
+    provider: Arc<dyn Provider>,
+) -> (Arc<AgentHandle>, Arc<ApprovalManager>, Arc<Mutex<usize>>) {
+    let posted = Arc::new(Mutex::new(0));
+    let grants = std::env::temp_dir().join(format!(
+        "obc-unattended-grants-{}.json",
+        uuid::Uuid::new_v4()
+    ));
+    let approval = Arc::new(ApprovalManager::with_grants(
+        &AutonomyConfig::default(),
+        ForeverGrants::load(grants),
+        true,
+    ));
+    let agent = Agent::new(
+        AgentConfig {
+            name: "scheduled-unattended-test".into(),
+            system_prompt: "test".into(),
+            max_tool_iterations: 3,
+            ..AgentConfig::default()
+        },
+        provider,
+        Arc::new(MemoryStore::open_in_memory().unwrap()),
+        vec![Box::new(PostNote(Arc::clone(&posted)))],
+    )
+    .with_approval(Arc::clone(&approval));
+    let handle = Arc::new(AgentHandle::new(Arc::new(agent), ProviderConfig::default()));
+    (handle, approval, posted)
+}
+
+fn post_note_task(id: &str) -> ScheduledTask {
+    ScheduledTask::one_shot(id, id, "", "scheduled-test", now_secs() - 1)
+        .with_tool("post_note", Some(json!({})))
+}
+
+#[tokio::test]
+async fn a_scheduled_tool_needs_a_grant_that_full_autonomy_is_not() {
+    let (handle, approval, posted) = unattended_bench(Arc::new(UnusedProvider));
+
+    // Control: the same call made by someone who is watching runs under Full.
+    let live = handle
+        .execute_tool_direct("post_note", json!({}))
+        .await
+        .unwrap();
+    assert!(
+        live.success,
+        "control: an attended call failed: {}",
+        live.output
+    );
+    assert_eq!(*posted.lock().unwrap(), 1);
+
+    let out = fire_task(&handle, post_note_task("ungranted")).await;
+    assert!(
+        !out.ok,
+        "an ungranted gated tool ran from the scheduler: {out:?}"
+    );
+    assert!(
+        out.text.contains("unattended") && out.text.contains("auto_approve"),
+        "the refusal should say why and what to do, got: {}",
+        out.text
+    );
+    assert_eq!(*posted.lock().unwrap(), 1, "the scheduled post ran");
+
+    // A session grant made just now covers it (inside the default 30 minutes).
+    let req = ApprovalRequest {
+        tool_name: "post_note".into(),
+        arguments: json!({}),
+        risk: None,
+    };
+    approval.record_external_decision(&req, ApprovalResponse::Always);
+    let out = fire_task(&handle, post_note_task("granted")).await;
+    assert!(out.ok, "a freshly granted tool was refused: {out:?}");
+    assert_eq!(*posted.lock().unwrap(), 2);
+}
+
+#[tokio::test]
+async fn a_scheduled_prompt_turn_runs_unattended_too() {
+    // Control: an attended turn that asks for the same tool runs it.
+    let (handle, _, posted) = unattended_bench(Arc::new(AsksToPost(Mutex::new(0))));
+    let resp = handle.process("live", "post the note").await.unwrap();
+    assert_eq!(*posted.lock().unwrap(), 1, "control: {:?}", resp.tool_calls);
+
+    // The same request, fired by the scheduler as a prompt.
+    let (handle, _, posted) = unattended_bench(Arc::new(AsksToPost(Mutex::new(0))));
+    let task = ScheduledTask::one_shot(
+        "prompt",
+        "prompt",
+        "post the note",
+        "scheduled-test",
+        now_secs() - 1,
+    );
+    let out = fire_task(&handle, task).await;
+    assert_eq!(
+        *posted.lock().unwrap(),
+        0,
+        "the scheduled turn ran a gated tool on Full autonomy alone: {out:?}"
+    );
+}
+
+/// The A2A server answers another agent with no person reading along, so its
+/// turn is unattended as well. Not a scheduler path, but the same posture.
+#[tokio::test]
+async fn an_a2a_turn_runs_unattended() {
+    use obc_a2a::{Message, TaskExecutor};
+    use obc_agent::a2a_executor::AgentExecutor;
+
+    let (handle, _, posted) = unattended_bench(Arc::new(AsksToPost(Mutex::new(0))));
+    let executor = AgentExecutor::new(handle.agent_arc(), ProviderConfig::default());
+    let task = executor.execute(Message::user_text("post the note")).await;
+    assert_eq!(
+        *posted.lock().unwrap(),
+        0,
+        "an A2A caller ran a gated tool on Full autonomy alone: {:?}",
+        task.status
     );
 }

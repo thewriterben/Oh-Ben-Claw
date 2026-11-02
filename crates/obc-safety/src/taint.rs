@@ -27,14 +27,17 @@ use crate::risk::RiskClass;
 use serde_json::Value;
 use std::sync::Mutex;
 
-/// How taint hits are handled at the chokepoint. Taint tracking is opt-in:
-/// the type default is `Off`, so it is inert until an operator turns it on.
+/// How taint hits are handled at the chokepoint. The default is `Warn`: every
+/// run pools external content and every gated call is scanned, but nothing is
+/// refused. It was `Off` until 2026-11-01, which left the guard inert for
+/// anyone who had not read this file; `Enforce` stays opt-in because the
+/// matcher is a heuristic and its false positives refuse real work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TaintMode {
-    /// No scanning (the default — opt-in feature).
-    #[default]
+    /// No scanning.
     Off,
-    /// Scan and log/count, but never refuse.
+    /// Scan and log/count, but never refuse (the default).
+    #[default]
     Warn,
     /// Refuse gated calls with tainted arguments (fail closed) unless the
     /// operator explicitly granted the tool.
@@ -43,12 +46,12 @@ pub enum TaintMode {
 
 impl TaintMode {
     /// Parse from an explicit config string (`"off" | "warn" | "enforce"`).
-    /// An unrecognized value falls back to `Warn` (the safe active mode); a
-    /// missing section is handled by the caller as `Off` (opt-in).
+    /// A missing key or an unrecognized value gives `Warn`; only an explicit
+    /// `"off"` turns scanning off.
     pub fn from_config(s: Option<&str>) -> Self {
         match s {
-            Some("off") | None => Self::Off,
-            Some("warn") => Self::Warn,
+            Some("off") => Self::Off,
+            Some("warn") | None => Self::Warn,
             Some("enforce") => Self::Enforce,
             Some(other) => {
                 tracing::warn!(mode = %other, "unknown taint_mode; using 'warn'");
@@ -298,8 +301,8 @@ mod tests {
 
     #[test]
     fn mode_parsing() {
-        assert_eq!(TaintMode::default(), TaintMode::Off, "opt-in");
-        assert_eq!(TaintMode::from_config(None), TaintMode::Off);
+        assert_eq!(TaintMode::default(), TaintMode::Warn, "on by default");
+        assert_eq!(TaintMode::from_config(None), TaintMode::Warn);
         assert_eq!(TaintMode::from_config(Some("warn")), TaintMode::Warn);
         assert_eq!(TaintMode::from_config(Some("enforce")), TaintMode::Enforce);
         assert_eq!(TaintMode::from_config(Some("off")), TaintMode::Off);
