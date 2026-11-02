@@ -1,0 +1,17 @@
+# Camera-build sdkconfig overlay for the nulllab/emakefun ESP32-S3-CAM
+# (`--features board-emakefun-s3-cam`). NOT read by a default build, and NOT
+# interchangeable with another board's -- see sdkconfig.defaults.camera-xiao-sense
+# for how ESP_IDF_SDKCONFIG_DEFAULTS selects it and why `sdkconfig.defaults` must
+# be named before it. scripts/build_camera.ps1 -Board emakefun-s3-cam does both.
+#
+# PSRAM holds the frame buffer.
+#
+# VENDOR-STATED, NOT MEASURED. The README at github.com/nulllaborg/esp32s3-cam
+# (printed 2026-08-20, on the bench 2026-11-01 as esp32s3cam.pdf) gives the chip
+# as ESP32-S3R8 -- 8 MB of octal PSRAM in the package -- and its Arduino settings
+# as "PSRAM: OPI PSRAM". Same mode as the XIAO Sense, which is measured. The first
+# boot log on this board should show `esp_psram: SPI SRAM memory test OK` and an
+# 8192K pool; write it here when it does.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y

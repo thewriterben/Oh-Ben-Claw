@@ -1158,6 +1158,47 @@
       ]
     },
     {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "emakefun-esp32-s3-cam",
+      "architecture": "ESP32-S3R8 LX7 dual-core @ 240 MHz, OV2640/OV3660 camera, microSD, 8 MB flash / 8 MB PSRAM (native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "wifi",
+        "ble",
+        "camera_capture",
+        "microsd",
+        "psram",
+        "battery"
+      ],
+      "vendor": "Emakefun",
+      "ecosystem": "ESP32-S3-CAM",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
+      "vid": 12346,
+      "pid": 4097,
+      "name": "esp32-s3-wroom-cam",
+      "architecture": "ESP32-S3-WROOM-1 LX7 dual-core @ 240 MHz, OV2640/OV5640 camera, microSD, 8 MB PSRAM (native USB; shared VID/PID)",
+      "transport": "serial",
+      "capabilities": [
+        "gpio",
+        "wifi",
+        "ble",
+        "camera_capture",
+        "microsd",
+        "psram"
+      ],
+      "vendor": "Unbranded",
+      "ecosystem": "ESP32-S3-CAM",
+      "connectors": [
+        "bare"
+      ]
+    },
+    {
       "vid": 6353,
       "pid": 37634,
       "name": "coral-usb-accelerator",

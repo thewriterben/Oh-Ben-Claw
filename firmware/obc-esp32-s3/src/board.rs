@@ -126,6 +126,70 @@ pub const LILYGO_T_CAMERA_PLUS_S3_V11: Board = Board {
     dht22_gpio: None,
 };
 
+/// nulllab/emakefun ESP32-S3-CAM (ESP32-S3R8, 8 MB flash, one native USB-C).
+///
+/// Added 2026-11-01 for the same reason as the Lilygo: the XIAO default would be
+/// destructive. Its `output_pins` `[21, 3, 7, 8]` are, here, an unbroken-out pad,
+/// the **flash LED**, camera **HREF** and camera **Y4**, and its I2C pins 5/6 are
+/// SCCB clock and VSYNC. The camera map is the ESP32-S3-EYE's (`camera.rs`).
+///
+/// `output_pins` is empty, a `TODO(source)` like the Lilygo's. The vendor
+/// README's header drawing breaks out GPIO0 (BOOT), 1, 14, 41, 42, 43, 44, 46,
+/// 47 and 48; of those, 0 and 46 are strapping pins and 43/44 are the spine
+/// UART. GPIO3 is the flash LED, which is the obvious first actuator once
+/// someone has watched it light from this firmware.
+///
+/// `i2c: None` — the only documented bus is the camera's SCCB on 4/5.
+///
+/// `has_mic: false` — the firmware's I2S mic wants GPIO2, which this board does
+/// not break out.
+///
+/// Facts from `github.com/nulllaborg/esp32s3-cam` (README, printed 2026-08-20,
+/// on the bench 2026-11-01 as `esp32s3cam.pdf`). **Not verified on metal.**
+#[allow(dead_code)] // the board this build is not; the host harness asserts all of them
+pub const EMAKEFUN_ESP32_S3_CAM: Board = Board {
+    name: "emakefun-esp32-s3-cam",
+    output_pins: &[],
+    i2c: None,
+    has_mic: false,
+    // GPIO9 is camera Y3 here (`camera.rs`).
+    dht22_gpio: None,
+};
+
+/// ESP32-S3-WROOM-1 CAM board (8 MB octal PSRAM, two USB-C: a USB-UART bridge on
+/// GPIO43/44 and native USB on 19/20). The seller's listing names no maker.
+///
+/// The XIAO default would be destructive here too: `[21, 3, 7, 8]` include the
+/// GPIO3 strapping pin (JTAG source select), camera **HREF** and camera **Y4**,
+/// and its I2C pins 5/6 are SCCB clock and VSYNC. Same camera map as the
+/// emakefun board (`camera.rs`), and nothing else in common.
+///
+/// `output_pins` is empty, a `TODO(source)`. The listing's pinout leaves 1, 14,
+/// 21, 41, 42 and 47 unlabelled beyond GPIO, marks an LED on GPIO2 and a WS2812
+/// on GPIO48, and reserves 35/36/37 for PSRAM. GPIO2 is the first candidate.
+///
+/// `i2c: None` — the only labelled bus is the camera's SCCB on 4/5.
+///
+/// `has_mic: false` — the firmware's I2S mic wants GPIO2, which is this board's
+/// LED.
+///
+/// On this board the spine UART (UART1 on GPIO43/44, `main.rs`) is wired to the
+/// bridge chip, so the status mirror comes out of the second USB-C port rather
+/// than a header. Harmless, and left alone.
+///
+/// Facts from the seller's listing (`esp32s3cam2.pdf`, on the bench
+/// 2026-11-01). Whether the module is N8R8 or N16R8 is not stated. **Not
+/// verified on metal.**
+#[allow(dead_code)] // the board this build is not; the host harness asserts all of them
+pub const ESP32_S3_WROOM_CAM: Board = Board {
+    name: "esp32-s3-wroom-cam",
+    output_pins: &[],
+    i2c: None,
+    has_mic: false,
+    // GPIO9 is camera Y3 here (`camera.rs`).
+    dht22_gpio: None,
+};
+
 /// The board this build targets. The only `#[cfg]` in this module.
 ///
 /// The XIAO remains the default because it is what the fleet's nodes are and
@@ -137,7 +201,16 @@ pub const LILYGO_T_CAMERA_PLUS_S3_V11: Board = Board {
 pub const ACTIVE: Board = WAVESHARE_ESP32_S3_TOUCH_LCD_21;
 #[cfg(feature = "board-lilygo-tcam-s3-v11")]
 pub const ACTIVE: Board = LILYGO_T_CAMERA_PLUS_S3_V11;
-#[cfg(not(any(feature = "board-waveshare-21", feature = "board-lilygo-tcam-s3-v11")))]
+#[cfg(feature = "board-emakefun-s3-cam")]
+pub const ACTIVE: Board = EMAKEFUN_ESP32_S3_CAM;
+#[cfg(feature = "board-s3-wroom-cam")]
+pub const ACTIVE: Board = ESP32_S3_WROOM_CAM;
+#[cfg(not(any(
+    feature = "board-waveshare-21",
+    feature = "board-lilygo-tcam-s3-v11",
+    feature = "board-emakefun-s3-cam",
+    feature = "board-s3-wroom-cam"
+)))]
 pub const ACTIVE: Board = XIAO_ESP32_S3;
 
 /// The `tools` array, pre-rendered.

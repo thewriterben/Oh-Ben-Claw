@@ -73,6 +73,8 @@ compile_error!(
     not(any(
         feature = "board-xiao-sense",
         feature = "board-lilygo-tcam-s3-v11",
+        feature = "board-emakefun-s3-cam",
+        feature = "board-s3-wroom-cam",
         feature = "board-unverified-map"
     ))
 ))]
@@ -80,9 +82,11 @@ compile_error!(
     "`camera` needs a board feature so the pin map is attributable. Add \
      `board-xiao-sense` (Seeed XIAO ESP32S3 Sense, pins from the vendor wiki), \
      `board-lilygo-tcam-s3-v11` (LILYGO T-CameraPlus-S3 **V1.0/V1.1 only** -- V1.2 \
-     moves VSYNC/PWDN/RESET and is a different board), or, only if you know what it \
-     is for, `board-unverified-map` (the historical unattributed set — matches no \
-     known board). See camera.rs."
+     moves VSYNC/PWDN/RESET and is a different board), `board-emakefun-s3-cam` \
+     (nulllab/emakefun ESP32-S3-CAM, 38x30 mm, one USB-C), `board-s3-wroom-cam` \
+     (ESP32-S3-WROOM-1 CAM, two USB-C), or, only if you know what it is for, \
+     `board-unverified-map` (the historical unattributed set — matches no known \
+     board). See camera.rs."
 );
 
 // Pairwise, because each pin map is a different board and picking two means the
@@ -93,6 +97,30 @@ compile_error!("pick one camera board feature, not both (xiao-sense + unverified
 compile_error!("pick one camera board feature, not both (xiao-sense + lilygo-tcam-s3-v11)");
 #[cfg(all(feature = "board-lilygo-tcam-s3-v11", feature = "board-unverified-map"))]
 compile_error!("pick one camera board feature, not both (lilygo-tcam-s3-v11 + unverified-map)");
+// The two boards added 2026-11-01 each get one line against every other board
+// (the Waveshare included, for the reason given for the Lilygo below) rather
+// than seven more pairs.
+#[cfg(all(
+    feature = "board-emakefun-s3-cam",
+    any(
+        feature = "board-xiao-sense",
+        feature = "board-lilygo-tcam-s3-v11",
+        feature = "board-s3-wroom-cam",
+        feature = "board-unverified-map",
+        feature = "board-waveshare-21"
+    )
+))]
+compile_error!("pick one board feature: `board-emakefun-s3-cam` is its own board");
+#[cfg(all(
+    feature = "board-s3-wroom-cam",
+    any(
+        feature = "board-xiao-sense",
+        feature = "board-lilygo-tcam-s3-v11",
+        feature = "board-unverified-map",
+        feature = "board-waveshare-21"
+    )
+))]
+compile_error!("pick one board feature: `board-s3-wroom-cam` is its own board");
 
 // The camera board and the board *profile* (`board.rs`) must agree, or Track 0
 // opens the wrong pins at boot. On the Lilygo V1.1 the XIAO's default output
@@ -107,12 +135,13 @@ compile_error!(
 );
 
 // The frame buffer needs PSRAM, and each board's module needs its own PSRAM
-// mode: the Sense is OCT, the Lilygo V1.1 is QUAD. A wrong or missing overlay
+// mode: the Sense is OCT, the Lilygo V1.1 is QUAD, and both boards added
+// 2026-11-01 are OCT (vendor-stated, not measured). A wrong or missing overlay
 // used to show up as a camera that initialised and never produced a frame, or
 // as a boot loop; esp-idf-sys hands the sdkconfig back as `esp_idf_*` cfgs, so
 // it is checked here instead. The overlay is chosen by
 // firmware/obc-esp32-s3-camera's manifest (Sense) or by
-// scripts/build_camera.ps1 (either board).
+// scripts/build_camera.ps1 (any board).
 #[cfg(all(feature = "camera", not(esp_idf_spiram)))]
 compile_error!(
     "`camera` without PSRAM: the sdkconfig overlay was not applied. Build from \
@@ -135,6 +164,24 @@ compile_error!(
 compile_error!(
     "`board-lilygo-tcam-s3-v11` needs QUAD PSRAM: use \
      sdkconfig.defaults.camera-lilygo-tcam-v11 (scripts/build_camera.ps1 -Board lilygo-tcam-v11)."
+);
+#[cfg(all(
+    feature = "board-emakefun-s3-cam",
+    esp_idf_spiram,
+    not(esp_idf_spiram_mode_oct)
+))]
+compile_error!(
+    "`board-emakefun-s3-cam` needs OCT PSRAM: use \
+     sdkconfig.defaults.camera-emakefun-s3-cam (scripts/build_camera.ps1 -Board emakefun-s3-cam)."
+);
+#[cfg(all(
+    feature = "board-s3-wroom-cam",
+    esp_idf_spiram,
+    not(esp_idf_spiram_mode_oct)
+))]
+compile_error!(
+    "`board-s3-wroom-cam` needs OCT PSRAM: use \
+     sdkconfig.defaults.camera-s3-wroom-cam (scripts/build_camera.ps1 -Board s3-wroom-cam)."
 );
 
 use anyhow::Context;
@@ -318,6 +365,90 @@ const PINS: CameraPins = CameraPins {
     vsync: 4,
     href: 5,
     pclk: 10,
+};
+
+/// nulllab/emakefun **ESP32-S3-CAM** (38.4 x 30.4 mm, ESP32-S3R8, one USB-C).
+///
+/// Source: the vendor README at `github.com/nulllaborg/esp32s3-cam`, printed to
+/// PDF on 2026-08-20 and put on the bench 2026-11-01 (`esp32s3cam.pdf`), table
+/// *"Camera pin"*:
+///
+/// ```text
+/// I2C_SDA 4   I2C_SCL 5   CAM_RST (blank: not wired)   VSYNC 6   HREF 7
+/// XMCLK 15   PCLK 13
+/// Y9 16  Y8 17  Y7 18  Y6 12  Y5 10  Y4 8  Y3 9  Y2 11
+/// ```
+///
+/// PWDN is not in the table at all, so it is -1 like RESET. This is the
+/// ESP32-S3-EYE's camera map exactly, and the same as `board-s3-wroom-cam`
+/// below; the two are separate features because nothing else about the boards
+/// is shared (see `board.rs`).
+///
+/// The same README gives the flash LED as GPIO3 and the TF card as 1-bit SDMMC
+/// on CMD 38 / CLK 39 / DAT0 40, and sells the board with an OV2640 or an
+/// OV3660. Neither the LED nor the card is driven here. **Not verified on
+/// metal.**
+#[cfg(feature = "board-emakefun-s3-cam")]
+const PINS: CameraPins = CameraPins {
+    // No IR-cut switch on this board.
+    ir_cut: -1,
+    ir_cut_engaged_level: 0,
+    pwdn: -1,
+    reset: -1,
+    xclk: 15,
+    sccb_sda: 4,
+    sccb_scl: 5,
+    d0: 11, // Y2
+    d1: 9,  // Y3
+    d2: 8,  // Y4
+    d3: 10, // Y5
+    d4: 12, // Y6
+    d5: 18, // Y7
+    d6: 17, // Y8
+    d7: 16, // Y9
+    vsync: 6,
+    href: 7,
+    pclk: 13,
+};
+
+/// **ESP32-S3-WROOM-1 CAM** board (57 x 28 mm, two USB-C: one through a USB-UART
+/// bridge on GPIO43/44, one native on 19/20). The seller's listing does not
+/// name a maker.
+///
+/// Source: the seller's listing, put on the bench 2026-11-01
+/// (`esp32s3cam2.pdf`), page *"ESP32-S3 Pinout"*:
+///
+/// ```text
+/// CAM_SIOD 4   CAM_SIOC 5   CAM_VYSNC 6   CAM_HREF 7   CAM_XCLK 15   CAM_PCLK 13
+/// Y9 16  Y8 17  Y7 18  Y6 12  Y5 10  Y4 8  Y3 9  Y2 11
+/// ```
+///
+/// No PWDN or RESET is labelled. The same map as `board-emakefun-s3-cam` above
+/// (the ESP32-S3-EYE's). The same page marks GPIO35/36/37 PSRAM, which is the
+/// octal-PSRAM module's reservation, an LED on GPIO2, a WS2812 on GPIO48, and
+/// the SD card on DATA 40 / CLK 39 / CMD 38. The listing offers the board with
+/// an OV2640 or an OV5640. **Not verified on metal.**
+#[cfg(feature = "board-s3-wroom-cam")]
+const PINS: CameraPins = CameraPins {
+    // No IR-cut switch on this board.
+    ir_cut: -1,
+    ir_cut_engaged_level: 0,
+    pwdn: -1,
+    reset: -1,
+    xclk: 15,
+    sccb_sda: 4,
+    sccb_scl: 5,
+    d0: 11, // Y2
+    d1: 9,  // Y3
+    d2: 8,  // Y4
+    d3: 10, // Y5
+    d4: 12, // Y6
+    d5: 18, // Y7
+    d6: 17, // Y8
+    d7: 16, // Y9
+    vsync: 6,
+    href: 7,
+    pclk: 13,
 };
 
 /// The historical map. **Matches no known board** — see the module header for how
@@ -554,6 +685,13 @@ pub fn init() -> anyhow::Result<()> {
     // Halving XCLK halves the OV2640's pixel clock and event rate. Verified
     // 2026-09-26 on 002: no overflow in two minutes, then 20/20 frames. The
     // Lilygo's OV5640 captured cleanly at 20 MHz and is left alone.
+    //
+    // The two boards added 2026-11-01 get 20 MHz too, unmeasured. Either can
+    // carry an OV2640, and the overflow above is that sensor's event rate, not
+    // the XIAO's; if `EV-VSYNC-OVF` shows up on one, add it to the 10 MHz arm.
+    // The bench's loose OV5640 module (`cammod.pdf`) has a ~100 mm FPC, longer
+    // than any cable measured so far, which is a second reason a lower clock
+    // may be needed there.
     #[cfg(feature = "board-xiao-sense")]
     const XCLK_HZ: i32 = 10_000_000;
     #[cfg(not(feature = "board-xiao-sense"))]

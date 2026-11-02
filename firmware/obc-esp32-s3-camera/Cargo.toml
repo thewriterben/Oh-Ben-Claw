@@ -56,6 +56,8 @@ default = ["camera"]
 camera = []
 board-xiao-sense = []
 board-lilygo-tcam-s3-v11 = []
+board-emakefun-s3-cam = []
+board-s3-wroom-cam = []
 board-unverified-map = []
 board-waveshare-21 = []
 
@@ -69,11 +71,11 @@ path = "../obc-esp32-s3/src/main.rs"
 # Paths here resolve against this crate's directory (the workspace dir).
 #
 # The Sense overlay is the default because two of the three camera boards on the
-# bench are Senses. The Lilygo overrides it through ESP_IDF_SDKCONFIG_DEFAULTS
-# (the environment wins over this table), which build_camera.ps1 sets. Getting
-# it wrong is a compile_error in camera.rs, not a boot loop: the PSRAM mode
-# comes back to Rust as `esp_idf_spiram_mode_*` cfgs and is checked against the
-# board feature.
+# bench are Senses. The Lilygo and the two boards added 2026-11-01 override it
+# through ESP_IDF_SDKCONFIG_DEFAULTS (the environment wins over this table),
+# which build_camera.ps1 sets. Getting it wrong is a compile_error in camera.rs,
+# not a boot loop: the PSRAM mode comes back to Rust as `esp_idf_spiram_mode_*`
+# cfgs and is checked against the board feature.
 [package.metadata.esp-idf-sys]
 esp_idf_sdkconfig_defaults = [
     "../obc-esp32-s3/sdkconfig.defaults",
