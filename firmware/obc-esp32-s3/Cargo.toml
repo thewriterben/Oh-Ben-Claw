@@ -55,6 +55,18 @@ board-xiao-sense = []
 # OCT) and selects its own board profile in board.rs, because the XIAO's default
 # output pins are this board's SD_CS, camera RESET, XCLK and D6.
 board-lilygo-tcam-s3-v11 = []
+# nulllab/emakefun ESP32-S3-CAM (ESP32-S3R8, one native USB-C). Camera pins from
+# the vendor README (github.com/nulllaborg/esp32s3-cam, printed 2026-08-20, on
+# the bench 2026-11-01), cited in camera.rs: the ESP32-S3-EYE map. Needs
+# `sdkconfig.defaults.camera-emakefun-s3-cam` (OCT PSRAM) and selects its own
+# board profile in board.rs. Not verified on metal.
+board-emakefun-s3-cam = []
+# ESP32-S3-WROOM-1 CAM board (two USB-C, maker not named by the seller). Camera
+# pins from the seller's pinout page (on the bench 2026-11-01), cited in
+# camera.rs: the same ESP32-S3-EYE map as above, a different board otherwise.
+# Needs `sdkconfig.defaults.camera-s3-wroom-cam` (OCT PSRAM) and selects its own
+# board profile in board.rs. Not verified on metal.
+board-s3-wroom-cam = []
 # The historical, unattributed pin map -- matches NO known board. Kept for the
 # forensic trail in camera.rs rather than deleted, quarantined behind its own
 # feature so nothing selects it by accident. Do not use it to bring up hardware.

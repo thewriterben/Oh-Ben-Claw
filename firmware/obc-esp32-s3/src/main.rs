@@ -161,9 +161,16 @@ mod sensors;
 /// I2S microphone driver (loudness/RMS).
 // On the Waveshare 2.1 build the I2S init is compiled out (GPIO0 = DHT22,
 // GPIO1/2 = LCD), so the constructor path is intentionally unused there. Same on
-// the Lilygo T-CameraPlus-S3 V1.0/V1.1, where GPIO1/2 are the camera's SCCB.
+// the Lilygo T-CameraPlus-S3 V1.0/V1.1, where GPIO1/2 are the camera's SCCB, and
+// on the two ESP32-S3-EYE-map camera boards, where GPIO2 is an LED or not broken
+// out (`board.rs`).
 #[cfg_attr(
-    any(feature = "board-waveshare-21", feature = "board-lilygo-tcam-s3-v11"),
+    any(
+        feature = "board-waveshare-21",
+        feature = "board-lilygo-tcam-s3-v11",
+        feature = "board-emakefun-s3-cam",
+        feature = "board-s3-wroom-cam"
+    ),
     allow(dead_code)
 )]
 mod audio;
@@ -229,12 +236,19 @@ const _: () = assert!(
     BOARD.has_mic
         == cfg!(not(any(
             feature = "board-waveshare-21",
-            feature = "board-lilygo-tcam-s3-v11"
+            feature = "board-lilygo-tcam-s3-v11",
+            feature = "board-emakefun-s3-cam",
+            feature = "board-s3-wroom-cam"
         ))),
     "board.rs says has_mic but the I2S init cfg disagrees (or vice versa)"
 );
 const _: () = assert!(
-    BOARD.i2c.is_some() == cfg!(not(feature = "board-lilygo-tcam-s3-v11")),
+    BOARD.i2c.is_some()
+        == cfg!(not(any(
+            feature = "board-lilygo-tcam-s3-v11",
+            feature = "board-emakefun-s3-cam",
+            feature = "board-s3-wroom-cam"
+        ))),
     "board.rs declares an I2C bus that the init cfg skips (or vice versa)"
 );
 
@@ -776,7 +790,17 @@ fn main() -> anyhow::Result<()> {
     // have opened a bus on GPIO5/6, which on that board are HREF and camera D7,
     // while `capabilities` announced `(-1, -1)`. The const assertion below keeps
     // this cfg and `BOARD.i2c` from drifting apart.
-    #[cfg(all(not(feature = "camera"), not(feature = "board-lilygo-tcam-s3-v11")))]
+    //
+    // The two ESP32-S3-EYE-map boards (2026-11-01) are the same case: GPIO5 is
+    // their SCCB clock and GPIO6 their VSYNC.
+    #[cfg(all(
+        not(feature = "camera"),
+        not(any(
+            feature = "board-lilygo-tcam-s3-v11",
+            feature = "board-emakefun-s3-cam",
+            feature = "board-s3-wroom-cam"
+        ))
+    ))]
     {
         use esp_idf_svc::hal::i2c::config::Config as I2cConfig;
         use esp_idf_svc::hal::i2c::I2cDriver;
@@ -813,7 +837,12 @@ fn main() -> anyhow::Result<()> {
     // that had just reported success -- a failure that would have looked like
     // anything but an I2S driver. `BOARD.has_mic` is false there and the
     // const assertion below makes the two agree.
-    #[cfg(not(any(feature = "board-waveshare-21", feature = "board-lilygo-tcam-s3-v11")))]
+    #[cfg(not(any(
+        feature = "board-waveshare-21",
+        feature = "board-lilygo-tcam-s3-v11",
+        feature = "board-emakefun-s3-cam",
+        feature = "board-s3-wroom-cam"
+    )))]
     {
         use esp_idf_svc::hal::i2s::{config, I2sDriver};
         let i2s_cfg =

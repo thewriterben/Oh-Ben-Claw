@@ -1313,6 +1313,52 @@ pub static KNOWN_BOARDS: &[BoardInfo] = &[
         ecosystem: "T-Camera",
         connectors: &[Connector::Bare],
     },
+    // ── nulllab/emakefun ESP32-S3-CAM ─────────────────────────────────────────
+    // 38.4 x 30.4 mm. ESP32-S3R8 (8 MB octal PSRAM in the package), 8 MB flash,
+    // DVP camera socket (sold with OV2640 or OV3660) on the ESP32-S3-EYE pin map,
+    // 1-bit TF card, flash LED on GPIO3, PH2.0 battery input with charger, one
+    // USB-C on the ESP32-S3's own USB (GPIO19/20) -- no bridge chip, hence the
+    // shared Espressif id. Facts from the vendor README at
+    // github.com/nulllaborg/esp32s3-cam (printed 2026-08-20), on the bench
+    // 2026-11-01; not plugged in yet. Firmware: `board-emakefun-s3-cam`.
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "emakefun-esp32-s3-cam",
+        architecture: Some(
+            "ESP32-S3R8 LX7 dual-core @ 240 MHz, OV2640/OV3660 camera, microSD, 8 MB flash / 8 MB PSRAM (native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "wifi", "ble", "camera_capture", "microsd", "psram", "battery",
+        ],
+        vendor: "Emakefun",
+        ecosystem: "ESP32-S3-CAM",
+        connectors: &[Connector::Bare],
+    },
+    // ── ESP32-S3-WROOM-1 CAM board ────────────────────────────────────────────
+    // 57 x 28 mm, maker not named by the seller. ESP32-S3-WROOM-1 with octal
+    // PSRAM (GPIO35-37 marked PSRAM on the pinout), DVP camera socket (sold with
+    // OV2640 or OV5640) on the ESP32-S3-EYE pin map, TF card, LED on GPIO2,
+    // WS2812 on GPIO48. Two USB-C: one native (keyed here), one through a
+    // USB-UART bridge on GPIO43/44 whose chip the listing does not name -- so no
+    // row for that id until one is plugged in and read. Facts from the seller's
+    // listing, on the bench 2026-11-01. Firmware: `board-s3-wroom-cam`.
+    BoardInfo {
+        vid: 0x303a,
+        pid: 0x1001,
+        name: "esp32-s3-wroom-cam",
+        architecture: Some(
+            "ESP32-S3-WROOM-1 LX7 dual-core @ 240 MHz, OV2640/OV5640 camera, microSD, 8 MB PSRAM (native USB; shared VID/PID)",
+        ),
+        transport: "serial",
+        capabilities: &[
+            "gpio", "wifi", "ble", "camera_capture", "microsd", "psram",
+        ],
+        vendor: "Unbranded",
+        ecosystem: "ESP32-S3-CAM",
+        connectors: &[Connector::Bare],
+    },
     // ── Hardware-scout 2026-06-29: AI-accelerator boards ──────────────────────
     // Edge-inference nodes (System 1 tier). These run local inference on a
     // dedicated accelerator and expose it as a tool over the spine via EdgeAgent;
@@ -3151,6 +3197,16 @@ mod tests {
         // A Qwiic/STEMMA QT module plugs straight into the Presto's Qw/ST port.
         let scd = lookup_accessory("scd41").unwrap();
         assert!(board_accepts_accessory(b, scd));
+    }
+
+    #[test]
+    fn camera_boards_2026_11_01_present_by_name() {
+        for n in ["emakefun-esp32-s3-cam", "esp32-s3-wroom-cam"] {
+            let b = KNOWN_BOARDS.iter().find(|b| b.name == n).unwrap();
+            assert_eq!((b.vid, b.pid), (0x303a, 0x1001), "{n}");
+            assert!(b.capabilities.contains(&"camera_capture"), "{n}");
+            assert!(b.capabilities.contains(&"psram"), "{n}");
+        }
     }
 
     #[test]
