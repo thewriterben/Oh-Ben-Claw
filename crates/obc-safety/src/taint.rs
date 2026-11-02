@@ -129,6 +129,18 @@ impl TaintPool {
         self.len() == 0
     }
 
+    /// The sources pooled so far, each once, in the order first seen.
+    pub fn sources(&self) -> Vec<String> {
+        let chunks = self.chunks.lock().unwrap_or_else(|p| p.into_inner());
+        let mut out: Vec<String> = Vec::new();
+        for c in chunks.iter() {
+            if !out.contains(&c.source) {
+                out.push(c.source.clone());
+            }
+        }
+        out
+    }
+
     fn find_str(&self, needle_lc: &str) -> Option<String> {
         let chunks = self.chunks.lock().unwrap_or_else(|p| p.into_inner());
         chunks
@@ -286,6 +298,16 @@ mod tests {
             pool.add("src", &format!("chunk number {i} content"));
         }
         assert_eq!(pool.len(), MAX_CHUNKS);
+    }
+
+    #[test]
+    fn sources_are_listed_once_in_order() {
+        let pool = TaintPool::new();
+        pool.add("web_fetch", "one");
+        pool.add("mcp:notes", "two");
+        pool.add("web_fetch", "three");
+        pool.add("ignored", "  ");
+        assert_eq!(pool.sources(), vec!["web_fetch", "mcp:notes"]);
     }
 
     #[test]

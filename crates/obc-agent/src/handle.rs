@@ -261,6 +261,11 @@ impl AgentHandle {
         self.agent.tool_risk(name)
     }
 
+    /// Whether a registered tool's output is untrusted content (Track 0 taint).
+    pub fn tool_output_is_external(&self, name: &str) -> bool {
+        self.agent.tool_output_is_external(name)
+    }
+
     /// Hot-resync the agent's skill tools from the forge (Phase 16). Returns
     /// `(added, removed, shadowed)`.
     pub fn sync_skills(&self, forge: &obc_skill_forge::SkillForge) -> (usize, usize, usize) {

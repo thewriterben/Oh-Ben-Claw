@@ -7,7 +7,7 @@
 //! persist in `scheduler.db` and are fired by the scheduler loop; the result of
 //! each run is delivered through the notifier.
 
-use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult};
+use crate::traits::{BlastRadius, RiskClass, Tool, ToolResult, TAINTED_BY_ARG};
 use async_trait::async_trait;
 use obc_scheduler::{nl, ScheduledTask, Scheduler, TaskKind, Tz};
 use serde_json::{json, Value};
@@ -106,6 +106,9 @@ impl ScheduleTool {
         if let Some(p) = phrase {
             task = task.with_phrase(p);
         }
+        // Set by the agent, never by the model: the turn asking for this task
+        // read untrusted content, and the fired turn starts out tainted by it.
+        task.tainted_by = str_arg(args, TAINTED_BY_ARG);
         let Some(next) = task.next_run else {
             return Ok(ToolResult::err("that schedule has no next run"));
         };
@@ -206,6 +209,10 @@ impl Tool for ScheduleTool {
             blast: BlastRadius::Low,
             physical: false,
         }
+    }
+
+    fn defers_call(&self) -> bool {
+        true
     }
 
     fn parameters_schema(&self) -> Value {
