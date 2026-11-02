@@ -55,6 +55,38 @@ pub fn turn_message(task_name: &str, prompt: &str, tool_report: Option<&str>) ->
     m
 }
 
+/// What one dispatch ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ran {
+    Task(Outcome),
+    Goal(crate::goals::TickOutcome),
+}
+
+/// The scheduler loop's dispatch: a task that ticks a standing goal goes to
+/// [`crate::goals::tick`], anything else to [`run_scheduled`]. With goals off
+/// (`goals` is `None`) a goal's task is skipped, not run as a reminder: that
+/// would hand the model the goal's text as an order to do it now. `goal-` ids
+/// are the goals' own; the `schedule` tool does not hand them out.
+pub async fn dispatch(
+    handle: &AgentHandle,
+    d: TaskDispatch,
+    notifier: Option<Arc<Notifier>>,
+    goals: Option<&crate::goals::Goals>,
+) -> Ran {
+    match goals {
+        Some(g) if g.is_goal(&d.task_id) => {
+            Ran::Goal(crate::goals::tick(handle, g, d, notifier).await)
+        }
+        None if obc_scheduler::is_goal_task(&d.task_id) => Ran::Task(Outcome {
+            task_id: d.task_id,
+            task_name: d.task_name,
+            text: "standing goals are off ([scheduler].goals = false)".to_string(),
+            ok: false,
+        }),
+        _ => Ran::Task(run_scheduled(handle, d, notifier).await),
+    }
+}
+
 /// Run one dispatch to completion: tool, then prompt, then delivery.
 ///
 /// The tool goes through [`AgentHandle::execute_tool_unattended`], the same

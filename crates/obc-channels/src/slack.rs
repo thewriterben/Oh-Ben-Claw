@@ -441,7 +441,7 @@ impl SlackChannel {
 }
 
 /// POST `body` to Web API `method` as the bot; `ok: false` is an error.
-async fn slack_call(
+pub(crate) async fn slack_call(
     http: &reqwest::Client,
     bot_token: &str,
     method: &str,
