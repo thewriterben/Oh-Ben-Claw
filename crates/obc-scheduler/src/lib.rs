@@ -43,7 +43,10 @@
 //! }).unwrap();
 //! ```
 
+pub mod goals;
 pub mod nl;
+
+pub use goals::{is_goal_task, Goal, GoalStatus, GOAL_PREFIX};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
@@ -433,6 +436,9 @@ impl Scheduler {
              WHERE enabled = 1;",
         )
         .context("Failed to initialize scheduler database schema")?;
+        // 2026-11-02: standing goals, ticked by a task with the goal's id.
+        conn.execute_batch(goals::DDL)
+            .context("Failed to initialize the goals table")?;
 
         // 2026-09-11: zone, tool, tool_args, phrase. Added in place so an
         // existing scheduler.db keeps its rows (all UTC, prompt-only).

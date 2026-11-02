@@ -96,7 +96,12 @@ impl ScheduleTool {
             return Ok(ToolResult::err(e));
         }
 
-        let id = str_arg(args, "id").unwrap_or_else(|| slug(&name));
+        let mut id = str_arg(args, "id").unwrap_or_else(|| slug(&name));
+        // `goal-` ids belong to standing goals (2026-11-02): the loop sends
+        // those to a goal's check, so a reminder named "Goal …" must not take one.
+        if obc_scheduler::is_goal_task(&id) {
+            id = format!("task-{id}");
+        }
         let session =
             str_arg(args, "session").unwrap_or_else(|| format!("scheduled-{}", slug(&name)));
         let mut task = ScheduledTask::from_kind(&id, &name, &prompt, &session, kind, self.tz);
@@ -444,5 +449,23 @@ mod tests {
         assert_eq!(slug("Printer check"), "printer-check");
         assert_eq!(slug("  ??? "), "task");
         assert_eq!(slug("A/B: test!"), "a-b-test");
+    }
+
+    #[tokio::test]
+    async fn a_reminder_never_takes_a_goal_id() {
+        let t = tool();
+        let r = t
+            .execute(json!({"action": "create", "name": "Goal review", "when": "every day at 9", "prompt": "review goals"}))
+            .await
+            .unwrap();
+        assert!(r.success, "{:?}", r.error);
+        let ids: Vec<String> = t
+            .scheduler
+            .list_tasks()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, ["task-goal-review"]);
     }
 }

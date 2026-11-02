@@ -301,7 +301,9 @@ world_memory = true
 
 # What the agent is shown about its own beliefs, every turn. Costs context —
 # roughly 2 KB at these settings — and is the difference between an agent that
-# knows what it believes and one that must think to ask.
+# knows what it believes and one that must think to ask. It also turns on the
+# chat commands "why do you believe X" and "forget that", answered from world
+# memory without a model turn.
 [perception.context]
 enabled = true
 max_facts = 24
@@ -583,6 +585,13 @@ roots = ["~/.oh-ben-claw/workspace"]
 enabled = true
 tick_interval_secs = 30
 timezone = "local"              # "local" or "utc"; phrases and cron are read here
+# Standing goals (the `goal` tool): "keep the greenhouse between 18 and 24 °C
+# this week". Each check is one unattended turn; gated tools in it go through
+# approval like any scheduled task. Progress notes go to world memory, and the
+# owner chat hears about it only when something changed or the goal is met.
+goals = true
+goal_every = "every 30 minutes" # cadence when none is named; must repeat
+goal_history = 5                # earlier progress notes shown to each check
 
 # ── Safety (Track 0) ─────────────────────────────────────────────────────────
 # Deterministic, model-independent limits on physical actuation. These are

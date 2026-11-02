@@ -5,8 +5,10 @@
 //! LLM, and repeats until the model produces a final text response.
 
 pub mod a2a_executor;
+pub mod beliefs;
 pub mod delegation_tools;
 pub mod edge;
+pub mod goals;
 pub mod handle;
 pub mod judge;
 pub mod notify;
@@ -179,10 +181,14 @@ pub struct Agent {
     safety: Option<Arc<SafetyGate>>,
     /// Track 0: tamper-evident audit log of physical-action decisions.
     auditor: Option<Arc<Mutex<ActionAuditor>>>,
-    /// World memory, for the state preamble. Read-only from here: the agent's own
-    /// writes go through the `world_memory` tool, which stamps provenance the agent
-    /// cannot forge.
+    /// World memory, for the state preamble and the chat belief commands. The
+    /// agent's own writes go through the `world_memory` tool, which stamps
+    /// provenance the agent cannot forge; the one write from here is the
+    /// operator's "forget that" ([`beliefs`]), an operator closure.
     world: Option<Arc<obc_memory::world::WorldMemory>>,
+    /// Per session, the belief the last "why do you believe" answered about:
+    /// what a following "forget that" means. Any other message clears it.
+    belief_referents: Mutex<HashMap<String, String>>,
     /// How much of that state to render, and which.
     world_context: world_context::WorldContextConfig,
     /// Phase 16: when attached, each run is captured as an `Episode` for
@@ -391,9 +397,10 @@ impl Agent {
             // saw before, so this cannot change behaviour for a caller that has not
             // asked for it.
             world: None,
+            belief_referents: Mutex::new(HashMap::new()),
             world_context: world_context::WorldContextConfig::default(),
             trajectory: None,
-            trajectory_skip: vec!["scheduled-".to_string()],
+            trajectory_skip: vec!["scheduled-".to_string(), "goal-".to_string()],
             trust: None,
             approval: None,
             experience_k: None,
@@ -1149,6 +1156,28 @@ impl Agent {
     }
 
     async fn process_as(
+        &self,
+        session_id: &str,
+        user_message: &str,
+        provider_config: &obc_providers::ProviderConfig,
+        presence: Presence,
+    ) -> Result<AgentResponse> {
+        // "why do you believe X" / "forget that" are the operator's, so only an
+        // attended turn is read for them; they are answered from world memory.
+        if presence == Presence::Attended {
+            if let Some(r) = self.belief_command(session_id, user_message)? {
+                return Ok(r);
+            }
+        }
+        TURN_SESSION
+            .scope(
+                session_id.to_string(),
+                self.run_turn(session_id, user_message, provider_config, presence),
+            )
+            .await
+    }
+
+    async fn run_turn(
         &self,
         session_id: &str,
         user_message: &str,
@@ -2636,6 +2665,16 @@ tokio::task_local! {
     /// What started the unattended turn this task runs, named on the prompt
     /// a gated call sends to chat while it waits for approval.
     static UNATTENDED_ORIGIN: String;
+    /// The session of the turn this task runs (2026-11-02).
+    static TURN_SESSION: String;
+}
+
+/// The session whose turn is running, for a tool that must know where it was
+/// asked from: the `goal` tool takes a goal's owner chat from it, never from
+/// an argument the model could fill in. `None` outside a turn (a tool called
+/// straight from the gateway, MCP or a peer).
+pub fn current_session() -> Option<String> {
+    TURN_SESSION.try_with(String::clone).ok()
 }
 
 /// Run `fut` with `origin` (`"scheduled task 'open-gate'"`, `"an A2A call"`)

@@ -792,7 +792,7 @@ impl TelegramNotifyChannel {
     /// already read `⏰ name: …`), prefixed for reflex escalations so a phone
     /// notification says where it came from.
     pub fn text_for(esc: &Escalation) -> String {
-        if esc.reason.starts_with('⏰') {
+        if esc.reason.starts_with('⏰') || esc.reason.starts_with('🎯') {
             esc.reason.clone()
         } else {
             format!("OBC: {}", esc.reason)
@@ -800,33 +800,42 @@ impl TelegramNotifyChannel {
     }
 
     async fn send_plain(&self, chat_id: i64, text: &str) -> Result<()> {
-        let url = format!("{}/sendMessage", self.api_base);
-        for chunk in chunk_text(text, 4000) {
-            let body = SendMessageRequest {
-                chat_id,
-                text: chunk,
-                parse_mode: None,
-                reply_to_message_id: None,
-            };
-            let resp: TgResponse<serde_json::Value> = self
-                .http
-                .post(&url)
-                .json(&body)
-                .send()
-                .await
-                .context("Telegram sendMessage HTTP error")?
-                .json()
-                .await
-                .context("Telegram sendMessage JSON parse error")?;
-            if !resp.ok {
-                anyhow::bail!(
-                    "Telegram sendMessage refused: {}",
-                    resp.description.as_deref().unwrap_or("unknown")
-                );
-            }
-        }
-        Ok(())
+        send_plain(&self.http, &self.api_base, chat_id, text).await
     }
+}
+
+/// Send `text` to one chat as plain messages of at most 4,000 characters.
+pub(crate) async fn send_plain(
+    http: &reqwest::Client,
+    api_base: &str,
+    chat_id: i64,
+    text: &str,
+) -> Result<()> {
+    let url = format!("{api_base}/sendMessage");
+    for chunk in chunk_text(text, 4000) {
+        let body = SendMessageRequest {
+            chat_id,
+            text: chunk,
+            parse_mode: None,
+            reply_to_message_id: None,
+        };
+        let resp: TgResponse<serde_json::Value> = http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .context("Telegram sendMessage HTTP error")?
+            .json()
+            .await
+            .context("Telegram sendMessage JSON parse error")?;
+        if !resp.ok {
+            anyhow::bail!(
+                "Telegram sendMessage refused: {}",
+                resp.description.as_deref().unwrap_or("unknown")
+            );
+        }
+    }
+    Ok(())
 }
 
 #[async_trait]
