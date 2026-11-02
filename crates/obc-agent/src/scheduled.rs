@@ -91,8 +91,9 @@ pub fn turn_message(task_name: &str, prompt: &str, tool_report: Option<&str>) ->
 /// **Approval in chat (2026-11-01).** A gated call that needs approval waits
 /// for an answer from a chat channel with approvers, for at most
 /// `[autonomy].approval_wait_secs`, and the prompt names this task. The
-/// scheduler loop runs one dispatch at a time, so the tasks due after it wait
-/// too.
+/// scheduler loop runs dispatches concurrently (2026-11-02, up to
+/// `obc_scheduler::MAX_CONCURRENT_DISPATCHES`), so the tasks due after it go
+/// ahead; only this task waits, and it is not started again until it finishes.
 pub async fn run_scheduled(
     handle: &AgentHandle,
     d: TaskDispatch,

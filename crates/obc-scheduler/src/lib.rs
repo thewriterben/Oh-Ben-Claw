@@ -50,6 +50,7 @@ use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 use cron::Schedule;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -676,22 +677,57 @@ pub struct TaskDispatch {
     pub tainted_by: Option<String>,
 }
 
+/// How many dispatches the scheduler loop runs at once.
+///
+/// A dispatch can wait minutes for an approval tap
+/// (`[autonomy].approval_wait_secs`), so one slot per waiting task would let a
+/// burst of gated tasks hold everything else; four leaves room for ordinary
+/// tasks while a couple wait, and bounds how many agent turns the scheduler
+/// starts at once on a small host. A due task that finds every slot taken is
+/// left due and goes out on a later tick, earliest-due first.
+pub const MAX_CONCURRENT_DISPATCHES: usize = 4;
+
 /// Run the scheduler loop, dispatching due tasks via the provided callback.
 ///
 /// This function runs indefinitely and should be spawned as a background task.
 /// The callback receives a `TaskDispatch` for each due task.
+///
+/// Dispatches run concurrently, up to [`MAX_CONCURRENT_DISPATCHES`], so a slow
+/// one no longer holds up the tasks due after it. The same task never runs
+/// twice at once: a task still running when it comes due again is deferred,
+/// left due and uncounted, and runs once on the first tick after it finishes;
+/// missed occurrences collapse into that one run. Dispatches belong to the
+/// loop: aborting the loop aborts the ones in flight.
 pub async fn run_scheduler_loop<F, Fut>(
     scheduler: Arc<Scheduler>,
     tick_interval_secs: u64,
     on_dispatch: F,
 ) where
     F: Fn(TaskDispatch) -> Fut + Send + Sync + 'static,
-    Fut: std::future::Future<Output = ()> + Send,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(tick_interval_secs));
+    let mut in_flight = tokio::task::JoinSet::new();
+    // Which scheduled task each dispatch in flight is running.
+    let mut running: HashMap<tokio::task::Id, String> = HashMap::new();
 
     loop {
         interval.tick().await;
+        while let Some(done) = in_flight.try_join_next_with_id() {
+            let id = match done {
+                Ok((id, ())) => id,
+                Err(e) => {
+                    if e.is_panic() {
+                        tracing::error!(
+                            task_id = running.get(&e.id()).map(String::as_str).unwrap_or("?"),
+                            "Scheduled task dispatch panicked"
+                        );
+                    }
+                    e.id()
+                }
+            };
+            running.remove(&id);
+        }
         let now = now_ts();
 
         let due = match scheduler.due_tasks(now) {
@@ -703,6 +739,20 @@ pub async fn run_scheduler_loop<F, Fut>(
         };
 
         for task in due {
+            if running.values().any(|id| *id == task.id) {
+                tracing::debug!(
+                    task_id = %task.id,
+                    "Scheduled task still running; deferred"
+                );
+                continue;
+            }
+            if running.len() >= MAX_CONCURRENT_DISPATCHES {
+                tracing::info!(
+                    running = running.len(),
+                    "Scheduler dispatch limit reached; remaining due tasks wait"
+                );
+                break;
+            }
             tracing::info!(
                 task_id = %task.id,
                 task_name = %task.name,
@@ -720,8 +770,9 @@ pub async fn run_scheduler_loop<F, Fut>(
                 tainted_by: task.tainted_by.clone(),
             };
 
-            // Advance *before* running: a slow or failing dispatch must not make
-            // the next tick find the same task still due and run it twice.
+            // Advance *before* running, in due order: the next run is counted
+            // from when this one started, and a dispatch that fails or panics
+            // still leaves the task advanced.
             if let Err(e) = scheduler.mark_run(&task.id) {
                 tracing::error!(
                     task_id = %task.id,
@@ -730,7 +781,8 @@ pub async fn run_scheduler_loop<F, Fut>(
                 );
             }
 
-            on_dispatch(dispatch).await;
+            let handle = in_flight.spawn(on_dispatch(dispatch));
+            running.insert(handle.id(), task.id);
         }
     }
 }
@@ -1015,6 +1067,128 @@ mod tests_2026_09_11 {
         let t = sched.get_task("once").unwrap().unwrap();
         assert!(!t.enabled);
         assert_eq!(t.run_count, 1);
+        h.abort();
+    }
+
+    use std::time::Duration;
+    use tokio::sync::{mpsc, Semaphore};
+
+    /// Run the loop with a dispatch that reports each task id on the returned
+    /// channel as it starts, then, for an id in `slow`, holds until a permit
+    /// is added to `gate` (one permit lets exactly one slow dispatch finish).
+    fn spawn_loop(
+        sched: &Arc<Scheduler>,
+        slow: &'static [&'static str],
+        gate: &Arc<Semaphore>,
+    ) -> (tokio::task::JoinHandle<()>, mpsc::UnboundedReceiver<String>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let gate = Arc::clone(gate);
+        let h = tokio::spawn(run_scheduler_loop(Arc::clone(sched), 1, move |d| {
+            let tx = tx.clone();
+            let gate = Arc::clone(&gate);
+            async move {
+                let _ = tx.send(d.task_id.clone());
+                if slow.contains(&d.task_id.as_str()) {
+                    gate.acquire().await.unwrap().forget();
+                }
+            }
+        }));
+        (h, rx)
+    }
+
+    async fn next_start(rx: &mut mpsc::UnboundedReceiver<String>, within_secs: u64) -> String {
+        tokio::time::timeout(Duration::from_secs(within_secs), rx.recv())
+            .await
+            .expect("a dispatch started in time")
+            .unwrap()
+    }
+
+    /// A dispatch waiting on something slow (an approval tap, say) used to
+    /// hold every task due after it, because the loop awaited each dispatch
+    /// before starting the next. Fails on that serial loop: `fast` never starts.
+    #[tokio::test]
+    async fn a_slow_dispatch_does_not_hold_up_the_next_due_task() {
+        let sched = Scheduler::new(":memory:").unwrap();
+        let now = now_ts();
+        // `slow` is due first, so the loop reaches it first.
+        sched
+            .add_task(ScheduledTask::one_shot("slow", "Slow", "", "s", now - 10))
+            .unwrap();
+        sched
+            .add_task(ScheduledTask::one_shot("fast", "Fast", "", "s", now - 5))
+            .unwrap();
+        let gate = Arc::new(Semaphore::new(0));
+        let (h, mut rx) = spawn_loop(&sched, &["slow"], &gate);
+
+        assert_eq!(next_start(&mut rx, 5).await, "slow");
+        assert_eq!(
+            next_start(&mut rx, 3).await,
+            "fast",
+            "the second due task waited behind the slow one"
+        );
+        // Both were advanced when they started, the slow one included.
+        assert_eq!(sched.get_task("slow").unwrap().unwrap().run_count, 1);
+        assert_eq!(sched.get_task("fast").unwrap().unwrap().run_count, 1);
+        gate.add_permits(1);
+        h.abort();
+    }
+
+    /// The control: the same task is not started a second time while it is
+    /// still running, even though it comes due again every second. It is
+    /// deferred, not skipped: once the first run finishes, it runs again.
+    #[tokio::test]
+    async fn a_task_still_running_is_not_started_again_until_it_finishes() {
+        let sched = Scheduler::new(":memory:").unwrap();
+        sched
+            .add_task(ScheduledTask::interval("every", "Every", "", "s", 1))
+            .unwrap();
+        let gate = Arc::new(Semaphore::new(0));
+        let (h, mut rx) = spawn_loop(&sched, &["every"], &gate);
+
+        assert_eq!(next_start(&mut rx, 5).await, "every");
+        let doubled = tokio::time::timeout(Duration::from_millis(3_500), rx.recv()).await;
+        assert!(doubled.is_err(), "started again while still running");
+        let t = sched.get_task("every").unwrap().unwrap();
+        assert_eq!(t.run_count, 1, "a deferred occurrence was counted as a run");
+        assert!(t.is_due(now_ts()), "deferred, so still due");
+
+        gate.add_permits(1);
+        assert_eq!(next_start(&mut rx, 3).await, "every");
+        assert_eq!(sched.get_task("every").unwrap().unwrap().run_count, 2);
+        gate.add_permits(1);
+        h.abort();
+    }
+
+    /// No more than [`MAX_CONCURRENT_DISPATCHES`] run at once. The task that
+    /// finds every slot taken stays due and unadvanced, and starts when one
+    /// frees up.
+    #[tokio::test]
+    async fn dispatches_beyond_the_limit_wait_for_a_free_slot() {
+        let sched = Scheduler::new(":memory:").unwrap();
+        let now = now_ts();
+        const IDS: [&str; MAX_CONCURRENT_DISPATCHES + 1] = ["t0", "t1", "t2", "t3", "t4"];
+        for (i, id) in IDS.iter().enumerate() {
+            let due = now - 20 + i as u64;
+            sched
+                .add_task(ScheduledTask::one_shot(*id, *id, "", "s", due))
+                .unwrap();
+        }
+        let gate = Arc::new(Semaphore::new(0));
+        let (h, mut rx) = spawn_loop(&sched, &IDS, &gate);
+
+        let mut started = Vec::new();
+        for _ in 0..MAX_CONCURRENT_DISPATCHES {
+            started.push(next_start(&mut rx, 5).await);
+        }
+        assert_eq!(started, IDS[..MAX_CONCURRENT_DISPATCHES], "earliest due first");
+        let over = tokio::time::timeout(Duration::from_millis(2_500), rx.recv()).await;
+        assert!(over.is_err(), "ran more than the limit at once");
+        let last = sched.get_task("t4").unwrap().unwrap();
+        assert!(last.enabled && last.run_count == 0, "advanced without running");
+
+        gate.add_permits(1);
+        assert_eq!(next_start(&mut rx, 3).await, "t4");
+        gate.add_permits(MAX_CONCURRENT_DISPATCHES);
         h.abort();
     }
 }
