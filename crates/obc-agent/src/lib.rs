@@ -1199,6 +1199,7 @@ impl Agent {
         // scheduled task starts with what it inherited (`with_inherited_taint`).
         let taint_pool = (self.taint_mode != obc_safety::taint::TaintMode::Off)
             .then(|| inherited_taint_pool().unwrap_or_default());
+        let inherited_sources = taint_pool.as_ref().map(|p| p.sources()).unwrap_or_default();
 
         // 1. Store the user message. The session row must exist first: since
         //    `PRAGMA foreign_keys` went on (2026-09-11, #146) a message for an
@@ -1836,12 +1837,19 @@ impl Agent {
             }
         }
 
+        let untrusted_sources = taint_pool
+            .map(|p| p.sources())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| !inherited_sources.contains(s))
+            .collect();
         Ok(AgentResponse {
             message: final_response,
             tool_calls: tool_calls_made,
             provider: brain.as_ref().map(|b| b.0.clone()).unwrap_or_default(),
             model: brain.as_ref().map(|b| b.1.clone()).unwrap_or_default(),
             usage: usage_known.then_some(turn_usage),
+            untrusted_sources,
         })
     }
 
@@ -2805,6 +2813,10 @@ pub struct AgentResponse {
     pub model: String,
     /// The turn's token numbers when the provider reported them.
     pub usage: Option<obc_providers::Usage>,
+    /// The untrusted sources (External-trust tools) whose output this turn
+    /// read and pooled, each once; not what it inherited
+    /// ([`with_inherited_taint`]). Empty when taint tracking is off.
+    pub untrusted_sources: Vec<String>,
 }
 
 impl AgentResponse {

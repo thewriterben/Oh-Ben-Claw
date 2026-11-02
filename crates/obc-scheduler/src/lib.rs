@@ -440,6 +440,15 @@ impl Scheduler {
         // 2026-11-02: standing goals, ticked by a task with the goal's id.
         conn.execute_batch(goals::DDL)
             .context("Failed to initialize the goals table")?;
+        // Same day: the Track 0 stamp of the latest note, added in place.
+        let have: Vec<String> = conn
+            .prepare("PRAGMA table_info(goals)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<std::result::Result<_, _>>()?;
+        if !have.iter().any(|c| c == "note_tainted_by") {
+            conn.execute_batch("ALTER TABLE goals ADD COLUMN note_tainted_by TEXT")
+                .context("Failed to add column note_tainted_by")?;
+        }
 
         // 2026-09-11: zone, tool, tool_args, phrase. Added in place so an
         // existing scheduler.db keeps its rows (all UTC, prompt-only).
