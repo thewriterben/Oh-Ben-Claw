@@ -1,0 +1,18 @@
+# Camera-build sdkconfig overlay for the ESP32-S3-WROOM-1 CAM board
+# (`--features board-s3-wroom-cam`). NOT read by a default build, and NOT
+# interchangeable with another board's -- see sdkconfig.defaults.camera-xiao-sense
+# for how ESP_IDF_SDKCONFIG_DEFAULTS selects it and why `sdkconfig.defaults` must
+# be named before it. scripts/build_camera.ps1 -Board s3-wroom-cam does both.
+#
+# PSRAM holds the frame buffer.
+#
+# VENDOR-STATED, NOT MEASURED. The seller's listing (on the bench 2026-11-01 as
+# esp32s3cam2.pdf) gives 8 MB PSRAM, and its pinout page marks GPIO35/36/37 as
+# PSRAM -- the pins an octal-PSRAM WROOM-1 module (N?R8) takes for the wider bus.
+# A quad module would leave them free. Whether the flash is 8 or 16 MB is not
+# stated and does not matter here. The first boot log on this board should show
+# `esp_psram: SPI SRAM memory test OK` and an 8192K pool; write it here when it
+# does.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y

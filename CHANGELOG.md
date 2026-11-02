@@ -5,6 +5,38 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Two more ESP32-S3 camera boards (2026-11-01)
+
+Board support for two camera boards put on the bench 2026-11-01. Both carry
+the ESP32-S3-EYE camera pin map; neither has been flashed yet.
+
+### Added
+
+- **`board-emakefun-s3-cam`** — nulllab/emakefun ESP32-S3-CAM (ESP32-S3R8,
+  8 MB octal PSRAM, OV2640 or OV3660, TF card, flash LED on GPIO3). Pin map
+  from the vendor README, cited in `camera.rs`. Overlay
+  `sdkconfig.defaults.camera-emakefun-s3-cam`;
+  `scripts/build_camera.ps1 -Board emakefun-s3-cam`.
+- **`board-s3-wroom-cam`** — ESP32-S3-WROOM-1 CAM board (two USB-C, one
+  through a USB-UART bridge; OV2640 or OV5640; LED on GPIO2, WS2812 on
+  GPIO48). Pin map from the seller's pinout page, cited in `camera.rs`.
+  Overlay `sdkconfig.defaults.camera-s3-wroom-cam`;
+  `scripts/build_camera.ps1 -Board s3-wroom-cam`.
+- Board profiles for both in `board.rs`: no output pins (the XIAO's default
+  set lands on camera and strap pins here), no I2C bus (GPIO5 is SCCB clock),
+  no microphone. Both are in `tests/firmware_node_selfreport.rs`, with a new
+  check that every profile reports a distinct name.
+- Planner registry rows `emakefun-esp32-s3-cam` and `esp32-s3-wroom-cam` on
+  the shared native-USB id `0x303a:0x1001`.
+
+### Not verified
+
+- Every pin, the PSRAM mode and the 20 MHz XCLK on both boards are vendor-stated
+  or inherited, not measured. The OV5640 module on the bench has a ~100 mm FPC;
+  if it overflows at 20 MHz, move the board to the 10 MHz arm in `camera.rs`.
+
+---
+
 ## Unreleased — Unattended posture and taint on by default (2026-11-01)
 
 Items 1 and 3 of `docs/PERSONAL-AGENTS-2026-11.md`, taken from OpenAI Dots

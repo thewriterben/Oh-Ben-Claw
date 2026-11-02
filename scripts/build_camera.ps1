@@ -24,7 +24,8 @@
   overlay is a compile error rather than a boot loop.
 
 .PARAMETER Board
-  xiao-sense (OCT PSRAM) or lilygo-tcam-v11 (QUAD PSRAM, V1.0/V1.1 only).
+  xiao-sense (OCT PSRAM), lilygo-tcam-v11 (QUAD PSRAM, V1.0/V1.1 only),
+  emakefun-s3-cam or s3-wroom-cam (both OCT PSRAM, not yet run on metal).
 
 .PARAMETER Port
   Flash to this port and open the monitor. Omit to build only. Find the port
@@ -35,7 +36,7 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('xiao-sense', 'lilygo-tcam-v11')][string]$Board,
+    [Parameter(Mandatory)][ValidateSet('xiao-sense', 'lilygo-tcam-v11', 'emakefun-s3-cam', 's3-wroom-cam')][string]$Board,
     [string]$Port,
     [string]$TargetDir = 'C:\ec-cam'
 )
@@ -52,6 +53,8 @@ if (-not (Test-Path (Join-Path $crate 'Cargo.toml'))) {
 $feature, $overlay = switch ($Board) {
     'xiao-sense'      { 'board-xiao-sense',         'sdkconfig.defaults.camera-xiao-sense' }
     'lilygo-tcam-v11' { 'board-lilygo-tcam-s3-v11', 'sdkconfig.defaults.camera-lilygo-tcam-v11' }
+    'emakefun-s3-cam' { 'board-emakefun-s3-cam',    'sdkconfig.defaults.camera-emakefun-s3-cam' }
+    's3-wroom-cam'    { 'board-s3-wroom-cam',       'sdkconfig.defaults.camera-s3-wroom-cam' }
 }
 
 # The live mesh node. Same value as ROSTER in identity_map.rs and $Known in

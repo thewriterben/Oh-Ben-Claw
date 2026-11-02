@@ -32,7 +32,8 @@
 mod board;
 
 use board::{
-    Board, LILYGO_T_CAMERA_PLUS_S3_V11 as LILYGO, WAVESHARE_ESP32_S3_TOUCH_LCD_21 as WAVESHARE,
+    Board, EMAKEFUN_ESP32_S3_CAM as EMAKEFUN, ESP32_S3_WROOM_CAM as WROOM_CAM,
+    LILYGO_T_CAMERA_PLUS_S3_V11 as LILYGO, WAVESHARE_ESP32_S3_TOUCH_LCD_21 as WAVESHARE,
     XIAO_ESP32_S3 as XIAO,
 };
 
@@ -40,7 +41,7 @@ use board::{
 /// pair -- on 2026-09-16 a third profile (the Lilygo) was added and every loop
 /// here still said `[&XIAO, &WAVESHARE]`, so the new board was covered by
 /// nothing while the suite stayed green.
-const ALL_BOARDS: &[&Board] = &[&XIAO, &WAVESHARE, &LILYGO];
+const ALL_BOARDS: &[&Board] = &[&XIAO, &WAVESHARE, &LILYGO, &EMAKEFUN, &WROOM_CAM];
 
 fn describe(b: &Board, camera: bool) -> serde_json::Value {
     board::describe(b, camera, "obc-esp32-s3-001", "0.4.2", 0xC0FFEE)
@@ -156,6 +157,25 @@ fn the_two_boards_are_distinguishable_by_their_report() {
     }
 }
 
+/// Three camera boards now report the same pin policy -- no outputs, no bus, no
+/// microphone -- so on the wire the name is the only thing that tells the
+/// Lilygo and the two ESP32-S3-EYE-map boards apart. It had better be distinct.
+#[test]
+fn every_board_reports_a_distinct_name() {
+    for (i, a) in ALL_BOARDS.iter().enumerate() {
+        for b in &ALL_BOARDS[i + 1..] {
+            assert_ne!(a.name, b.name, "two board profiles share a name");
+            assert_ne!(
+                describe(a, true)["board"],
+                describe(b, true)["board"],
+                "{} and {} report the same board",
+                a.name,
+                b.name
+            );
+        }
+    }
+}
+
 /// The XIAO's bus is the one its silkscreen marks, and its Track 0 outputs do
 /// not overlap it. Both halves of that changed on 2026-08-21 and both are
 /// asserted here, because the failure they replace was silent: a sensor on the
@@ -237,6 +257,17 @@ fn no_board_drives_its_own_camera_pins_as_actuators() {
         (
             "seeed-xiao-esp32-s3",
             &[10, 13, 38, 47, 40, 39, 15, 17, 18, 16, 14, 12, 11, 48],
+        ),
+        // Transcribed from camera.rs 2026-11-01. Both boards carry the
+        // ESP32-S3-EYE map: xclk 15, pclk 13, vsync 6, href 7, sccb 4/5,
+        // data 11/9/8/10/12/18/17/16.
+        (
+            "emakefun-esp32-s3-cam",
+            &[15, 13, 6, 7, 4, 5, 11, 9, 8, 10, 12, 18, 17, 16],
+        ),
+        (
+            "esp32-s3-wroom-cam",
+            &[15, 13, 6, 7, 4, 5, 11, 9, 8, 10, 12, 18, 17, 16],
         ),
     ];
 

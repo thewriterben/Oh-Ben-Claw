@@ -27,13 +27,16 @@ its greyscale capture, software JPEG encoder and on-node detector
 > |---|---|---|---|
 > | `board-xiao-sense` | Seeed XIAO ESP32S3 **Sense** | `sdkconfig.defaults.camera-xiao-sense` (PSRAM **OCT**, measured) | Seeed wiki camera-slot table, 2026-09-16, cited in `camera.rs` |
 > | `board-lilygo-tcam-s3-v11` | LILYGO T-CameraPlus-S3 **V1.0/V1.1 only** | `sdkconfig.defaults.camera-lilygo-tcam-v11` (PSRAM **QUAD**, vendor-cited) | vendor `pin_config.h` + README, 2026-09-16, cited in `camera.rs` |
+> | `board-emakefun-s3-cam` | nulllab/emakefun **ESP32-S3-CAM** (ESP32-S3R8, one USB-C) | `sdkconfig.defaults.camera-emakefun-s3-cam` (PSRAM **OCT**, vendor-stated) | vendor README *"Camera pin"* table (printed 2026-08-20, on the bench 2026-11-01), cited in `camera.rs` — the ESP32-S3-EYE map. Not run on metal |
+> | `board-s3-wroom-cam` | **ESP32-S3-WROOM-1 CAM** (two USB-C, maker unnamed) | `sdkconfig.defaults.camera-s3-wroom-cam` (PSRAM **OCT**, vendor-stated) | seller's *"ESP32-S3 Pinout"* page (on the bench 2026-11-01), cited in `camera.rs` — the same EYE map. Not run on metal |
 > | `board-unverified-map` | **none known** | — | the historical unattributed set — quarantined, do not bring up hardware with it |
 >
 > Omitting a board, or naming two, is a `compile_error!` that names the choice.
 > `board-waveshare-21` + `camera` remains a `compile_error!` (no camera connector).
 >
 > **The overlay is not interchangeable.** PSRAM mode is a property of the module:
-> the XIAO is octal, the Lilygo is quad. Pairing a board with the wrong overlay
+> the XIAO is octal, the Lilygo is quad, and the two boards added 2026-11-01 are
+> octal by their vendors' word. Pairing a board with the wrong overlay
 > does not fail cleanly on hardware — the board boots and `esp_camera_init`
 > fails, or PSRAM misbehaves quietly. **Since 2026-09-26 it fails at compile
 > time instead.** This used to say sdkconfig is invisible to `cfg`; it is not.
@@ -151,6 +154,8 @@ cd C:\src\obc
 .\scripts\which_esp32.ps1                                          # which port is which board
 .\scripts\build_camera.ps1 -Board xiao-sense -Port COM11
 .\scripts\build_camera.ps1 -Board lilygo-tcam-v11 -Port COMx       # the Lilygo
+.\scripts\build_camera.ps1 -Board emakefun-s3-cam -Port COMx       # nulllab/emakefun ESP32-S3-CAM
+.\scripts\build_camera.ps1 -Board s3-wroom-cam -Port COMx          # ESP32-S3-WROOM-1 CAM
 ```
 
 What the script does, so it can be done by hand if it has to be:
