@@ -94,7 +94,9 @@ audited as a denial. Approvers are `[channels.telegram].approver_user_ids` and
 `[channels.slack].approver_users`, separate from the chat allowlists; anyone
 else's tap is refused and audited. Attended turns do not wait, because the
 Telegram loop handles one update at a time. `crates/obc-agent/tests/chat_approval.rs`
-covers it through the scheduler loop and the A2A executor. The original
+covers it through the scheduler loop and the A2A executor. Since 2026-11-02
+the scheduler loop runs dispatches concurrently (up to four), so a task
+waiting for a tap no longer holds up the tasks due after it. The original
 proposal follows.
 
 *Taken from:* all three. Telegram inline buttons and Slack interactive messages
