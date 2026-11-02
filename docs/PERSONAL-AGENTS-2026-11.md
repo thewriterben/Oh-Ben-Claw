@@ -93,7 +93,9 @@ gets it with Approve / Allow 30 min / Deny buttons. No answer is a refusal,
 audited as a denial. Approvers are `[channels.telegram].approver_user_ids` and
 `[channels.slack].approver_users`, separate from the chat allowlists; anyone
 else's tap is refused and audited. `crates/obc-agent/tests/chat_approval.rs`
-covers it through the scheduler loop and the A2A executor.
+covers it through the scheduler loop and the A2A executor. Since 2026-11-02
+the scheduler loop runs dispatches concurrently (up to four), so a task
+waiting for a tap no longer holds up the tasks due after it.
 
 *Attended (2026-11-02):* when an approver's own message on Telegram or Slack
 starts a turn and it reaches a gated call, the call waits the same way, asked
