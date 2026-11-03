@@ -331,6 +331,12 @@ mod tests {
         fn description(&self) -> &str {
             "fill"
         }
+        fn risk_class(&self) -> RiskClass {
+            RiskClass {
+                physical: false,
+                ..RiskClass::default()
+            }
+        }
         async fn execute(&self, _args: Value) -> Result<ToolResult> {
             Ok(ToolResult::ok("filled"))
         }
