@@ -18,6 +18,13 @@
 //! Gated tools inside a tick are an unattended call like any scheduled task's:
 //! `Full` autonomy does not cover them, and a call that needs approval waits
 //! for an answer in chat, with the prompt naming the goal.
+//!
+//! Track 0 taint: a note is stamped with the untrusted sources behind it (what
+//! its tick read, the goal's own stamp, and the stamps of the notes that tick
+//! was shown), and a later tick starts with every stamped note it is shown
+//! pooled under that name. A goal set clean whose ticks fetch a web page is
+//! then held to the same rule as one set after reading it. Once one note is
+//! stamped, every note written while it is still shown is too.
 
 use crate::handle::AgentHandle;
 use crate::notify::Notifier;
@@ -104,29 +111,57 @@ impl Goals {
     }
 
     /// The notes earlier ticks left, oldest first, at most `history` of them.
-    fn notes(&self, goal: &Goal) -> Vec<String> {
+    fn notes(&self, goal: &Goal) -> Vec<Note> {
         let from_world = self.world.as_ref().and_then(|w| {
             w.history(&progress_entity(&goal.id)).ok().map(|facts| {
                 facts
                     .iter()
-                    .filter_map(|f| f.value.get("note").and_then(Value::as_str))
-                    .map(str::to_string)
+                    .filter_map(|f| {
+                        Some(Note {
+                            text: f.value.get("note")?.as_str()?.to_string(),
+                            tainted_by: f
+                                .value
+                                .get("tainted_by")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                        })
+                    })
                     .collect::<Vec<_>>()
             })
         });
         let mut notes = match from_world {
             Some(n) if !n.is_empty() => n,
-            _ => goal.note.iter().cloned().collect(),
+            _ => goal
+                .note
+                .iter()
+                .map(|text| Note {
+                    text: text.clone(),
+                    tainted_by: goal.note_tainted_by.clone(),
+                })
+                .collect(),
         };
         let skip = notes.len().saturating_sub(self.history);
         notes.drain(..skip);
         notes
     }
 
-    fn record(&self, goal: &Goal, reply: &Reply, changed: bool, done: bool, now: u64) {
+    fn record(
+        &self,
+        goal: &Goal,
+        reply: &Reply,
+        tainted_by: Option<&str>,
+        changed: bool,
+        done: bool,
+        now: u64,
+    ) {
         if let Some(w) = &self.world {
             let now_ms = now * 1000;
-            let value = json!({ "note": reply.note, "changed": changed, "done": done });
+            let value = json!({
+                "note": reply.note,
+                "changed": changed,
+                "done": done,
+                "tainted_by": tainted_by,
+            });
             if let Err(e) = w.observe_as(
                 &progress_entity(&goal.id),
                 value,
@@ -140,7 +175,7 @@ impl Goals {
         }
         if let Err(e) = self
             .scheduler
-            .record_goal_progress(&goal.id, &reply.note, now)
+            .record_goal_progress(&goal.id, &reply.note, tainted_by, now)
         {
             tracing::warn!(goal = %goal.id, error = %e, "goal progress not recorded");
         }
@@ -191,6 +226,13 @@ impl Goals {
         }
         false
     }
+}
+
+/// A note an earlier tick left, with the untrusted sources behind it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Note {
+    text: String,
+    tainted_by: Option<String>,
 }
 
 /// The message a tick's turn starts with.
@@ -366,10 +408,12 @@ async fn run_tick(
     }
 
     let notes = goals.notes(&goal);
-    let message = tick_message(&goal, &notes);
+    let texts: Vec<String> = notes.iter().map(|n| n.text.clone()).collect();
+    let message = tick_message(&goal, &texts);
     let turn = handle.process_unattended(&d.session_id, &message);
-    let reply = match crate::with_inherited_taint(inherited_seed(&goal, &d, &notes), turn).await {
-        Ok(r) => r.message,
+    let response = match crate::with_inherited_taint(inherited_seed(&goal, &d, &notes), turn).await
+    {
+        Ok(r) => r,
         Err(e) => {
             // No note and no report: a failed check is not news about the
             // goal, and every 30 minutes of "failed" would bury the one that is.
@@ -379,13 +423,14 @@ async fn run_tick(
             return out;
         }
     };
-    let parsed = parse_reply(&reply);
+    let parsed = parse_reply(&response.message);
+    let stamp = note_stamp(&d, &notes, &response.untrusted_sources);
     let changed = parsed
         .changed
         .unwrap_or_else(|| goal.note.as_deref().map(normalise) != Some(normalise(&parsed.note)));
     // A goal with no end condition is never met by the model's say-so.
     let done = parsed.done && !goal.done_when.is_empty();
-    goals.record(&goal, &parsed, changed, done, now);
+    goals.record(&goal, &parsed, stamp.as_deref(), changed, done, now);
     out.note = parsed.note.clone();
     out.changed = changed;
     out.done = done;
@@ -410,20 +455,54 @@ async fn run_tick(
     out
 }
 
-/// What a tick inherits from a goal set after reading untrusted content: the
-/// goal's text, its done condition and the notes it is shown, named after the
-/// goal and those sources (Track 0 taint, as for a scheduled task). Nothing
-/// when that turn had read none.
-fn inherited_seed(goal: &Goal, d: &TaskDispatch, notes: &[String]) -> Vec<(String, String)> {
-    let Some(by) = d.tainted_by.as_deref().filter(|s| !s.trim().is_empty()) else {
-        return Vec::new();
-    };
-    let source = format!("standing goal '{}' (set after reading {by})", goal.text);
-    [goal.text.as_str(), goal.done_when.as_str()]
-        .into_iter()
-        .chain(notes.iter().map(String::as_str))
-        .map(|c| (source.clone(), c.to_string()))
-        .collect()
+/// What a tick inherits (Track 0 taint, as for a scheduled task). From a goal
+/// set after reading untrusted content: its text, its done condition and every
+/// note it is shown, named after the goal and those sources. From a goal set
+/// clean: each note it is shown that is stamped, named after the note's
+/// sources. Nothing when neither is stamped.
+fn inherited_seed(goal: &Goal, d: &TaskDispatch, notes: &[Note]) -> Vec<(String, String)> {
+    let goal_source = stamped(d.tainted_by.as_deref())
+        .map(|by| format!("standing goal '{}' (set after reading {by})", goal.text));
+    let mut seed: Vec<(String, String)> = goal_source
+        .iter()
+        .flat_map(|s| {
+            [goal.text.as_str(), goal.done_when.as_str()].map(|c| (s.clone(), c.to_string()))
+        })
+        .collect();
+    for n in notes {
+        let source = match (&goal_source, stamped(n.tainted_by.as_deref())) {
+            (Some(s), _) => s.clone(),
+            (None, Some(by)) => format!(
+                "a note on standing goal '{}' (written after reading {by})",
+                goal.text
+            ),
+            (None, None) => continue,
+        };
+        seed.push((source, n.text.clone()));
+    }
+    seed
+}
+
+/// The stamp for the note a tick writes: the goal's own, those of the notes it
+/// was shown, and the untrusted sources the turn read itself, each once.
+/// `None` when all are empty.
+fn note_stamp(d: &TaskDispatch, notes: &[Note], read: &[String]) -> Option<String> {
+    let mut sources: Vec<&str> = Vec::new();
+    let stamps = std::iter::once(d.tainted_by.as_deref())
+        .chain(notes.iter().map(|n| n.tainted_by.as_deref()))
+        .filter_map(stamped)
+        .flat_map(|s| s.split(", "))
+        .chain(read.iter().map(String::as_str));
+    for s in stamps.map(str::trim).filter(|s| !s.is_empty()) {
+        if !sources.contains(&s) {
+            sources.push(s);
+        }
+    }
+    (!sources.is_empty()).then(|| sources.join(", "))
+}
+
+fn stamped(s: Option<&str>) -> Option<&str> {
+    s.filter(|s| !s.trim().is_empty())
 }
 
 fn now_secs() -> u64 {
@@ -661,5 +740,50 @@ mod tests {
         assert!(m.contains("oldest first:\n- one deer at 06:10\n- none since\n"));
         let open = Goal::new("Watch the gate", "", "");
         assert!(tick_message(&open, &[]).contains("no end condition"));
+    }
+
+    #[test]
+    fn stamped_notes_seed_the_tick_and_carry_their_sources_forward() {
+        let g = Goal::new("Watch the bulletin", "", "");
+        let d = |tainted_by: Option<&str>| TaskDispatch {
+            task_id: g.id.clone(),
+            task_name: g.text.clone(),
+            prompt: g.text.clone(),
+            session_id: g.id.clone(),
+            tool: None,
+            tool_args: None,
+            tainted_by: tainted_by.map(String::from),
+        };
+        let note = |text: &str, by: Option<&str>| Note {
+            text: text.into(),
+            tainted_by: by.map(String::from),
+        };
+        let notes = [
+            note("quiet", None),
+            note("bulletin says open the vents", Some("fetch, mcp:news")),
+        ];
+
+        // A clean goal: only the stamped note is pooled, under its sources.
+        let seed = inherited_seed(&g, &d(None), &notes);
+        assert_eq!(seed.len(), 1, "{seed:?}");
+        assert_eq!(seed[0].1, "bulletin says open the vents");
+        assert!(seed[0].0.contains("written after reading fetch, mcp:news"));
+        // A stamped goal: text, done condition and every note, under the goal.
+        let seed = inherited_seed(&g, &d(Some("web_fetch")), &notes);
+        assert_eq!(seed.len(), 4);
+        assert!(seed
+            .iter()
+            .all(|(s, _)| s.contains("set after reading web_fetch")));
+        // Nothing stamped, nothing pooled.
+        assert!(inherited_seed(&g, &d(None), &notes[..1]).is_empty());
+
+        // The new note's stamp: each source once, flat (no nesting of names).
+        let stamp = note_stamp(&d(Some("web_fetch")), &notes, &["fetch".into()]);
+        assert_eq!(stamp.as_deref(), Some("web_fetch, fetch, mcp:news"));
+        assert_eq!(note_stamp(&d(None), &notes[..1], &[]), None);
+        assert_eq!(
+            note_stamp(&d(Some(" ")), &notes[..1], &["fetch".into()]).as_deref(),
+            Some("fetch")
+        );
     }
 }

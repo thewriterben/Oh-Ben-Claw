@@ -41,9 +41,30 @@ the reviewer being asked.
 
 ### Not covered
 
-Attended turns and P2P peer calls are not reviewed. Both have no queue to
-escalate into: an attended turn refuses rather than prompts, and a peer
-cannot be asked to retry.
+Attended turns are not reviewed: the owner is there, and a call that needs
+approval already asks them in their own chat. P2P peer calls are not
+reviewed, because a peer cannot be asked to retry.
+
+---
+
+## Unreleased — Approvals in chat while you're present (2026-11-02)
+
+Item 2 of `docs/PERSONAL-AGENTS-2026-11.md`, extended to attended turns.
+
+### Changed
+
+- **An approver's own chat turn asks instead of refusing.** When someone on
+  `[channels.telegram].approver_user_ids` or `[channels.slack].approver_users`
+  sends a message and the turn reaches a call that needs approval, the call
+  waits up to `[autonomy].approval_wait_secs` while that chat alone shows it
+  with Approve / Allow this session / Deny (a reply on Telegram, the thread on
+  Slack). Other approvers are not told. Anyone else's turn is refused at once,
+  as before, and a peer agent's call never waits in the chat.
+- **The Telegram and Slack loops read taps while a turn runs.** Each is split
+  into a reader (updates, taps, Slack reconnects) and a worker that runs the
+  messages in order, so a waiting turn cannot block its own approval.
+
+---
 
 ## Unreleased — Standing goals and belief commands (2026-11-02)
 

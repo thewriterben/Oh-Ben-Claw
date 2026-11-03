@@ -31,7 +31,7 @@ details:
 | Standing goals that keep moving | Routines on a schedule, or after an event | Larger goals; checks in on change | Several goals at once, worked around the clock | **Partial.** Cron prompts (`crates/obc-agent/src/scheduled.rs`) and physical missions. No goal object with progress or a done condition |
 | Proactive background work | — | Makes suggestions | "Proactive research", **read-only** | **Gap.** The heartbeat was dropped 2026-10-30 because nothing wired it |
 | Posture with no one watching | Background approvals **expire after ~30 min** | Asks before sends and purchases | Background work **cannot send or change anything** | **Have** (2026-11-01). Scheduled and A2A turns run unattended: `full` autonomy is not a grant there, and a session grant covers them for 30 min |
-| Approvals reach you where you are | Apps, X Chat, Slack | WhatsApp | ChatGPT, Slack, Teams | **Have** (2026-11-01). Telegram and Slack show an unattended call with Approve / Deny buttons, and it waits for the tap. The gateway also records out-of-band decisions |
+| Approvals reach you where you are | Apps, X Chat, Slack | WhatsApp | ChatGPT, Slack, Teams | **Have** (2026-11-01). Telegram and Slack show an unattended call with Approve / Deny buttons, and it waits for the tap. Since 2026-11-02 an approver's own chat turn is asked the same way, in that chat. The gateway also records out-of-band decisions |
 | Allow / block / ask rules | "Ask first" for send, publish, delete, purchase, prod | Per-app scope (e.g. read-only mail) | Custom Rules per action | **Have, stronger.** `[[security.policies]]`, autonomy levels, plan-mode argument bounds, Track 0 mirrored on the MCU |
 | A second agent reviews actions | Auto-review rules | **Sentinel**: a second agent that must approve all internet access | Auto-review of account and sharing actions; a monitor can pause the dot | **Partial.** The checks are deterministic: taint tracking (default `warn` since 2026-11-01) and the conscience egress allowlist. No model-based reviewer |
 | Credentials it can use but not see | Vault, password manager, Secure Form | Credential store it can use but not read; Stripe Link single-use cards | Saved passwords hidden from the model | **Partial.** The vault exists (`crates/obc-safety/src/vault.rs`). I found no path that fills a browser field from the vault without the secret entering the model's context |
@@ -92,12 +92,18 @@ waits up to `[autonomy].approval_wait_secs` (default 300) while each approver
 gets it with Approve / Allow 30 min / Deny buttons. No answer is a refusal,
 audited as a denial. Approvers are `[channels.telegram].approver_user_ids` and
 `[channels.slack].approver_users`, separate from the chat allowlists; anyone
-else's tap is refused and audited. Attended turns do not wait, because the
-Telegram loop handles one update at a time. `crates/obc-agent/tests/chat_approval.rs`
+else's tap is refused and audited. `crates/obc-agent/tests/chat_approval.rs`
 covers it through the scheduler loop and the A2A executor. Since 2026-11-02
 the scheduler loop runs dispatches concurrently (up to four), so a task
-waiting for a tap no longer holds up the tasks due after it. The original
-proposal follows.
+waiting for a tap no longer holds up the tasks due after it.
+
+*Attended (2026-11-02):* when an approver's own message on Telegram or Slack
+starts a turn and it reaches a gated call, the call waits the same way, asked
+only in that chat (as a reply, or in the Slack thread) with Approve / Allow
+this session / Deny. Both channels now read taps while a turn runs: one half
+reads updates and answers taps, the other runs the messages in order. Anyone
+not on the approver list is refused at once, as before, and a peer agent's
+call never uses the chat. The original proposal follows.
 
 *Taken from:* all three. Telegram inline buttons and Slack interactive messages
 call `record_external_decision`, which is the function the gateway route
@@ -173,8 +179,9 @@ and withdrawal by supersession, as chat-level commands. This is mostly UX on
 *As built:* `[autonomy.review]` with `enabled`, `timeout_ms` (3000) and
 `fail_closed` (false). It uses `[edge].local_model` but not edge mode, since
 the hosts that run scheduled work are mostly desktops. It reviews unattended
-turns only. An attended turn here refuses rather than prompts, so a concern
-would leave nobody able to say yes, and a P2P peer cannot be asked to retry.
+turns only. In an attended turn the owner is there, and a call that needs
+approval already asks them in their own chat; a P2P peer cannot be asked to
+retry.
 It runs after taint as well as the approval policy, so a human is never asked
 about a call that taint then refuses, and it is skipped when the operator has
 just approved this call in chat. An unavailable review runs the call as

@@ -4126,7 +4126,7 @@ fn spawn_channels(agent: Arc<Agent>, config: &Config) {
         ) {
             info!(
                 approvers = p.approver_count(),
-                "Unattended approvals will be asked on Telegram"
+                "Approvals will be asked on Telegram"
             );
             approval.add_prompter(Arc::new(p));
         }
@@ -4168,7 +4168,7 @@ fn spawn_channels(agent: Arc<Agent>, config: &Config) {
         ) {
             info!(
                 approvers = p.approver_count(),
-                "Unattended approvals will be asked on Slack"
+                "Approvals will be asked on Slack"
             );
             approval.add_prompter(Arc::new(p));
         }
