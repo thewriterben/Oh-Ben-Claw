@@ -94,6 +94,7 @@ mod skill_replay;
 // calls `Provider::chat_completion_streaming` and broadcasts each text delta
 // as `AgentEvent::Token`, with `Thinking`, `ToolCall` and `ToolResult` emitted
 // from inside the loop as they happen rather than reconstructed afterwards.
+pub mod action_review;
 pub mod context;
 pub mod posture;
 pub mod reflex_tier;
@@ -242,6 +243,10 @@ pub struct Agent {
     /// scanning; `Warn` (default) logs + counts; `Enforce` refuses unless the
     /// tool is explicitly operator-granted.
     taint_mode: obc_safety::taint::TaintMode,
+    /// The local-model action reviewer (`[autonomy.review]`): shown each
+    /// unattended gated call the deterministic checks let through, and able
+    /// only to send it to the operator.
+    reviewer: Option<Arc<action_review::ActionReviewer>>,
     /// How many recent messages to replay into context. Defaults to
     /// [`MAX_HISTORY_MESSAGES`]; an edge device lowers it to bound RAM. This used to
     /// be the constant, read directly, which is why `edge.max_history_messages` could
@@ -413,6 +418,7 @@ impl Agent {
             rollout: None,
             forge_dir: None,
             taint_mode: obc_safety::taint::TaintMode::default(),
+            reviewer: None,
             max_history: MAX_HISTORY_MESSAGES,
         }
     }
@@ -875,6 +881,14 @@ impl Agent {
     /// (`Enforce`).
     pub fn with_taint_mode(mut self, mode: obc_safety::taint::TaintMode) -> Self {
         self.taint_mode = mode;
+        self
+    }
+
+    /// Attach the local-model action reviewer (`[autonomy.review]`). It sees
+    /// unattended gated calls after every deterministic check has passed them,
+    /// and a concern sends the call to the operator in chat.
+    pub fn with_action_reviewer(mut self, reviewer: Arc<action_review::ActionReviewer>) -> Self {
+        self.reviewer = Some(reviewer);
         self
     }
 
@@ -2410,7 +2424,7 @@ impl Agent {
         // except that an unattended turn needs an explicit grant for a gated tool.
         // An unattended call that needs one waits for an answer in chat when a
         // channel with approvers is attached, and is refused when none comes.
-        if let Err(reason) = obc_approval::approval_authorize_waiting(
+        let cleared = match obc_approval::approval_authorize_waiting(
             self.approval.as_deref(),
             name,
             &args,
@@ -2421,12 +2435,15 @@ impl Agent {
         )
         .await
         {
-            tracing::warn!(tool = %name, node = %node_id, reason = %reason, "tool call refused by approval policy");
-            return Ok(obc_tool_api::ToolResult::err(format!(
-                "Tool '{}' refused: {}",
-                name, reason
-            )));
-        }
+            Ok(cleared) => cleared,
+            Err(reason) => {
+                tracing::warn!(tool = %name, node = %node_id, reason = %reason, "tool call refused by approval policy");
+                return Ok(obc_tool_api::ToolResult::err(format!(
+                    "Tool '{}' refused: {}",
+                    name, reason
+                )));
+            }
+        };
 
         // Track 0 taint tracking: before a *privileged* call runs, check whether
         // its argument values echo untrusted (external-origin) content pooled
@@ -2477,6 +2494,25 @@ impl Agent {
             }
         }
 
+        // The action reviewer: last, so it only ever sees a call every
+        // deterministic check has passed and has no refusal to lift. A call the
+        // operator approved in chat a moment ago is not asked about twice.
+        if presence == obc_approval::Presence::Unattended
+            && taint::gated(risk)
+            && cleared == obc_approval::Cleared::Policy
+        {
+            if let Err(reason) = self
+                .review_action(name, tool.description(), &args, risk)
+                .await
+            {
+                tracing::warn!(tool = %name, reason = %reason, "tool call refused after the action reviewer escalated it");
+                return Ok(obc_tool_api::ToolResult::err(format!(
+                    "Tool '{}' refused: {}",
+                    name, reason
+                )));
+            }
+        }
+
         // A stored call keeps the provenance of the turn that stored it: a
         // paraphrase of external content matches nothing in `scan_args`, so the
         // fired turn is seeded from the task instead (see `scheduled.rs`).
@@ -2515,6 +2551,58 @@ impl Agent {
             }
         }
         result
+    }
+
+    /// Show an unattended gated call to the action reviewer, if one is
+    /// attached. `Ok` runs the call; `Err` is the refusal after an
+    /// escalation the operator denied or did not answer.
+    async fn review_action(
+        &self,
+        name: &str,
+        description: &str,
+        args: &serde_json::Value,
+        risk: RiskClass,
+    ) -> Result<(), String> {
+        use action_review::Review;
+        let Some(reviewer) = &self.reviewer else {
+            return Ok(());
+        };
+        let origin = unattended_origin();
+        let review = reviewer
+            .review(name, description, args, risk, &origin)
+            .await;
+        let counter = match &review {
+            Review::Clear => "action_review_clear_total",
+            Review::Concern(_) => "action_review_concern_total",
+            Review::Unavailable(_) => "action_review_unavailable_total",
+        };
+        if let Some(obs) = &self.obs {
+            obs.metrics.counter(counter).inc();
+        }
+        let concern = match review {
+            Review::Clear => return Ok(()),
+            Review::Concern(why) => format!("the action reviewer has a concern: {why}"),
+            Review::Unavailable(why) if reviewer.fail_closed() => format!(
+                "the action reviewer could not review it ({why}) and                  [autonomy.review].fail_closed is set"
+            ),
+            Review::Unavailable(why) => {
+                tracing::warn!(
+                    tool = %name, model = %reviewer.model_name(), reason = %why,
+                    "action review unavailable; running as the deterministic checks decided"
+                );
+                return Ok(());
+            }
+        };
+        tracing::warn!(tool = %name, concern = %concern, "action reviewer escalated an unattended call");
+        obc_approval::approval_escalate(
+            self.approval.as_deref(),
+            name,
+            args,
+            risk,
+            &origin,
+            &concern,
+        )
+        .await
     }
 
     /// Record the outcome of a supervised-rollout-stage skill run. A failure

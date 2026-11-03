@@ -5,6 +5,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Local-model action reviewer (2026-11-02)
+
+Item 6 of `docs/PERSONAL-AGENTS-2026-11.md`, taken from Muse's Sentinel and
+Dots' auto-review. Rules catch what they were written for. A small local model
+now reads each unattended action that the rules have let through, looking for
+the rest.
+
+### Added
+
+- **`[autonomy.review]`** (`enabled`, `timeout_ms` default 3000,
+  `fail_closed` default false). On, it needs `[edge].local_model`; edge mode
+  itself is not required. In an unattended turn (scheduled task, goal tick,
+  A2A call), a gated call (physical, irreversible or blast radius) that Track
+  0, dynamic trust, the approval policy and taint have all passed is shown to
+  that model before it runs (`obc_agent::action_review`). It answers `OK` or
+  `CONCERN: <why>`. A concern goes to the chat approvers through
+  `obc_approval::approval_escalate` with the concern as the reason; with no
+  approvers attached the call is refused. A timeout, error, model marked down
+  or unreadable reply runs the call as decided, or with `fail_closed` counts
+  as a concern. Counters: `action_review_{clear,concern,unavailable}_total`.
+- `obc_approval::approval_authorize_waiting` returns `Cleared::{Policy,
+  Operator}`, so a call the operator just approved in chat is not reviewed
+  and asked about a second time.
+
+### Why it can only tighten
+
+It runs last, so there is no refusal left for it to lift; its one power is
+to add a question. A prompt injection in the arguments can at worst make it
+say `OK`, which leaves the call where the rules put it.
+`crates/obc-agent/tests/action_review.rs` drives the real scheduler loop:
+a clear review posts, a concern posts only after the approver's tap and not
+on Deny, expiry or with nobody to ask, and the rules' refusals happen without
+the reviewer being asked.
+
+### Not covered
+
+Attended turns and P2P peer calls are not reviewed. Both have no queue to
+escalate into: an attended turn refuses rather than prompts, and a peer
+cannot be asked to retry.
+
 ## Unreleased — Standing goals and belief commands (2026-11-02)
 
 Items 4 and 5 of `docs/PERSONAL-AGENTS-2026-11.md`. You can give the agent a

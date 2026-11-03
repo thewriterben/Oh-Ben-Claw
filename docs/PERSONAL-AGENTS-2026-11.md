@@ -168,7 +168,20 @@ time T, and here is what depends on it". Expose belief lookup with provenance,
 and withdrawal by supersession, as chat-level commands. This is mostly UX on
 `world.rs`.
 
-### 6. A local-model action reviewer that can only tighten — M
+### 6. A local-model action reviewer that can only tighten — M (done 2026-11-02)
+
+*As built:* `[autonomy.review]` with `enabled`, `timeout_ms` (3000) and
+`fail_closed` (false). It uses `[edge].local_model` but not edge mode, since
+the hosts that run scheduled work are mostly desktops. It reviews unattended
+turns only. An attended turn here refuses rather than prompts, so a concern
+would leave nobody able to say yes, and a P2P peer cannot be asked to retry.
+It runs after taint as well as the approval policy, so a human is never asked
+about a call that taint then refuses, and it is skipped when the operator has
+just approved this call in chat. An unavailable review runs the call as
+decided by default, because a dead local server should not stop all
+unattended work; `fail_closed` turns that into a concern.
+`crates/obc-agent/tests/action_review.rs` covers it through the scheduler
+loop. The original proposal follows.
 
 *Taken from:* Muse's Sentinel and Dots' auto-review. An optional reviewer at the
 chokepoint, using the P3 reflex-tier local model, covers irreversible and
@@ -221,7 +234,8 @@ document plainly that sub-agents are not a boundary.
 1. ~~Items 1 and 3 in one PR: unattended posture, approval expiry, and taint on by default.~~ Done 2026-11-01.
 2. ~~Item 2, approvals from Telegram and Slack, which makes item 1 usable away from the desk.~~ Done 2026-11-01.
 3. ~~Items 4 and 5 as a "standing goals" phase.~~ Done 2026-11-02.
-4. Items 6 to 9 when needed. Item 8's embodied version is the one no competitor can match.
+4. ~~Item 6, the action reviewer.~~ Done 2026-11-02.
+5. Items 7 to 9 when needed. Item 8's embodied version is the one no competitor can match.
 
 ## Sources
 

@@ -1283,14 +1283,14 @@ pub async fn approval_authorize_waiting(
     risk: RiskClass,
     presence: Presence,
     origin: &str,
-) -> Result<(), String> {
+) -> Result<Cleared, String> {
     let Some(approval) = approval else {
-        return Ok(());
+        return Ok(Cleared::Policy);
     };
     let gate = approval.trust_gate(Some(node_id), risk);
     let decision = approval.decide_gated(tool, gate, risk, presence);
     let reason = match explain_decision(approval, decision, gate, tool, node_id, risk, presence) {
-        Ok(()) => return Ok(()),
+        Ok(()) => return Ok(Cleared::Policy),
         Err(reason) => reason,
     };
     if decision != Decision::NeedsApproval
@@ -1299,12 +1299,56 @@ pub async fn approval_authorize_waiting(
     {
         return Err(reason);
     }
+    ask_in_chat(approval, tool, args, risk, origin, &reason).await?;
+    Ok(Cleared::Operator)
+}
+
+/// How a call got past [`approval_authorize_waiting`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cleared {
+    /// The policy allowed it: autonomy level, a grant, or no manager.
+    Policy,
+    /// An operator approved this very call in chat.
+    Operator,
+}
+
+/// Send an unattended call that the policy allowed to the operator anyway,
+/// because something after the policy (the action reviewer) has a concern.
+/// `concern` is what the operator reads. With nowhere to ask (no manager, no
+/// prompter with approvers), the call is refused with the concern as the
+/// reason. Approval here covers only what the operator would have been asked
+/// for if the policy had needed it.
+pub async fn approval_escalate(
+    approval: Option<&ApprovalManager>,
+    tool: &str,
+    args: &serde_json::Value,
+    risk: RiskClass,
+    origin: &str,
+    concern: &str,
+) -> Result<(), String> {
+    match approval {
+        Some(a) if a.can_wait() => ask_in_chat(a, tool, args, risk, origin, concern).await,
+        _ => Err(format!(
+            "{concern}; no chat channel with approvers is attached to ask the operator"
+        )),
+    }
+}
+
+/// Show the call in chat and turn the answer into a go-ahead or a refusal.
+async fn ask_in_chat(
+    approval: &ApprovalManager,
+    tool: &str,
+    args: &serde_json::Value,
+    risk: RiskClass,
+    origin: &str,
+    reason: &str,
+) -> Result<(), String> {
     let req = ApprovalRequest {
         tool_name: tool.to_string(),
         arguments: args.clone(),
         risk: Some(risk),
     };
-    match approval.wait_for_decision(&req, origin, &reason).await {
+    match approval.wait_for_decision(&req, origin, reason).await {
         WaitOutcome::Approved { .. } => Ok(()),
         WaitOutcome::Denied { by } => Err(format!("denied by the operator in chat ({by})")),
         WaitOutcome::Expired => Err(format!(
@@ -2176,7 +2220,7 @@ mod tests {
     fn waiting_call(
         mgr: &Arc<ApprovalManager>,
         presence: Presence,
-    ) -> tokio::task::JoinHandle<Result<(), String>> {
+    ) -> tokio::task::JoinHandle<Result<Cleared, String>> {
         let mgr = Arc::clone(mgr);
         tokio::spawn(async move {
             approval_authorize_waiting(
@@ -2216,7 +2260,7 @@ mod tests {
             &approvers(),
         )
         .unwrap();
-        assert_eq!(call.await.unwrap(), Ok(()));
+        assert_eq!(call.await.unwrap(), Ok(Cleared::Operator));
         let last = mgr.audit_log().pop().unwrap();
         assert_eq!(last.channel, "telegram:42");
         assert_eq!(last.decision, ApprovalResponse::Yes);
@@ -2259,7 +2303,7 @@ mod tests {
             &approvers(),
         )
         .unwrap();
-        assert_eq!(call.await.unwrap(), Ok(()));
+        assert_eq!(call.await.unwrap(), Ok(Cleared::Operator));
         assert_eq!(mgr.session_grants(), vec!["browser_click".to_string()]);
     }
 
@@ -2312,7 +2356,7 @@ mod tests {
         // Full autonomy, attended: allowed outright, nothing asked.
         assert_eq!(
             waiting_call(&mgr, Presence::Attended).await.unwrap(),
-            Ok(())
+            Ok(Cleared::Policy)
         );
         let supervised = Arc::new(manager(
             &AutonomyConfig {
@@ -2336,6 +2380,53 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert!(err.contains("unattended turn") && err.contains("auto_approve"));
+    }
+
+    #[tokio::test]
+    async fn an_escalated_call_shows_the_concern_and_runs_only_on_a_yes() {
+        let (mgr, chat) = chat_mgr(30);
+        let m = Arc::clone(&mgr);
+        let call = tokio::spawn(async move {
+            approval_escalate(
+                Some(&m),
+                "http",
+                &json!({"url": "https://example.com"}),
+                irreversible_software(),
+                "scheduled task 'digest'",
+                "the action reviewer has a concern: posts a home address",
+            )
+            .await
+        });
+        let pending = shown(&chat).await;
+        assert!(pending.prompt_text().contains("posts a home address"));
+        mgr.resolve_pending(
+            &pending.id,
+            ApprovalResponse::Yes,
+            "telegram",
+            "42",
+            &approvers(),
+        )
+        .unwrap();
+        assert_eq!(call.await.unwrap(), Ok(()));
+
+        // Nowhere to ask: refused, and the reason is the concern.
+        let bare = manager(&config_full(), false);
+        for approval in [Some(&bare), None] {
+            let err = approval_escalate(
+                approval,
+                "http",
+                &json!({}),
+                irreversible_software(),
+                "scheduled task 'digest'",
+                "the action reviewer has a concern: x",
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                err.starts_with("the action reviewer has a concern: x"),
+                "{err}"
+            );
+        }
     }
 
     #[test]
@@ -2416,10 +2507,53 @@ pub struct AutonomyConfig {
     /// approver_user_ids`, `[channels.slack] approver_users`) before it is
     /// refused and the expiry audited as a denial. Default 300 (5 minutes);
     /// 0 refuses at once, as happens anyway when no channel has approvers.
-    /// The scheduler runs one task at a time, so a waiting call delays the
-    /// tasks due after it by up to this long.
+    /// The scheduler runs up to four dispatches at once, so a waiting call
+    /// holds one of those slots for up to this long.
     #[serde(default = "default_approval_wait_secs")]
     pub approval_wait_secs: u64,
+    /// The local-model action reviewer (`[autonomy.review]`).
+    #[serde(default)]
+    pub review: ReviewConfig,
+}
+
+/// The local-model action reviewer (`[autonomy.review]`).
+///
+/// In an unattended turn, a gated call (physical, irreversible or with a
+/// blast radius) that every deterministic check has let through is shown to
+/// the reflex tier's small model (`[edge].local_model`) before it runs. The
+/// model answers `OK` or names a concern. A concern sends the call to the
+/// operator in chat, as a call that needs approval does. The reviewer can
+/// only add that question: it never runs before a deterministic refusal, so
+/// nothing it says can lift one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewConfig {
+    /// Off by default. On, `[edge].local_model` must be set.
+    #[serde(default)]
+    pub enabled: bool,
+    /// How long one review may take. Past it the review counts as unavailable.
+    #[serde(default = "default_review_timeout_ms")]
+    pub timeout_ms: u64,
+    /// What an unavailable review means: a timeout, an error, a model marked
+    /// down, or a reply that is neither `OK` nor a concern. `false` (the
+    /// default) runs the call as the deterministic checks decided, so a dead
+    /// model server does not stop unattended work. `true` treats it as a
+    /// concern and asks the operator.
+    #[serde(default)]
+    pub fail_closed: bool,
+}
+
+fn default_review_timeout_ms() -> u64 {
+    3_000
+}
+
+impl Default for ReviewConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            timeout_ms: default_review_timeout_ms(),
+            fail_closed: false,
+        }
+    }
 }
 
 fn default_unattended_grant_ttl_secs() -> u64 {
@@ -2438,6 +2572,7 @@ impl Default for AutonomyConfig {
             always_ask: vec![],
             unattended_grant_ttl_secs: default_unattended_grant_ttl_secs(),
             approval_wait_secs: default_approval_wait_secs(),
+            review: ReviewConfig::default(),
         }
     }
 }
