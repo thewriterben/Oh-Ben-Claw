@@ -1199,7 +1199,6 @@ impl Agent {
         // scheduled task starts with what it inherited (`with_inherited_taint`).
         let taint_pool = (self.taint_mode != obc_safety::taint::TaintMode::Off)
             .then(|| inherited_taint_pool().unwrap_or_default());
-        let inherited_sources = taint_pool.as_ref().map(|p| p.sources()).unwrap_or_default();
 
         // 1. Store the user message. The session row must exist first: since
         //    `PRAGMA foreign_keys` went on (2026-09-11, #146) a message for an
@@ -1232,8 +1231,15 @@ impl Agent {
                 }
             }
         }
-        let mut messages =
-            self.build_context_with(session_id, Some(user_message), assessment.as_ref())?;
+        let (mut messages, world_sources) = self.build_context_with(
+            session_id,
+            Some(user_message),
+            assessment.as_ref(),
+            taint_pool.as_ref(),
+        )?;
+        // What the pool holds before any tool runs — inherited, and stamped
+        // world facts the preamble shows — is not what this turn read itself.
+        let inherited_sources = taint_pool.as_ref().map(|p| p.sources()).unwrap_or_default();
 
         let max_iterations = self.config.max_tool_iterations.min(MAX_TOOL_ITERATIONS);
         let mut tool_calls_made = Vec::new();
@@ -1837,12 +1843,19 @@ impl Agent {
             }
         }
 
-        let untrusted_sources = taint_pool
+        // Plus the tool names behind the stamped world facts it was shown, so
+        // a note written from one carries the stamp on (flat, never nested).
+        let mut untrusted_sources: Vec<String> = taint_pool
             .map(|p| p.sources())
             .unwrap_or_default()
             .into_iter()
             .filter(|s| !inherited_sources.contains(s))
             .collect();
+        for s in world_sources {
+            if !untrusted_sources.contains(&s) {
+                untrusted_sources.push(s);
+            }
+        }
         Ok(AgentResponse {
             message: final_response,
             tool_calls: tool_calls_made,
@@ -2030,7 +2043,7 @@ impl Agent {
     /// exercise directly.
     #[cfg(test)]
     fn build_context(&self, session_id: &str) -> Result<Vec<ChatMessage>> {
-        self.build_context_with(session_id, None, None)
+        Ok(self.build_context_with(session_id, None, None, None)?.0)
     }
 
     /// The prompt for one turn, in cache-stable order:
@@ -2048,12 +2061,17 @@ impl Agent {
     /// system prompt. The world state is still its own system message, not
     /// spliced into the prompt: the prompt is who the agent is; this is what is
     /// true right now, and the boundary stays visible in a transcript.
+    ///
+    /// With a `taint` pool, each world fact shown whose value carries a
+    /// `tainted_by` stamp is pooled under its entity; the second value is the
+    /// tool names those stamps hold, each once.
     fn build_context_with(
         &self,
         session_id: &str,
         objective: Option<&str>,
         assessment: Option<&obc_memory::mushroom::Assessment>,
-    ) -> Result<Vec<ChatMessage>> {
+        taint: Option<&obc_safety::taint::TaintPool>,
+    ) -> Result<(Vec<ChatMessage>, Vec<String>)> {
         let mut system = match self.notes.as_ref().and_then(|n| n.render()) {
             Some(notes) => format!("{}\n\n{notes}", self.config.system_prompt.trim_end()),
             None => self.config.system_prompt.clone(),
@@ -2078,6 +2096,7 @@ impl Agent {
         messages.extend(context::assemble_history(&stored));
 
         let mut ephemeral = Vec::new();
+        let mut world_sources = Vec::new();
         // Phase 16 P1: verified experience (learned skills + similar past
         // successes) for this objective.
         if let (Some(k), Some(objective)) = (self.experience_k, objective) {
@@ -2098,7 +2117,21 @@ impl Agent {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
-            if let Some(state) = world_context::render(world, &self.world_context, now) {
+            if let Some((state, shown)) =
+                world_context::render_shown(world, &self.world_context, now)
+            {
+                // Track 0: a shown fact written from untrusted content is
+                // pooled like inherited taint, under its entity and sources.
+                if let Some(pool) = taint {
+                    for t in shown.iter().filter_map(world_context::fact_taint) {
+                        pool.add(&t.source, &t.content);
+                        for s in t.tainted_by.split(", ").map(str::trim) {
+                            if !s.is_empty() && !world_sources.iter().any(|w| w == s) {
+                                world_sources.push(s.to_string());
+                            }
+                        }
+                    }
+                }
                 ephemeral.push(ChatMessage {
                     role: ChatRole::System,
                     content: state,
@@ -2106,7 +2139,10 @@ impl Agent {
             }
         }
 
-        Ok(context::with_ephemeral_tail(messages, ephemeral))
+        Ok((
+            context::with_ephemeral_tail(messages, ephemeral),
+            world_sources,
+        ))
     }
 
     /// Fold older history into a persisted summary when the history has grown
@@ -2815,7 +2851,8 @@ pub struct AgentResponse {
     pub usage: Option<obc_providers::Usage>,
     /// The untrusted sources (External-trust tools) whose output this turn
     /// read and pooled, each once; not what it inherited
-    /// ([`with_inherited_taint`]). Empty when taint tracking is off.
+    /// ([`with_inherited_taint`]), except the tool names stamped on world facts
+    /// its preamble showed. Empty when taint tracking is off.
     pub untrusted_sources: Vec<String>,
 }
 
@@ -3362,8 +3399,8 @@ mod context_order_and_compaction_tests {
             vec![],
         )
         .with_world_context(world, world_context::WorldContextConfig::default());
-        let ctx = agent
-            .build_context_with(&session, Some("the ask"), None)
+        let (ctx, _) = agent
+            .build_context_with(&session, Some("the ask"), None, None)
             .unwrap();
         let contents: Vec<&str> = ctx.iter().map(|m| m.content.as_str()).collect();
         assert_eq!(contents[0], AgentConfig::default().system_prompt);
