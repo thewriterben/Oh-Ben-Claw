@@ -164,7 +164,8 @@ impl PolicyEngine {
 const GLOB_MAX_DEPTH: usize = 64;
 
 /// Minimal glob matcher supporting `*` (any sequence) and `?` (any single char).
-fn glob_match(pattern: &str, text: &str) -> bool {
+/// Shared with sub-agent scopes, so a scope glob means what a policy glob means.
+pub fn glob_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
     glob_match_inner(&p, &t, 0)

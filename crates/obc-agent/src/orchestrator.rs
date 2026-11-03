@@ -19,7 +19,7 @@
 //! | `LeastBusy` | Tasks go to the sub-agent with the fewest completed tasks |
 
 use crate::delegation_tools::delegation_tools;
-use crate::pool::{AgentPool, SubAgentSpec};
+use crate::pool::{AgentPool, SubAgentPosture, SubAgentSpec};
 use crate::AgentConfig;
 use crate::{Agent, AgentHandle, AgentResponse};
 use anyhow::Result;
@@ -111,6 +111,10 @@ pub struct OrchestratorConfig {
     /// System prompt extension for the orchestrator role.
     #[serde(default = "default_orchestrator_prompt_extension")]
     pub system_prompt_extension: String,
+    /// The tool and vault globs every sub-agent's scope is cut from
+    /// (`[orchestrator.sub_agent_scope]`). Default `"*"` for both.
+    #[serde(default)]
+    pub sub_agent_scope: crate::scope::ScopeConfig,
 }
 
 fn default_orchestrator_prompt_extension() -> String {
@@ -129,6 +133,7 @@ impl Default for OrchestratorConfig {
             routing: RoutingStrategy::Manual,
             agents: Vec::new(),
             system_prompt_extension: default_orchestrator_prompt_extension(),
+            sub_agent_scope: crate::scope::ScopeConfig::default(),
         }
     }
 }
@@ -218,13 +223,30 @@ impl OrchestratorAgent {
         session_id: String,
         deps: InnerAgentDeps,
     ) -> Result<Self> {
-        // The pool carries the conscience reach gate so every sub-agent it spawns
-        // is gated too — delegation is not an egress bypass.
-        let pool = AgentPool::new(provider_config.clone(), Arc::clone(&memory)).with_reach_gate(
-            deps.reach.clone(),
-            deps.auditor.clone(),
-            deps.resolver.clone(),
-        );
+        // The pool carries the conscience reach gate and the inner agent's
+        // safety layers, so every sub-agent it spawns is gated too — delegation
+        // is not a way round egress, policy, Track 0, approval or the fences —
+        // and cuts each sub-agent's scope from the configured ceiling.
+        let posture = SubAgentPosture {
+            policy: deps.policy.clone(),
+            safety: deps.safety.clone(),
+            approval: deps.approval.clone(),
+            trust: deps.trust.clone(),
+            obs: deps.obs.clone(),
+            cost: deps.cost.clone(),
+            taint_mode: deps.taint_mode,
+            tools: deps.tools.clone(),
+        };
+        let pool = AgentPool::new(provider_config.clone(), Arc::clone(&memory))
+            .with_reach_gate(
+                deps.reach.clone(),
+                deps.auditor.clone(),
+                deps.resolver.clone(),
+            )
+            .with_posture(posture)
+            .with_scope(crate::scope::Scope::from_config(
+                &orchestrator_config.sub_agent_scope,
+            ));
         let session_arc = Arc::new(Mutex::new(session_id));
 
         // Build the orchestrator's inner tool registry: default tools (egress

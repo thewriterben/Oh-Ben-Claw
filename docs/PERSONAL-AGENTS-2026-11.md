@@ -36,7 +36,7 @@ details:
 | A second agent reviews actions | Auto-review rules | **Sentinel**: a second agent that must approve all internet access | Auto-review of account and sharing actions; a monitor can pause the dot | **Partial.** The checks are deterministic: taint tracking (default `warn` since 2026-11-01) and the conscience egress allowlist. No model-based reviewer |
 | Credentials it can use but not see | Vault, password manager, Secure Form | Credential store it can use but not read; Stripe Link single-use cards | Saved passwords hidden from the model | **Partial.** The vault exists (`crates/obc-safety/src/vault.rs`). I found no path that fills a browser field from the vault without the secret entering the model's context |
 | Teach by demonstration | Records a browser workflow of up to 10 minutes and turns it into a draft skill | — | — | **Gap.** Skill Forge builds skills from text. Nothing records |
-| Specialised agents | Bots with set jobs that hand off and message each other. **The shared computer is not a security boundary** | Muse plus Sentinel | Specialist dots, each with its own identity and credentials | **Partial.** Sub-agent pool (`crates/obc-agent/src/delegation_tools.rs`) and fleet coordination. Not checked: whether a sub-agent gets narrower tool or credential scope than its parent |
+| Specialised agents | Bots with set jobs that hand off and message each other. **The shared computer is not a security boundary** | Muse plus Sentinel | Specialist dots, each with its own identity and credentials | **Partial.** Sub-agent pool (`crates/obc-agent/src/delegation_tools.rs`) and fleet coordination. Each sub-agent inherits its parent's safety layers and a tool and vault scope that can only narrow (item 9); one process, so not an OS boundary |
 | Memory you can inspect | You can ask a bot what it remembers | Forgets on request | Learns from feedback | **Have, stronger substrate.** Bitemporal world memory with provenance and withdrawal (`world.rs`). The chat path to it is rough |
 | Model selection | Picked per task; the user cannot choose | Not disclosed | Not disclosed | **Have, better.** Explicit local-to-cloud routing (P1–P3), audited |
 | Data custody | Cloud storage required | User-key "Confidential VM" planned | Cloud | **Have.** Local-first by design |
@@ -222,6 +222,18 @@ the warning in Grok's own FAQ that its bots share one computer, which is no
 security boundary. Give each spawned sub-agent a policy scope (tool globs and
 vault names) narrower than its parent's, enforced at the chokepoint. Or
 document plainly that sub-agents are not a boundary.
+
+**Done 2026-11-02, both.** Checking found the gap was wider than the item
+assumed: a sub-agent got none of its parent's policy, Track 0, approval, trust,
+taint mode or tool fences, so delegating went round them. It now inherits all
+of them (`SubAgentPosture`, `crates/obc-agent/src/pool.rs`) and gets a scope
+cut from `[orchestrator.sub_agent_scope]` (`crates/obc-agent/src/scope.rs`):
+tools outside it are not registered and are refused at the chokepoint, vault
+names outside it resolve as missing at credential injection. It can narrow,
+never widen. Still not an OS boundary, and the config says so: a sub-agent
+with `shell` or `file` can read the environment and the process's files.
+Open: a delegated turn always runs as attended, even when the parent's turn
+was not, so approval does not tighten for an unattended delegation.
 
 ## Don't copy
 
