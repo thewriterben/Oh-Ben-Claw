@@ -182,6 +182,17 @@ enabled = true
 cdp_url = "http://127.0.0.1:9333"
 profile = "headless"            # "user" to attach to a signed-in browser instead
 timeout_secs = 30
+# browser_fill_secret (an eighth tool) fills a login field from the vault
+# without the model seeing the value. It is registered only with [conscience]
+# enabled, and fills only on an https host whose reach rule names that secret:
+#   [[conscience.hosts]]
+#   host = "github.com"
+#   credential = "github"     # the model asks for "vault:github"; fills only here
+#   [[conscience.tools]]
+#   tool = "browser"
+#   scope = "egress"
+# The same rule makes the http tool send that secret to github.com as a bearer
+# token. Each fill and each refusal is written to the audit chain.
 
 # ── Channels: Telegram ───────────────────────────────────────────────────────
 # The one channel verified against a real endpoint (2026-09-12). Token from

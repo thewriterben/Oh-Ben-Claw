@@ -236,6 +236,31 @@ impl ActionAuditor {
         )
     }
 
+    /// Record a **vault secret use** — a secret the browser filled into a field
+    /// on `host`, the one host its reach rule binds it to. The secret's *name*
+    /// is recorded, never its value. Non-physical (`RiskClass::safe`); the node
+    /// is `conscience`, the tool `conscience.secret vault:<name> @ <host>` so a
+    /// reader of the chain sees which secret went where, and the decision
+    /// [`Decision::Allowed`]: the reach rule is the bound, and it passed. A
+    /// refused fill goes through [`Self::record_conscience_refusal`] instead.
+    pub fn record_secret_use(
+        &mut self,
+        ts_ms: u64,
+        secret: &str,
+        host: &str,
+        field: &str,
+    ) -> anyhow::Result<ActionRecord> {
+        let args = serde_json::json!({ "secret": secret, "host": host, "field": field });
+        self.record(
+            ts_ms,
+            "conscience",
+            &format!("conscience.secret vault:{secret} @ {host}"),
+            &args,
+            crate::risk::RiskClass::safe(),
+            Decision::Allowed,
+        )
+    }
+
     /// Record a **routing escalation** — a turn the router gave the local brain,
     /// answered by the cloud brain instead (Phase 20 plans P1 and P2: the local
     /// brain failed, called a cloud tool, or asked to hand the turn up) — into
@@ -477,6 +502,23 @@ mod tests {
         }
         // both refusals are in the same tamper-evident chain as physical actions
         assert_eq!(verify(&path, key).unwrap(), 2);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn secret_use_names_the_secret_and_host() {
+        let path = tmp_path("secret");
+        let key = b"test-key";
+        {
+            let mut a = ActionAuditor::open(key.to_vec(), path.clone()).unwrap();
+            let r = a
+                .record_secret_use(1_000, "github", "github.com", "#password")
+                .unwrap();
+            assert_eq!(r.tool, "conscience.secret vault:github @ github.com");
+            assert_eq!(r.decision, Decision::Allowed);
+            assert!(!r.risk.physical);
+        }
+        assert_eq!(verify(&path, key).unwrap(), 1);
         let _ = std::fs::remove_file(&path);
     }
 

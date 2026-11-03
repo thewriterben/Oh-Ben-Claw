@@ -29,6 +29,33 @@ Item 8 of `docs/PERSONAL-AGENTS-2026-11.md`, the embodied half.
 
 ---
 
+## Unreleased — Fill browser fields from the vault (2026-11-02)
+
+Item 7 of `docs/PERSONAL-AGENTS-2026-11.md`.
+
+### Added
+
+- **`browser_fill_secret { field, secret: "vault:<name>" }`.** Fills an input
+  or textarea from the vault (environment as fallback, the same resolver the
+  http tool uses for credentials). The value is never in the tool result.
+- **A secret fills only on its own domain.** The page must be `https`, and its
+  live host (read from the tab when the field is focused, not from the
+  remembered URL) must be allowlisted for `browser` with a reach rule whose
+  `credential` is that secret. A subdomain is a different host. The vault is
+  not read until the host check passes, and a field inside a frame is refused.
+- **Each use is audited.** A fill is a `conscience.secret vault:<name> @ <host>`
+  record in the Track 0 chain; a refusal is a `conscience.secret` denial.
+- The tool is registered only when the conscience is enabled and a resolver is
+  wired, which is the agent's path. The MCP server does not expose it.
+
+### Changed
+
+- **`browser_snapshot` hides password values.** A password field, or one filled
+  from the vault, shows `value=[hidden]`. Before, a snapshot printed the first
+  40 characters of any field's value, a typed password included.
+
+---
+
 ## Unreleased — Approvals in chat while you're present (2026-11-02)
 
 Item 2 of `docs/PERSONAL-AGENTS-2026-11.md`, extended to attended turns.

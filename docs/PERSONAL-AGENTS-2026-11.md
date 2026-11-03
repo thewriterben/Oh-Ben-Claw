@@ -240,7 +240,8 @@ document plainly that sub-agents are not a boundary.
 1. ~~Items 1 and 3 in one PR: unattended posture, approval expiry, and taint on by default.~~ Done 2026-11-01.
 2. ~~Item 2, approvals from Telegram and Slack, which makes item 1 usable away from the desk.~~ Done 2026-11-01.
 3. ~~Items 4 and 5 as a "standing goals" phase.~~ Done 2026-11-02.
-4. Items 6 to 9 when needed. Item 8's embodied version is the one no competitor can match.
+4. ~~Item 7, `browser_fill_secret`.~~ Done 2026-11-02.
+5. Items 6, 8 and 9 when needed. Item 8's embodied version is the one no competitor can match.
 
 ## Sources
 

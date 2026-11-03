@@ -20,8 +20,8 @@ pub use obc_tool_api as traits;
 pub use builtin::{
     audio::{AudioTranscribeTool, TextToSpeechTool},
     browser::{
-        BrowserClickTool, BrowserCloseTabTool, BrowserNavigateTool, BrowserNewTabTool,
-        BrowserScrollTool, BrowserSession, BrowserSnapshotTool, BrowserTypeTool,
+        BrowserClickTool, BrowserCloseTabTool, BrowserFillSecretTool, BrowserNavigateTool,
+        BrowserNewTabTool, BrowserScrollTool, BrowserSession, BrowserSnapshotTool, BrowserTypeTool,
     },
     file::FileTool,
     http::HttpTool,
@@ -108,10 +108,13 @@ pub fn default_tools_with_reach(
     // Browser tools share a single session; CDP URL from env or default port.
     // Navigation is an egress path, so it gets the same reach gate + auditor as
     // the HTTP tool — arbitrary browsing can't reach a non-allowlisted host.
+    // With a resolver too, `browser_fill_secret` fills a field from the vault
+    // on the one host whose reach rule names that secret.
     tools.extend(builtin::browser::all_browser_tools_with_reach(
         cdp_url.as_deref(),
         reach.clone(),
         auditor.clone(),
+        resolver.clone(),
     ));
 
     tools
@@ -250,6 +253,7 @@ mod risk_contract_tests {
             "ota_update",
             "browser_click",
             "browser_type",
+            "browser_fill_secret",
             "browser_new_tab",
             "browser_close_tab",
             "schedule",
