@@ -71,6 +71,9 @@ pub struct Goal {
     pub status: GoalStatus,
     /// The latest progress note, written by the last tick.
     pub note: Option<String>,
+    /// The untrusted sources the tick that wrote [`note`](Self::note) had
+    /// read (Track 0 taint), or `None` when it had read none.
+    pub note_tainted_by: Option<String>,
     /// Ticks run so far.
     pub ticks: u64,
     /// Unix seconds after which the goal closes as [`GoalStatus::Expired`].
@@ -90,6 +93,7 @@ impl Goal {
             owner: owner.trim().to_string(),
             status: GoalStatus::Active,
             note: None,
+            note_tainted_by: None,
             ticks: 0,
             until: None,
             created_at: now,
@@ -125,13 +129,15 @@ pub(crate) const DDL: &str = "CREATE TABLE IF NOT EXISTS goals (
      owner       TEXT NOT NULL,
      status      TEXT NOT NULL,
      note        TEXT,
+     note_tainted_by TEXT,
      ticks       INTEGER NOT NULL DEFAULT 0,
      until       INTEGER,
      created_at  INTEGER NOT NULL,
      updated_at  INTEGER NOT NULL
  );";
 
-const COLS: &str = "id, text, done_when, owner, status, note, ticks, until, created_at, updated_at";
+const COLS: &str =
+    "id, text, done_when, owner, status, note, ticks, until, created_at, updated_at, note_tainted_by";
 
 fn row_to_goal(row: &rusqlite::Row<'_>) -> rusqlite::Result<Goal> {
     Ok(Goal {
@@ -145,6 +151,7 @@ fn row_to_goal(row: &rusqlite::Row<'_>) -> rusqlite::Result<Goal> {
         until: row.get::<_, Option<i64>>(7)?.map(|t| t as u64),
         created_at: row.get::<_, i64>(8)? as u64,
         updated_at: row.get::<_, i64>(9)? as u64,
+        note_tainted_by: row.get(10)?,
     })
 }
 
@@ -179,7 +186,7 @@ impl Scheduler {
         {
             let conn = self.conn.lock().unwrap();
             conn.execute(
-                &format!("INSERT OR REPLACE INTO goals ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"),
+                &format!("INSERT OR REPLACE INTO goals ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"),
                 params![
                     goal.id,
                     goal.text,
@@ -191,6 +198,7 @@ impl Scheduler {
                     goal.until.map(|t| t as i64),
                     goal.created_at as i64,
                     goal.updated_at as i64,
+                    goal.note_tainted_by,
                 ],
             )
             .context("Failed to store goal")?;
@@ -238,13 +246,21 @@ impl Scheduler {
         )
     }
 
-    /// Record a tick's progress note. `false` when no such goal.
-    pub fn record_goal_progress(&self, id: &str, note: &str, at: u64) -> Result<bool> {
+    /// Record a tick's progress note, with the untrusted sources that tick
+    /// had read (see [`Goal::note_tainted_by`]). `false` when no such goal.
+    pub fn record_goal_progress(
+        &self,
+        id: &str,
+        note: &str,
+        tainted_by: Option<&str>,
+        at: u64,
+    ) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
         let n = conn
             .execute(
-                "UPDATE goals SET note = ?1, ticks = ticks + 1, updated_at = ?2 WHERE id = ?3",
-                params![note, at as i64, id],
+                "UPDATE goals SET note = ?1, note_tainted_by = ?2, ticks = ticks + 1,
+                 updated_at = ?3 WHERE id = ?4",
+                params![note, tainted_by, at as i64, id],
             )
             .context("Failed to record goal progress")?;
         Ok(n > 0)
@@ -305,10 +321,16 @@ mod tests {
         assert_eq!(task.session_id, g.id);
         assert!(s.get_task(&g.id).unwrap().unwrap().enabled);
 
-        assert!(s.record_goal_progress(&g.id, "21 °C, fine", 100).unwrap());
+        assert!(s
+            .record_goal_progress(&g.id, "21 °C, fine", Some("web_fetch"), 100)
+            .unwrap());
         let got = s.find_goal(&g.text.to_uppercase()).unwrap().unwrap();
         assert_eq!(got.note.as_deref(), Some("21 °C, fine"));
+        assert_eq!(got.note_tainted_by.as_deref(), Some("web_fetch"));
         assert_eq!(got.ticks, 1);
+        // A clean tick clears the stamp along with the note it replaces.
+        assert!(s.record_goal_progress(&g.id, "22 °C", None, 110).unwrap());
+        assert_eq!(s.get_goal(&g.id).unwrap().unwrap().note_tainted_by, None);
         assert_eq!(got.owner, "telegram:42");
 
         assert!(s.close_goal(&g.id, GoalStatus::Done, 200).unwrap());

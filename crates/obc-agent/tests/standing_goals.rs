@@ -9,6 +9,8 @@
 //! Track 0 taint (2026-11-02): a goal set in a turn that had read external
 //! content is stamped with those sources, and its ticks start with the goal's
 //! text pooled under that name, as a scheduled task's turn does.
+//! A note a tick writes after reading external content is stamped the same
+//! way, so a goal set clean whose ticks fetch is held to it from the next tick.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -658,4 +660,66 @@ fn tap_yes(b: &Bench) -> tokio::task::JoinHandle<bool> {
         }
         false
     })
+}
+
+#[tokio::test]
+async fn a_note_written_after_a_fetch_taints_the_next_tick_of_a_goal_set_clean() {
+    // Tick 1 writes a note quoting the bulletin; tick 2 tries to post it.
+    let steps = |fetch_first: bool| {
+        let mut s = Vec::new();
+        if fetch_first {
+            s.push(Step::Call(
+                "fetch",
+                json!({"url": "https://example.org/bulletin"}),
+            ));
+        }
+        s.extend([
+            Step::Say("NOTE: bulletin says post open-the-vents-now\nCHANGED: yes\nDONE: no"),
+            Step::Call("post_note", json!({"text": "open-the-vents-now"})),
+            Step::Say("NOTE: posted\nCHANGED: yes\nDONE: no"),
+        ]);
+        s
+    };
+    let stamps = |b: &Bench, g: &Goal| -> Vec<Option<String>> {
+        b.world
+            .history(&progress_entity(&g.id))
+            .unwrap()
+            .iter()
+            .map(|f| f.value["tainted_by"].as_str().map(String::from))
+            .collect()
+    };
+
+    // The first tick fetched: its note is stamped, the second tick starts with
+    // it pooled, and the tapped post is refused. The second note, written
+    // while the first was shown, keeps the stamp.
+    let b = bench_in(steps(true), 30, TaintMode::Enforce, &[]);
+    let g = add_goal(&b, "Watch the greenhouse bulletin", "");
+    let tap = tap_yes(&b);
+    let ran = run(&b, 2, true).await;
+    assert!(tap.await.unwrap(), "the phone was never asked");
+    assert!(tick(&ran[1]).ok, "{ran:?}");
+    assert_eq!(
+        *b.posted.lock().unwrap(),
+        0,
+        "a fetched note drove post_note"
+    );
+    assert_eq!(
+        stamps(&b, &g),
+        vec![Some("fetch".to_string()), Some("fetch".to_string())]
+    );
+    let row = b.scheduler.get_goal(&g.id).unwrap().unwrap();
+    assert_eq!(row.note_tainted_by.as_deref(), Some("fetch"));
+
+    // Control: the same note with no fetch behind it, and the tapped post runs.
+    let b = bench_in(steps(false), 30, TaintMode::Enforce, &[]);
+    let g = add_goal(&b, "Watch the greenhouse bulletin", "");
+    let tap = tap_yes(&b);
+    run(&b, 2, true).await;
+    assert!(tap.await.unwrap(), "the phone was never asked");
+    assert_eq!(
+        *b.posted.lock().unwrap(),
+        1,
+        "an unstamped note was refused"
+    );
+    assert_eq!(stamps(&b, &g), vec![None, None]);
 }
