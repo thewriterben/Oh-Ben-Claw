@@ -1259,6 +1259,8 @@ pub struct SpawnAgentRequest {
     #[serde(default)]
     pub tools: Vec<String>,
     #[serde(default)]
+    pub vaults: Vec<String>,
+    #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub max_iterations: Option<usize>,
@@ -1284,6 +1286,7 @@ pub async fn spawn_agent(
     if !body.tools.is_empty() {
         spec.tools = body.tools;
     }
+    spec.vaults = body.vaults;
     if let Some(max_iter) = body.max_iterations {
         spec.max_iterations = max_iter;
     }

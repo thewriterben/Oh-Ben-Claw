@@ -14,6 +14,7 @@ pub mod judge;
 pub mod notify;
 pub mod orchestrator;
 pub mod pool;
+pub mod scope;
 /// System 1 — the reflex rule language, engine, escalation budget and action
 /// sink — extracted to [`obc_reflex`] on 2026-08-12.
 ///
@@ -107,7 +108,8 @@ pub use handle::{AgentEvent, AgentHandle};
 #[allow(unused_imports)]
 pub use orchestrator::{OrchestratorAgent, OrchestratorConfig, RoutingStrategy};
 #[allow(unused_imports)]
-pub use pool::{AgentPool, SubAgentInfo, SubAgentSpec, SubAgentStatus};
+pub use pool::{AgentPool, SubAgentInfo, SubAgentPosture, SubAgentSpec, SubAgentStatus};
+pub use scope::{Scope, ScopeConfig};
 
 use anyhow::Result;
 use obc_approval::ApprovalManager;
@@ -248,6 +250,9 @@ pub struct Agent {
     /// be documented, generated into every NanoPi config by the deployment planner,
     /// and have no effect whatsoever.
     max_history: usize,
+    /// A sub-agent's tool scope ([`scope`]): a call to a name outside it is
+    /// refused at the chokepoint, on every delegate hop. `None` = no scope.
+    tool_scope: Option<scope::Scope>,
 }
 
 /// Which brain produced one completion, as [`Agent::complete_routed`] reports
@@ -414,6 +419,7 @@ impl Agent {
             forge_dir: None,
             taint_mode: obc_safety::taint::TaintMode::default(),
             max_history: MAX_HISTORY_MESSAGES,
+            tool_scope: None,
         }
     }
 
@@ -882,6 +888,13 @@ impl Agent {
     /// untrusted node are then refused, and every tool round-trip feeds the score.
     pub fn with_trust(mut self, trust: Arc<TrustScorer>) -> Self {
         self.trust = Some(trust);
+        self
+    }
+
+    /// Confine this agent to a sub-agent scope: a call to a tool outside it is
+    /// refused at the chokepoint even if the tool is registered.
+    pub fn with_tool_scope(mut self, scope: scope::Scope) -> Self {
+        self.tool_scope = Some(scope);
         self
     }
 
@@ -2239,6 +2252,18 @@ impl Agent {
                     return Ok(obc_tool_api::ToolResult::err(format!(
                         "Tool '{}' blocked by security policy '{}': {}",
                         name, policy_name, reason
+                    )));
+                }
+            }
+
+            // Sub-agent scope — also per hop, so a skill in scope cannot
+            // delegate to a tool outside it.
+            if let Some(ref scope) = self.tool_scope {
+                if !scope.allows_tool(&name) {
+                    tracing::warn!(agent = %self.config.name, tool = %name, "Tool call outside the sub-agent's scope");
+                    return Ok(obc_tool_api::ToolResult::err(format!(
+                        "Tool '{}' is outside this sub-agent's scope",
+                        name
                     )));
                 }
             }

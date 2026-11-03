@@ -5,6 +5,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Sub-agent scopes (2026-11-02)
+
+Item 9 of `docs/PERSONAL-AGENTS-2026-11.md`.
+
+### Fixed
+
+- **Delegating no longer gets round the parent's safety layers.** A spawned
+  sub-agent was a bare agent: no tool policy, no Track 0 gate or audit, no
+  approval, no trust, the default taint mode, and the default tool set without
+  the operator's `[shell]`/`[file]`/`[browser]` fences. Only the egress reach
+  gate and credential resolver were passed down. It now gets all of them from
+  the agent that spawned it. Under a supervised autonomy level, a delegated
+  call that needs approval is now refused, as in any other turn with no chat to
+  ask in.
+
+### Added
+
+- **`[orchestrator.sub_agent_scope]`**: `tools` and `vaults` glob lists, the
+  ceiling every sub-agent's scope is cut from (default `"*"` for both). A spawn
+  (`spawn_agent`, `POST /api/v1/agents`, `[[orchestrator.agents]]`) can narrow
+  it with `tools` and the new `vaults`, never widen it: a glob is intersected,
+  and a literal name outside it refuses the spawn. Tools outside the scope are
+  not registered, and the chokepoint refuses a call to one on every delegate
+  hop. A credential outside the vault scope resolves as missing, which the HTTP
+  tool refuses (fail closed).
+- Sub-agents are not an OS boundary, and the docs now say so: one given
+  `shell` or `file` can read the environment and the process's files.
+
+---
+
 ## Unreleased — Approvals in chat while you're present (2026-11-02)
 
 Item 2 of `docs/PERSONAL-AGENTS-2026-11.md`, extended to attended turns.
