@@ -3631,6 +3631,37 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
         .with_skill_usage(Arc::clone(&skill_usage))
         .with_forge_dir(oh_ben_claw::skill_forge::SkillForge::default_dir())
         .with_taint_mode(taint_mode);
+    // Personal-agents item 6: the reflex tier's small model reviews unattended
+    // gated calls after the deterministic checks. `validate` refused
+    // `enabled` without `[edge].local_model`.
+    if config.autonomy.review.enabled {
+        if let Some(m) = config.edge.reflex_provider() {
+            match providers::from_config(&m) {
+                Ok(provider) => {
+                    let mut model = oh_ben_claw::agent::reflex_tier::ProviderReflexModel::new(
+                        provider,
+                        m.clone(),
+                    );
+                    if let Some(models) = &model_registry {
+                        model = model.with_registry(Arc::clone(models));
+                    }
+                    let reviewer = oh_ben_claw::agent::action_review::ActionReviewer::from_config(
+                        Arc::new(model),
+                        &config.autonomy.review,
+                    );
+                    info!(
+                        model = %m.model,
+                        fail_closed = config.autonomy.review.fail_closed,
+                        "action reviewer armed for unattended gated calls"
+                    );
+                    agent = agent.with_action_reviewer(Arc::new(reviewer));
+                }
+                Err(e) => anyhow::bail!(
+                    "[autonomy.review] is enabled but its model could not be built: {e}"
+                ),
+            }
+        }
+    }
     // Phase 16: load enabled skills (authored + learned) from the forge into the
     // live tool registry. Disabled skills stay invisible; simulate-stage skills
     // load but can only dry-run until promoted.

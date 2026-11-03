@@ -2963,7 +2963,18 @@ impl Config {
         if self.edge.reflex_timeout_ms == 0 {
             anyhow::bail!("edge.reflex_timeout_ms must be > 0");
         }
-        if self.edge.local_model.is_some() && !self.edge.enabled {
+        // The action reviewer uses the same small model, edge mode or not.
+        if self.autonomy.review.enabled {
+            if self.edge.reflex_provider().is_none() {
+                anyhow::bail!(
+                    "[autonomy.review] enabled = true needs [edge] local_model set to the                      small local model that reviews unattended actions"
+                );
+            }
+            if self.autonomy.review.timeout_ms == 0 {
+                anyhow::bail!("autonomy.review.timeout_ms must be > 0");
+            }
+        }
+        if self.edge.local_model.is_some() && !self.edge.enabled && !self.autonomy.review.enabled {
             warnings.push(
                 "edge.local_model has no effect while edge.enabled = false: the reflex \
                  tier runs only in edge mode"
@@ -3292,6 +3303,24 @@ mod tests {
         let mut config = Config::default();
         config.agent.max_tool_iterations = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn the_action_reviewer_needs_a_local_model_but_not_edge_mode() {
+        let mut config: Config = toml::from_str("[autonomy.review]\nenabled = true\n").unwrap();
+        assert_eq!(config.autonomy.review.timeout_ms, 3_000);
+        assert!(!config.autonomy.review.fail_closed);
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("[edge] local_model"), "{err}");
+
+        config.edge.local_model = Some("gemma3n".into());
+        let warnings = config.validate().unwrap();
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.contains("edge.local_model has no effect")),
+            "the reviewer uses it: {warnings:?}"
+        );
     }
 
     #[test]

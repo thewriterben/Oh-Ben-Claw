@@ -29,6 +29,48 @@ Item 8 of `docs/PERSONAL-AGENTS-2026-11.md`, the embodied half.
 
 ---
 
+## Unreleased — Local-model action reviewer (2026-11-02)
+
+Item 6 of `docs/PERSONAL-AGENTS-2026-11.md`, taken from Muse's Sentinel and
+Dots' auto-review. Rules catch what they were written for. A small local model
+now reads each unattended action that the rules have let through, looking for
+the rest.
+
+### Added
+
+- **`[autonomy.review]`** (`enabled`, `timeout_ms` default 3000,
+  `fail_closed` default false). On, it needs `[edge].local_model`; edge mode
+  itself is not required. In an unattended turn (scheduled task, goal tick,
+  A2A call), a gated call (physical, irreversible or blast radius) that Track
+  0, dynamic trust, the approval policy and taint have all passed is shown to
+  that model before it runs (`obc_agent::action_review`). It answers `OK` or
+  `CONCERN: <why>`. A concern goes to the chat approvers through
+  `obc_approval::approval_escalate` with the concern as the reason; with no
+  approvers attached the call is refused. A timeout, error, model marked down
+  or unreadable reply runs the call as decided, or with `fail_closed` counts
+  as a concern. Counters: `action_review_{clear,concern,unavailable}_total`.
+- `obc_approval::approval_authorize_waiting` returns `Cleared::{Policy,
+  Operator}`, so a call the operator just approved in chat is not reviewed
+  and asked about a second time.
+
+### Why it can only tighten
+
+It runs last, so there is no refusal left for it to lift; its one power is
+to add a question. A prompt injection in the arguments can at worst make it
+say `OK`, which leaves the call where the rules put it.
+`crates/obc-agent/tests/action_review.rs` drives the real scheduler loop:
+a clear review posts, a concern posts only after the approver's tap and not
+on Deny, expiry or with nobody to ask, and the rules' refusals happen without
+the reviewer being asked.
+
+### Not covered
+
+Attended turns are not reviewed: the owner is there, and a call that needs
+approval already asks them in their own chat. P2P peer calls are not
+reviewed, because a peer cannot be asked to retry.
+
+---
+
 ## Unreleased — Fill browser fields from the vault (2026-11-02)
 
 Item 7 of `docs/PERSONAL-AGENTS-2026-11.md`.
