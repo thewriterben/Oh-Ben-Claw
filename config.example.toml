@@ -241,14 +241,27 @@ timeout_secs = 30
 # `unattended_grant_ttl_secs` (default 1800 = 30 min; 0 = never). With
 # Telegram or Slack approvers listed, such a call is sent to them and waits
 # `approval_wait_secs` (default 300) for a tap; unanswered, it is refused and
-# the expiry is audited as a denial. Tasks run one at a time, so a waiting
-# call holds back the tasks due after it. 0 refuses at once.
+# the expiry is audited as a denial. Up to four tasks run at once, so a
+# waiting call holds one of those slots. 0 refuses at once.
 # [autonomy]
 # level = "full"
 # always_ask = ["memory"]
 # auto_approve = ["gpio_write"]   # what a scheduled task may actuate unasked
 # unattended_grant_ttl_secs = 1800
 # approval_wait_secs = 300
+#
+# The action reviewer: before an unattended physical, irreversible or
+# blast-radius call runs, after every rule has passed it, the small local
+# model from [edge] local_model (edge mode not required) reads it and answers
+# OK or names a concern ("sends a home address to a stranger"). A concern goes
+# to the Telegram/Slack approvers as above; with none listed, the call is
+# refused. It can only add that question, never lift a refusal. A timeout,
+# error or unreadable reply runs the call as the rules decided, unless
+# fail_closed = true makes it a concern.
+# [autonomy.review]
+# enabled = false
+# timeout_ms = 3000
+# fail_closed = false
 
 # ── Self-improvement ─────────────────────────────────────────────────────────
 # Phase 16: every run is captured as a trajectory; an hourly loop synthesises
