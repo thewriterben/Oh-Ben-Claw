@@ -28,11 +28,13 @@
 //! | `browser_snapshot` | Capture an accessibility snapshot of the current page |
 //! | `browser_click` | Click an element matched by CSS selector |
 //! | `browser_type` | Type text into a focused input / textarea |
+//! | `browser_fill_secret` | Fill a field from the vault, on the secret's own host only |
 //! | `browser_scroll` | Scroll the page (up / down / to a selector) |
 //! | `browser_new_tab` | Open a new browser tab |
 //! | `browser_close_tab` | Close the active tab |
 
 use super::browser_cdp::{self, Cdp};
+use crate::credentials::CredentialResolver;
 use crate::{traits::BlastRadius, traits::RiskClass, Tool, ToolResult};
 use async_trait::async_trait;
 use obc_conscience::{ReachDecision, ReachGate};
@@ -873,6 +875,257 @@ impl Tool for BrowserTypeTool {
     }
 }
 
+// ── BrowserFillSecretTool ─────────────────────────────────────────────────────
+
+/// Fill a field from the secrets vault without the model ever seeing the value
+/// (docs/PERSONAL-AGENTS-2026-11.md, item 7).
+///
+/// The model names the secret (`vault:github`); the value is resolved here, at
+/// the moment of the fill, through the same [`CredentialResolver`] that injects
+/// HTTP credentials, and typed into the field. It never appears in the tool
+/// result, and a snapshot of the page shows the field as `[hidden]`.
+///
+/// **A secret fills only on its own domain.** The binding is the conscience
+/// egress allowlist: a fill is allowed only when the page's live host is
+/// allowlisted for the `browser` tool *and* that host's rule names this secret
+/// as its credential. The host is read from the tab after the field is
+/// focused, not from the session's remembered URL, so a redirect cannot carry
+/// the fill to another site. Only `https` pages qualify, and only a field in
+/// the top document (focus that lands in a frame is refused).
+///
+/// Every outcome is audited when an auditor is attached: a fill as
+/// [`obc_safety::ActionAuditor::record_secret_use`], a refusal as a
+/// `conscience.secret` denial.
+pub struct BrowserFillSecretTool {
+    session: Arc<BrowserSession>,
+    reach: ReachGate,
+    resolver: Arc<dyn CredentialResolver>,
+    auditor: Option<Arc<Mutex<obc_safety::ActionAuditor>>>,
+}
+
+impl BrowserFillSecretTool {
+    /// Both the reach gate and the resolver are required: without the gate no
+    /// secret is bound to any host, so nothing could ever be filled.
+    pub fn new(
+        session: Arc<BrowserSession>,
+        reach: ReachGate,
+        resolver: Arc<dyn CredentialResolver>,
+    ) -> Self {
+        Self {
+            session,
+            reach,
+            resolver,
+            auditor: None,
+        }
+    }
+
+    /// Attach a Track 0 auditor so each fill and each refusal is a
+    /// tamper-evident record.
+    pub fn with_auditor(mut self, auditor: Arc<Mutex<obc_safety::ActionAuditor>>) -> Self {
+        self.auditor = Some(auditor);
+        self
+    }
+
+    /// The secret name from `vault:<name>`, or why the reference is unusable.
+    fn secret_name(reference: &str) -> Result<&str, String> {
+        match reference.strip_prefix("vault:") {
+            Some(name) if !name.trim().is_empty() => Ok(name.trim()),
+            _ => Err(format!(
+                "secret must be a vault reference like \"vault:github\", got \"{reference}\""
+            )),
+        }
+    }
+
+    /// May the secret `name` fill a field on the page at `href`? `Ok(host)` if
+    /// the page is `https` and its host's `browser` reach rule names `name` as
+    /// its credential; `Err(reason)` otherwise. Pure, so it is tested offline.
+    fn authorize(&self, name: &str, href: &str) -> Result<String, String> {
+        let url = reqwest::Url::parse(href)
+            .map_err(|_| format!("the page has no usable address ({href})"))?;
+        let host = url.host_str().unwrap_or_default().to_string();
+        if url.scheme() != "https" {
+            return Err(format!(
+                "secrets fill only on https pages; this page is {}",
+                url.scheme()
+            ));
+        }
+        match self.reach.check("browser", &host) {
+            ReachDecision::Refuse(reason) => Err(reason.to_string()),
+            ReachDecision::Allow { credential } if credential.as_deref() == Some(name) => Ok(host),
+            ReachDecision::Allow { .. } => Err(format!(
+                "conscience: vault:{name} is not bound to '{host}' (its reach rule names \
+                 a different credential, or none)"
+            )),
+        }
+    }
+
+    /// Write a `conscience.secret` refusal to the chain, if an auditor is attached.
+    fn audit_refusal(&self, name: &str, host: &str, reason: &str) {
+        if let Some(auditor) = &self.auditor {
+            let mut g = auditor.lock().unwrap_or_else(|e| e.into_inner());
+            let subject = format!("vault:{name} @ {host}");
+            let _ = g.record_conscience_refusal(now_ms(), "conscience.secret", &subject, reason);
+        }
+    }
+
+    /// Log and audit a refusal, and turn it into the tool's error.
+    fn refuse(&self, name: &str, host: &str, reason: String) -> ToolResult {
+        tracing::warn!(secret = %name, host = %host, refusal = %reason, "browser_fill_secret refused");
+        self.audit_refusal(name, host, &reason);
+        ToolResult::err(reason)
+    }
+}
+
+/// Milliseconds since the Unix epoch, for audit records.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[async_trait]
+impl Tool for BrowserFillSecretTool {
+    fn name(&self) -> &str {
+        "browser_fill_secret"
+    }
+
+    fn risk_class(&self) -> RiskClass {
+        // Typing a credential into a live page; replaying it types it again.
+        RiskClass {
+            reversible: false,
+            blast: BlastRadius::Low,
+            physical: false,
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Fill a browser input field (a password, API key or other secret) from the \
+         secrets vault. Give the field's CSS selector and the secret as \"vault:<name>\". \
+         The value is never shown to you. It fills only on the https site the secret \
+         belongs to; anywhere else it is refused."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string",
+                    "description": "CSS selector of the input or textarea to fill (from browser_snapshot)."
+                },
+                "secret": {
+                    "type": "string",
+                    "description": "The secret to fill, as \"vault:<name>\"."
+                },
+                "submit": {
+                    "type": "boolean",
+                    "description": "If true, press Enter after filling (default: false).",
+                    "default": false
+                }
+            },
+            "required": ["field", "secret"]
+        })
+    }
+
+    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
+        let Some(field) = args.get("field").and_then(|v| v.as_str()) else {
+            return Ok(ToolResult::err("Missing required parameter 'field'"));
+        };
+        let Some(reference) = args.get("secret").and_then(|v| v.as_str()) else {
+            return Ok(ToolResult::err("Missing required parameter 'secret'"));
+        };
+        let name = match Self::secret_name(reference) {
+            Ok(n) => n,
+            Err(e) => return Ok(ToolResult::err(e)),
+        };
+        let submit = args
+            .get("submit")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let cdp = match self.session.attach().await {
+            Ok(c) => c,
+            Err(e) => return Ok(ToolResult::err(format!(
+                "No browser is attached (CDP at {} unreachable: {e}); filling needs a real page.",
+                self.session.cdp_url
+            ))),
+        };
+
+        // Focus the field and read the page's address in one script, so the
+        // host checked is the host of the page the field is on.
+        let v = match cdp.eval(&browser_cdp::js_focus_secret_field(field)).await {
+            Ok(v) => v,
+            Err(e) => return Ok(ToolResult::err(format!("Focus failed: {e}"))),
+        };
+        let status = v.get(0).and_then(|s| s.as_str()).unwrap_or_default();
+        let href = v.get(1).and_then(|s| s.as_str()).unwrap_or_default();
+        match status {
+            "OK" => {}
+            "NOT_FOUND" => {
+                return Ok(ToolResult::err(format!(
+                    "No element matches '{field}' on {href}; take a browser_snapshot for the selectors that exist"
+                )))
+            }
+            "NOT_A_FIELD" => {
+                return Ok(ToolResult::err(format!(
+                    "'{field}' is not an editable text field; secrets fill only inputs and textareas"
+                )))
+            }
+            _ => {
+                return Ok(ToolResult::err(format!(
+                    "'{field}' could not be focused in the page itself (a field inside a frame is not filled)"
+                )))
+            }
+        }
+
+        // The domain binding comes before the vault is touched: a refused fill
+        // never resolves the secret.
+        let host = match self.authorize(name, href) {
+            Ok(h) => h,
+            Err(reason) => {
+                let host = reqwest::Url::parse(href)
+                    .ok()
+                    .and_then(|u| u.host_str().map(str::to_string))
+                    .unwrap_or_default();
+                return Ok(self.refuse(name, &host, reason));
+            }
+        };
+        let Some(secret) = self.resolver.resolve(name) else {
+            let reason =
+                format!("vault:{name} could not be resolved (not in the vault or environment)");
+            return Ok(self.refuse(name, &host, reason));
+        };
+
+        // Errors from here on carry the CDP method, never the typed text.
+        let typed = cdp.insert_text(&secret).await;
+        drop(secret);
+        if let Err(e) = typed {
+            return Ok(ToolResult::err(format!("Filling failed: {e}")));
+        }
+        tracing::info!(secret = %name, host = %host, field = %field, "browser_fill_secret: filled");
+        if let Some(auditor) = &self.auditor {
+            let mut g = auditor.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = g.record_secret_use(now_ms(), name, &host, field);
+        }
+        if submit {
+            if let Err(e) = cdp.press_enter().await {
+                return Ok(ToolResult::err(format!("Filled, but Enter failed: {e}")));
+            }
+            tokio::time::sleep(Duration::from_millis(600)).await;
+        }
+        self.session.sync_location(&cdp).await;
+        let suffix = if submit { " + Enter" } else { "" };
+        let now = self
+            .session
+            .current_url()
+            .unwrap_or_else(|| href.to_string());
+        Ok(ToolResult::ok(format!(
+            "Filled {field} on {host} from vault:{name}{suffix} (value not shown). Page is now {now}"
+        )))
+    }
+}
+
 // ── BrowserScrollTool ─────────────────────────────────────────────────────────
 
 /// Scroll the current page.
@@ -1137,24 +1390,40 @@ impl Tool for BrowserCloseTabTool {
 /// assert_eq!(tools.len(), 7);
 /// ```
 pub fn all_browser_tools(cdp_url: Option<&str>) -> Vec<Box<dyn Tool>> {
-    all_browser_tools_with_reach(cdp_url, None, None)
+    all_browser_tools_with_reach(cdp_url, None, None, None)
 }
 
 /// Like [`all_browser_tools`], but gates the navigate tool's destination host
 /// through a conscience reach gate (tool name `browser`) and audits refusals.
 /// Navigation is an egress path exactly like the HTTP tool, so it gets the same
-/// deterministic allowlist the model cannot override. `None, None` reproduces
-/// [`all_browser_tools`] exactly.
+/// deterministic allowlist the model cannot override. `None, None, None`
+/// reproduces [`all_browser_tools`] exactly.
+///
+/// With both a gate and a `resolver`, `browser_fill_secret` is registered too:
+/// the gate's host rules are what bind a secret to its domain, so without one
+/// the tool could never fill anything and is left out of the prompt.
 pub fn all_browser_tools_with_reach(
     cdp_url: Option<&str>,
     reach: Option<ReachGate>,
     auditor: Option<Arc<Mutex<obc_safety::ActionAuditor>>>,
+    resolver: Option<Arc<dyn CredentialResolver>>,
 ) -> Vec<Box<dyn Tool>> {
     let session = Arc::new(if let Some(url) = cdp_url {
         BrowserSession::with_cdp_url(url)
     } else {
         BrowserSession::new()
     });
+
+    let fill_secret = match (&reach, resolver) {
+        (Some(g), Some(r)) => {
+            let mut t = BrowserFillSecretTool::new(session.clone(), g.clone(), r);
+            if let Some(a) = auditor.clone() {
+                t = t.with_auditor(a);
+            }
+            Some(t)
+        }
+        _ => None,
+    };
 
     let mut navigate = BrowserNavigateTool::new(session.clone());
     if let Some(g) = reach {
@@ -1164,7 +1433,7 @@ pub fn all_browser_tools_with_reach(
         navigate = navigate.with_auditor(a);
     }
 
-    vec![
+    let mut tools: Vec<Box<dyn Tool>> = vec![
         Box::new(navigate),
         Box::new(BrowserSnapshotTool::new(session.clone())),
         Box::new(BrowserClickTool::new(session.clone())),
@@ -1172,7 +1441,11 @@ pub fn all_browser_tools_with_reach(
         Box::new(BrowserScrollTool::new(session.clone())),
         Box::new(BrowserNewTabTool::new(session.clone())),
         Box::new(BrowserCloseTabTool::new(session)),
-    ]
+    ];
+    if let Some(t) = fill_secret {
+        tools.push(Box::new(t));
+    }
+    tools
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1444,5 +1717,178 @@ mod tests {
     fn session_state_open_tab_count_starts_zero() {
         let s = BrowserSession::new();
         assert_eq!(s.open_tab_count(), 0);
+    }
+
+    // ── BrowserFillSecretTool ─────────────────────────────────────────────────
+
+    /// `github.com` is bound to `vault:github`, `docs.example.com` is
+    /// allowlisted with no credential, and `other.example.com` is bound to a
+    /// different secret.
+    fn secret_gate() -> ReachGate {
+        use obc_conscience::{HostRule, ReachScope, ToolReach};
+        let rule = |host: &str, credential: Option<&str>| HostRule {
+            host: host.into(),
+            purpose: "test".into(),
+            credential: credential.map(str::to_string),
+        };
+        ReachGate::new(
+            vec![
+                rule("github.com", Some("github")),
+                rule("docs.example.com", None),
+                rule("other.example.com", Some("other")),
+            ],
+            vec![ToolReach {
+                tool: "browser".into(),
+                scope: ReachScope::Egress,
+            }],
+        )
+    }
+
+    /// Counts lookups, so a test can show a refused fill never reads the vault.
+    struct CountingResolver(std::sync::atomic::AtomicUsize);
+    impl CredentialResolver for CountingResolver {
+        fn resolve(&self, name: &str) -> Option<String> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            (name == "github").then(|| "ghp_secret_value".to_string())
+        }
+    }
+
+    fn fill_tool(resolver: Arc<CountingResolver>) -> BrowserFillSecretTool {
+        BrowserFillSecretTool::new(make_session(), secret_gate(), resolver)
+    }
+
+    fn counting() -> Arc<CountingResolver> {
+        Arc::new(CountingResolver(std::sync::atomic::AtomicUsize::new(0)))
+    }
+
+    #[test]
+    fn secret_reference_must_be_a_vault_name() {
+        assert_eq!(
+            BrowserFillSecretTool::secret_name("vault:github"),
+            Ok("github")
+        );
+        assert!(BrowserFillSecretTool::secret_name("github").is_err());
+        assert!(BrowserFillSecretTool::secret_name("vault:").is_err());
+        assert!(BrowserFillSecretTool::secret_name("vault:  ").is_err());
+    }
+
+    #[test]
+    fn secret_fills_on_its_own_host() {
+        let t = fill_tool(counting());
+        assert_eq!(
+            t.authorize("github", "https://github.com/login"),
+            Ok("github.com".to_string())
+        );
+    }
+
+    #[test]
+    fn secret_is_refused_on_any_other_host() {
+        let t = fill_tool(counting());
+        // not allowlisted at all
+        assert!(t
+            .authorize("github", "https://github.com.evil.example/login")
+            .is_err());
+        // a subdomain is a different host
+        assert!(t
+            .authorize("github", "https://gist.github.com/login")
+            .is_err());
+        // allowlisted, but bound to no secret
+        assert!(t.authorize("github", "https://docs.example.com/").is_err());
+        // allowlisted, but bound to a different secret
+        let e = t
+            .authorize("github", "https://other.example.com/")
+            .unwrap_err();
+        assert!(e.contains("not bound"), "{e}");
+    }
+
+    #[test]
+    fn secret_is_refused_off_https() {
+        let t = fill_tool(counting());
+        assert!(t.authorize("github", "http://github.com/login").is_err());
+        assert!(t.authorize("github", "data:text/html,<input>").is_err());
+        assert!(t.authorize("github", "about:blank").is_err());
+    }
+
+    #[test]
+    fn secret_is_refused_when_the_browser_has_no_egress() {
+        use obc_conscience::HostRule;
+        let gate = ReachGate::new(
+            vec![HostRule {
+                host: "github.com".into(),
+                purpose: "test".into(),
+                credential: Some("github".into()),
+            }],
+            vec![], // `browser` unlisted: no reach
+        );
+        let t = BrowserFillSecretTool::new(make_session(), gate, counting());
+        assert!(t.authorize("github", "https://github.com/login").is_err());
+    }
+
+    #[tokio::test]
+    async fn fill_without_a_browser_never_reads_the_vault() {
+        let r = counting();
+        let t = fill_tool(Arc::clone(&r));
+        let result = t
+            .execute(json!({"field": "#password", "secret": "vault:github"}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert_eq!(r.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let text = format!("{:?}", result);
+        assert!(!text.contains("ghp_secret_value"));
+    }
+
+    #[tokio::test]
+    async fn fill_rejects_a_literal_secret() {
+        let r = counting();
+        let t = fill_tool(Arc::clone(&r));
+        let result = t
+            .execute(json!({"field": "#password", "secret": "hunter2"}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.error.as_deref().unwrap_or("").contains("vault:"));
+        assert_eq!(r.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn fill_requires_field_and_secret() {
+        let t = fill_tool(counting());
+        let r = t.execute(json!({"secret": "vault:github"})).await.unwrap();
+        assert!(r.error.as_deref().unwrap_or("").contains("field"));
+        let r = t.execute(json!({"field": "#p"})).await.unwrap();
+        assert!(r.error.as_deref().unwrap_or("").contains("secret"));
+    }
+
+    #[test]
+    fn fill_secret_is_registered_only_with_a_gate_and_a_resolver() {
+        let has = |tools: &[Box<dyn Tool>]| tools.iter().any(|t| t.name() == "browser_fill_secret");
+        let resolver = || Some(counting() as Arc<dyn CredentialResolver>);
+        assert!(!has(&all_browser_tools(None)));
+        assert!(!has(&all_browser_tools_with_reach(
+            None,
+            Some(secret_gate()),
+            None,
+            None
+        )));
+        assert!(!has(&all_browser_tools_with_reach(
+            None,
+            None,
+            None,
+            resolver()
+        )));
+        assert!(has(&all_browser_tools_with_reach(
+            None,
+            Some(secret_gate()),
+            None,
+            resolver()
+        )));
+    }
+
+    #[test]
+    fn fill_secret_is_not_replayable() {
+        let t = fill_tool(counting());
+        assert!(!t.risk_class().reversible);
+        assert!(!t.risk_class().physical);
     }
 }
