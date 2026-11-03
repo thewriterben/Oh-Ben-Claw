@@ -10,7 +10,8 @@
 //! Enforced at two points. Tools outside the scope are never registered, and
 //! the execution chokepoint refuses a call to a name outside it (every delegate
 //! hop included). Vault names are enforced by [`ScopedResolver`] at the HTTP
-//! tool's credential injection, which fails closed on a name it cannot resolve.
+//! tool's credential injection, which fails closed on a name it cannot resolve,
+//! and by [`VaultScopedFill`] on the parent's `browser_fill_secret`.
 //!
 //! What this is not: an OS boundary. A sub-agent given `shell` or `file` can
 //! read the environment and the files the process can read, credentials
@@ -18,9 +19,13 @@
 //! has to mean something.
 
 use anyhow::{bail, Result};
+use async_trait::async_trait;
 use obc_safety::glob_match;
+use obc_tool_api::{OutputTrust, RiskClass, RolloutStage};
 use obc_tools::credentials::CredentialResolver;
+use obc_tools::{Tool, ToolResult};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 
 /// `[orchestrator.sub_agent_scope]` — the ceiling every sub-agent is cut from.
@@ -149,6 +154,73 @@ impl CredentialResolver for ScopedResolver {
     }
 }
 
+/// The parent's `browser_fill_secret`, limited to a scope's vault list. That
+/// tool holds the parent's own browser session and unscoped resolver, so it is
+/// wrapped rather than rebuilt: a `secret` outside the scope is refused before
+/// the inner tool runs, and every other trait method is the inner tool's.
+pub struct VaultScopedFill {
+    inner: Arc<dyn Tool>,
+    scope: Scope,
+    agent: String,
+}
+
+impl VaultScopedFill {
+    /// The tool this wraps.
+    pub const TOOL: &'static str = "browser_fill_secret";
+
+    pub fn new(inner: Arc<dyn Tool>, scope: Scope, agent: &str) -> Self {
+        Self {
+            inner,
+            scope,
+            agent: agent.to_string(),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for VaultScopedFill {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+
+    fn parameters_schema(&self) -> Value {
+        self.inner.parameters_schema()
+    }
+
+    fn risk_class(&self) -> RiskClass {
+        self.inner.risk_class()
+    }
+
+    fn rollout_stage(&self) -> RolloutStage {
+        self.inner.rollout_stage()
+    }
+
+    fn output_trust(&self) -> OutputTrust {
+        self.inner.output_trust()
+    }
+
+    async fn execute(&self, args: Value) -> Result<ToolResult> {
+        // The same parse as the tool's own: `vault:<name>`, trimmed. A
+        // malformed reference is left for the inner tool to refuse.
+        let name = args
+            .get("secret")
+            .and_then(|v| v.as_str())
+            .and_then(|r| r.strip_prefix("vault:"))
+            .map(str::trim);
+        if let Some(name) = name.filter(|n| !self.scope.allows_vault(n)) {
+            tracing::warn!(agent = %self.agent, credential = %name, "secret outside the sub-agent's vault scope");
+            return Ok(ToolResult::err(format!(
+                "secret 'vault:{name}' is outside this sub-agent's vault scope"
+            )));
+        }
+        self.inner.execute(args).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,5 +319,37 @@ mod tests {
         let r = ScopedResolver::new(Arc::new(Fixed), scope, "researcher");
         assert_eq!(r.resolve("github").as_deref(), Some("secret-github"));
         assert_eq!(r.resolve("aws_root"), None);
+    }
+
+    /// Stands in for `browser_fill_secret`: succeeds whenever it is reached.
+    struct Fill;
+    #[async_trait]
+    impl Tool for Fill {
+        fn name(&self) -> &str {
+            VaultScopedFill::TOOL
+        }
+        fn description(&self) -> &str {
+            "fill"
+        }
+        async fn execute(&self, _args: Value) -> Result<ToolResult> {
+            Ok(ToolResult::ok("filled"))
+        }
+    }
+
+    #[tokio::test]
+    async fn vault_scoped_fill_refuses_out_of_scope_secrets() {
+        let scope = Scope::unrestricted().narrow(&[], &s(&["github"])).unwrap();
+        let fill = VaultScopedFill::new(Arc::new(Fill), scope, "researcher");
+        let ok = fill
+            .execute(serde_json::json!({"field": "#p", "secret": "vault:github"}))
+            .await
+            .unwrap();
+        assert!(ok.is_ok());
+        let refused = fill
+            .execute(serde_json::json!({"field": "#p", "secret": "vault: aws_root"}))
+            .await
+            .unwrap();
+        assert!(!refused.is_ok());
+        assert!(refused.error.unwrap_or_default().contains("aws_root"));
     }
 }

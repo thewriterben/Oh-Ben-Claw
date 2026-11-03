@@ -29,9 +29,37 @@ Item 9 of `docs/PERSONAL-AGENTS-2026-11.md`.
   and a literal name outside it refuses the spawn. Tools outside the scope are
   not registered, and the chokepoint refuses a call to one on every delegate
   hop. A credential outside the vault scope resolves as missing, which the HTTP
-  tool refuses (fail closed).
+  tool refuses (fail closed), and `browser_fill_secret` refuses a `vault:`
+  name outside it before the vault is read.
 - Sub-agents are not an OS boundary, and the docs now say so: one given
   `shell` or `file` can read the environment and the process's files.
+
+---
+
+## Unreleased — Fill browser fields from the vault (2026-11-02)
+
+Item 7 of `docs/PERSONAL-AGENTS-2026-11.md`.
+
+### Added
+
+- **`browser_fill_secret { field, secret: "vault:<name>" }`.** Fills an input
+  or textarea from the vault (environment as fallback, the same resolver the
+  http tool uses for credentials). The value is never in the tool result.
+- **A secret fills only on its own domain.** The page must be `https`, and its
+  live host (read from the tab when the field is focused, not from the
+  remembered URL) must be allowlisted for `browser` with a reach rule whose
+  `credential` is that secret. A subdomain is a different host. The vault is
+  not read until the host check passes, and a field inside a frame is refused.
+- **Each use is audited.** A fill is a `conscience.secret vault:<name> @ <host>`
+  record in the Track 0 chain; a refusal is a `conscience.secret` denial.
+- The tool is registered only when the conscience is enabled and a resolver is
+  wired, which is the agent's path. The MCP server does not expose it.
+
+### Changed
+
+- **`browser_snapshot` hides password values.** A password field, or one filled
+  from the vault, shows `value=[hidden]`. Before, a snapshot printed the first
+  40 characters of any field's value, a typed password included.
 
 ---
 

@@ -21,7 +21,7 @@
 //!     └─ list_agents()                   ──► [researcher, coder, ...]
 //! ```
 
-use crate::scope::{Scope, ScopedResolver};
+use crate::scope::{Scope, ScopedResolver, VaultScopedFill};
 use crate::AgentConfig;
 use crate::{Agent, AgentHandle};
 use anyhow::{bail, Result};
@@ -262,7 +262,8 @@ impl AgentPool {
         });
         let all_tools: Vec<Arc<dyn Tool>> = match &self.posture.tools {
             // The parent's own tools, fences included. Its `http` carries the
-            // unscoped resolver, so it is swapped for one with the scoped one.
+            // unscoped resolver, so it is swapped for one with the scoped one;
+            // its `browser_fill_secret` does too, so it is wrapped.
             Some(parent) => {
                 let mut http = obc_tools::HttpTool::new();
                 if let Some(gate) = self.reach.clone() {
@@ -277,7 +278,14 @@ impl AgentPool {
                 let mut tools: Vec<Arc<dyn Tool>> = parent
                     .iter()
                     .filter(|t| t.name() != http.name())
-                    .cloned()
+                    .map(|t| {
+                        if t.name() == VaultScopedFill::TOOL {
+                            Arc::new(VaultScopedFill::new(t.clone(), scope.clone(), &spec.name))
+                                as Arc<dyn Tool>
+                        } else {
+                            t.clone()
+                        }
+                    })
                     .collect();
                 if parent.iter().any(|t| t.name() == http.name()) {
                     tools.push(Arc::new(http));
