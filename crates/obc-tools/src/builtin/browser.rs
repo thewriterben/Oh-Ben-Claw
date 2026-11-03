@@ -1046,10 +1046,11 @@ impl Tool for BrowserFillSecretTool {
 
         let cdp = match self.session.attach().await {
             Ok(c) => c,
-            Err(e) => return Ok(ToolResult::err(format!(
-                "No browser is attached (CDP at {} unreachable: {e}); filling needs a real page.",
-                self.session.cdp_url
-            ))),
+            Err(e) => {
+                let url = &self.session.cdp_url;
+                let msg = format!("No browser is attached (CDP at {url} unreachable: {e}); filling needs a real page.");
+                return Ok(ToolResult::err(msg));
+            }
         };
 
         // Focus the field and read the page's address in one script, so the
