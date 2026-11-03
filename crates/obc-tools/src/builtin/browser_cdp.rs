@@ -197,6 +197,29 @@ pub fn js_focus(selector: &str) -> String {
     )
 }
 
+/// Focus the text field matching `selector` for a vault fill, and say where the
+/// page is. Yields `[status, location.href]`, where status is `OK`,
+/// `NOT_FOUND`, `NOT_A_FIELD` (not an editable text input or textarea) or
+/// `NOT_FOCUSED` (focus went elsewhere, e.g. into a frame). On `OK` the field
+/// is marked `data-obc-secret` so [`js_snapshot`] never prints its value.
+pub fn js_focus_secret_field(selector: &str) -> String {
+    format!(
+        "(() => {{ const el = document.querySelector({sel}); \
+         if (!el) return ['NOT_FOUND', location.href]; \
+         const tag = el.tagName.toLowerCase(); \
+         const kind = (el.type || 'text').toLowerCase(); \
+         const text = tag === 'textarea' || (tag === 'input' && !['hidden', 'checkbox', 'radio', 'submit', \
+           'button', 'image', 'reset', 'file', 'range', 'color'].includes(kind)); \
+         if (!text || el.disabled || el.readOnly) return ['NOT_A_FIELD', location.href]; \
+         el.scrollIntoView({{block: 'center'}}); el.focus(); \
+         if (typeof el.select === 'function') el.select(); \
+         if (document.activeElement !== el) return ['NOT_FOCUSED', location.href]; \
+         el.setAttribute('data-obc-secret', ''); \
+         return ['OK', location.href]; }})()",
+        sel = js_str(selector)
+    )
+}
+
 /// Scroll the first element matching `selector` into view.
 pub fn js_scroll_to(selector: &str) -> String {
     format!(
@@ -219,7 +242,8 @@ pub fn js_scroll(direction: &str, amount_px: u64) -> String {
 
 /// A compact, model-readable snapshot: title, URL, headings, the interactive
 /// elements with a selector each (`#id`, `[name=…]`, or `tag:nth-of-type`),
-/// then the visible text, cut at `max_chars`.
+/// then the visible text, cut at `max_chars`. A password field's value, or one
+/// filled from the vault, shows as `[hidden]`.
 pub fn js_snapshot(max_chars: usize) -> String {
     format!(
         r#"(() => {{
@@ -243,7 +267,8 @@ pub fn js_snapshot(max_chars: usize) -> String {
   if (inputs.length) out.push('', 'Inputs:', ...inputs.map(i => '  ' + sel(i) + '  type=' + (i.type || i.tagName.toLowerCase())
     + (i.placeholder ? ' placeholder="' + clip(i.placeholder, 60) + '"' : '')
     + (i.getAttribute('aria-label') ? ' label="' + clip(i.getAttribute('aria-label'), 60) + '"' : '')
-    + (i.value ? ' value="' + clip(i.value, 40) + '"' : '')));
+    + (i.value ? (i.type === 'password' || i.hasAttribute('data-obc-secret')
+      ? ' value=[hidden]' : ' value="' + clip(i.value, 40) + '"') : '')));
   const buttons = [...document.querySelectorAll('button, input[type=submit], [role=button]')].filter(visible).slice(0, 30);
   if (buttons.length) out.push('', 'Buttons:', ...buttons.map(b => '  ' + sel(b) + '  "' + clip(b.innerText || b.value || b.getAttribute('aria-label'), 60) + '"'));
   const links = [...document.querySelectorAll('a[href]')].filter(visible).slice(0, 40);
@@ -331,6 +356,52 @@ mod tests {
         let (_, title) = cdp.location().await.unwrap();
         assert_eq!(title, "clicked hello");
         assert_eq!(cdp.eval(&js_click("#nope")).await.unwrap(), "NOT_FOUND");
+        let _ = client.get(format!("{base}/json/close/{id}")).send().await;
+    }
+
+    /// A vault-filled field and a password field never show their value in a
+    /// snapshot. Same Chrome as above:
+    /// `OBC_TEST_CDP=http://127.0.0.1:9333 cargo test -p obc-tools -- --ignored cdp`.
+    #[tokio::test]
+    #[ignore]
+    async fn cdp_secret_field_is_hidden_from_snapshots() {
+        let Some(base) = std::env::var("OBC_TEST_CDP").ok() else {
+            return;
+        };
+        let client = reqwest::Client::new();
+        let tab: Value = client
+            .put(format!("{base}/json/new?about:blank"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let ws = tab["webSocketDebuggerUrl"].as_str().unwrap().to_string();
+        let id = tab["id"].as_str().unwrap().to_string();
+        let cdp = Cdp::new(ws, Duration::from_secs(20));
+
+        cdp.navigate("data:text/html,<title>Login</title><input id=key><input id=pw type=password><input id=t type=hidden>")
+            .await
+            .unwrap();
+        let v = cdp.eval(&js_focus_secret_field("#key")).await.unwrap();
+        assert_eq!(v[0], "OK");
+        assert!(v[1].as_str().unwrap().starts_with("data:"));
+        cdp.insert_text("key-value-1").await.unwrap();
+        assert_eq!(cdp.eval(&js_focus("#pw")).await.unwrap(), "OK input");
+        cdp.insert_text("pw-value-2").await.unwrap();
+        let snap = cdp.eval(&js_snapshot(2000)).await.unwrap();
+        let snap = snap.as_str().unwrap();
+        assert!(
+            !snap.contains("key-value-1") && !snap.contains("pw-value-2"),
+            "{snap}"
+        );
+        assert!(snap.contains("value=[hidden]"), "{snap}");
+
+        let v = cdp.eval(&js_focus_secret_field("#t")).await.unwrap();
+        assert_eq!(v[0], "NOT_A_FIELD");
+        let v = cdp.eval(&js_focus_secret_field("#nope")).await.unwrap();
+        assert_eq!(v[0], "NOT_FOUND");
         let _ = client.get(format!("{base}/json/close/{id}")).send().await;
     }
 }
