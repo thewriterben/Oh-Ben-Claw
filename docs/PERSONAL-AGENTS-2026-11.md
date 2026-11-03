@@ -242,7 +242,8 @@ document plainly that sub-agents are not a boundary.
 2. ~~Item 2, approvals from Telegram and Slack, which makes item 1 usable away from the desk.~~ Done 2026-11-01.
 3. ~~Items 4 and 5 as a "standing goals" phase.~~ Done 2026-11-02.
 4. ~~Item 6, the action reviewer.~~ Done 2026-11-02.
-5. Items 7 to 9 when needed. Item 8's embodied version is the one no competitor can match.
+5. ~~Item 7, `browser_fill_secret`.~~ Done 2026-11-02.
+6. Items 8 and 9 when needed. Item 8's embodied version is the one no competitor can match.
 
 ## Sources
 
