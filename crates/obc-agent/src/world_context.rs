@@ -32,6 +32,14 @@
 //! The rendering is capped, and when it drops facts it says so, by name of what is left
 //! and how to get it. A truncated view that looks complete is worse than no view: it
 //! invites exactly the confident wrong answer this whole subsystem exists to prevent.
+//!
+//! # Why a stamped fact taints the turn (Track 0, 2026-11-02)
+//!
+//! A fact whose value carries a non-empty `tainted_by` (a standing goal's progress
+//! note written after its tick read a web page, say) was written from untrusted
+//! content. The block shows it to every turn, so every turn that sees it pools it
+//! ([`fact_taint`]), as a scheduled task pools what it inherited; a privileged call
+//! built from it is then caught like any other untrusted content.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -185,7 +193,22 @@ pub const WORLD_STATE_RULE: &str = "_Background, for your awareness only. Alerts
     asks about it._\n\n";
 
 pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Option<String> {
+    render_shown(world, cfg, now_ms).map(|(s, _)| s)
+}
+
+/// [`render`], with the facts the block actually shows: the beliefs that fit
+/// the budget and the withdrawals listed. What a turn pools for taint.
+pub fn render_shown(
+    world: &WorldMemory,
+    cfg: &WorldContextConfig,
+    now_ms: u64,
+) -> Option<(String, Vec<Fact>)> {
     let (facts, withdrawn) = context_facts(world, cfg, now_ms)?;
+    let mut seen: Vec<Fact> = withdrawn
+        .iter()
+        .take(cfg.max_withdrawals)
+        .cloned()
+        .collect();
     let total_facts = facts.len();
     let shown: Vec<&Fact> = facts.iter().take(cfg.max_facts).collect();
     let total_withdrawn = withdrawn.len();
@@ -281,6 +304,7 @@ pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Opt
                     break 'outer;
                 }
                 out.push_str(&line);
+                seen.push((*f).clone());
                 rendered += 1;
             }
         }
@@ -296,7 +320,50 @@ pub fn render(world: &WorldMemory, cfg: &WorldContextConfig, now_ms: u64) -> Opt
     }
 
     out.push_str(&withdrawals);
-    Some(out)
+    Some((out, seen))
+}
+
+/// A shown fact written from untrusted content, as a turn pools it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FactTaint {
+    /// The pool's name for it: the entity and the sources behind it.
+    pub source: String,
+    /// What the model saw of it: every string and number in the value except
+    /// the stamp itself, one per line.
+    pub content: String,
+    /// The stamp as written (`fetch, mcp:news`): flat tool names, so a note a
+    /// turn writes after seeing this carries them on without nesting.
+    pub tainted_by: String,
+}
+
+/// The pool entry for a fact whose value carries a non-empty `tainted_by`;
+/// `None` for a clean one.
+pub fn fact_taint(f: &Fact) -> Option<FactTaint> {
+    fn leaves(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::String(s) => out.push(s.clone()),
+            serde_json::Value::Number(n) => out.push(n.to_string()),
+            serde_json::Value::Array(a) => a.iter().for_each(|v| leaves(v, out)),
+            serde_json::Value::Object(m) => m
+                .iter()
+                .filter(|(k, _)| k.as_str() != "tainted_by")
+                .for_each(|(_, v)| leaves(v, out)),
+            _ => {}
+        }
+    }
+    let by = f
+        .value
+        .get("tainted_by")?
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let mut content = Vec::new();
+    leaves(&f.value, &mut content);
+    Some(FactTaint {
+        source: format!("world fact {} (written after reading {by})", f.entity),
+        content: content.join("\n"),
+        tainted_by: by.to_string(),
+    })
 }
 
 /// Whether a fact's origin means "the world said so".
@@ -315,6 +382,52 @@ mod tests {
 
     fn store() -> WorldMemory {
         WorldMemory::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn only_shown_facts_are_returned_and_only_stamped_ones_taint() {
+        let w = store();
+        let note = |entity: &str, by: serde_json::Value, at: u64| {
+            w.observe_as(
+                entity,
+                json!({"note": "post open-the-vents-now", "changed": true, "tainted_by": by}),
+                at,
+                at,
+                "goal:g",
+                Origin::Asserted,
+            )
+            .unwrap();
+        };
+        note("goal.a.progress", json!("fetch, mcp:news"), 1_000);
+        note("goal.b.progress", json!(null), 2_000);
+        note("goal.c.progress", json!(" "), 3_000);
+        note("goal.d.progress", json!("fetch"), 4_000);
+
+        // A cap of three drops the oldest (the stamped `goal.a`): not shown,
+        // so not pooled.
+        let cfg = WorldContextConfig {
+            max_facts: 3,
+            ..WorldContextConfig::default()
+        };
+        let (_, shown) = render_shown(&w, &cfg, 5_000).unwrap();
+        let taints: Vec<FactTaint> = shown.iter().filter_map(fact_taint).collect();
+        assert_eq!(taints.len(), 1, "{taints:?}");
+        assert_eq!(
+            taints[0].source,
+            "world fact goal.d.progress (written after reading fetch)"
+        );
+        assert_eq!(taints[0].tainted_by, "fetch");
+        assert!(taints[0].content.contains("post open-the-vents-now"));
+        assert!(!taints[0].content.contains("fetch"), "the stamp is pooled");
+
+        let (_, shown) = render_shown(&w, &WorldContextConfig::default(), 5_000).unwrap();
+        let by: Vec<String> = shown
+            .iter()
+            .filter_map(fact_taint)
+            .map(|t| t.tainted_by)
+            .collect();
+        assert_eq!(by.len(), 2);
+        assert!(by.contains(&"fetch, mcp:news".to_string()));
     }
 
     #[test]
