@@ -466,13 +466,29 @@ pub enum Presence {
     Unattended,
 }
 
-// ── Chat approvals: an unattended call that waits for an answer ─────────────
+/// The chat an attended turn came from, when the person who sent it may
+/// approve there (2026-11-02). A gated call in that turn is asked in this chat,
+/// and only there, instead of being refused: the person is present, so the
+/// question goes where they are reading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatTarget {
+    /// The [`ApprovalPrompter::name`] that owns the chat: `"telegram"`, `"slack"`.
+    pub channel: String,
+    /// The chat to ask in: a Telegram chat id, a Slack channel id.
+    pub chat: String,
+    /// The message the request answers, so it lands beside it: a Telegram
+    /// message id, a Slack thread `ts`.
+    pub reply_to: Option<String>,
+}
 
-/// A gated call from an unattended turn, waiting for an operator to answer it
-/// from a chat channel. Each [`ApprovalPrompter`] shows it with buttons; the
-/// tap comes back through [`ApprovalManager::resolve_pending`]. Unanswered
-/// after [`AutonomyConfig::approval_wait_secs`], the call is refused and the
-/// expiry is audited as a denial.
+// ── Chat approvals: a gated call that waits for an answer ───────────────────
+
+/// A gated call waiting for an operator to answer it from a chat channel:
+/// from an unattended turn, or from an attended chat turn ([`ChatTarget`]).
+/// Each [`ApprovalPrompter`] shows it with buttons; the tap comes back
+/// through [`ApprovalManager::resolve_pending`]. Unanswered after
+/// [`AutonomyConfig::approval_wait_secs`], the call is refused and the expiry
+/// is audited as a denial.
 #[derive(Debug, Clone)]
 pub struct PendingApproval {
     /// Opaque id the buttons carry back: 32 hex characters, so a Telegram
@@ -494,6 +510,9 @@ pub struct PendingApproval {
     /// tool ([`AutonomyConfig::unattended_grant_ttl_secs`]); 0 means it
     /// covers none, so channels do not offer it.
     pub session_grant_secs: u64,
+    /// The chat the call's turn came from, when its sender is present: the
+    /// request goes there alone. `None`: to every approver.
+    pub to: Option<ChatTarget>,
 }
 
 impl PendingApproval {
@@ -528,10 +547,15 @@ impl PendingApproval {
 
     /// The answers a chat offers, with their button labels: run this call,
     /// allow the tool for the unattended window (when that is above zero),
-    /// deny. Never "forever": a standing grant is made at the desk.
+    /// deny. Asked in the chat a present sender is in, the middle one reads
+    /// "Allow this session": the grant covers that person's later calls of
+    /// the tool until the agent restarts. Never "forever": a standing grant
+    /// is made at the desk.
     pub fn chat_choices(&self) -> Vec<(ApprovalResponse, String)> {
         let mut choices = vec![(ApprovalResponse::Yes, "Approve".to_string())];
-        if self.session_grant_secs > 0 {
+        if self.to.is_some() {
+            choices.push((ApprovalResponse::Always, "Allow this session".to_string()));
+        } else if self.session_grant_secs > 0 {
             choices.push((
                 ApprovalResponse::Always,
                 format!("Allow {}", human_secs(self.session_grant_secs)),
@@ -573,6 +597,10 @@ pub fn parse_chat_code(code: &str) -> Option<ApprovalResponse> {
 }
 
 /// A chat channel that can show a [`PendingApproval`] with buttons.
+///
+/// With [`PendingApproval::to`] set, `prompt` is called only on the prompter
+/// that `to.channel` names, and it posts in `to.chat` alone; otherwise it
+/// sends to the channel's approvers.
 ///
 /// `prompt` must not block the caller: send from a spawned task. The answer
 /// comes back through [`ApprovalManager::resolve_pending`], from the same
@@ -980,6 +1008,13 @@ impl ApprovalManager {
         self.config.approval_wait_secs > 0 && !self.prompters.lock().is_empty()
     }
 
+    /// Whether an attended call from the chat `to` can wait for an answer
+    /// there: waits are on, and the prompter `to.channel` names is attached.
+    pub fn can_wait_in(&self, to: &ChatTarget) -> bool {
+        self.config.approval_wait_secs > 0
+            && self.prompters.lock().iter().any(|p| p.name() == to.channel)
+    }
+
     /// Calls waiting for an answer now, oldest first.
     pub fn pending(&self) -> Vec<PendingApproval> {
         let map = self.pending.lock();
@@ -999,6 +1034,19 @@ impl ApprovalManager {
         origin: &str,
         reason: &str,
     ) -> WaitOutcome {
+        self.wait_for_decision_in(req, origin, reason, None).await
+    }
+
+    /// [`wait_for_decision`](Self::wait_for_decision), asked only in the chat
+    /// `to` when it is given: the prompter it names shows the call there, and
+    /// no other prompter is told.
+    pub async fn wait_for_decision_in(
+        &self,
+        req: &ApprovalRequest,
+        origin: &str,
+        reason: &str,
+        to: Option<&ChatTarget>,
+    ) -> WaitOutcome {
         let secs = self.config.approval_wait_secs;
         let pending = PendingApproval {
             id: uuid::Uuid::new_v4().simple().to_string(),
@@ -1009,6 +1057,7 @@ impl ApprovalManager {
             reason: reason.to_string(),
             expires_in_secs: secs,
             session_grant_secs: self.config.unattended_grant_ttl_secs,
+            to: to.cloned(),
         };
         let (tx, mut rx) = tokio::sync::oneshot::channel();
         self.pending.lock().insert(
@@ -1031,10 +1080,14 @@ impl ApprovalManager {
             id = %pending.id,
             origin,
             wait_secs = secs,
-            "unattended call waiting for approval in chat"
+            chat = ?to.map(|t| format!("{}:{}", t.channel, t.chat)),
+            "call waiting for approval in chat"
         );
         let prompters = self.prompters.lock().clone();
-        for prompter in &prompters {
+        for prompter in prompters
+            .iter()
+            .filter(|p| to.is_none_or(|t| p.name() == t.channel))
+        {
             prompter.prompt(&pending);
         }
 
@@ -1271,10 +1324,13 @@ pub fn approval_authorize_as(
 /// [`AutonomyConfig::approval_wait_secs`], instead of being refused at once.
 /// `origin` says what asked, for the prompt: `"scheduled task 'gate'"`.
 ///
-/// Attended calls never wait. Whoever asked is reading the reply, and a
-/// channel that handles its messages one at a time would be waiting on the
-/// very tap it has not read yet. A `Deny` never waits either: no answer
-/// lifts what dynamic trust refused.
+/// An attended call waits only when `present` names the chat its turn came
+/// from (the sender may approve there) and that chat's prompter is attached
+/// ([`ApprovalManager::can_wait_in`]); it is asked in that chat alone
+/// (2026-11-02). Any other attended call (the CLI, the gateway, a sender who
+/// is not an approver) is refused at once, as before. A `Deny` never waits:
+/// no answer lifts what dynamic trust refused.
+#[allow(clippy::too_many_arguments)]
 pub async fn approval_authorize_waiting(
     approval: Option<&ApprovalManager>,
     tool: &str,
@@ -1283,6 +1339,7 @@ pub async fn approval_authorize_waiting(
     risk: RiskClass,
     presence: Presence,
     origin: &str,
+    present: Option<&ChatTarget>,
 ) -> Result<(), String> {
     let Some(approval) = approval else {
         return Ok(());
@@ -1293,24 +1350,35 @@ pub async fn approval_authorize_waiting(
         Ok(()) => return Ok(()),
         Err(reason) => reason,
     };
-    if decision != Decision::NeedsApproval
-        || presence != Presence::Unattended
-        || !approval.can_wait()
-    {
+    if decision != Decision::NeedsApproval {
         return Err(reason);
     }
+    let to = match presence {
+        Presence::Unattended if approval.can_wait() => None,
+        Presence::Attended => match present {
+            Some(to) if approval.can_wait_in(to) => Some(to),
+            _ => return Err(reason),
+        },
+        Presence::Unattended => return Err(reason),
+    };
     let req = ApprovalRequest {
         tool_name: tool.to_string(),
         arguments: args.clone(),
         risk: Some(risk),
     };
-    match approval.wait_for_decision(&req, origin, &reason).await {
+    match approval
+        .wait_for_decision_in(&req, origin, &reason, to)
+        .await
+    {
         WaitOutcome::Approved { .. } => Ok(()),
         WaitOutcome::Denied { by } => Err(format!("denied by the operator in chat ({by})")),
         WaitOutcome::Expired => Err(format!(
             "{reason}; the approval request sent to {} got no answer within {}s \
              ([autonomy].approval_wait_secs)",
-            approval.prompter_names().join(" and "),
+            match to {
+                Some(to) => format!("this {} chat", to.channel),
+                None => approval.prompter_names().join(" and "),
+            },
             approval.config.approval_wait_secs
         )),
     }
@@ -2177,6 +2245,14 @@ mod tests {
         mgr: &Arc<ApprovalManager>,
         presence: Presence,
     ) -> tokio::task::JoinHandle<Result<(), String>> {
+        waiting_call_in(mgr, presence, None)
+    }
+
+    fn waiting_call_in(
+        mgr: &Arc<ApprovalManager>,
+        presence: Presence,
+        present: Option<ChatTarget>,
+    ) -> tokio::task::JoinHandle<Result<(), String>> {
         let mgr = Arc::clone(mgr);
         tokio::spawn(async move {
             approval_authorize_waiting(
@@ -2187,9 +2263,131 @@ mod tests {
                 irreversible_software(),
                 presence,
                 "scheduled task 'demo'",
+                present.as_ref(),
             )
             .await
         })
+    }
+
+    fn this_chat(channel: &str) -> ChatTarget {
+        ChatTarget {
+            channel: channel.into(),
+            chat: "-100".into(),
+            reply_to: Some("7".into()),
+        }
+    }
+
+    /// A second prompter, to show the request reaches only the chat it came from.
+    struct Elsewhere(Mutex<usize>);
+
+    impl ApprovalPrompter for Elsewhere {
+        fn name(&self) -> &str {
+            "elsewhere"
+        }
+        fn prompt(&self, _: &PendingApproval) {
+            *self.0.lock() += 1;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_present_approver_is_asked_in_their_own_chat_and_the_call_runs() {
+        let supervised = Arc::new(manager(
+            &AutonomyConfig {
+                level: AutonomyLevel::Supervised,
+                approval_wait_secs: 30,
+                ..Default::default()
+            },
+            false,
+        ));
+        let chat = Arc::new(Captured(Mutex::new(Vec::new())));
+        let other = Arc::new(Elsewhere(Mutex::new(0)));
+        supervised.add_prompter(other.clone());
+        supervised.add_prompter(chat.clone());
+
+        let call = waiting_call_in(
+            &supervised,
+            Presence::Attended,
+            Some(this_chat("test-chat")),
+        );
+        let pending = shown(&chat).await;
+        assert_eq!(pending.to, Some(this_chat("test-chat")));
+        assert_eq!(
+            *other.0.lock(),
+            0,
+            "only the chat the turn came from is asked"
+        );
+        let labels: Vec<String> = pending.chat_choices().into_iter().map(|c| c.1).collect();
+        assert_eq!(labels, ["Approve", "Allow this session", "Deny"]);
+
+        supervised
+            .resolve_pending(
+                &pending.id,
+                ApprovalResponse::Always,
+                "test-chat",
+                "42",
+                &approvers(),
+            )
+            .unwrap();
+        assert_eq!(call.await.unwrap(), Ok(()));
+        // The session grant covers the next attended call without asking.
+        assert_eq!(
+            waiting_call_in(
+                &supervised,
+                Presence::Attended,
+                Some(this_chat("test-chat"))
+            )
+            .await
+            .unwrap(),
+            Ok(())
+        );
+        assert_eq!(chat.0.lock().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_present_call_whose_chat_has_no_prompter_refuses_at_once() {
+        let supervised = Arc::new(manager(
+            &AutonomyConfig {
+                level: AutonomyLevel::Supervised,
+                approval_wait_secs: 30,
+                ..Default::default()
+            },
+            false,
+        ));
+        let chat = Arc::new(Captured(Mutex::new(Vec::new())));
+        supervised.add_prompter(chat.clone());
+        let err = waiting_call_in(&supervised, Presence::Attended, Some(this_chat("irc")))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(err.contains("requires operator approval"), "{err}");
+        assert!(chat.0.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_present_call_names_the_chat_it_was_asked_in() {
+        let supervised = Arc::new(manager(
+            &AutonomyConfig {
+                level: AutonomyLevel::Supervised,
+                approval_wait_secs: 1,
+                ..Default::default()
+            },
+            false,
+        ));
+        let chat = Arc::new(Captured(Mutex::new(Vec::new())));
+        supervised.add_prompter(chat.clone());
+        let err = waiting_call_in(
+            &supervised,
+            Presence::Attended,
+            Some(this_chat("test-chat")),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(
+            err.contains("this test-chat chat got no answer within 1s"),
+            "{err}"
+        );
+        assert_eq!(supervised.audit_log().pop().unwrap().channel, "expired");
     }
 
     fn approvers() -> Vec<String> {
@@ -2326,7 +2524,10 @@ mod tests {
             .await
             .unwrap()
             .is_err());
-        assert!(chat.0.lock().is_empty(), "attended calls are never queued");
+        assert!(
+            chat.0.lock().is_empty(),
+            "an attended call with no chat to ask in is never queued"
+        );
 
         // No prompter attached: the unattended refusal is immediate, as before.
         let bare = Arc::new(manager(&config_full(), false));
@@ -2357,6 +2558,7 @@ mod tests {
             reason: "r".into(),
             expires_in_secs: 300,
             session_grant_secs: 1800,
+            to: None,
         };
         let labels: Vec<String> = pending.chat_choices().into_iter().map(|c| c.1).collect();
         assert_eq!(labels, ["Approve", "Allow 30 min", "Deny"]);

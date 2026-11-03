@@ -349,6 +349,46 @@ async fn an_a2a_turn_that_asks_for_the_gate_waits_for_the_tap_too() {
     assert!(b.phone.0.lock().unwrap().is_empty());
 }
 
+/// An approver's own chat turn waits too (2026-11-02), asked only in the chat
+/// it came from; the same turn with no approver present is refused at once.
+#[tokio::test]
+async fn a_present_approvers_turn_is_asked_in_their_chat() {
+    use obc_agent::with_present_approver;
+    use obc_approval::ChatTarget;
+
+    let b = bench(Arc::new(AsksForGate(Mutex::new(0))), 30);
+    let phone = tap(&b, APPROVER, ApprovalResponse::Yes);
+    let here = ChatTarget {
+        channel: "phone".into(),
+        chat: "42".into(),
+        reply_to: Some("7".into()),
+    };
+    let (agent, config) = (b.handle.agent_arc(), ProviderConfig::default());
+    let turn = agent.process("telegram-42", "open the gate", &config);
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        with_present_approver(here.clone(), turn),
+    )
+    .await
+    .expect("the turn finished")
+    .unwrap();
+    let (shown, answer) = phone.await.unwrap();
+    assert!(answer.is_ok(), "{answer:?}");
+    assert_eq!(shown.to, Some(here));
+    assert!(shown.prompt_text().contains("your message in this chat"));
+    assert_eq!(*b.opened.lock().unwrap(), 1, "the gate did not open");
+
+    // Control: nobody present, so the attended call is refused, unasked.
+    let b = bench(Arc::new(AsksForGate(Mutex::new(0))), 30);
+    b.handle
+        .agent_arc()
+        .process("telegram-99", "open the gate", &ProviderConfig::default())
+        .await
+        .unwrap();
+    assert_eq!(*b.opened.lock().unwrap(), 0);
+    assert!(b.phone.0.lock().unwrap().is_empty());
+}
+
 /// For tool-only tasks: the model is never asked.
 struct NoTurns;
 

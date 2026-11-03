@@ -19,7 +19,8 @@
 //!    IDs who may answer in `channels.slack.approver_users`. A gated call from
 //!    a scheduled task or an A2A call then reaches each of them as a direct
 //!    message with Approve / Deny buttons ([`SlackApprovalPrompter`]); a tap
-//!    from anyone else is refused and audited.
+//!    from anyone else is refused and audited. Since 2026-11-02 a gated call
+//!    in an approver's own turn is asked in that channel's thread instead.
 
 // Wire-format types: fields mirror the platform's webhook payload and exist to
 // document what arrives, even where this code does not read them. Deleting them
@@ -175,9 +176,38 @@ impl SlackChannel {
 
     /// Connect to Slack Socket Mode and process events.
     ///
-    /// Runs until the connection closes or is cancelled.  The caller should
-    /// re-invoke `run()` to reconnect.
+    /// Runs until cancelled. Two halves share the task: the reader holds the
+    /// socket (reconnecting when it drops) and answers button taps at once,
+    /// and the worker runs the messages one at a time, in order. A turn
+    /// waiting for an approval tap therefore does not stop the tap from being
+    /// read, and a reconnect does not drop the turn.
     pub async fn run(&self) -> Result<()> {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SlackEvent>();
+        let reader = async {
+            loop {
+                match self.connection(&tx).await {
+                    Ok(()) => tokio::time::sleep(Duration::from_secs(2)).await,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Slack channel error; reconnecting in 10 s");
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                    }
+                }
+            }
+        };
+        let worker = async {
+            while let Some(event) = rx.recv().await {
+                if let Err(e) = self.handle_event(event).await {
+                    tracing::error!(error = %e, "Slack event handling error");
+                }
+            }
+        };
+        tokio::join!(reader, worker);
+        Ok(())
+    }
+
+    /// One Socket Mode connection: read until it closes, sending events to
+    /// the worker through `tx`.
+    async fn connection(&self, tx: &tokio::sync::mpsc::UnboundedSender<SlackEvent>) -> Result<()> {
         // 1. Obtain a WebSocket URL from apps.connections.open.
         let ws_url = self
             .open_connection()
@@ -231,9 +261,7 @@ impl SlackChannel {
                         .and_then(|v| serde_json::from_value::<EventsApiPayload>(v).ok());
                     if let Some(ep) = ep {
                         if let Some(event) = ep.event {
-                            if let Err(e) = self.handle_event(event).await {
-                                tracing::error!(error = %e, "Slack event handling error");
-                            }
+                            let _ = tx.send(event);
                         }
                     }
                 }
@@ -256,8 +284,6 @@ impl SlackChannel {
                 }
             }
         }
-
-        tokio::time::sleep(Duration::from_secs(2)).await;
         Ok(())
     }
 
@@ -349,13 +375,23 @@ impl SlackChannel {
             None
         };
 
-        let response = self
-            .agent
-            .process(&session_id, &text, &self.provider_config)
-            .await
-            .context("Agent processing error")?;
-
         let thread_ts = event.thread_ts.or(event.ts);
+        // An approver is present: a gated call in this turn is asked here.
+        let turn = self
+            .agent
+            .process(&session_id, &text, &self.provider_config);
+        let present = present_in(
+            &self.approvers,
+            event.user.as_deref(),
+            &channel,
+            thread_ts.as_deref(),
+        );
+        let response = match present {
+            Some(to) => obc_agent::with_present_approver(to, turn).await,
+            None => turn.await,
+        }
+        .context("Agent processing error")?;
+
         self.post_message(&channel, &response.message, thread_ts.as_deref())
             .await
     }
@@ -543,6 +579,46 @@ impl SlackApprovalPrompter {
             "blocks": [section(&text), { "type": "actions", "elements": buttons }],
         })
     }
+
+    /// Every `chat.postMessage` body for `pending`: one in the channel a
+    /// present approver's turn came from, in the thread of their message, or
+    /// else one per approver as a direct message.
+    fn bodies(&self, pending: &PendingApproval) -> Vec<serde_json::Value> {
+        match &pending.to {
+            Some(to) => {
+                let mut body = Self::message(pending, &to.chat);
+                if let Some(ts) = &to.reply_to {
+                    body["thread_ts"] = json!(ts);
+                }
+                vec![body]
+            }
+            None => self
+                .approvers
+                .iter()
+                .map(|user| Self::message(pending, user))
+                .collect(),
+        }
+    }
+}
+
+/// The channel to ask in when `user` is on `approvers` (2026-11-02): a gated
+/// call in their turn is asked in `channel`, in the thread `thread_ts`.
+/// `None` for anyone else, whose gated calls are refused as before.
+fn present_in(
+    approvers: &[String],
+    user: Option<&str>,
+    channel: &str,
+    thread_ts: Option<&str>,
+) -> Option<obc_approval::ChatTarget> {
+    let user = user?;
+    approvers
+        .iter()
+        .any(|a| a == user)
+        .then(|| obc_approval::ChatTarget {
+            channel: "slack".to_string(),
+            chat: channel.to_string(),
+            reply_to: thread_ts.map(str::to_string),
+        })
 }
 
 impl ApprovalPrompter for SlackApprovalPrompter {
@@ -552,11 +628,7 @@ impl ApprovalPrompter for SlackApprovalPrompter {
 
     fn prompt(&self, pending: &PendingApproval) {
         let this = self.clone();
-        let bodies: Vec<serde_json::Value> = self
-            .approvers
-            .iter()
-            .map(|user| Self::message(pending, user))
-            .collect();
+        let bodies = self.bodies(pending);
         tokio::spawn(async move {
             for body in bodies {
                 if let Err(e) =
@@ -587,6 +659,7 @@ mod tests {
             reason: "unattended".into(),
             expires_in_secs: 300,
             session_grant_secs: 0,
+            to: None,
         }
     }
 
@@ -654,5 +727,41 @@ mod tests {
             ..SlackConfig::default()
         };
         assert!(SlackApprovalPrompter::from_config(&cfg).is_none());
+    }
+
+    #[test]
+    fn a_present_approver_is_asked_in_their_thread_and_nobody_else_is() {
+        let prompter = SlackApprovalPrompter::from_config(&SlackConfig {
+            bot_token: Some("xoxb-1".into()),
+            approver_users: vec!["U1".into(), "U2".into()],
+            ..SlackConfig::default()
+        })
+        .unwrap();
+        let approvers = vec!["U1".to_string(), "U2".to_string()];
+        let to = present_in(&approvers, Some("U1"), "C9", Some("1.5")).unwrap();
+        assert!(present_in(&approvers, Some("U3"), "C9", Some("1.5")).is_none());
+        assert!(present_in(&approvers, None, "C9", Some("1.5")).is_none());
+
+        let mut p = pending();
+        p.to = Some(to);
+        let bodies = prompter.bodies(&p);
+        assert_eq!(bodies.len(), 1, "the other approver is not told");
+        assert_eq!(bodies[0]["channel"], "C9");
+        assert_eq!(bodies[0]["thread_ts"], "1.5");
+        let labels: Vec<&str> = bodies[0]["blocks"][1]["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["text"]["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(labels, ["Approve", "Allow this session", "Deny"]);
+
+        p.to = None;
+        let dms: Vec<serde_json::Value> = prompter
+            .bodies(&p)
+            .iter()
+            .map(|b| b["channel"].clone())
+            .collect();
+        assert_eq!(dms, [json!("U1"), json!("U2")]);
     }
 }
