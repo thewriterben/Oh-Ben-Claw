@@ -65,7 +65,12 @@ impl Tool for SpawnAgentTool {
                 "tools": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Optional list of tool names to give this agent. Empty means all default tools. Use ['none'] for no tools."
+                    "description": "Optional tool names or globs (e.g. 'browser_*') to give this agent, within your own sub-agent scope. Empty means the whole scope. Use ['none'] for no tools."
+                },
+                "vaults": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional vault credential names or globs this agent's HTTP calls may use, within your own sub-agent scope. Empty means the whole scope. Use ['none'] for no credentials."
                 },
                 "model": {
                     "type": "string",
@@ -100,6 +105,13 @@ impl Tool for SpawnAgentTool {
 
         if let Some(tools) = args["tools"].as_array() {
             spec.tools = tools
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+        }
+
+        if let Some(vaults) = args["vaults"].as_array() {
+            spec.vaults = vaults
                 .iter()
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                 .collect();

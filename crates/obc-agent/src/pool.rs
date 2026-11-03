@@ -21,6 +21,7 @@
 //!     └─ list_agents()                   ──► [researcher, coder, ...]
 //! ```
 
+use crate::scope::{Scope, ScopedResolver, VaultScopedFill};
 use crate::AgentConfig;
 use crate::{Agent, AgentHandle};
 use anyhow::{bail, Result};
@@ -47,10 +48,15 @@ pub struct SubAgentSpec {
     /// LLM provider config. If not set, inherits from the orchestrator.
     #[serde(default)]
     pub provider: Option<ProviderConfig>,
-    /// Tool names to give this sub-agent. If empty, all default tools are given.
-    /// Use `["none"]` to give the sub-agent no tools (pure reasoning only).
+    /// Tool names or globs to give this sub-agent, cut from the pool's scope
+    /// ([`crate::scope`]). Empty inherits the pool's scope; `["none"]` gives
+    /// no tools (pure reasoning only).
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Vault credential names or globs this sub-agent's egress may inject,
+    /// cut from the pool's scope. Empty inherits it; `["none"]` gives none.
+    #[serde(default)]
+    pub vaults: Vec<String>,
     /// Maximum tool-use iterations for this sub-agent.
     #[serde(default = "default_max_iterations")]
     pub max_iterations: usize,
@@ -75,6 +81,7 @@ impl SubAgentSpec {
             role,
             provider: None,
             tools: Vec::new(),
+            vaults: Vec::new(),
             max_iterations: default_max_iterations(),
         }
     }
@@ -91,11 +98,36 @@ impl SubAgentSpec {
         self
     }
 
+    /// Restrict to a set of vault credential names.
+    pub fn with_vaults(mut self, vaults: Vec<String>) -> Self {
+        self.vaults = vaults;
+        self
+    }
+
     /// Use a specific provider config.
     pub fn with_provider(mut self, provider: ProviderConfig) -> Self {
         self.provider = Some(provider);
         self
     }
+}
+
+// ── Sub-Agent Posture ─────────────────────────────────────────────────────────
+
+/// The parent's safety layers, attached to every sub-agent the pool spawns.
+/// Until 2026-11-02 a sub-agent was a bare `Agent::new`: no tool policy, no
+/// Track 0 gate, no approval, no trust, default taint mode and the unfenced
+/// default tool set, so delegating was a way round all of them.
+#[derive(Clone, Default)]
+pub struct SubAgentPosture {
+    pub policy: Option<obc_safety::PolicyEngine>,
+    pub safety: Option<Arc<obc_safety::SafetyGate>>,
+    pub approval: Option<Arc<obc_approval::ApprovalManager>>,
+    pub trust: Option<Arc<obc_safety::trust::TrustScorer>>,
+    pub obs: Option<Arc<obc_observability::ObsContext>>,
+    pub cost: Option<(Arc<obc_cost::CostTracker>, f64, f64)>,
+    pub taint_mode: obc_safety::taint::TaintMode,
+    /// The parent's own tools (its fences included). None = the default set.
+    pub tools: Option<Vec<Arc<dyn Tool>>>,
 }
 
 // ── Sub-Agent Entry ───────────────────────────────────────────────────────────
@@ -142,6 +174,10 @@ pub struct AgentPool {
     /// Conscience credential resolver (item (b)), so a spawned sub-agent injects
     /// a reach-named credential at its egress boundary too.
     resolver: Option<Arc<dyn obc_tools::credentials::CredentialResolver>>,
+    /// The parent's safety layers, attached to every sub-agent.
+    posture: SubAgentPosture,
+    /// The ceiling every sub-agent's scope is cut from.
+    scope: Scope,
 }
 
 impl AgentPool {
@@ -154,7 +190,21 @@ impl AgentPool {
             reach: None,
             auditor: None,
             resolver: None,
+            posture: SubAgentPosture::default(),
+            scope: Scope::unrestricted(),
         }
+    }
+
+    /// Attach the parent's safety layers to every sub-agent this pool spawns.
+    pub fn with_posture(mut self, posture: SubAgentPosture) -> Self {
+        self.posture = posture;
+        self
+    }
+
+    /// Set the ceiling every sub-agent's tool and vault scope is cut from.
+    pub fn with_scope(mut self, scope: Scope) -> Self {
+        self.scope = scope;
+        self
     }
 
     /// Attach a conscience reach gate (and optional auditor + credential
@@ -197,32 +247,60 @@ impl AgentPool {
             .unwrap_or_else(|| self.default_provider.clone());
         let provider = obc_providers::from_config(&provider_config)?;
 
+        // The child's scope, cut from the pool's ceiling; a literal tool or
+        // vault name the parent lacks refuses the spawn.
+        let scope = self.scope.narrow(&spec.tools, &spec.vaults)?;
+
         // Build the tool registry. Sub-agents get the SAME conscience reach gate
         // (and auditor) as the orchestrator, so delegation is not an egress
         // bypass — a spawned agent's HTTP/browser calls hit the same allowlist.
-        // Sub-agents get the SAME credential resolver (item (b)) as the
-        // orchestrator, so a reach-named credential is injected at their egress
-        // boundary too — delegation is not an injection bypass either.
-        let all_tools = default_tools_with_reach(
-            self.reach.clone(),
-            self.auditor.clone(),
-            self.resolver.clone(),
-        );
-        let tools: Vec<Box<dyn Tool>> = if spec.tools.is_empty() {
-            // Give all default tools
-            all_tools
-        } else if spec.tools == ["none"] {
-            // No tools — pure reasoning
-            Vec::new()
-        } else {
-            // Filter to the requested tool names
-            let requested: std::collections::HashSet<&str> =
-                spec.tools.iter().map(|s| s.as_str()).collect();
-            all_tools
+        // The credential resolver (item (b)) is the orchestrator's, limited to
+        // the child's vault scope.
+        let resolver = self.resolver.clone().map(|r| {
+            Arc::new(ScopedResolver::new(r, scope.clone(), &spec.name))
+                as Arc<dyn obc_tools::credentials::CredentialResolver>
+        });
+        let all_tools: Vec<Arc<dyn Tool>> = match &self.posture.tools {
+            // The parent's own tools, fences included. Its `http` carries the
+            // unscoped resolver, so it is swapped for one with the scoped one;
+            // its `browser_fill_secret` does too, so it is wrapped.
+            Some(parent) => {
+                let mut http = obc_tools::HttpTool::new();
+                if let Some(gate) = self.reach.clone() {
+                    http = http.with_reach_gate(gate);
+                }
+                if let Some(a) = self.auditor.clone() {
+                    http = http.with_auditor(a);
+                }
+                if let Some(r) = resolver {
+                    http = http.with_resolver(r);
+                }
+                let mut tools: Vec<Arc<dyn Tool>> = parent
+                    .iter()
+                    .filter(|t| t.name() != http.name())
+                    .map(|t| {
+                        if t.name() == VaultScopedFill::TOOL {
+                            Arc::new(VaultScopedFill::new(t.clone(), scope.clone(), &spec.name))
+                                as Arc<dyn Tool>
+                        } else {
+                            t.clone()
+                        }
+                    })
+                    .collect();
+                if parent.iter().any(|t| t.name() == http.name()) {
+                    tools.push(Arc::new(http));
+                }
+                tools
+            }
+            None => default_tools_with_reach(self.reach.clone(), self.auditor.clone(), resolver)
                 .into_iter()
-                .filter(|t| requested.contains(t.name()))
-                .collect()
+                .map(Arc::from)
+                .collect(),
         };
+        let tools: Vec<Arc<dyn Tool>> = all_tools
+            .into_iter()
+            .filter(|t| scope.allows_tool(t.name()))
+            .collect();
 
         // Build the agent config
         let agent_config = AgentConfig {
@@ -232,13 +310,34 @@ impl AgentPool {
             ..AgentConfig::default()
         };
 
-        // Build the agent
-        let agent = Arc::new(Agent::new(
-            agent_config,
-            provider,
-            Arc::clone(&self.memory),
-            tools,
-        ));
+        // Build the agent with the parent's safety layers and its own scope.
+        let posture = self.posture.clone();
+        let mut agent = Agent::new(agent_config, provider, Arc::clone(&self.memory), Vec::new())
+            .with_tool_scope(scope)
+            .with_taint_mode(posture.taint_mode);
+        agent.add_tool_arcs(tools);
+        if let Some(policy) = posture.policy {
+            agent = agent.with_policy(policy);
+        }
+        if let Some(gate) = posture.safety {
+            agent = agent.with_safety_gate(gate);
+        }
+        if let Some(a) = self.auditor.clone() {
+            agent = agent.with_action_auditor(a);
+        }
+        if let Some(approval) = posture.approval {
+            agent = agent.with_approval(approval);
+        }
+        if let Some(trust) = posture.trust {
+            agent = agent.with_trust(trust);
+        }
+        if let Some(obs) = posture.obs {
+            agent = agent.with_obs(obs);
+        }
+        if let Some((tracker, in_price, out_price)) = posture.cost {
+            agent = agent.with_cost(tracker, in_price, out_price);
+        }
+        let agent = Arc::new(agent);
 
         let handle = AgentHandle::new(Arc::clone(&agent), provider_config);
 
@@ -495,5 +594,102 @@ mod tests {
         // list() returns all entries including stopped
         let all = pool.list();
         assert_eq!(all.len(), 2);
+    }
+
+    // ── Scopes and posture (PERSONAL-AGENTS-2026-11 item 9) ──────────────────
+
+    fn handle_of(pool: &AgentPool, name: &str) -> AgentHandle {
+        pool.agents.lock().unwrap()[name].handle.clone()
+    }
+
+    fn scoped_pool(tools: &[&str], vaults: &[&str]) -> AgentPool {
+        make_pool().with_scope(Scope::from_config(&crate::scope::ScopeConfig {
+            tools: tools.iter().map(|s| s.to_string()).collect(),
+            vaults: vaults.iter().map(|s| s.to_string()).collect(),
+        }))
+    }
+
+    #[test]
+    fn registered_tools_stay_inside_the_ceiling() {
+        let pool = scoped_pool(&["http", "browser_*"], &["*"]);
+        pool.spawn(SubAgentSpec::new("web", "Browse")).unwrap();
+        let names = handle_of(&pool, "web").tool_names();
+        assert!(names.iter().any(|n| n == "http"), "{names:?}");
+        assert!(names.iter().any(|n| n.starts_with("browser_")), "{names:?}");
+        assert!(
+            !names.iter().any(|n| n == "shell" || n == "file"),
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn a_child_glob_cannot_widen_the_ceiling() {
+        let pool = scoped_pool(&["http"], &["*"]);
+        pool.spawn(SubAgentSpec::new("greedy", "Wants it all").with_tools(vec!["*".into()]))
+            .unwrap();
+        assert_eq!(handle_of(&pool, "greedy").tool_names(), vec!["http"]);
+    }
+
+    #[test]
+    fn a_literal_outside_the_ceiling_refuses_the_spawn() {
+        let pool = scoped_pool(&["http"], &["github"]);
+        let err = pool
+            .spawn(SubAgentSpec::new("sh", "Shell").with_tools(vec!["shell".into()]))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("outside the parent's scope"),
+            "{err}"
+        );
+        let err = pool
+            .spawn(SubAgentSpec::new("aws", "Cloud").with_vaults(vec!["aws_root".into()]))
+            .unwrap_err();
+        assert!(err.to_string().contains("vault 'aws_root'"), "{err}");
+        assert!(!pool.exists("sh") && !pool.exists("aws"));
+    }
+
+    #[tokio::test]
+    async fn the_parent_policy_reaches_the_sub_agent() {
+        let policy = obc_safety::PolicyEngine::new(vec![obc_safety::ToolPolicy {
+            name: "no-shell".into(),
+            tool_pattern: "shell".into(),
+            arg_contains: None,
+            action: obc_safety::ToolPolicyAction::Deny,
+            reason: Some("parent forbids it".into()),
+        }]);
+        let pool = make_pool().with_posture(SubAgentPosture {
+            policy: Some(policy),
+            ..Default::default()
+        });
+        pool.spawn(SubAgentSpec::new("worker", "Work")).unwrap();
+        let result = handle_of(&pool, "worker")
+            .execute_tool_direct("shell", serde_json::json!({ "command": "echo hi" }))
+            .await
+            .unwrap();
+        assert!(
+            !result.is_ok(),
+            "a delegated shell call bypassed the parent's policy"
+        );
+        let error = result.error.unwrap_or_default();
+        assert!(error.contains("no-shell"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn the_chokepoint_refuses_a_registered_tool_outside_the_scope() {
+        // Registered but out of scope: the chokepoint, not registration, refuses.
+        let scope = Scope::unrestricted().narrow(&["http".into()], &[]).unwrap();
+        let agent = Agent::new(
+            AgentConfig::default(),
+            obc_providers::from_config(&ProviderConfig::default()).unwrap(),
+            Arc::new(MemoryStore::open_in_memory().unwrap()),
+            vec![Box::new(obc_tools::ShellTool::new())],
+        )
+        .with_tool_scope(scope);
+        let handle = AgentHandle::new(Arc::new(agent), ProviderConfig::default());
+        let result = handle
+            .execute_tool_direct("shell", serde_json::json!({ "command": "echo hi" }))
+            .await
+            .unwrap();
+        let error = result.error.unwrap_or_default();
+        assert!(error.contains("outside this sub-agent's scope"), "{error}");
     }
 }

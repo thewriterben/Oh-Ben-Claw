@@ -57,7 +57,7 @@ pub use limits::{SafetyConfig, SafetyGate, SafetyLimit, SafetyViolation};
 #[allow(unused_imports)]
 pub use pairing::{NodePairingManager, PairingStatus};
 #[allow(unused_imports)]
-pub use policy::{PolicyEngine, ToolPolicy, ToolPolicyAction};
+pub use policy::{glob_match, PolicyEngine, ToolPolicy, ToolPolicyAction};
 #[allow(unused_imports)]
 pub use secret::SecretString;
 pub use vault::SecretsVault;

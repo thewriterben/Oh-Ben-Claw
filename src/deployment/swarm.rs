@@ -259,6 +259,7 @@ impl DeploymentSwarm {
                     .to_string(),
                 provider: None,
                 tools: vec!["memory_note".to_string()],
+                vaults: Vec::new(),
                 max_iterations,
             },
             SubAgentSpec {
@@ -274,6 +275,7 @@ impl DeploymentSwarm {
                     .to_string(),
                 provider: None,
                 tools: vec!["memory_note".to_string()],
+                vaults: Vec::new(),
                 max_iterations,
             },
         ]

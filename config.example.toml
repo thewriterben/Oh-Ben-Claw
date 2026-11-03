@@ -726,3 +726,18 @@ agent_url = "http://localhost:4311/a2a"
 # which is the honest default: a card promising a skill the agent does not load
 # is a lie told at discovery time.
 skills = []
+
+# ── Sub-agent scopes ─────────────────────────────────────────────────────────
+# With [orchestrator] enabled, the agent can spawn sub-agents. Each one runs
+# under the same policy, Track 0 gate, approval, trust, taint mode and tool
+# fences as the agent that spawned it, and gets a scope cut from this ceiling:
+# the tools (globs, as in [[security.policies]]) and vault credential names it
+# may use. A spawn can narrow it (spawn_agent "tools" and "vaults") but never
+# widen it; a name outside it refuses the spawn. Default "*" for both.
+# This is not an OS boundary: a sub-agent with "shell" or "file" can read the
+# environment and any file this process can, credentials included. Leave those
+# two out when the vault list has to mean something.
+#
+# [orchestrator.sub_agent_scope]
+# tools = ["http", "browser_*", "memory"]
+# vaults = ["github"]
