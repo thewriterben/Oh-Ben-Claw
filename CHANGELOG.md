@@ -5,6 +5,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased — Teach a mission by demonstration (2026-11-02)
+
+Item 8 of `docs/PERSONAL-AGENTS-2026-11.md`, the embodied half.
+
+### Added
+
+- **A teleoperated run becomes a draft mission.** Drive the platform by hand
+  (T-Deck, GUI joystick, anything that moves it) and the pose trail it leaves
+  in world memory is the recording. `mission_teach` `start`/`stop` brackets a
+  run, `draft` takes any past window, and `oh-ben-claw mission teach <id>
+  --last-secs N` does the same from the CLI. Stops of 2 s or more become
+  `wait` steps; the driving between them is simplified to `navigate_to`
+  waypoints. Tune it under `[mission.teach]` (pose entities, simplification,
+  dwell time and radius, arrival tolerance).
+- **Drafts are quarantined until an operator approves them.** They live in
+  `<data dir>/mission_drafts` (or `[mission].drafts_dir`), outside the mission
+  library, so the `mission` tool cannot start one. `oh-ben-claw mission
+  approve <id>` releases a draft into the library on the next start;
+  `drafts`, `show` and `reject` review and discard. The agent's tool has no
+  approve action, and re-teaching an approved id is refused. A taught draft
+  has no guards; approve warns until you add some.
+
+---
+
 ## Unreleased — Approvals in chat while you're present (2026-11-02)
 
 Item 2 of `docs/PERSONAL-AGENTS-2026-11.md`, extended to attended turns.

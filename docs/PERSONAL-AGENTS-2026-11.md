@@ -35,7 +35,7 @@ details:
 | Allow / block / ask rules | "Ask first" for send, publish, delete, purchase, prod | Per-app scope (e.g. read-only mail) | Custom Rules per action | **Have, stronger.** `[[security.policies]]`, autonomy levels, plan-mode argument bounds, Track 0 mirrored on the MCU |
 | A second agent reviews actions | Auto-review rules | **Sentinel**: a second agent that must approve all internet access | Auto-review of account and sharing actions; a monitor can pause the dot | **Partial.** The checks are deterministic: taint tracking (default `warn` since 2026-11-01) and the conscience egress allowlist. No model-based reviewer |
 | Credentials it can use but not see | Vault, password manager, Secure Form | Credential store it can use but not read; Stripe Link single-use cards | Saved passwords hidden from the model | **Partial.** The vault exists (`crates/obc-safety/src/vault.rs`). I found no path that fills a browser field from the vault without the secret entering the model's context |
-| Teach by demonstration | Records a browser workflow of up to 10 minutes and turns it into a draft skill | — | — | **Gap.** Skill Forge builds skills from text. Nothing records |
+| Teach by demonstration | Records a browser workflow of up to 10 minutes and turns it into a draft skill | — | — | **Partial.** Embodied version built 2026-11-02: a teleoperated run becomes a quarantined draft mission (`crates/obc-mission/src/teach.rs`). Browser recording not started |
 | Specialised agents | Bots with set jobs that hand off and message each other. **The shared computer is not a security boundary** | Muse plus Sentinel | Specialist dots, each with its own identity and credentials | **Partial.** Sub-agent pool (`crates/obc-agent/src/delegation_tools.rs`) and fleet coordination. Not checked: whether a sub-agent gets narrower tool or credential scope than its parent |
 | Memory you can inspect | You can ask a bot what it remembers | Forgets on request | Learns from feedback | **Have, stronger substrate.** Bitemporal world memory with provenance and withdrawal (`world.rs`). The chat path to it is rough |
 | Model selection | Picked per task; the user cannot choose | Not disclosed | Not disclosed | **Have, better.** Explicit local-to-cloud routing (P1–P3), audited |
@@ -190,7 +190,20 @@ tool. It resolves the secret inside the tool, never returns the value, and
 audits the use. It is scoped by the conscience egress allowlist, so a secret
 only fills on its own domain.
 
-### 8. Teach by demonstration — L
+### 8. Teach by demonstration — L (embodied half done 2026-11-02)
+
+*As built (embodied):* world memory already holds the pose trail of any drive,
+and it is bitemporal, so a demonstration is a time window over that history, not
+a new recorder. `mission_teach` `start`/`stop` brackets a run (its state is the
+`mission.teach` fact, so a GUI or T-Deck can show it), `draft` takes a past
+window, and `oh-ben-claw mission teach <id> --last-secs N` does it from the CLI.
+Stops of `[mission.teach].dwell_ms` or more become `wait` steps; the driving in
+between is simplified (Ramer–Douglas–Peucker) to `navigate_to` waypoints. Drafts
+sit in `<data dir>/mission_drafts`, outside the mission library, until an
+operator runs `oh-ben-claw mission approve <id>`; the agent's tool has no
+approve action. A draft has no guards, and approve warns until it has some.
+Not built: the browser half, and capturing non-motion actions (speech, records)
+from the run.
 
 *Taken from:* Grok's "teach a task". There are two versions:
 

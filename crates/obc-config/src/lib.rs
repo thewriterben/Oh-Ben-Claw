@@ -1880,6 +1880,24 @@ pub struct MissionConfig {
     /// The named mission library (`[[mission.definition]]`).
     #[serde(default, rename = "definition")]
     pub missions: Vec<obc_mission::Mission>,
+    /// How a teleoperated run is read into a draft (`[mission.teach]`).
+    #[serde(default)]
+    pub teach: obc_mission::teach::TeachSettings,
+    /// Where taught drafts wait for approval (default `<data dir>/mission_drafts`).
+    #[serde(default)]
+    pub drafts_dir: Option<String>,
+}
+
+impl MissionConfig {
+    /// The draft store for missions taught by demonstration.
+    pub fn draft_store(&self) -> obc_mission::teach::DraftStore {
+        obc_mission::teach::DraftStore::new(
+            self.drafts_dir
+                .clone()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| obc_paths::in_data_dir("mission_drafts")),
+        )
+    }
 }
 
 /// Foresight (Track 1) configuration (`[foresight]`). Predictive rules that fire

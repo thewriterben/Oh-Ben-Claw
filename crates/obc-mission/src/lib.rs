@@ -23,6 +23,8 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+pub mod teach;
+
 fn default_tolerance() -> f64 {
     0.5
 }

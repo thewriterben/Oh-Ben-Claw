@@ -101,6 +101,10 @@ enum Commands {
     #[command(subcommand)]
     World(WorldCommands),
 
+    /// Missions taught by demonstration: draft, review, approve (Track 0).
+    #[command(subcommand)]
+    Mission(MissionCommands),
+
     /// This node's part in the fleet. Today: its on-device models.
     #[command(subcommand)]
     Fleet(FleetCommands),
@@ -328,6 +332,32 @@ enum HistoryCommands {
 }
 
 #[derive(Subcommand, Debug)]
+enum MissionCommands {
+    /// List taught drafts and whether each is approved.
+    Drafts,
+    /// Show one draft: its steps and where it came from.
+    Show { id: String },
+    /// Turn a teleoperated run already in world memory into a pending draft.
+    Teach {
+        id: String,
+        /// Window start, ms since epoch.
+        #[arg(long, conflicts_with = "last_secs")]
+        from_ms: Option<u64>,
+        /// Window end, ms since epoch (default: now).
+        #[arg(long)]
+        to_ms: Option<u64>,
+        /// Window = the last N seconds before `--to-ms`.
+        #[arg(long)]
+        last_secs: Option<u64>,
+    },
+    /// Approve a draft: it joins the mission library on the next start.
+    /// Add guards to the draft file first; a taught draft has none.
+    Approve { id: String },
+    /// Delete a draft, approved or not.
+    Reject { id: String },
+}
+
+#[derive(Subcommand, Debug)]
 enum SkillCommands {
     /// List installed skills with stage and clean-run record.
     List,
@@ -419,6 +449,9 @@ async fn main() -> Result<()> {
         }
         Commands::World(cmd) => {
             run_world(&config, cmd)?;
+        }
+        Commands::Mission(cmd) => {
+            run_mission(&config, cmd)?;
         }
         Commands::Fleet(FleetCommands::Models(cmd)) => {
             run_fleet_models(&config, cmd).await?;
@@ -2027,6 +2060,31 @@ async fn run_start(config: Config, session_id: &str, no_spine: bool) -> Result<(
             for m in &config.mission.missions {
                 library.insert(m.id.clone(), m.clone());
             }
+            // Missions taught by demonstration join only once an operator has
+            // approved them (`mission approve`); pending drafts stay out.
+            let drafts = Arc::new(config.mission.draft_store());
+            match drafts.approved() {
+                Ok(approved) => {
+                    for m in approved {
+                        if library.contains_key(&m.id) {
+                            tracing::warn!(
+                                id = %m.id,
+                                "approved taught mission shadowed by a [[mission.definition]] of the same id"
+                            );
+                        } else {
+                            library.insert(m.id.clone(), m);
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("reading mission drafts: {e}"),
+            }
+            all_tools.push(Box::new(
+                oh_ben_claw::tools::builtin::mission::MissionTeachTool::new(
+                    Arc::clone(world),
+                    drafts,
+                    config.mission.teach.clone(),
+                ),
+            ));
             let library = Arc::new(library);
             all_tools.push(Box::new(
                 oh_ben_claw::tools::builtin::mission::MissionStartTool::new(
@@ -5234,6 +5292,90 @@ fn run_skill(config: &Config, cmd: SkillCommands) -> Result<()> {
 }
 
 /// `oh-ben-claw world …`: read or withdraw beliefs in the store the agent uses.
+fn run_mission(config: &Config, cmd: MissionCommands) -> Result<()> {
+    use oh_ben_claw::memory::world::WorldMemory;
+    use oh_ben_claw::mission::teach::{draft_from_world, DraftStatus};
+    let store = config.mission.draft_store();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    match cmd {
+        MissionCommands::Drafts => {
+            let drafts = store.list()?;
+            if drafts.is_empty() {
+                println!("No mission drafts in {}", store.dir().display());
+            }
+            for d in drafts {
+                let status = match d.status {
+                    DraftStatus::Pending => "pending",
+                    DraftStatus::Approved => "approved",
+                };
+                println!(
+                    "{:<32} {:<9} {:>3} steps {:>3} guards {:>8.2} m",
+                    d.mission.id,
+                    status,
+                    d.mission.steps.len(),
+                    d.mission.guards.len(),
+                    d.taught.path_m
+                );
+            }
+        }
+        MissionCommands::Show { id } => {
+            let draft = store
+                .load(&id)?
+                .ok_or_else(|| anyhow::anyhow!("no mission draft '{id}'"))?;
+            println!("{}", serde_json::to_string_pretty(&draft)?);
+        }
+        MissionCommands::Teach {
+            id,
+            from_ms,
+            to_ms,
+            last_secs,
+        } => {
+            let to = to_ms.unwrap_or(now);
+            let from = match (from_ms, last_secs) {
+                (Some(f), _) => f,
+                (None, Some(s)) => to.saturating_sub(s * 1_000),
+                (None, None) => anyhow::bail!("give --from-ms or --last-secs"),
+            };
+            let world_path = config.perception.world_db_path.clone().unwrap_or_else(|| {
+                oh_ben_claw::config::paths::in_data_dir("world.db")
+                    .to_string_lossy()
+                    .into_owned()
+            });
+            let world = WorldMemory::open(&world_path)
+                .with_context(|| format!("opening world memory at {world_path}"))?;
+            let draft = draft_from_world(&world, &id, from, to, &config.mission.teach, now)?;
+            let path = store.save(&draft)?;
+            println!(
+                "Drafted '{id}': {} steps over {:.2} m -> {}",
+                draft.mission.steps.len(),
+                draft.taught.path_m,
+                path.display()
+            );
+            println!("Review it, add guards, then: oh-ben-claw mission approve {id}");
+        }
+        MissionCommands::Approve { id } => {
+            let draft = store.approve(&id, now)?;
+            println!("'{id}' approved; it joins the mission library on the next start.");
+            if draft.mission.guards.is_empty() {
+                println!(
+                    "warning: '{id}' has no guards, so nothing preempts it on low battery or a lost link"
+                );
+            }
+        }
+        MissionCommands::Reject { id } => {
+            if store.reject(&id)? {
+                println!("'{id}' deleted.");
+            } else {
+                println!("No mission draft '{id}'.");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn run_world(config: &Config, cmd: WorldCommands) -> Result<()> {
     use oh_ben_claw::memory::world::{Closure, WorldMemory};
     let world_path = config.perception.world_db_path.clone().unwrap_or_else(|| {
